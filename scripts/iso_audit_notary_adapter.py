@@ -28,6 +28,7 @@ import ipaddress
 import json
 import math
 import os
+import re
 import secrets
 import stat
 import sys
@@ -54,6 +55,7 @@ IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
 INDEX_DIGEST_FIELD = "index_sha256"
 INDEX_FILE = "messages.index.json"
+INDEX_VERSION = 1
 LATEST_ANCHOR_FILE = "latest.notary.json"
 RECEIPT_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_VERSION = 1
@@ -151,7 +153,35 @@ ANCHOR_KEYS = {
     "audit_index",
     ANCHOR_DIGEST_FIELD,
 }
-SECRET_PREVIEW_MARKERS = ("authorization", "bearer ", "private_key", "secret", "token")
+SECRET_PREVIEW_MARKERS = (
+    "authorization",
+    "bearer ",
+    "private_key",
+    "private-key",
+    "password",
+    "passphrase",
+    "api_key",
+    "api-key",
+    "access_key",
+    "access-key",
+    "session_key",
+    "session-key",
+    "client_secret",
+    "client-secret",
+    "cookie",
+    "secret",
+    "token",
+    "x_iroha_signature",
+)
+SECRET_VALUE_PATTERNS = [
+    re.compile(r"\bauthorization\s*:", re.IGNORECASE),
+    re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(
+        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
+]
 REDACTED_RESPONSE_PREVIEW = "[redacted: sensitive response body]"
 REDACTED_ERROR = "[redacted: sensitive error]"
 
@@ -159,6 +189,28 @@ REDACTED_ERROR = "[redacted: sensitive error]"
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *_args: object, **_kwargs: object) -> None:
         return None
+
+
+def _secret_scan_values(raw: str) -> tuple[str, ...]:
+    values = [raw]
+    decoded = raw
+    for _ in range(4):
+        if "%" not in decoded:
+            break
+        next_decoded = urllib.parse.unquote(decoded)
+        if next_decoded == decoded:
+            break
+        values.append(next_decoded)
+        decoded = next_decoded
+    return tuple(values)
+
+
+def _contains_secret_material(value: str) -> bool:
+    return any(
+        pattern.search(candidate)
+        for candidate in _secret_scan_values(value)
+        for pattern in SECRET_VALUE_PATTERNS
+    )
 
 
 NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)
@@ -207,42 +259,56 @@ class PublishResult:
     error: str | None = None
 
 
-def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
-    if max_bytes is not None and max_bytes <= 0:
-        raise AdapterError("max file bytes must be positive")
-    _reject_symlinked_existing_ancestors(path.parent)
+def _read_regular_file(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    limit_label: str = "input",
+    path_label: str | None = None,
+) -> bytes:
+    if max_bytes is not None and (
+        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+    ):
+        raise AdapterError("max file bytes must be a positive integer")
+    display_path = path_label if path_label is not None else str(path)
+    try:
+        _reject_symlinked_existing_ancestors(path.parent)
+    except AdapterError as error:
+        if path_label is not None:
+            raise AdapterError(f"{display_path} ancestor must not be a symlink") from error
+        raise
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise AdapterError(f"{path} does not exist") from error
+        raise AdapterError(f"{display_path} does not exist") from error
     if stat.S_ISLNK(metadata.st_mode):
-        raise AdapterError(f"{path} must not be a symlink")
+        raise AdapterError(f"{display_path} must not be a symlink")
     if not stat.S_ISREG(metadata.st_mode):
-        raise AdapterError(f"{path} must be a regular file")
+        raise AdapterError(f"{display_path} must be a regular file")
     if max_bytes is not None and metadata.st_size > max_bytes:
-        raise AdapterError(f"{path} exceeds {max_bytes} byte input limit")
+        raise AdapterError(f"{display_path} exceeds {max_bytes} byte {limit_label} limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
         fd_metadata = os.fstat(fd)
         if not stat.S_ISREG(fd_metadata.st_mode):
-            raise AdapterError(f"{path} must be a regular file")
+            raise AdapterError(f"{display_path} must be a regular file")
         if max_bytes is not None and fd_metadata.st_size > max_bytes:
-            raise AdapterError(f"{path} exceeds {max_bytes} byte input limit")
+            raise AdapterError(f"{display_path} exceeds {max_bytes} byte {limit_label} limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             limit = max_bytes + 1 if max_bytes is not None else -1
             raw = handle.read(limit)
         if max_bytes is not None and len(raw) > max_bytes:
-            raise AdapterError(f"{path} exceeds {max_bytes} byte input limit")
+            raise AdapterError(f"{display_path} exceeds {max_bytes} byte {limit_label} limit")
         return raw
     except FileNotFoundError as error:
-        raise AdapterError(f"{path} does not exist") from error
+        raise AdapterError(f"{display_path} does not exist") from error
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise AdapterError(f"{path} must not be a symlink") from error
-        raise AdapterError(f"cannot open {path} for reading: {error.strerror}") from error
+            raise AdapterError(f"{display_path} must not be a symlink") from error
+        raise AdapterError(f"cannot open {display_path} for reading: {error.strerror}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -291,6 +357,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+        raise AdapterError(f"{label} must not contain secret-looking material")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise AdapterError(f"{label} must not contain leading-dash path segments")
@@ -313,6 +381,8 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+        raise AdapterError(f"{label} must not contain secret-looking material")
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -321,6 +391,39 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise AdapterError(f"{label} must not contain leading-dash path segments")
     if any(part in {".", ".."} for part in checked_parts):
         raise AdapterError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg in value_flags:
+            index += 2
+            continue
+        if any(arg.startswith(f"{flag}=") for flag in value_flags):
+            index += 1
+            continue
+        if _contains_secret_material(arg) or _is_secret_looking_key(arg):
+            raise AdapterError("CLI argument must not contain secret-looking material")
+        index += 1
+
+
+def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        flag, separator, _value = arg.partition("=")
+        if separator and flag in flags:
+            raise AdapterError(f"{flag} does not take a value")
+        if (
+            arg in flags
+            and index + 1 < len(raw_args)
+            and not raw_args[index + 1].startswith("--")
+        ):
+            raise AdapterError(f"{arg} does not take a value")
+        index += 1
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
@@ -333,14 +436,102 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
         matched = False
         for flag in flags:
             if arg == flag:
-                if index + 1 < len(raw_args):
-                    _reject_raw_output_path_smuggling(raw_args[index + 1], flag)
+                if index + 1 >= len(raw_args):
+                    raise AdapterError(f"{flag} requires a path value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
                 index += 2
                 matched = True
                 break
             prefix = f"{flag}="
             if arg.startswith(prefix):
-                _reject_raw_output_path_smuggling(arg[len(prefix) :], flag)
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _preflight_required_cli_values(
+    argv: list[str] | None,
+    flags: set[str],
+    value_name: str,
+) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise AdapterError(f"{flag} requires a {value_name} value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a {value_name} value")
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a {value_name} value")
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
+    if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise AdapterError(f"{flag} must be a numeric value")
+    try:
+        int(raw, 10) if integer else float(raw)
+    except ValueError as error:
+        raise AdapterError(f"{flag} must be a numeric value") from error
+
+
+def _preflight_numeric_cli_values(
+    argv: list[str] | None,
+    *,
+    integer_flags: set[str],
+    number_flags: set[str],
+) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    flags = integer_flags | number_flags
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise AdapterError(f"{flag} requires a numeric value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
                 index += 1
                 matched = True
                 break
@@ -466,7 +657,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in seen:
-            raise AdapterError(f"JSON object contains duplicate key {key!r}")
+            raise AdapterError("JSON object contains duplicate key")
         seen.add(key)
         result[key] = value
     return result
@@ -492,7 +683,44 @@ def _reject_json_surrogates(value: Any) -> None:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
+        if any(_is_secret_looking_key(key) for key in unknown):
+            raise AdapterError(f"{label} contains unknown keys")
         raise AdapterError(f"{label} contains unknown keys: {', '.join(unknown)}")
+
+
+def _is_secret_looking_key(value: Any) -> bool:
+    markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private_key",
+        "private-key",
+        "password",
+        "passphrase",
+        "api_key",
+        "api-key",
+        "access_key",
+        "access-key",
+        "session_key",
+        "session-key",
+        "client_secret",
+        "client-secret",
+        "cookie",
+        "set-cookie",
+        "x-iroha-signature",
+        "x_iroha_signature",
+    )
+    return any(
+        marker in candidate.lower()
+        for candidate in _secret_scan_values(str(value))
+        for marker in markers
+    )
+
+
+def _reject_secret_looking_identifier(value: str, label: str) -> None:
+    if _contains_secret_material(value) or _is_secret_looking_key(value):
+        raise AdapterError(f"{label} must not contain secret-looking material")
 
 
 def _load_json_bytes(path: Path) -> tuple[Any, bytes]:
@@ -571,6 +799,8 @@ def _require_clean_path_string(value: Any, label: str) -> str:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in path:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(path) or _is_secret_looking_key(path):
+        raise AdapterError(f"{label} must not contain secret-looking material")
     parts = path.split("/")
     checked_parts = parts[1:] if path.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -705,7 +935,12 @@ def _verify_persisted_record_source(
     if not isinstance(value, dict):
         raise AdapterError(f"{label} must contain a JSON object")
     _reject_unknown_keys(value, PERSISTED_RECORD_KEYS, label)
-    if value.get("version") != PERSISTED_RECORD_VERSION:
+    version = value.get("version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != PERSISTED_RECORD_VERSION
+    ):
         raise AdapterError(f"{label} has unsupported persisted record version")
     source_digest = require_digest_matches(value, PERSISTED_RECORD_DIGEST_FIELD, label)
     if source_digest != index_record.get(PERSISTED_RECORD_DIGEST_FIELD):
@@ -867,7 +1102,7 @@ def _reject_duplicate_audit_index_records(records: list[Any], label: str) -> Non
             if value in field_seen:
                 raise AdapterError(
                     f"{label} records[{offset}].{field} duplicates "
-                    f"{label} records[{field_seen[value]}].{field}: {value}"
+                    f"{label} records[{field_seen[value]}].{field}"
                 )
             field_seen[value] = offset
 
@@ -878,10 +1113,13 @@ def verify_audit_index(index: Any) -> dict[str, Any]:
     if not isinstance(index, dict):
         raise AdapterError("audit index must be a JSON object")
     _reject_unknown_keys(index, AUDIT_INDEX_KEYS, "audit index")
+    version = index.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version != INDEX_VERSION:
+        raise AdapterError(f"audit index version must be {INDEX_VERSION}")
     require_digest_matches(index, INDEX_DIGEST_FIELD, "audit index")
     record_count = index.get("record_count")
     records = index.get("records")
-    if not isinstance(record_count, int) or record_count < 0:
+    if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
         raise AdapterError("audit index record_count must be a non-negative integer")
     if not isinstance(records, list):
         raise AdapterError("audit index records must be an array")
@@ -903,11 +1141,13 @@ def verify_anchor_file(
 ) -> VerifiedAnchor:
     """Verify one notary anchor against the export directory index file."""
 
+    _reject_raw_output_path_smuggling(str(anchor_path), "anchor path")
     anchor_value, raw = _load_json_bytes(anchor_path)
     if not isinstance(anchor_value, dict):
         raise AdapterError(f"{anchor_path} must contain a JSON object")
     _reject_unknown_keys(anchor_value, ANCHOR_KEYS, str(anchor_path))
-    if anchor_value.get("version") != ANCHOR_VERSION:
+    version = anchor_value.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version != ANCHOR_VERSION:
         raise AdapterError(f"{anchor_path} has unsupported anchor version")
     anchor_sha256 = require_digest_matches(anchor_value, ANCHOR_DIGEST_FIELD, str(anchor_path))
 
@@ -918,7 +1158,14 @@ def verify_anchor_file(
         raise AdapterError(
             f"{anchor_path} index_sha256 does not match embedded audit index digest"
         )
-    if anchor_value.get("record_count") != audit_index.get("record_count"):
+    anchor_record_count = anchor_value.get("record_count")
+    if (
+        isinstance(anchor_record_count, bool)
+        or not isinstance(anchor_record_count, int)
+        or anchor_record_count < 0
+    ):
+        raise AdapterError(f"{anchor_path} record_count must be a non-negative integer")
+    if anchor_record_count != audit_index.get("record_count"):
         raise AdapterError(f"{anchor_path} record_count does not match embedded audit index")
     _verify_persisted_record_sources(
         audit_index,
@@ -961,7 +1208,7 @@ def verify_anchor_file(
         raw=raw,
         index_sha256=index_sha256,
         anchor_sha256=anchor_sha256,
-        record_count=anchor_value["record_count"],
+        record_count=anchor_record_count,
     )
 
 
@@ -1006,7 +1253,7 @@ def _validate_url_port(parsed: urllib.parse.ParseResult, label: str) -> None:
     try:
         port = parsed.port
     except ValueError as error:
-        raise AdapterError(f"{label} has invalid port: {error}") from error
+        raise AdapterError(f"{label} has invalid port") from error
     port_text = _raw_url_port_text(parsed)
     if port_text == "":
         raise AdapterError(f"{label} must not include an empty port")
@@ -1053,6 +1300,7 @@ def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise AdapterError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise AdapterError(f"{label} host must not end with a dot")
+    _reject_secret_looking_identifier(raw_host, f"{label} host")
     if len(raw_host) > 253:
         raise AdapterError(f"{label} host must be at most 253 characters")
     try:
@@ -1151,6 +1399,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise AdapterError(f"{label} path must not contain empty segments")
     if any(segment in {".", ".."} for segment in segments):
         raise AdapterError(f"{label} path must not contain dot segments")
+    if _contains_secret_material(path) or _is_secret_looking_key(path):
+        raise AdapterError(f"{label} path must not contain secret-looking material")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
         raise AdapterError(f"{label} path must not contain encoded dot or separator characters")
@@ -1176,7 +1426,7 @@ def _validate_endpoint(endpoint: str, allow_insecure_http: bool) -> None:
         parsed = urllib.parse.urlparse(endpoint)
         hostname = parsed.hostname
     except ValueError as error:
-        raise AdapterError(f"{label} is not a valid URL: {error}") from error
+        raise AdapterError(f"{label} is not a valid URL") from error
     if parsed.scheme != "https" and not (
         parsed.scheme == "http" and allow_insecure_http
     ):
@@ -1206,7 +1456,7 @@ def _reject_duplicate_endpoints(endpoints: list[str]) -> None:
     for offset, endpoint in enumerate(endpoints):
         if endpoint in seen:
             raise AdapterError(
-                f"--endpoint[{offset}] duplicates --endpoint[{seen[endpoint]}]: {endpoint}"
+                f"--endpoint[{offset}] duplicates --endpoint[{seen[endpoint]}]"
             )
         seen[endpoint] = offset
 
@@ -1214,19 +1464,25 @@ def _reject_duplicate_endpoints(endpoints: list[str]) -> None:
 def _load_bearer_token(path: Path | None) -> str | None:
     if path is None:
         return None
-    raw = _read_regular_file(path, max_bytes=MAX_BEARER_TOKEN_BYTES)
+    label = "bearer token file"
+    raw = _read_regular_file(
+        path,
+        max_bytes=MAX_BEARER_TOKEN_BYTES,
+        limit_label="bearer token",
+        path_label=label,
+    )
     try:
         token = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise AdapterError(f"bearer token file {path} is not UTF-8") from error
+        raise AdapterError(f"{label} is not UTF-8") from error
     if not token:
-        raise AdapterError(f"bearer token file {path} is empty")
+        raise AdapterError(f"{label} is empty")
     if token != token.strip():
-        raise AdapterError(f"bearer token file {path} must not have surrounding whitespace")
+        raise AdapterError(f"{label} must not have surrounding whitespace")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in token):
-        raise AdapterError(f"bearer token file {path} must not contain control characters")
+        raise AdapterError(f"{label} must not contain control characters")
     if any(ch.isspace() for ch in token):
-        raise AdapterError(f"bearer token file {path} must not contain whitespace")
+        raise AdapterError(f"{label} must not contain whitespace")
     return token
 
 
@@ -1253,7 +1509,7 @@ def publish_anchor(
             body = response.read(response_limit_bytes + 1)
             if len(body) > response_limit_bytes:
                 raise AdapterError(
-                    f"{endpoint} response exceeded {response_limit_bytes} byte limit"
+                    f"endpoint response exceeded {response_limit_bytes} byte limit"
                 )
             status_code = int(response.status)
     except urllib.error.HTTPError as error:
@@ -1262,7 +1518,9 @@ def publish_anchor(
         finally:
             error.close()
         if len(body) > response_limit_bytes:
-            raise AdapterError(f"{endpoint} error response exceeded {response_limit_bytes} byte limit")
+            raise AdapterError(
+                f"endpoint error response exceeded {response_limit_bytes} byte limit"
+            )
         return PublishResult(
             endpoint=endpoint,
             status_code=int(error.code),
@@ -1300,8 +1558,11 @@ def _response_preview(body: bytes) -> str:
 
 
 def _response_preview_looks_secret(preview: str) -> bool:
-    lowered = preview.lower()
-    return any(marker in lowered for marker in SECRET_PREVIEW_MARKERS)
+    return any(
+        marker in candidate.lower()
+        for candidate in _secret_scan_values(preview)
+        for marker in SECRET_PREVIEW_MARKERS
+    )
 
 
 def _receipt_error(message: str) -> str:
@@ -1484,6 +1745,32 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
+        _preflight_raw_cli_secrets(
+            argv,
+            {
+                "--bearer-token-file",
+                "--endpoint",
+                "--export-dir",
+                "--receipt-dir",
+                "--response-limit-bytes",
+                "--timeout-secs",
+            },
+        )
+        _preflight_boolean_cli_flags(
+            argv,
+            {
+                "--all",
+                "--allow-insecure-http",
+                "--allow-missing-record-sources",
+                "--dry-run",
+            },
+        )
+        _preflight_required_cli_values(argv, {"--endpoint"}, "URL")
+        _preflight_numeric_cli_values(
+            argv,
+            integer_flags={"--response-limit-bytes"},
+            number_flags={"--timeout-secs"},
+        )
         _preflight_output_cli_paths(
             argv,
             {"--bearer-token-file", "--export-dir", "--receipt-dir"},

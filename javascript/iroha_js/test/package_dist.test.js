@@ -34,6 +34,7 @@ import {
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
   KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
@@ -59,6 +60,8 @@ import {
   isKagemushaCompactPaymentTokenNativeAvailable,
   isKagemushaRecursiveAggregationProofBundleNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenNativeAvailable,
+  isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable,
+  isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
   isKagemushaRecursiveSpendLineageProofCircuitId,
   isKagemushaRecursiveSpendLineageAppendOutputCircuitId,
   isSupportedKagemushaRecursiveSpendAppendOutputProofCircuitId,
@@ -67,6 +70,10 @@ import {
   normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaRecursiveSpendAppendOutputProofCircuitId,
   preferredKagemushaOfflineSpendModeForCapabilities,
+  kagemushaRecursiveSpendLineageKeyArtifacts,
+  kagemushaRecursiveSpendLineageKeyArtifactsForAppend,
+  kagemushaRecursiveSpendLineageKeyArtifactsForInit,
+  validateKagemushaRecursiveSpendLineageKeyArtifacts,
   requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput,
   requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit,
   requiresKagemushaRecursiveSpendLineageWitnessForRedeem,
@@ -373,6 +380,83 @@ function privacyNoritoFrameWithPayload(schemaByte) {
   frame.writeBigUInt64LE(3n, 23);
   Buffer.from([0xb9, 0xd3, 0xa8, 0x0c, 0xcd, 0x5d, 0x13, 0x24]).copy(frame, 31);
   return frame;
+}
+
+const TEST_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
+const TEST_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
+const TEST_CRC64_TABLE = (() => {
+  const table = new Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let crc = BigInt(index);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 1n) !== 0n
+          ? (crc >> 1n) ^ TEST_CRC64_REFLECTED_POLY
+          : crc >> 1n;
+    }
+    table[index] = crc;
+  }
+  return table;
+})();
+
+function testCrc64(payload) {
+  let crc = TEST_CRC64_MASK;
+  for (const byte of payload) {
+    const index = Number((crc ^ BigInt(byte)) & 0xffn);
+    crc = TEST_CRC64_TABLE[index] ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ TEST_CRC64_MASK);
+}
+
+function privacyNoritoFrameFromPayload(schemaByte, payload) {
+  const payloadBuffer = Buffer.from(payload);
+  const frame = Buffer.concat([privacyNoritoFrame(schemaByte), payloadBuffer]);
+  frame.writeBigUInt64LE(BigInt(payloadBuffer.length), 23);
+  frame.writeBigUInt64LE(testCrc64(payloadBuffer), 31);
+  return frame;
+}
+
+function kagemushaZk1Tlv(tag, payload) {
+  const payloadBuffer = Buffer.from(payload);
+  const length = Buffer.alloc(4);
+  length.writeUInt32LE(payloadBuffer.length);
+  return Buffer.concat([Buffer.from(tag, "ascii"), length, payloadBuffer]);
+}
+
+function kagemushaLineageVerifierKey(circuitId, seed) {
+  return Buffer.concat([
+    Buffer.from([0x5a, 0x4b, 0x31, 0x00]),
+    kagemushaZk1Tlv("IPAK", Buffer.from([8, 0, 0, 0])),
+    kagemushaZk1Tlv("CID1", Buffer.from(circuitId, "utf8")),
+    kagemushaZk1Tlv("H2VK", Buffer.alloc(32, seed)),
+  ]);
+}
+
+function kagemushaVerifierKeyCommitment(verifierKey) {
+  const backend = Buffer.from(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "utf8");
+  const backendLength = Buffer.alloc(8);
+  backendLength.writeBigUInt64BE(BigInt(backend.length));
+  const verifierKeyLength = Buffer.alloc(8);
+  verifierKeyLength.writeBigUInt64BE(BigInt(verifierKey.length));
+  return createHash("sha256")
+    .update("iroha:zk:v1:vk")
+    .update(backendLength)
+    .update(backend)
+    .update(verifierKeyLength)
+    .update(verifierKey)
+    .digest();
+}
+
+function kagemushaLineageProvingKeyArchive(circuitId, verifierKey, seed) {
+  return privacyNoritoFrameFromPayload(
+    0x9a,
+    Buffer.concat([
+      Buffer.from([1, 0]),
+      Buffer.from(circuitId, "utf8"),
+      kagemushaVerifierKeyCommitment(verifierKey),
+      Buffer.alloc(64, seed),
+    ]),
+  );
 }
 
 function privacyNoritoFrameWithPadding(schemaByte, paddingLength) {
@@ -841,6 +925,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
+    "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1",
@@ -865,6 +950,11 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "canAppendKagemushaRecursiveSpendWitnesslessLineage",
     "isKagemushaRecursiveSpendLineageProofCircuitId",
     "isKagemushaRecursiveSpendLineageAppendOutputCircuitId",
+    "isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen",
+    "kagemushaRecursiveSpendLineageKeyArtifactsForInit",
+    "kagemushaRecursiveSpendLineageKeyArtifactsForAppend",
+    "kagemushaRecursiveSpendLineageKeyArtifacts",
+    "validateKagemushaRecursiveSpendLineageKeyArtifacts",
     "requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit",
     "requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput",
     "normalizeKagemushaRecursiveSpendAppendOutputProofCircuitId",
@@ -879,6 +969,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "isKagemushaCompactPaymentTokenNativeAvailable",
     "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
     "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
+    "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
     "isKagemushaRecursiveSpendNativeAvailable",
     "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
     "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
@@ -905,6 +996,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION, 7);
   assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1, "kagemusha-recursive-compact-v1");
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION, 6);
+  assert.equal(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "halo2/ipa");
   assert.equal(
     KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
     "kagemusha-recursive-aggregation-v1",
@@ -1060,6 +1152,161 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     true,
   );
   assert.equal(requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(), true);
+  for (const openingLen of [2, 4, 8, 16, 32, 64, 128]) {
+    assert.equal(
+      isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(openingLen),
+      true,
+    );
+  }
+  for (const openingLen of [0, 1, 3, 65, 129, -2, 2.5, Number.NaN, "2", true]) {
+    assert.equal(
+      isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(openingLen),
+      false,
+    );
+  }
+  const verifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    0xe7,
+  );
+  const provingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    verifierKey,
+    0xe8,
+  );
+  const expectedVerifierKey = Buffer.from(verifierKey);
+  const expectedProvingKey = Buffer.from(provingKey);
+  const initArtifacts = kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+    128,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+    verifierKey,
+    provingKey,
+  );
+  verifierKey.fill(0);
+  provingKey.fill(0);
+  assert.equal(
+    initArtifacts.proofCircuitId,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(initArtifacts.verifierOpeningLen, 128);
+  assert.equal(initArtifacts.lineageVerifierKeyBackend, "halo2/ipa");
+  assert.deepEqual(initArtifacts.lineageVerifierKey, expectedVerifierKey);
+  assert.deepEqual(initArtifacts.lineageProvingKeyArchive, expectedProvingKey);
+  assert.equal(initArtifacts.isInitArtifact, true);
+  assert.equal(initArtifacts.isAppendArtifact, false);
+  const appendVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    0xa7,
+  );
+  const appendProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    appendVerifierKey,
+    0xa8,
+  );
+  const appendArtifacts = kagemushaRecursiveSpendLineageKeyArtifactsForAppend(
+    64,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+    appendVerifierKey,
+    appendProvingKey,
+  );
+  assert.equal(
+    appendArtifacts.proofCircuitId,
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+  );
+  assert.equal(appendArtifacts.isInitArtifact, false);
+  assert.equal(appendArtifacts.isAppendArtifact, true);
+  const genericArtifacts = kagemushaRecursiveSpendLineageKeyArtifacts(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+    2,
+    KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+    appendVerifierKey,
+    appendProvingKey,
+  );
+  assert.equal(genericArtifacts.verifierOpeningLen, 2);
+  assert.deepEqual(
+    validateKagemushaRecursiveSpendLineageKeyArtifacts(genericArtifacts),
+    genericArtifacts,
+  );
+  const directVerifierKey = kagemushaLineageVerifierKey(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    0x11,
+  );
+  const directProvingKey = kagemushaLineageProvingKeyArchive(
+    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    directVerifierKey,
+    0x12,
+  );
+  const directArtifacts = validateKagemushaRecursiveSpendLineageKeyArtifacts({
+    ...initArtifacts,
+    lineageVerifierKey: directVerifierKey,
+    lineageProvingKeyArchive: directProvingKey,
+  });
+  directVerifierKey.fill(0);
+  directProvingKey.fill(0);
+  assert.deepEqual(
+    directArtifacts.lineageVerifierKey,
+    kagemushaLineageVerifierKey(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+      0x11,
+    ),
+  );
+  assert.deepEqual(
+    directArtifacts.lineageProvingKeyArchive,
+    kagemushaLineageProvingKeyArchive(
+      KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+      kagemushaLineageVerifierKey(
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+        0x11,
+      ),
+      0x12,
+    ),
+  );
+  const exposedVerifierKey = directArtifacts.lineageVerifierKey;
+  const exposedProvingKey = directArtifacts.lineageProvingKeyArchive;
+  exposedVerifierKey[0] = 0;
+  exposedProvingKey[0] = 0;
+  assert.equal(directArtifacts.lineageVerifierKey[0], 0x5a);
+  assert.equal(directArtifacts.lineageProvingKeyArchive[0], 0x4e);
+  assert.notStrictEqual(
+    directArtifacts.lineageVerifierKey,
+    directArtifacts.lineageVerifierKey,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        appendVerifierKey,
+        expectedProvingKey,
+      ),
+    /lineage_verifier_key/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        expectedVerifierKey,
+        appendProvingKey,
+      ),
+    /lineage_proving_key_archive/,
+  );
+  for (const malformed of [
+    [null, /lineage_key_artifacts/],
+    [{ ...initArtifacts, proofCircuitId: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1 }, /proof_circuit_id/],
+    [{ ...initArtifacts, proofCircuitId: "unknown-kagemusha-recursive-spend-circuit" }, /proof_circuit_id/],
+    [{ ...initArtifacts, verifierOpeningLen: 3 }, /verifier_opening_len/],
+    [{ ...initArtifacts, verifierOpeningLen: true }, /verifier_opening_len/],
+    [{ ...initArtifacts, lineageVerifierKeyBackend: "halo2/kzg" }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageVerifierKey: Buffer.alloc(0) }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageProvingKeyArchive: Buffer.alloc(0) }, /lineage_proving_key_archive/],
+    [{ ...initArtifacts, lineageVerifierKey: "not-bytes" }, /lineage_verifier_key/],
+    [{ ...initArtifacts, lineageProvingKeyArchive: "not-bytes" }, /lineage_proving_key_archive/],
+  ]) {
+    assert.throws(
+      () => validateKagemushaRecursiveSpendLineageKeyArtifacts(malformed[0]),
+      malformed[1],
+    );
+  }
   assert.equal(
     requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
       KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
@@ -1482,6 +1729,10 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "boolean",
   );
   assert.equal(typeof isKagemushaRecursiveSpendNativeAvailable(), "boolean");
+  assert.equal(
+    typeof isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(),
+    "boolean",
+  );
   assert.equal(typeof kagemushaVerifyRecursiveCompactPaymentToken, "function");
   assert.throws(
     () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(
@@ -1569,6 +1820,10 @@ test("package dist Kagemusha recursive spend availability rejects coerced ABI ve
 
       assert.equal(isKagemushaRecursiveSpendNativeAvailable(), false);
       assert.equal(isKagemushaRecursiveCompactPaymentTokenNativeAvailable(), false);
+      assert.equal(
+        isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(),
+        false,
+      );
     }
   } finally {
     if (previous === undefined) {
@@ -2878,6 +3133,25 @@ test("package declarations mark privacy capability metadata readonly", () => {
       new RegExp(`export const ${name}: ${value};`),
     );
   }
+});
+
+test("package declarations mark Kagemusha lineage key artifacts readonly", () => {
+  const artifacts = declarationInterface(
+    "KagemushaRecursiveSpendLineageKeyArtifacts",
+  );
+  assert.match(artifacts, /readonly proofCircuitId:/);
+  assert.match(
+    artifacts,
+    /readonly verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen;/,
+  );
+  assert.match(
+    artifacts,
+    /readonly lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND;/,
+  );
+  assert.match(artifacts, /readonly lineageVerifierKey: Buffer;/);
+  assert.match(artifacts, /readonly lineageProvingKeyArchive: Buffer;/);
+  assert.match(artifacts, /readonly isInitArtifact: boolean;/);
+  assert.match(artifacts, /readonly isAppendArtifact: boolean;/);
 });
 
 test("package declarations do not advertise privacy production metadata inputs", () => {

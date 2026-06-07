@@ -26,7 +26,7 @@ public final class OfflineNoteHalo2Prover {
   private static final int PUBLIC_VALUE_COUNT = 16;
   private static final int ADVICE_COUNT = 22;
   private static final byte[] CANONICAL_VK_HASH =
-      hexBytes("3493ea067302cab2180cef8f5dc60e0e6751ab9bb0c850286e2aaace2f863c25");
+      hexBytes("ad4d2ce680df32288d382c8b6403108d7174ca0ba9e558bd93a693f9d770b256");
   private static final byte[] CANONICAL_TRANSCRIPT_REPR =
       hexBytes("7db2235914292d4e825d6d51e1a880da77f107eb2c7853e3ec9c9d0dccc59813");
   private static final SecureRandom RNG = new SecureRandom();

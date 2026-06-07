@@ -39,6 +39,10 @@ from typing import Any
 
 READINESS_VERSION = 1
 EVIDENCE_VERSION = 1
+CANARY_SUMMARY_VERSION = 1
+RECEIPT_SUMMARY_VERSION = 1
+TRUST_SUMMARY_VERSION = 1
+XSD_SUMMARY_VERSION = 1
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
@@ -112,6 +116,7 @@ EVIDENCE_POLICY_KEYS = {
     *EVIDENCE_FRESHNESS_POLICY_FIELDS,
 }
 COMPACT_CANARY_KEYS = {
+    "version",
     "path",
     "config_path",
     "provider",
@@ -127,11 +132,13 @@ COMPACT_CANARY_KEYS = {
 }
 COMPACT_STAGE_WINDOW_KEYS = {"name", "started_at", "finished_at"}
 RECEIPT_SUMMARY_KEYS = {
+    "version",
     "verified_receipts",
     "receipt_kind",
     "allow_failed",
     "allow_insecure_http",
     "allow_legacy_colr007",
+    "allow_default_profile",
     "require_source_files",
     "receipts",
     SUMMARY_DIGEST_FIELD,
@@ -152,6 +159,7 @@ RECEIPT_ENTRY_KEYS = {
 NOTARY_RECEIPT_METADATA_KEYS = {"anchor_sha256", "index_sha256", "record_count"}
 RAIL_RECEIPT_METADATA_KEYS = {"message_type", "payload_sha256", "profile"}
 TRUST_SUMMARY_KEYS = {
+    "version",
     "path",
     "verified_at",
     "verified_bundles",
@@ -183,6 +191,7 @@ TRUST_PROFILE_KEYS = {
     "x509_ocsp_response_der",
 }
 XSD_SUMMARY_KEYS = {
+    "version",
     "verified_at",
     "manifest",
     "manifest_sha256",
@@ -195,6 +204,8 @@ XSD_SUMMARY_KEYS = {
     "missing_schema_fixtures",
     "schema_only_entries",
     "missing_profile_schema_versions",
+    "blocked_schema_source_count",
+    "blocked_schema_sources",
     "schemas",
     "fixtures",
     "profile_catalog",
@@ -222,6 +233,19 @@ XSD_FIXTURE_KEYS = {
     "missing_schema_reason",
 }
 XSD_GAP_ENTRY_KEYS = {"path", "message_def_id", "reason"}
+XSD_BLOCKED_SCHEMA_SOURCE_KEYS = {
+    "message_def_id",
+    "source",
+    "reason",
+    "restriction_markers",
+}
+XSD_BLOCKED_SCHEMA_SOURCE_PROVENANCE_KEYS = {"repository", "commit", "path", "sha256"}
+XSD_BLOCKED_SCHEMA_RESTRICTION_MARKERS = {
+    "swift-copyright-header",
+    "licensed-product-redistribution-agreement",
+    "no-public-distribution-right",
+    "exclusive-swift-property",
+}
 XSD_STRICT_KEYS = {
     "require_schema_backed_fixtures",
     "require_fixture_for_schema",
@@ -258,6 +282,70 @@ XSD_PROFILE_SKIPPED_VERSION_KEYS = {
     "direction",
     "version",
 }
+SECRET_KEY_FRAGMENTS = (
+    "authorization",
+    "private_key",
+    "private-key",
+    "password",
+    "passphrase",
+    "api_key",
+    "api-key",
+    "access_key",
+    "access-key",
+    "session_key",
+    "session-key",
+    "client_secret",
+    "client-secret",
+    "cookie",
+    "set-cookie",
+    "x-iroha-signature",
+    "x_iroha_signature",
+)
+SECRET_KEY_EXACT = {
+    "bearer",
+    "bearer_token",
+    "secret",
+    "token",
+}
+SECRET_VALUE_PATTERNS = [
+    re.compile(r"\bauthorization\s*:", re.IGNORECASE),
+    re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(
+        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
+]
+SECRET_IDENTIFIER_PATTERN = re.compile(
+    r"(?<![a-z0-9])"
+    r"(?:authorization|bearer|token|secret|private[_-]?key|password|passphrase|"
+    r"api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|"
+    r"set-cookie|x[_-]iroha[_-]signature)"
+    r"(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _secret_scan_values(raw: str) -> tuple[str, ...]:
+    values = [raw]
+    decoded = raw
+    for _ in range(4):
+        if "%" not in decoded:
+            break
+        next_decoded = urllib.parse.unquote(decoded)
+        if next_decoded == decoded:
+            break
+        values.append(next_decoded)
+        decoded = next_decoded
+    return tuple(values)
+
+
+def _contains_secret_material(value: str) -> bool:
+    return any(
+        pattern.search(candidate)
+        for candidate in _secret_scan_values(value)
+        for pattern in SECRET_VALUE_PATTERNS
+    )
 
 
 class ReadinessError(RuntimeError):
@@ -279,9 +367,29 @@ def _canonical_json_bytes(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def _reject_secret_string(value: str, label: str) -> None:
+    if _contains_secret_material(value) or _is_secret_looking_key(value):
+        raise ReadinessError(f"{label} contains secret-looking material")
+
+
+def _check_no_secret_material(value: Any, label: str = "$") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if _is_secret_looking_key(key):
+                raise ReadinessError(f"{label} contains forbidden secret-looking field")
+            _check_no_secret_material(child, f"{label}.{key}")
+    elif isinstance(value, list):
+        for offset, child in enumerate(value):
+            _check_no_secret_material(child, f"{label}[{offset}]")
+    elif isinstance(value, str):
+        _reject_secret_string(value, label)
+
+
 def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
-    if max_bytes is not None and max_bytes <= 0:
-        raise ReadinessError("max file bytes must be positive")
+    if max_bytes is not None and (
+        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+    ):
+        raise ReadinessError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         metadata = path.lstat()
@@ -337,6 +445,7 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise ReadinessError(f"{label} must use forward slashes")
     if ";" in raw:
         raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    _reject_secret_string(raw, label)
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise ReadinessError(f"{label} must not contain leading-dash path segments")
@@ -359,6 +468,7 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise ReadinessError(f"{label} must use forward slashes")
     if ";" in raw:
         raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    _reject_secret_string(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -367,6 +477,72 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise ReadinessError(f"{label} must not contain leading-dash path segments")
     if any(part in {".", ".."} for part in checked_parts):
         raise ReadinessError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg in value_flags:
+            index += 2
+            continue
+        if any(arg.startswith(f"{flag}=") for flag in value_flags):
+            index += 1
+            continue
+        _reject_secret_string(arg, "CLI argument")
+        index += 1
+
+
+def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        flag, separator, _value = arg.partition("=")
+        if separator and flag in flags:
+            raise ReadinessError(f"{flag} does not take a value")
+        if (
+            arg in flags
+            and index + 1 < len(raw_args)
+            and not raw_args[index + 1].startswith("--")
+        ):
+            raise ReadinessError(f"{arg} does not take a value")
+        index += 1
+
+
+def _preflight_required_cli_values(
+    argv: list[str] | None,
+    flags: set[str],
+    value_name: str,
+) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise ReadinessError(f"{flag} requires a {value_name} value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise ReadinessError(f"{flag} requires a {value_name} value")
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise ReadinessError(f"{flag} requires a {value_name} value")
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
@@ -379,14 +555,68 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
         matched = False
         for flag in flags:
             if arg == flag:
-                if index + 1 < len(raw_args):
-                    _reject_raw_output_path_smuggling(raw_args[index + 1], flag)
+                if index + 1 >= len(raw_args):
+                    raise ReadinessError(f"{flag} requires a path value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise ReadinessError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
                 index += 2
                 matched = True
                 break
             prefix = f"{flag}="
             if arg.startswith(prefix):
-                _reject_raw_output_path_smuggling(arg[len(prefix) :], flag)
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise ReadinessError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
+    if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise ReadinessError(f"{flag} must be a numeric value")
+    try:
+        int(raw, 10) if integer else float(raw)
+    except ValueError as error:
+        raise ReadinessError(f"{flag} must be a numeric value") from error
+
+
+def _preflight_numeric_cli_values(
+    argv: list[str] | None,
+    *,
+    integer_flags: set[str],
+    number_flags: set[str],
+) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    flags = integer_flags | number_flags
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise ReadinessError(f"{flag} requires a numeric value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise ReadinessError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise ReadinessError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
                 index += 1
                 matched = True
                 break
@@ -502,7 +732,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise ReadinessError(f"duplicate key {key!r} in JSON object")
+            raise ReadinessError("duplicate key in JSON object")
         result[key] = value
     return result
 
@@ -533,7 +763,21 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
+        if any(_is_secret_looking_key(key) for key in unknown):
+            raise ReadinessError(f"{label} contains unknown keys")
         raise ReadinessError(f"{label} contains unknown keys: {', '.join(unknown)}")
+
+
+def _is_secret_looking_key(value: Any) -> bool:
+    return any(
+        SECRET_IDENTIFIER_PATTERN.search(candidate)
+        for candidate in _secret_scan_values(str(value))
+    )
+
+
+def _reject_secret_looking_identifier(value: str, label: str) -> None:
+    if _contains_secret_material(value) or _is_secret_looking_key(value):
+        raise ReadinessError(f"{label} must not contain secret-looking material")
 
 
 def _require_list(value: Any, label: str) -> list[Any]:
@@ -560,6 +804,7 @@ def _require_cli_string(value: str | None, label: str) -> str:
         raise ReadinessError(f"{label} must not contain control characters")
     if value != value.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
+    _reject_secret_looking_identifier(value, label)
     return value
 
 
@@ -576,9 +821,7 @@ def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
     for offset, path in enumerate(paths):
         key = str(path)
         if key in seen:
-            raise ReadinessError(
-                f"{label}[{offset}] duplicates {label}[{seen[key]}]: {key}"
-            )
+            raise ReadinessError(f"{label}[{offset}] duplicates {label}[{seen[key]}]")
         seen[key] = offset
 
 
@@ -592,14 +835,14 @@ def _reject_duplicate_compact_summaries(
         path = summary["path"]
         if path in seen_paths:
             raise ReadinessError(
-                f"{label}[{offset}].path duplicates {label}[{seen_paths[path]}].path: {path}"
+                f"{label}[{offset}].path duplicates {label}[{seen_paths[path]}].path"
             )
         seen_paths[path] = offset
         digest = summary[SUMMARY_DIGEST_FIELD]
         if digest in seen_digests:
             raise ReadinessError(
                 f"{label}[{offset}].{SUMMARY_DIGEST_FIELD} duplicates "
-                f"{label}[{seen_digests[digest]}].{SUMMARY_DIGEST_FIELD}: {digest}"
+                f"{label}[{seen_digests[digest]}].{SUMMARY_DIGEST_FIELD}"
             )
         seen_digests[digest] = offset
 
@@ -635,6 +878,8 @@ def _is_lower_sha256(value: Any) -> bool:
 
 def _require_sha256(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
+    if isinstance(raw, str):
+        _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if not _is_lower_sha256(raw):
         raise ReadinessError(f"{label}.{key} must be a lowercase SHA-256 digest")
     return raw
@@ -701,6 +946,7 @@ def _reject_path_smuggling(raw: str, label: str) -> None:
         raise ReadinessError(f"{label} must not start with a dash")
     if ";" in raw:
         raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    _reject_secret_string(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -725,11 +971,13 @@ def _require_profile_id(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
     if PROFILE_ID_RE.fullmatch(raw) is None:
         raise ReadinessError(f"{label}.{key} must be a canonical lowercase profile id")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
 
 
 def _require_rail(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if raw not in KNOWN_RAILS:
         raise ReadinessError(
             f"{label}.{key} must be one of " + ", ".join(sorted(KNOWN_RAILS))
@@ -741,6 +989,18 @@ def _require_message_type(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
     if MESSAGE_TYPE_RE.fullmatch(raw) is None:
         raise ReadinessError(f"{label}.{key} must be lowercase ISO family id")
+    return raw
+
+
+def _require_receipt_kind(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
+def _require_stage_name(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
 
 
@@ -762,6 +1022,12 @@ def _check_receipt_entry_sha256(
     blockers: list[dict[str, Any]],
 ) -> str | None:
     raw = receipt.get(key)
+    if isinstance(raw, str):
+        try:
+            _reject_secret_looking_identifier(raw, f"{entry_label}.{key}")
+        except ReadinessError as error:
+            _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
+            return None
     if not _is_lower_sha256(raw):
         _block_receipt_metadata_error(
             blockers,
@@ -799,6 +1065,7 @@ def _block_receipt_entry_metadata_errors(
     *,
     receipt_kind: str,
     allow_legacy_colr007: bool,
+    allow_default_profile: bool,
     metadata_code: str,
 ) -> None:
     if receipt_kind == "iso-audit-notary":
@@ -869,10 +1136,19 @@ def _block_receipt_entry_metadata_errors(
             path,
             blockers,
         )
-        try:
-            _require_rail(receipt, "profile", entry_label)
-        except ReadinessError as error:
-            _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
+        if receipt.get("profile") is None:
+            if not allow_default_profile:
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    f"{entry_label}.profile must be a non-empty string",
+                    path,
+                )
+        else:
+            try:
+                _require_profile_id(receipt, "profile", entry_label)
+            except ReadinessError as error:
+                _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
 
 
 def _receipt_entry_content_metadata(receipt: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
@@ -907,6 +1183,7 @@ def _validate_schema_source_path(raw: str, label: str) -> str:
         raise ReadinessError(f"{label} must not contain whitespace")
     if ";" in raw:
         raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    _reject_secret_string(raw, label)
     path = Path(raw)
     if path.is_absolute():
         raise ReadinessError(f"{label} must be relative")
@@ -931,6 +1208,7 @@ def _validate_fixture_summary_path(raw: str, label: str) -> str:
         raise ReadinessError(f"{label} must not contain whitespace")
     if ";" in raw:
         raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    _reject_secret_string(raw, label)
     if Path(raw).is_absolute():
         raise ReadinessError(f"{label} must be relative")
     if not raw.endswith(".xml"):
@@ -1026,6 +1304,95 @@ def _verify_schema_source_summary(
     }
 
 
+def _verify_blocked_schema_source_summary(
+    entry_raw: Any,
+    label: str,
+    *,
+    blockers: list[dict[str, Any]],
+    path: Path,
+) -> dict[str, Any]:
+    entry = _require_object(entry_raw, label)
+    _reject_unknown_keys(entry, XSD_BLOCKED_SCHEMA_SOURCE_KEYS, label)
+    message_def_id = _require_message_def_id(entry, "message_def_id", label)
+    reason = _require_string(entry, "reason", label)
+    if len(reason) > 1024:
+        raise ReadinessError(f"{label}.reason must be no longer than 1024 characters")
+    source = _require_object(entry.get("source"), f"{label}.source")
+    _reject_unknown_keys(
+        source,
+        XSD_BLOCKED_SCHEMA_SOURCE_PROVENANCE_KEYS,
+        f"{label}.source",
+    )
+    repository = _require_string(source, "repository", f"{label}.source")
+    if (
+        len(repository) > MAX_SOURCE_REPOSITORY_CHARS
+        or SOURCE_REPOSITORY_RE.fullmatch(repository) is None
+        or repository.endswith(".git")
+    ):
+        _blocker(
+            blockers,
+            "xsd.blocked_source_repository_invalid",
+            f"{label}.source.repository is not a canonical GitHub source URL",
+            path,
+        )
+    commit = _require_string(source, "commit", f"{label}.source")
+    if SOURCE_COMMIT_RE.fullmatch(commit) is None:
+        _blocker(
+            blockers,
+            "xsd.blocked_source_commit_invalid",
+            f"{label}.source.commit is not a lowercase 40-hex Git commit",
+            path,
+        )
+    source_path = _validate_schema_source_path(
+        _require_string(source, "path", f"{label}.source"),
+        f"{label}.source.path",
+    )
+    if Path(source_path).name != f"{message_def_id}.xsd":
+        _blocker(
+            blockers,
+            "xsd.blocked_source_path_mismatch",
+            f"{label}.source.path filename does not match message_def_id",
+            path,
+        )
+    source_sha256 = _require_sha256(source, "sha256", f"{label}.source")
+    raw_markers = _require_list(
+        entry.get("restriction_markers"),
+        f"{label}.restriction_markers",
+    )
+    if not raw_markers:
+        raise ReadinessError(f"{label}.restriction_markers must not be empty")
+    markers: list[str] = []
+    seen_markers: dict[str, int] = {}
+    for offset, marker_raw in enumerate(raw_markers):
+        marker_label = f"{label}.restriction_markers[{offset}]"
+        if not isinstance(marker_raw, str) or not marker_raw.strip():
+            raise ReadinessError(f"{marker_label} must be a non-empty string")
+        if marker_raw != marker_raw.strip():
+            raise ReadinessError(f"{marker_label} must not have surrounding whitespace")
+        if marker_raw not in XSD_BLOCKED_SCHEMA_RESTRICTION_MARKERS:
+            raise ReadinessError(
+                f"{marker_label} must be one of "
+                + ", ".join(sorted(XSD_BLOCKED_SCHEMA_RESTRICTION_MARKERS))
+            )
+        if marker_raw in seen_markers:
+            raise ReadinessError(
+                f"{marker_label} duplicates {label}.restriction_markers[{seen_markers[marker_raw]}]"
+            )
+        seen_markers[marker_raw] = offset
+        markers.append(marker_raw)
+    return {
+        "message_def_id": message_def_id,
+        "source": {
+            "repository": repository,
+            "commit": commit,
+            "path": source_path,
+            "sha256": source_sha256,
+        },
+        "reason": reason,
+        "restriction_markers": markers,
+    }
+
+
 def _parse_timestamp(raw: str, label: str) -> dt.datetime:
     normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
     try:
@@ -1059,13 +1426,13 @@ def _validate_https_source_url(raw: str, label: str) -> str:
         parsed = urllib.parse.urlparse(raw)
         hostname = parsed.hostname
     except ValueError as error:
-        raise ReadinessError(f"{label} is not a valid URL: {error}") from error
+        raise ReadinessError(f"{label} is not a valid URL") from error
     if parsed.scheme != "https":
         raise ReadinessError(f"{label} must use HTTPS URL")
     try:
         port = parsed.port
     except ValueError as error:
-        raise ReadinessError(f"{label} has invalid port: {error}") from error
+        raise ReadinessError(f"{label} has invalid port") from error
     port_text = _raw_url_port_text(parsed)
     if port_text == "":
         raise ReadinessError(f"{label} must not include an empty port")
@@ -1087,6 +1454,7 @@ def _validate_https_source_url(raw: str, label: str) -> str:
         raise ReadinessError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise ReadinessError(f"{label} host must not end with a dot")
+    _reject_secret_looking_identifier(raw_host, f"{label} host")
     _validate_host_labels(raw_host, label)
     if parsed.params or parsed.query or parsed.fragment:
         raise ReadinessError(f"{label} must not contain params, query, or fragment")
@@ -1237,6 +1605,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise ReadinessError(f"{label} path must not contain empty segments")
     if any(segment in {".", ".."} for segment in segments):
         raise ReadinessError(f"{label} path must not contain dot segments")
+    if _contains_secret_material(path) or _is_secret_looking_key(path):
+        raise ReadinessError(f"{label} path must not contain secret-looking material")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
         raise ReadinessError(f"{label} path must not contain encoded dot or separator characters")
@@ -1351,6 +1721,8 @@ def _verify_xsd_summary_entries(
     schema_validated_fixtures: int,
     missing_schema_fixtures: list[Any],
     schema_only_entries: list[Any],
+    blocked_schema_source_count: int,
+    blocked_schema_sources: list[Any],
     blockers: list[dict[str, Any]],
 ) -> None:
     schemas_raw = _require_list(summary.get("schemas"), f"{path}.schemas")
@@ -1465,6 +1837,57 @@ def _verify_xsd_summary_entries(
         label=f"{path}.schemas.source",
         code="xsd.schema_source_duplicate",
         message="XSD summary repeats a schema source reference",
+        path=path,
+        blockers=blockers,
+    )
+
+    if len(blocked_schema_sources) != blocked_schema_source_count:
+        _blocker(
+            blockers,
+            "xsd.blocked_schema_source_count_mismatch",
+            "XSD summary blocked_schema_source_count does not match blocked_schema_sources[] length",
+            path,
+        )
+    blocked_source_refs: list[str] = []
+    blocked_source_digests: list[str] = []
+    blocked_source_messages: list[str] = []
+    blocked_sources: list[dict[str, Any]] = []
+    for offset, blocked_raw in enumerate(blocked_schema_sources):
+        label = f"{path}.blocked_schema_sources[{offset}]"
+        blocked = _verify_blocked_schema_source_summary(
+            blocked_raw,
+            label,
+            blockers=blockers,
+            path=path,
+        )
+        blocked_source_messages.append(blocked["message_def_id"])
+        blocked_source_refs.append(
+            f"{blocked['source']['repository']}@{blocked['source']['commit']}:"
+            f"{blocked['source']['path']}"
+        )
+        blocked_source_digests.append(blocked["source"]["sha256"])
+        blocked_sources.append(blocked)
+    checked_schema_ids = set(schema_ids)
+    for message_def_id in sorted(set(blocked_source_messages) & checked_schema_ids):
+        _blocker(
+            blockers,
+            "xsd.blocked_source_already_checked_in",
+            f"XSD summary records blocked candidate for checked-in schema {message_def_id}",
+            path,
+        )
+    _block_duplicate_strings(
+        blocked_source_refs,
+        label=f"{path}.blocked_schema_sources.source",
+        code="xsd.blocked_source_duplicate",
+        message="XSD summary repeats a blocked schema source reference",
+        path=path,
+        blockers=blockers,
+    )
+    _block_duplicate_strings(
+        blocked_source_digests,
+        label=f"{path}.blocked_schema_sources.sha256",
+        code="xsd.blocked_source_digest_duplicate",
+        message="XSD summary repeats a blocked schema source digest",
         path=path,
         blockers=blockers,
     )
@@ -1642,6 +2065,9 @@ def _verify_xsd_summary_entries(
     summary["_validated_schema_paths"] = schema_paths
     summary["_validated_schema_digests"] = schema_digests
     summary["_validated_schema_source_refs"] = schema_source_refs
+    summary["_validated_blocked_schema_sources"] = blocked_sources
+    summary["_validated_blocked_schema_source_refs"] = blocked_source_refs
+    summary["_validated_blocked_schema_source_digests"] = blocked_source_digests
     summary["_validated_fixture_paths"] = fixture_paths
     summary["_validated_fixture_digests"] = fixture_digests
 
@@ -1871,6 +2297,8 @@ def _verify_receipt_summary(
     allow_failed_code: str,
     allow_insecure_code: str,
     allow_legacy_code: str,
+    allow_default_profile_code: str,
+    version_code: str,
     source_files_code: str,
     count_mismatch_code: str,
     digest_missing_code: str,
@@ -1883,6 +2311,21 @@ def _verify_receipt_summary(
 ) -> dict[str, Any]:
     digest = _require_summary_digest(receipt_obj, label)
     _reject_unknown_keys(receipt_obj, RECEIPT_SUMMARY_KEYS, label)
+    version = receipt_obj.get("version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != RECEIPT_SUMMARY_VERSION
+    ):
+        _blocker(
+            blockers,
+            version_code,
+            (
+                f"{label}.version must be receipt verifier summary version "
+                f"{RECEIPT_SUMMARY_VERSION}"
+            ),
+            path,
+        )
     verified_receipts = _require_positive_int(
         receipt_obj,
         "verified_receipts",
@@ -1904,6 +2347,7 @@ def _verify_receipt_summary(
             raise ReadinessError(
                 f"{label}.receipt_kind[{offset}] must not have surrounding whitespace"
             )
+        _reject_secret_looking_identifier(item, f"{label}.receipt_kind[{offset}]")
         if item in seen_receipt_kinds:
             _blocker(
                 blockers,
@@ -1936,6 +2380,7 @@ def _verify_receipt_summary(
     allow_failed = _require_bool(receipt_obj, "allow_failed", label)
     allow_insecure_http = _require_bool(receipt_obj, "allow_insecure_http", label)
     allow_legacy_colr007 = _require_bool(receipt_obj, "allow_legacy_colr007", label)
+    allow_default_profile = _require_bool(receipt_obj, "allow_default_profile", label)
     require_source_files = _require_bool(receipt_obj, "require_source_files", label)
     if allow_failed:
         _blocker(
@@ -1956,6 +2401,13 @@ def _verify_receipt_summary(
             blockers,
             allow_legacy_code,
             "receipt verifier evidence allowed legacy colr.007 rail receipts",
+            path,
+        )
+    if allow_default_profile:
+        _blocker(
+            blockers,
+            allow_default_profile_code,
+            "receipt verifier evidence allowed default rail profile fallback",
             path,
         )
     if not require_source_files:
@@ -1998,7 +2450,7 @@ def _verify_receipt_summary(
             )
         else:
             seen_receipt_paths[receipt_path] = offset
-        receipt_kind = _require_string(receipt, "receipt_kind", entry_label)
+        receipt_kind = _require_receipt_kind(receipt, "receipt_kind", entry_label)
         if receipt_kind not in REQUIRED_RECEIPT_KINDS:
             _blocker(
                 blockers,
@@ -2069,6 +2521,7 @@ def _verify_receipt_summary(
             blockers,
             receipt_kind=receipt_kind,
             allow_legacy_colr007=allow_legacy_colr007,
+            allow_default_profile=allow_default_profile,
             metadata_code=metadata_code,
         )
         receipts.append(dict(receipt))
@@ -2082,11 +2535,13 @@ def _verify_receipt_summary(
         )
 
     return {
+        "version": version,
         "verified_receipts": verified_receipts,
         "receipt_kind": sorted(receipt_kind_set),
         "allow_failed": allow_failed,
         "allow_insecure_http": allow_insecure_http,
         "allow_legacy_colr007": allow_legacy_colr007,
+        "allow_default_profile": allow_default_profile,
         "require_source_files": require_source_files,
         "receipts": receipts,
         "summary_sha256": digest,
@@ -2106,6 +2561,19 @@ def verify_xsd_summary(
     summary = _require_object(_load_json(path), str(path))
     digest = _require_summary_digest(summary, str(path))
     _reject_unknown_keys(summary, XSD_SUMMARY_KEYS, str(path))
+    _check_no_secret_material(summary)
+    version = summary.get("version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != XSD_SUMMARY_VERSION
+    ):
+        _blocker(
+            blockers,
+            "xsd.summary_version_unsupported",
+            f"XSD summary version must be {XSD_SUMMARY_VERSION}",
+            path,
+        )
     verified_at, verified_at_dt = _require_timestamp(summary, "verified_at", str(path))
     _block_if_stale(
         verified_at_dt,
@@ -2144,6 +2612,11 @@ def verify_xsd_summary(
         "profile_schema_backed_versions",
         str(path),
     )
+    blocked_schema_source_count = _require_nonnegative_int(
+        summary,
+        "blocked_schema_source_count",
+        str(path),
+    )
     missing_schema_fixtures = _require_list(
         summary.get("missing_schema_fixtures"),
         f"{path}.missing_schema_fixtures",
@@ -2155,6 +2628,10 @@ def verify_xsd_summary(
     missing_profile_schema_versions = _require_list(
         summary.get("missing_profile_schema_versions"),
         f"{path}.missing_profile_schema_versions",
+    )
+    blocked_schema_sources = _require_list(
+        summary.get("blocked_schema_sources"),
+        f"{path}.blocked_schema_sources",
     )
     strict = _require_object(summary.get("strict"), f"{path}.strict")
     _reject_unknown_keys(strict, XSD_STRICT_KEYS, f"{path}.strict")
@@ -2197,6 +2674,8 @@ def verify_xsd_summary(
         schema_validated_fixtures=schema_validated_fixtures,
         missing_schema_fixtures=missing_schema_fixtures,
         schema_only_entries=schema_only_entries,
+        blocked_schema_source_count=blocked_schema_source_count,
+        blocked_schema_sources=blocked_schema_sources,
         blockers=blockers,
     )
     profile_catalog_summary = _verify_xsd_profile_catalog_entries(
@@ -2207,6 +2686,35 @@ def verify_xsd_summary(
         missing_profile_schema_versions=missing_profile_schema_versions,
         blockers=blockers,
     )
+    blocked_gap_message_ids = {
+        _require_message_def_id(entry, "message_def_id", f"{path}.missing_schema_fixtures")
+        for entry in missing_schema_fixtures
+        if isinstance(entry, dict)
+    } | {
+        _require_message_def_id(entry, "message_def_id", f"{path}.schema_only_entries")
+        for entry in schema_only_entries
+        if isinstance(entry, dict)
+    } | {
+        _require_message_def_id(
+            entry,
+            "message_def_id",
+            f"{path}.missing_profile_schema_versions",
+        )
+        for entry in missing_profile_schema_versions
+        if isinstance(entry, dict)
+    }
+    for blocked in summary.get("_validated_blocked_schema_sources", []):
+        message_def_id = blocked["message_def_id"]
+        if message_def_id not in blocked_gap_message_ids:
+            _blocker(
+                blockers,
+                "xsd.blocked_source_without_gap",
+                (
+                    "XSD summary records blocked candidate "
+                    f"{message_def_id} without a current missing schema/profile gap"
+                ),
+                path,
+            )
 
     if not require_schema_backed:
         target = warnings if allow_reviewed_xsd_gaps else blockers
@@ -2288,6 +2796,7 @@ def verify_xsd_summary(
             }
         )
     return {
+        "version": version,
         "path": str(path),
         "verified_at": verified_at,
         "manifest_sha256": manifest_sha256,
@@ -2298,6 +2807,8 @@ def verify_xsd_summary(
         "profile_checked_versions": profile_checked_versions,
         "profile_schema_backed_versions": profile_schema_backed_versions,
         "schema_sources": summary.get("_validated_schema_sources", []),
+        "blocked_schema_source_count": blocked_schema_source_count,
+        "blocked_schema_sources": summary.get("_validated_blocked_schema_sources", []),
         "missing_schema_fixture_count": len(missing_schema_fixtures),
         "schema_only_count": len(schema_only_entries),
         "missing_profile_schema_version_count": len(missing_profile_schema_versions),
@@ -2311,6 +2822,14 @@ def verify_xsd_summary(
         "_schema_paths": summary.get("_validated_schema_paths", []),
         "_schema_digests": summary.get("_validated_schema_digests", []),
         "_schema_source_refs": summary.get("_validated_schema_source_refs", []),
+        "_validated_blocked_schema_source_refs": summary.get(
+            "_validated_blocked_schema_source_refs",
+            [],
+        ),
+        "_validated_blocked_schema_source_digests": summary.get(
+            "_validated_blocked_schema_source_digests",
+            [],
+        ),
         "_fixture_paths": summary.get("_validated_fixture_paths", []),
         "_fixture_digests": summary.get("_validated_fixture_digests", []),
         "summary_sha256": digest,
@@ -2327,6 +2846,8 @@ def _verify_policy(
     _reject_unknown_keys(policy, EVIDENCE_POLICY_KEYS, f"{path}.policy")
     provider = _require_string(policy, "provider", f"{path}.policy")
     environment = _require_string(policy, "environment", f"{path}.policy")
+    _reject_secret_looking_identifier(provider, f"{path}.policy.provider")
+    _reject_secret_looking_identifier(environment, f"{path}.policy.environment")
     if provider != args.provider:
         _blocker(
             blockers,
@@ -2385,6 +2906,18 @@ def _verify_canary(
         f"{label}.config_path",
     )
     summary_sha256 = _require_sha256(canary, SUMMARY_DIGEST_FIELD, label)
+    version = canary.get("version")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != CANARY_SUMMARY_VERSION
+    ):
+        _blocker(
+            blockers,
+            "evidence.canary_summary_version_unsupported",
+            f"{label}.version must be {CANARY_SUMMARY_VERSION}",
+            path,
+        )
     started_at_raw, started_at = _require_timestamp(canary, "started_at", label)
     finished_at_raw, finished_at = _require_timestamp(canary, "finished_at", label)
     if finished_at < started_at:
@@ -2399,6 +2932,8 @@ def _verify_canary(
     )
     provider = _require_string(canary, "provider", label)
     environment = _require_string(canary, "environment", label)
+    _reject_secret_looking_identifier(provider, f"{label}.provider")
+    _reject_secret_looking_identifier(environment, f"{label}.environment")
     plan_only = _require_bool(canary, "plan_only", label)
     require_explicit_policy = _require_bool(canary, "require_explicit_policy", label)
     if args.provider is not None and provider != args.provider:
@@ -2437,6 +2972,7 @@ def _verify_canary(
             raise ReadinessError(
                 f"{label}.stage_names[{offset}] must not have surrounding whitespace"
             )
+        _reject_secret_looking_identifier(item, f"{label}.stage_names[{offset}]")
         stage_names_clean.append(item)
     stage_names_raw = stage_names_clean
     stage_names = set(stage_names_raw)
@@ -2466,7 +3002,7 @@ def _verify_canary(
         window_label = f"{label}.stage_windows[{offset}]"
         window = _require_object(raw_window, window_label)
         _reject_unknown_keys(window, COMPACT_STAGE_WINDOW_KEYS, window_label)
-        stage_name = _require_string(window, "name", window_label)
+        stage_name = _require_stage_name(window, "name", window_label)
         window_started_raw, window_started = _require_timestamp(
             window,
             "started_at",
@@ -2516,6 +3052,8 @@ def _verify_canary(
         allow_failed_code="evidence.receipts_allow_failed",
         allow_insecure_code="evidence.receipts_allow_insecure_http",
         allow_legacy_code="evidence.receipts_allow_legacy_colr007",
+        allow_default_profile_code="evidence.receipts_allow_default_profile",
+        version_code="evidence.receipt_summary_version_unsupported",
         source_files_code="evidence.receipts_source_files_not_required",
         count_mismatch_code="evidence.receipt_count_mismatch",
         digest_missing_code="evidence.receipt_digest_missing",
@@ -2527,6 +3065,7 @@ def _verify_canary(
         kind_entry_mismatch_code="evidence.receipt_kind_entry_mismatch",
     )
     return {
+        "version": version,
         "path": canary_path,
         "config_path": config_path,
         "started_at": started_at_raw,
@@ -2555,8 +3094,10 @@ def _verify_trust_profile(
     profile_id = _require_profile_id(profile, "profile_id", label)
     rail = _require_rail(profile, "rail", label)
     environment = _require_string(profile, "environment", label)
+    _reject_secret_looking_identifier(environment, f"{label}.environment")
     bundle_sha256 = _require_sha256(profile, "bundle_sha256", label)
     policy = _require_string(profile, "embedded_signature_policy", label)
+    _reject_secret_looking_identifier(policy, f"{label}.embedded_signature_policy")
     signature_pin_count = _require_nonnegative_int(
         profile,
         "signature_public_key_pin_count",
@@ -2619,6 +3160,8 @@ def _verify_trust_profile(
     _reject_unknown_keys(source, TRUST_SOURCE_KEYS, f"{label}.source")
     source_authority = _require_string(source, "authority", f"{label}.source")
     source_version = _require_string(source, "version", f"{label}.source")
+    _reject_secret_looking_identifier(source_authority, f"{label}.source.authority")
+    _reject_secret_looking_identifier(source_version, f"{label}.source.version")
     source_url = _validate_https_source_url(
         _require_string(source, "url", f"{label}.source"),
         f"{label}.source.url",
@@ -2758,6 +3301,8 @@ def _verify_archive_receipts(
         allow_failed_code="evidence.archive_receipts_allow_failed",
         allow_insecure_code="evidence.archive_receipts_insecure_http",
         allow_legacy_code="evidence.archive_receipts_allow_legacy_colr007",
+        allow_default_profile_code="evidence.archive_receipts_allow_default_profile",
+        version_code="evidence.archive_receipt_summary_version_unsupported",
         source_files_code="evidence.archive_receipts_source_files_not_required",
         count_mismatch_code="evidence.archive_receipt_count_mismatch",
         digest_missing_code="evidence.archive_receipt_digest_missing",
@@ -2816,6 +3361,21 @@ def _block_if_archive_receipts_do_not_cover_canaries(
                         f"canary_summaries[{canary_offset}].receipt_summary.receipts"
                         f"[{receipt_offset}].receipt_sha256 {receipt_sha256} to "
                         f"receipt_kind {archive_kind!r}, not {receipt_kind!r}"
+                    ),
+                    path,
+                )
+                continue
+            archive_path_name = Path(archive_receipt["path"]).name
+            canary_path_name = Path(receipt["path"]).name
+            if archive_path_name != canary_path_name:
+                _blocker(
+                    blockers,
+                    "evidence.archive_receipt_canary_path_mismatch",
+                    (
+                        "direct receipt archive verification binds "
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].receipt_sha256 {receipt_sha256} to "
+                        f"receipt filename {archive_path_name!r}, not {canary_path_name!r}"
                     ),
                     path,
                 )
@@ -2939,6 +3499,58 @@ def _block_cross_trust_profile_reuse(
                 seen_bundle_digests[bundle_sha256] = (trust_offset, profile_offset)
 
 
+def _block_canary_rail_receipts_without_trust(
+    canaries: list[dict[str, Any]],
+    trusts: list[dict[str, Any]],
+    path: Path,
+    blockers: list[dict[str, Any]],
+) -> None:
+    """Require every canary rail receipt to have matching trust material."""
+
+    trusted_profiles_by_environment = {
+        (profile["profile_id"], profile["environment"])
+        for trust in trusts
+        for profile in trust["profiles"]
+    }
+    trusted_builtin_profiles_by_rail_environment = {
+        (profile["profile_id"], profile["rail"], profile["environment"])
+        for trust in trusts
+        for profile in trust["profiles"]
+    }
+    for canary_offset, canary in enumerate(canaries):
+        canary_environment = canary["environment"]
+        for receipt_offset, receipt in enumerate(canary["receipt_summary"]["receipts"]):
+            if receipt.get("receipt_kind") != "iso-rail-gateway":
+                continue
+            profile_id = receipt.get("profile")
+            if profile_id is None:
+                continue
+            if not isinstance(profile_id, str) or PROFILE_ID_RE.fullmatch(profile_id) is None:
+                continue
+            if profile_id in KNOWN_RAILS:
+                covered = (
+                    profile_id,
+                    profile_id,
+                    canary_environment,
+                ) in trusted_builtin_profiles_by_rail_environment
+            else:
+                covered = (
+                    profile_id,
+                    canary_environment,
+                ) in trusted_profiles_by_environment
+            if not covered:
+                _blocker(
+                    blockers,
+                    "trust.canary_rail_without_profile",
+                    (
+                        f"canary_summaries[{canary_offset}].receipt_summary.receipts"
+                        f"[{receipt_offset}].profile {profile_id!r} has no matching "
+                        f"trust profile coverage for environment {canary_environment!r}"
+                    ),
+                    path,
+                )
+
+
 def _block_cross_xsd_summary_reuse(
     xsd_summaries: list[dict[str, Any]],
     blockers: list[dict[str, Any]],
@@ -2949,6 +3561,16 @@ def _block_cross_xsd_summary_reuse(
         ("_schema_paths", "schemas.path", "xsd.schema_path_reused"),
         ("_schema_digests", "schemas.sha256", "xsd.schema_digest_reused"),
         ("_schema_source_refs", "schemas.source", "xsd.schema_source_reused"),
+        (
+            "_validated_blocked_schema_source_refs",
+            "blocked_schema_sources.source",
+            "xsd.blocked_source_reused",
+        ),
+        (
+            "_validated_blocked_schema_source_digests",
+            "blocked_schema_sources.sha256",
+            "xsd.blocked_source_digest_reused",
+        ),
         ("_fixture_paths", "fixtures.path", "xsd.fixture_path_reused"),
         ("_fixture_digests", "fixtures.sha256", "xsd.fixture_digest_reused"),
     )
@@ -3159,6 +3781,7 @@ def verify_evidence_summary(
     summary = _require_object(_load_json(path), str(path))
     digest = _require_summary_digest(summary, str(path))
     _reject_unknown_keys(summary, EVIDENCE_SUMMARY_KEYS, str(path))
+    _check_no_secret_material(summary)
     verified_at, verified_at_dt = _require_timestamp(summary, "verified_at", str(path))
     _block_if_stale(
         verified_at_dt,
@@ -3169,7 +3792,11 @@ def verify_evidence_summary(
         blockers=blockers,
     )
     version = summary.get("version")
-    if version != EVIDENCE_VERSION:
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != EVIDENCE_VERSION
+    ):
         raise ReadinessError(f"{path}.version must be {EVIDENCE_VERSION}")
     if not _require_bool(summary, "ok", str(path)):
         _blocker(blockers, "evidence.summary_not_ok", "evidence summary is not ok", path)
@@ -3219,6 +3846,18 @@ def verify_evidence_summary(
             blockers=blockers,
         )
         summary_sha256 = _require_sha256(trust_obj, SUMMARY_DIGEST_FIELD, label)
+        version = trust_obj.get("version")
+        if (
+            isinstance(version, bool)
+            or not isinstance(version, int)
+            or version != TRUST_SUMMARY_VERSION
+        ):
+            _blocker(
+                blockers,
+                "trust.summary_version_unsupported",
+                f"{label}.version must be {TRUST_SUMMARY_VERSION}",
+                path,
+            )
         verified_bundles = _require_positive_int(trust_obj, "verified_bundles", label)
         if "max_source_age_days" not in trust_obj:
             raise ReadinessError(f"{label}.max_source_age_days must be recorded")
@@ -3346,6 +3985,7 @@ def verify_evidence_summary(
                 seen_bundle_digests[bundle_sha256] = profile_offset
         trust_outputs.append(
             {
+                "version": version,
                 "path": trust_path,
                 "verified_at": verified_at_raw,
                 "verified_bundles": verified_bundles,
@@ -3360,6 +4000,7 @@ def verify_evidence_summary(
     _reject_duplicate_compact_summaries(canaries, f"{path}.canary_summaries")
     _reject_duplicate_compact_summaries(trust_outputs, f"{path}.trust_summaries")
     _block_cross_trust_profile_reuse(trust_outputs, path, blockers)
+    _block_canary_rail_receipts_without_trust(canaries, trust_outputs, path, blockers)
     return {
         "path": str(path),
         "verified_at": verified_at,
@@ -3523,6 +4164,42 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
+        _preflight_raw_cli_secrets(
+            argv,
+            {
+                "--evidence-summary",
+                "--max-canary-age-days",
+                "--max-evidence-age-days",
+                "--max-trust-age-days",
+                "--max-trust-source-age-days",
+                "--max-xsd-age-days",
+                "--summary-out",
+                "--xsd-summary",
+            },
+        )
+        _preflight_boolean_cli_flags(
+            argv,
+            {
+                "--allow-canary-stage-receipts-only",
+                "--allow-reviewed-xsd-gaps",
+            },
+        )
+        _preflight_required_cli_values(
+            argv,
+            {"--environment", "--provider"},
+            "context",
+        )
+        _preflight_numeric_cli_values(
+            argv,
+            integer_flags={
+                "--max-canary-age-days",
+                "--max-evidence-age-days",
+                "--max-trust-age-days",
+                "--max-trust-source-age-days",
+                "--max-xsd-age-days",
+            },
+            number_flags=set(),
+        )
         _preflight_output_cli_paths(
             argv,
             {"--evidence-summary", "--summary-out", "--xsd-summary"},

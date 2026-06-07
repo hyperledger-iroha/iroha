@@ -11,19 +11,30 @@ class KagemushaRecursiveAggregationProofBundleProver private constructor() {
 
         @JvmStatic
         fun proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-            recordBundleArchive: ByteArray,
-            pallasOpenEnvelopesArchive: ByteArray,
+            recordBundleArchive: ByteArray?,
+            pallasOpenEnvelopesArchive: ByteArray?,
         ): ByteArray {
-            KagemushaCompactPaymentTokenProver.requireNativeInput(recordBundleArchive, "recordBundleArchive")
             KagemushaCompactPaymentTokenProver.requireNativeInput(
+                recordBundleArchive,
+                "recordBundleArchive",
+            )
+            KagemushaCompactPaymentTokenProver.requireNativeInput(
+                pallasOpenEnvelopesArchive,
+                "pallasOpenEnvelopesArchive",
+            )
+            val recordBundle = KagemushaCompactPaymentTokenProver.ownedNativeInput(
+                recordBundleArchive,
+                "recordBundleArchive",
+            )
+            val pallasOpenEnvelopes = KagemushaCompactPaymentTokenProver.ownedNativeInput(
                 pallasOpenEnvelopesArchive,
                 "pallasOpenEnvelopesArchive",
             )
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
             val proofBundleArchive =
                 nativeProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    recordBundleArchive,
-                    pallasOpenEnvelopesArchive,
+                    recordBundle,
+                    pallasOpenEnvelopes,
                 )
             return KagemushaCompactPaymentTokenProver.requireNativeOutput(
                 proofBundleArchive,

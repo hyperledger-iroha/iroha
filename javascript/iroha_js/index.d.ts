@@ -17321,6 +17321,7 @@ export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
+export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND: "halo2/ipa";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-onehop-v1";
@@ -17343,6 +17344,29 @@ export type KagemushaOfflineSpendMode =
   | "recursive_compact_v1"
   | "recursive_spend_v1"
   | "checked_prefold_v1";
+export type KagemushaRecursiveSpendLineageKeyArtifactOpeningLen =
+  | 2
+  | 4
+  | 8
+  | 16
+  | 32
+  | 64
+  | 128;
+export type KagemushaRecursiveSpendLineageKeyArtifactBytesLike =
+  | Buffer
+  | ArrayBuffer
+  | ArrayBufferView;
+export interface KagemushaRecursiveSpendLineageKeyArtifacts {
+  readonly proofCircuitId:
+    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1;
+  readonly verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen;
+  readonly lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND;
+  readonly lineageVerifierKey: Buffer;
+  readonly lineageProvingKeyArchive: Buffer;
+  readonly isInitArtifact: boolean;
+  readonly isAppendArtifact: boolean;
+}
 export function preferredKagemushaOfflineSpendMode(
   recursiveSpendAvailable?: boolean,
   recursiveCompactAvailable?: boolean,
@@ -17361,6 +17385,33 @@ export function isKagemushaRecursiveSpendLineageProofCircuitId(
 export function isKagemushaRecursiveSpendLineageAppendOutputCircuitId(
   outputProofCircuitId?: string | null,
 ): boolean;
+export function isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(
+  verifierOpeningLen: unknown,
+): verifierOpeningLen is KagemushaRecursiveSpendLineageKeyArtifactOpeningLen;
+export function kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+  verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
+  lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+  lineageVerifierKey: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+  lineageProvingKeyArchive: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+): KagemushaRecursiveSpendLineageKeyArtifacts;
+export function kagemushaRecursiveSpendLineageKeyArtifactsForAppend(
+  verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
+  lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+  lineageVerifierKey: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+  lineageProvingKeyArchive: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+): KagemushaRecursiveSpendLineageKeyArtifacts;
+export function kagemushaRecursiveSpendLineageKeyArtifacts(
+  proofCircuitId:
+    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+    | typeof KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+  verifierOpeningLen: KagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
+  lineageVerifierKeyBackend: typeof KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+  lineageVerifierKey: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+  lineageProvingKeyArchive: KagemushaRecursiveSpendLineageKeyArtifactBytesLike,
+): KagemushaRecursiveSpendLineageKeyArtifacts;
+export function validateKagemushaRecursiveSpendLineageKeyArtifacts(
+  artifacts: KagemushaRecursiveSpendLineageKeyArtifacts,
+): KagemushaRecursiveSpendLineageKeyArtifacts;
 export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForInit(): boolean;
 export function requiresKagemushaRecursiveSpendLineageKeyArtifactsForAppendOutput(
   outputProofCircuitId?: string | null,
@@ -17408,6 +17459,7 @@ export function isKagemushaRecursiveSpendNativeAvailable(): boolean;
 export function isKagemushaCompactPaymentTokenNativeAvailable(): boolean;
 export function isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean;
 export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable(): boolean;
+export function isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(): boolean;
 export function kagemushaProveVerifiedCompactPaymentTokenWithRecords(
   recordBundleArchive: BinaryLike,
 ): Buffer;

@@ -149,6 +149,104 @@ def run_verify(argv):
 
 
 class IsoTrustBundleVerifyTest(unittest.TestCase):
+    def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
+        cases = (
+            ("password_trust_unknown_secret", "trust_unknown_secret"),
+            ("%70assword_trust_unknown_leak", "trust_unknown_leak"),
+            ("private-key_trust_unknown_leak", "trust_unknown_leak"),
+        )
+        for unknown_key, hidden in cases:
+            with self.subTest(unknown_key=unknown_key):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._reject_unknown_keys(
+                        {unknown_key: "redacted"}, set(), "bundle"
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("contains unknown keys", message)
+                self.assertNotIn("password", message)
+                self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_output_cli_path_flags_reject_flag_like_values(self):
+        cases = (
+            ["--summary-out"],
+            ["--summary-out", ""],
+            ["--summary-out", "--emit-profile-json"],
+            ["--summary-out="],
+            ["--summary-out=--emit-profile-json"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                with self.assertRaisesRegex(
+                    VERIFIER.TrustBundleError,
+                    "--summary-out requires a path value",
+                ):
+                    VERIFIER._preflight_output_cli_paths(argv, {"--summary-out"})
+
+    def test_output_cli_paths_reject_encoded_secret_material_without_echo(self):
+        cases = (
+            ("token=trust-path-leak.summary.json", "token=trust-path-leak"),
+            ("token%3Dtrust-path-leak.summary.json", "token=trust-path-leak"),
+            ("%70assword%253Dtrust-path-leak.summary.json", "password=trust-path-leak"),
+            ("token-trust-path-secret.summary.json", "token-trust-path-secret"),
+        )
+        for raw_path, decoded_secret in cases:
+            with self.subTest(raw_path=raw_path):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._preflight_output_cli_paths(
+                        ["--summary-out", raw_path], {"--summary-out"}
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("secret-looking material", message)
+                self.assertNotIn(raw_path, message)
+                self.assertNotIn(decoded_secret, message)
+                self.assertNotIn("trust-path-leak", message)
+
+    def test_boolean_cli_flags_reject_values_without_echo(self):
+        cases = (
+            (["--allow-record-only=true"], "--allow-record-only", "--allow-record-only=true"),
+            (["--allow-synthetic-der", "true"], "--allow-synthetic-der", "true"),
+        )
+        for argv, flag, rejected in cases:
+            with self.subTest(argv=argv):
+                rc, stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertEqual(stdout, "")
+                self.assertIn(f"{flag} does not take a value", stderr)
+                self.assertNotIn(rejected, stderr)
+
+    def test_raw_cli_secret_like_values_rejected_without_echo(self):
+        cases = (
+            ["--private-key=trust-secret"],
+            ["token=trust-secret"],
+            ["password=trust-secret"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("secret-looking", stderr)
+                self.assertNotIn("token=", stderr)
+                self.assertNotIn("password=", stderr)
+                self.assertNotIn("trust-secret", stderr)
+
+    def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            path = Path(raw_root) / "bundle.json"
+            path.write_text("{}\n", encoding="utf-8")
+
+            for limit in (True, "64"):
+                with self.subTest(limit=limit):
+                    with self.assertRaisesRegex(
+                        VERIFIER.TrustBundleError,
+                        "max file bytes must be a positive integer",
+                    ):
+                        VERIFIER._read_regular_file(path, max_bytes=limit)
+
     def test_valid_bundle_emits_digest_bound_summary_and_profile_overrides(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -172,6 +270,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 0, stderr)
             summary = json.loads(stdout)
+            self.assertEqual(summary["version"], VERIFIER.TRUST_SUMMARY_VERSION)
             self.assertEqual(summary["verified_bundles"], 1)
             self.assertFalse(summary["allow_record_only"])
             self.assertFalse(summary["allow_insecure_source_url"])
@@ -298,6 +397,36 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+
+    def test_secret_looking_cli_paths_are_rejected_before_summary_output(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            clean_bundle = write_bundle(root, valid_bundle())
+            cases = (
+                (
+                    ["--bundle", str(root / "token=trust-path-secret.bundle.json")],
+                    root / "token=trust-path-secret.bundle.json",
+                ),
+                (
+                    [
+                        "--bundle",
+                        str(clean_bundle),
+                        "--summary-out",
+                        str(root / "token=trust-summary-secret.summary.json"),
+                    ],
+                    root / "token=trust-summary-secret.summary.json",
+                ),
+            )
+            for argv, secret_path in cases:
+                with self.subTest(secret_path=secret_path.name):
+                    rc, stdout, stderr = run_verify(argv)
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("secret-looking material", stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn(secret_path.name, stderr)
+                    self.assertFalse(secret_path.exists())
 
     def test_symlinked_output_files_are_rejected(self):
         cases = (
@@ -495,7 +624,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_root:
             path = Path(raw_root) / "trust-bundle.json"
             path.write_text(
-                '{"version":1,"profile_id":"swift-cbpr-plus","profile_id":"fedwire-funds"}\n',
+                '{"version":1,"token=trust-duplicate-key-secret":1,"token=trust-duplicate-key-secret":2}\n',
                 encoding="utf-8",
             )
 
@@ -503,6 +632,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("duplicate key", stderr)
+            self.assertNotIn("trust-duplicate-key-secret", stderr)
 
     def test_non_finite_bundle_json_numbers_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -534,6 +664,16 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             )
             self.assertEqual(rc, 2)
             self.assertIn("--bundle[1] duplicates --bundle[0]", stderr)
+
+            secret_bundle = root / "token=trust-duplicate-secret.bundle.json"
+            secret_bundle.write_text(original.read_text(encoding="utf-8"), encoding="utf-8")
+            rc, _stdout, stderr = run_verify(
+                ["--bundle", str(secret_bundle), "--bundle", str(secret_bundle)]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("secret-looking material", stderr)
+            self.assertNotIn("token=", stderr)
+            self.assertNotIn("trust-duplicate-secret", stderr)
 
             copied_dir = root / "copied"
             copied_dir.mkdir()
@@ -772,6 +912,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("duplicates DER SHA-256", stderr)
+            self.assertNotIn(der_digest(CERT_ONE_B64), stderr)
 
     def test_duplicate_der_labels_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -790,6 +931,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("duplicates label", stderr)
+            self.assertNotIn("root-a", stderr)
 
     def test_trust_anchor_also_revoked_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -802,6 +944,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("trusted/revoked certificate pins", stderr)
+            self.assertNotIn(der_digest(CERT_ONE_B64), stderr)
 
     def test_legacy_and_current_pin_alias_conflicts_are_rejected(self):
         for mutate, message in [
@@ -839,6 +982,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    self.assertNotIn("1" * 64, stderr)
+                    self.assertNotIn("2" * 64, stderr)
 
     def test_required_crl_and_ocsp_material_must_be_present(self):
         for key, message in [
@@ -858,11 +1003,150 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertIn(message, stderr)
 
     def test_secret_material_and_unknown_keys_are_rejected(self):
-        for mutate, message in [
-            (lambda bundle: bundle.update({"authorization": "Bearer secret"}), "unknown keys"),
-            (lambda bundle: bundle["source"].update({"token": "secret"}), "forbidden secret"),
-            (lambda bundle: bundle["source"].update({"version": "Bearer secret"}), "bearer-token"),
-        ]:
+        cases = [
+            (
+                lambda bundle: bundle.update({"authorization": "Bearer top-level-secret"}),
+                "unknown keys",
+                "top-level-secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update(
+                    {"password_source_field_secret": "redacted"}
+                ),
+                "forbidden secret",
+                "source_field_secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update(
+                    {"private-key_source_field_secret": "redacted"}
+                ),
+                "forbidden secret",
+                "source_field_secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update(
+                    {"%70assword_source_field_secret": "redacted"}
+                ),
+                "forbidden secret",
+                "source_field_secret",
+            ),
+            (
+                lambda bundle: bundle.update(
+                    {"profile_id": "token-trust-profile-secret"}
+                ),
+                "secret-looking material",
+                "token-trust-profile-secret",
+            ),
+            (
+                lambda bundle: bundle.update(
+                    {"environment": "token-trust-environment-secret"}
+                ),
+                "secret-looking material",
+                "token-trust-environment-secret",
+            ),
+            (
+                lambda bundle: bundle.update({"rail": "token-trust-rail-secret"}),
+                "secret-looking material",
+                "token-trust-rail-secret",
+            ),
+            (
+                lambda bundle: bundle.update(
+                    {"embedded_signature_policy": "token-trust-policy-secret"}
+                ),
+                "secret-looking material",
+                "token-trust-policy-secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update(
+                    {"authority": "token-trust-authority-secret"}
+                ),
+                "secret-looking material",
+                "token-trust-authority-secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update(
+                    {"version": "session-key-trust-version-secret"}
+                ),
+                "secret-looking material",
+                "session-key-trust-version-secret",
+            ),
+            (
+                lambda bundle: bundle["x509_trust_anchors"][0].update(
+                    {"label": "token-trust-label-secret"}
+                ),
+                "secret-looking material",
+                "token-trust-label-secret",
+            ),
+            (
+                lambda bundle: bundle.update(
+                    {"signature_public_key_sha256_pins": ["token-trust-pin-secret"]}
+                ),
+                "secret-looking material",
+                "token-trust-pin-secret",
+            ),
+            (
+                lambda bundle: bundle["x509_crls"][0].update(
+                    {"sha256": "token-trust-der-digest-secret"}
+                ),
+                "secret-looking material",
+                "token-trust-der-digest-secret",
+            ),
+            (
+                lambda bundle: bundle["x509_required_certificate_policy_oids"].__setitem__(
+                    0,
+                    "token-trust-oid-secret",
+                ),
+                "secret-looking material",
+                "token-trust-oid-secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update({"version": "Bearer source-secret"}),
+                "secret-looking material",
+                "source-secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update({"version": "token=source-secret"}),
+                "secret-looking material",
+                "source-secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update({"version": "password=source-secret"}),
+                "secret-looking material",
+                "source-secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update({"version": "token%3Dsource-leak"}),
+                "secret-looking material",
+                "source-leak",
+            ),
+            (
+                lambda bundle: bundle["source"].update(
+                    {"version": "%70assword%253Dsource-leak"}
+                ),
+                "secret-looking material",
+                "source-leak",
+            ),
+            (
+                lambda bundle: bundle["source"].update(
+                    {"authority": "Authorization: Bearer source-secret"}
+                ),
+                "secret-looking material",
+                "source-secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update({"authority": "private_key=source-secret"}),
+                "secret-looking material",
+                "source-secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update(
+                    {"authority": "X-Iroha-Signature: source-secret"}
+                ),
+                "secret-looking material",
+                "source-secret",
+            ),
+        ]
+        for mutate, message, secret in cases:
             with self.subTest(message=message):
                 with tempfile.TemporaryDirectory() as raw_root:
                     root = Path(raw_root)
@@ -874,6 +1158,11 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    self.assertNotIn(secret, stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn("password=", stderr)
+                    self.assertNotIn("source-secret", stderr)
+                    self.assertNotIn("top-level-secret", stderr)
 
     def test_insecure_source_url_requires_explicit_local_override(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1003,8 +1292,26 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("--max-source-age-days is required", stderr)
 
+    def test_source_freshness_cli_flag_rejects_missing_empty_or_flag_like_values(self):
+        cases = (
+            ["--max-source-age-days"],
+            ["--max-source-age-days", ""],
+            ["--max-source-age-days", "--summary-out"],
+            ["--max-source-age-days="],
+            ["--max-source-age-days=--summary-out"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_verify(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn(
+                    "--max-source-age-days requires a positive integer value",
+                    stderr,
+                )
+
     def test_source_freshness_budget_must_be_positive_integer(self):
-        cases = ("0", "-1", "1.5", " 7")
+        cases = ("0", "-1", "1.5", " 7", "token=trust-secret")
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             path = write_bundle(root, valid_bundle())
@@ -1016,6 +1323,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn("--max-source-age-days must be a positive integer", stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn("trust-secret", stderr)
 
     def test_stale_source_prevents_profile_override_emission(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1067,6 +1376,18 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_boolean_bundle_version_is_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            bundle["version"] = True
+            path = write_bundle(root, bundle)
+
+            rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn(".version must be 1", stderr)
 
     def test_source_identity_fields_are_required_and_clean(self):
         cases = (
@@ -1132,9 +1453,9 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         long_url = "https://pki.example.invalid/" + ("a" * VERIFIER.MAX_SOURCE_URL_CHARS)
         cases = [
             ("https://user:pass@pki.example.invalid/swift-cbpr-plus", "credentials"),
-            ("https://pki.example.invalid/swift-cbpr-plus?token=abc", "params, query, or fragment"),
+            ("https://pki.example.invalid/swift-cbpr-plus?debug=true", "params, query, or fragment"),
             ("https://pki.example.invalid/swift-cbpr-plus#bundle", "params, query, or fragment"),
-            ("https://pki.example.invalid/swift-cbpr-plus\nX-Token: abc", "ASCII control"),
+            ("https://pki.example.invalid/swift-cbpr-plus\nbad", "ASCII control"),
             ("https://pki.example.invalid/swift cbpr plus", "must not contain whitespace"),
             ("https://pki.example.invalid:abc/swift-cbpr-plus", "invalid port"),
             ("https://pki.example.invalid:/swift-cbpr-plus", "empty port"),
@@ -1187,6 +1508,68 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_rejected_source_url_does_not_echo_secret_query(self):
+        cases = (
+            "https://pki.example.invalid/swift-cbpr-plus?token=trust-url-secret",
+            "https://pki.example.invalid/swift-cbpr-plus/token=trust-url-secret",
+            "https://pki.example.invalid/swift-cbpr-plus/token-trust-url-secret",
+            "https://pki.example.invalid/swift-cbpr-plus/token%3Dtrust-url-secret",
+            "https://pki.example.invalid/swift-cbpr-plus/token%253Dtrust-url-secret",
+        )
+        for secret_url in cases:
+            with self.subTest(secret_url=secret_url):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    bundle["source"]["url"] = secret_url
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("secret-looking material", stderr)
+                    self.assertNotIn(secret_url, stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn("trust-url-secret", stderr)
+
+    def test_rejected_source_url_does_not_echo_secret_port(self):
+        secret_url = "https://pki.example.invalid:token-trust-port-secret/swift-cbpr-plus"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            bundle["source"]["url"] = secret_url
+            path = write_bundle(root, bundle)
+
+            rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("invalid port", stderr)
+            self.assertNotIn(secret_url, stderr)
+            self.assertNotIn("token-trust-port-secret", stderr)
+
+    def test_rejected_source_url_does_not_echo_secret_host_or_parser_error(self):
+        cases = (
+            (
+                "https://token-trust-host-secret.pki.example/swift-cbpr-plus",
+                "secret-looking material",
+            ),
+            ("https://[token-trust-host-secret/swift-cbpr-plus", "malformed"),
+        )
+        for secret_url, message in cases:
+            with self.subTest(secret_url=secret_url):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    bundle["source"]["url"] = secret_url
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(secret_url, stderr)
+                    self.assertNotIn("token-trust-host-secret", stderr)
+
     def test_local_source_url_override_is_limited_to_local_audits(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1208,7 +1591,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("not-a-date", "ISO 8601"),
             ("2026-06-04T00:00:00", "timezone"),
             (future, "future"),
-            ("2026-06-04T00:00:00Z\nX-Token: abc", "ASCII control"),
+            ("2026-06-04T00:00:00Z\nbad", "ASCII control"),
         ]
         for retrieved_at, message in cases:
             with self.subTest(retrieved_at=retrieved_at):

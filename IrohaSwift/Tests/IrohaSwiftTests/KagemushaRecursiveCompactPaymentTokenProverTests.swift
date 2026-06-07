@@ -196,6 +196,25 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
         }
     }
 
+    func testNativeRecursiveCompactUnavailableIsDistinctFromProofRejection() {
+        let validArchive = validKagemushaNoritoArchive()
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    recordBundleArchive: validArchive,
+                    pallasOpenEnvelopesArchive: validArchive,
+                    bridgeAvailable: true
+                ) {
+                    throw NativeBridgeError.kagemushaRecursiveCompactUnavailable
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .recursiveCompactUnavailable
+            )
+        }
+    }
+
     func testVerifyRejectsEmptyCompactTokenArchiveBeforeBridgeCall() {
         XCTAssertThrowsError(
             try KagemushaRecursiveCompactPaymentTokenProver
@@ -247,6 +266,24 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
         }
     }
 
+    func testVerifyRequiresVerifierNativeAvailabilityAfterInputValidation() {
+        XCTAssertThrowsError(
+            try KagemushaRecursiveCompactPaymentTokenProver
+                .verifyRecursiveCompactPaymentToken(
+                    compactTokenArchive: validKagemushaNoritoArchive(),
+                    bridgeAvailable: false
+                ) {
+                    XCTFail("native compact-token verifier body must not run when unavailable")
+                    return true
+                }
+        ) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveCompactPaymentTokenProverError,
+                .bridgeUnavailable
+            )
+        }
+    }
+
     func testVerifyReturnsNativeBoolean() throws {
         XCTAssertTrue(
             try KagemushaRecursiveCompactPaymentTokenProver
@@ -266,6 +303,45 @@ final class KagemushaRecursiveCompactPaymentTokenProverTests: XCTestCase {
                     false
                 }
         )
+    }
+
+    func testNativeBridgeRejectsInvalidVerifierBooleanOutput() throws {
+        XCTAssertFalse(
+            try NoritoNativeBridge.normalizeKagemushaRecursiveCompactVerifierOutput(
+                status: 0,
+                valid: 0
+            )
+        )
+        XCTAssertTrue(
+            try NoritoNativeBridge.normalizeKagemushaRecursiveCompactVerifierOutput(
+                status: 0,
+                valid: 1
+            )
+        )
+        XCTAssertThrowsError(
+            try NoritoNativeBridge.normalizeKagemushaRecursiveCompactVerifierOutput(
+                status: 0,
+                valid: 2
+            )
+        ) { error in
+            XCTAssertEqual(error as? NativeBridgeError, .invalidKagemushaVerifierOutput)
+        }
+        XCTAssertThrowsError(
+            try NoritoNativeBridge.normalizeKagemushaRecursiveCompactVerifierOutput(
+                status: -311,
+                valid: 0
+            )
+        ) { error in
+            XCTAssertEqual(error as? NativeBridgeError, .kagemushaProve)
+        }
+        XCTAssertThrowsError(
+            try NoritoNativeBridge.normalizeKagemushaRecursiveCompactVerifierOutput(
+                status: -312,
+                valid: 0
+            )
+        ) { error in
+            XCTAssertEqual(error as? NativeBridgeError, .kagemushaRecursiveCompactUnavailable)
+        }
     }
 
     func testVerifyNilNativeResultIsBridgeUnavailable() {

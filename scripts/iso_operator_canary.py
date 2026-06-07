@@ -30,6 +30,7 @@ import ipaddress
 import json
 import math
 import os
+import re
 import secrets
 import stat
 import subprocess
@@ -43,12 +44,44 @@ from typing import Any
 
 DEFAULT_OUTPUT_LIMIT_BYTES = 64 * 1024
 DEFAULT_STAGE_TIMEOUT_SECS = 300.0
+CANARY_SUMMARY_VERSION = 1
 MAX_CONFIG_JSON_BYTES = 64 * 1024
 MAX_HTTP_URL_CHARS = 2048
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
+SECRET_VALUE_PATTERNS = [
+    re.compile(r"\bauthorization\s*:", re.IGNORECASE),
+    re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(
+        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
+]
+SECRET_IDENTIFIER_PATTERN = re.compile(
+    r"(?<![a-z0-9])"
+    r"(?:authorization|bearer|token|secret|private[_-]?key|password|passphrase|"
+    r"api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|"
+    r"set-cookie|x[_-]iroha[_-]signature)"
+    r"(?![a-z0-9])",
+    re.IGNORECASE,
+)
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _secret_scan_values(raw: str) -> tuple[str, ...]:
+    values = [raw]
+    decoded = raw
+    for _ in range(4):
+        if "%" not in decoded:
+            break
+        next_decoded = urllib.parse.unquote(decoded)
+        if next_decoded == decoded:
+            break
+        values.append(next_decoded)
+        decoded = next_decoded
+    return tuple(values)
 
 TOP_LEVEL_KEYS = {"provider", "environment", "rail", "notary", "verify"}
 RAIL_KEYS = {
@@ -82,6 +115,7 @@ VERIFY_KEYS = {
     "include_stage_receipts",
     "allow_failed",
     "allow_insecure_http",
+    "allow_default_profile",
     "require_source_files",
     "skip_on_stage_failure",
 }
@@ -136,8 +170,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
-    if max_bytes is not None and max_bytes <= 0:
-        raise CanaryError("max file bytes must be positive")
+    if max_bytes is not None and (
+        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+    ):
+        raise CanaryError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         metadata = path.lstat()
@@ -193,6 +229,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise CanaryError(f"{label} must use forward slashes")
     if ";" in raw:
         raise CanaryError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+        raise CanaryError(f"{label} must not contain secret-looking material")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise CanaryError(f"{label} must not contain leading-dash path segments")
@@ -215,6 +253,8 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise CanaryError(f"{label} must use forward slashes")
     if ";" in raw:
         raise CanaryError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+        raise CanaryError(f"{label} must not contain secret-looking material")
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -223,6 +263,39 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise CanaryError(f"{label} must not contain leading-dash path segments")
     if any(part in {".", ".."} for part in checked_parts):
         raise CanaryError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg in value_flags:
+            index += 2
+            continue
+        if any(arg.startswith(f"{flag}=") for flag in value_flags):
+            index += 1
+            continue
+        if _contains_secret_material(arg) or _is_secret_looking_key(arg):
+            raise CanaryError("CLI argument must not contain secret-looking material")
+        index += 1
+
+
+def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        flag, separator, _value = arg.partition("=")
+        if separator and flag in flags:
+            raise CanaryError(f"{flag} does not take a value")
+        if (
+            arg in flags
+            and index + 1 < len(raw_args)
+            and not raw_args[index + 1].startswith("--")
+        ):
+            raise CanaryError(f"{arg} does not take a value")
+        index += 1
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
@@ -235,14 +308,68 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
         matched = False
         for flag in flags:
             if arg == flag:
-                if index + 1 < len(raw_args):
-                    _reject_raw_output_path_smuggling(raw_args[index + 1], flag)
+                if index + 1 >= len(raw_args):
+                    raise CanaryError(f"{flag} requires a path value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise CanaryError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
                 index += 2
                 matched = True
                 break
             prefix = f"{flag}="
             if arg.startswith(prefix):
-                _reject_raw_output_path_smuggling(arg[len(prefix) :], flag)
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise CanaryError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
+    if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise CanaryError(f"{flag} must be a numeric value")
+    try:
+        int(raw, 10) if integer else float(raw)
+    except ValueError as error:
+        raise CanaryError(f"{flag} must be a numeric value") from error
+
+
+def _preflight_numeric_cli_values(
+    argv: list[str] | None,
+    *,
+    integer_flags: set[str],
+    number_flags: set[str],
+) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    flags = integer_flags | number_flags
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise CanaryError(f"{flag} requires a numeric value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise CanaryError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise CanaryError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
                 index += 1
                 matched = True
                 break
@@ -363,7 +490,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in seen:
-            raise CanaryError(f"JSON object contains duplicate key {key!r}")
+            raise CanaryError("JSON object contains duplicate key")
         seen.add(key)
         result[key] = value
     return result
@@ -395,7 +522,51 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
+        if any(_is_secret_looking_key(key) for key in unknown):
+            raise CanaryError(f"{label} contains unknown keys")
         raise CanaryError(f"{label} contains unknown keys: {', '.join(unknown)}")
+
+
+def _is_secret_looking_key(value: Any) -> bool:
+    markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private_key",
+        "private-key",
+        "password",
+        "passphrase",
+        "api_key",
+        "api-key",
+        "access_key",
+        "access-key",
+        "session_key",
+        "session-key",
+        "client_secret",
+        "client-secret",
+        "cookie",
+        "set-cookie",
+        "x-iroha-signature",
+        "x_iroha_signature",
+    )
+    return any(
+        marker in candidate.lower()
+        for candidate in _secret_scan_values(str(value))
+        for marker in markers
+    )
+
+
+def _is_secret_looking_identifier(value: Any) -> bool:
+    return any(
+        SECRET_IDENTIFIER_PATTERN.search(candidate)
+        for candidate in _secret_scan_values(str(value))
+    )
+
+
+def _reject_secret_looking_identifier(value: str, label: str) -> None:
+    if _contains_secret_material(value) or _is_secret_looking_identifier(value):
+        raise CanaryError(f"{label} must not contain secret-looking material")
 
 
 def _required_string(value: dict[str, Any], key: str, label: str) -> str:
@@ -507,7 +678,7 @@ def _reject_duplicate_strings(values: list[str], label: str) -> None:
     seen: dict[str, int] = {}
     for offset, value in enumerate(values):
         if value in seen:
-            raise CanaryError(f"{label}[{offset}] duplicates {label}[{seen[value]}]: {value}")
+            raise CanaryError(f"{label}[{offset}] duplicates {label}[{seen[value]}]")
         seen[value] = offset
 
 
@@ -516,7 +687,7 @@ def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
     for offset, path in enumerate(paths):
         key = str(path.resolve())
         if key in seen:
-            raise CanaryError(f"{label}[{offset}] duplicates {label}[{seen[key]}]: {key}")
+            raise CanaryError(f"{label}[{offset}] duplicates {label}[{seen[key]}]")
         seen[key] = offset
 
 
@@ -567,13 +738,13 @@ def _validate_endpoint_url(
         parsed = urllib.parse.urlparse(url)
         hostname = parsed.hostname
     except ValueError as error:
-        raise CanaryError(f"{label} is not a valid URL: {error}") from error
+        raise CanaryError(f"{label} is not a valid URL") from error
     if parsed.scheme != "https" and not (parsed.scheme == "http" and allow_insecure_http):
         raise CanaryError(f"{label} must use HTTPS")
     try:
         port = parsed.port
     except ValueError as error:
-        raise CanaryError(f"{label} has invalid port: {error}") from error
+        raise CanaryError(f"{label} has invalid port") from error
     port_text = _raw_url_port_text(parsed)
     if port_text == "":
         raise CanaryError(f"{label} must not include an empty port")
@@ -597,6 +768,7 @@ def _validate_endpoint_url(
         raise CanaryError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise CanaryError(f"{label} host must not end with a dot")
+    _reject_secret_looking_identifier(raw_host, f"{label} host")
     _validate_host_labels(raw_host, label)
     _reject_local_url_host(parsed, label, allow_insecure_http=allow_insecure_http)
     if parsed.params or parsed.query or parsed.fragment:
@@ -744,6 +916,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise CanaryError(f"{label} path must not contain empty segments")
     if any(segment in {".", ".."} for segment in segments):
         raise CanaryError(f"{label} path must not contain dot segments")
+    if _contains_secret_material(path) or _is_secret_looking_key(path):
+        raise CanaryError(f"{label} path must not contain secret-looking material")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
         raise CanaryError(f"{label} path must not contain encoded dot or separator characters")
@@ -1027,6 +1201,16 @@ def _build_verify_stage(
     )
     _append_bool(
         argv,
+        "--allow-default-profile",
+        _policy_bool(
+            verify,
+            "allow_default_profile",
+            "verify",
+            require_explicit_policy=require_explicit_policy,
+        ),
+    )
+    _append_bool(
+        argv,
         "--require-source-files",
         _policy_bool(
             verify,
@@ -1063,7 +1247,11 @@ def _run_command_bounded(
     output_limit_bytes: int,
     timeout_secs: float,
 ) -> tuple[int, str, bool, str, bool, bool]:
-    if output_limit_bytes <= 0:
+    if (
+        isinstance(output_limit_bytes, bool)
+        or not isinstance(output_limit_bytes, int)
+        or output_limit_bytes <= 0
+    ):
         raise CanaryError("output limit bytes must be positive")
     timeout_secs = _require_positive_finite_number(timeout_secs, "stage timeout seconds")
     process = subprocess.Popen(
@@ -1163,6 +1351,26 @@ def _run_stage(stage: StagePlan, output_limit_bytes: int, stage_timeout_secs: fl
     )
 
 
+def _contains_secret_material(value: str) -> bool:
+    return any(
+        pattern.search(candidate)
+        for candidate in _secret_scan_values(value)
+        for pattern in SECRET_VALUE_PATTERNS
+    )
+
+
+def _reject_secret_stage_output(results: list[StageResult]) -> None:
+    for result in results:
+        if _contains_secret_material(result.stdout_preview):
+            raise CanaryError(
+                f"stage {result.name} stdout_preview contains secret-looking material"
+            )
+        if _contains_secret_material(result.stderr_preview):
+            raise CanaryError(
+                f"stage {result.name} stderr_preview contains secret-looking material"
+            )
+
+
 def _skipped_verify_result(reason: str) -> StageResult:
     timestamp = dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat()
     return StageResult(
@@ -1220,6 +1428,8 @@ def build_stage_plans(
     _reject_unknown_keys(config, TOP_LEVEL_KEYS, "config")
     provider = _required_string(config, "provider", "config")
     environment = _required_string(config, "environment", "config")
+    _reject_secret_looking_identifier(provider, "config.provider")
+    _reject_secret_looking_identifier(environment, "config.environment")
     config_dir = config_path.resolve().parent
 
     stages: list[StagePlan] = []
@@ -1257,7 +1467,11 @@ def run(args: argparse.Namespace) -> int:
         config,
         require_explicit_policy=args.require_explicit_policy,
     )
-    if args.output_limit_bytes <= 0:
+    if (
+        isinstance(args.output_limit_bytes, bool)
+        or not isinstance(args.output_limit_bytes, int)
+        or args.output_limit_bytes <= 0
+    ):
         raise CanaryError("--output-limit-bytes must be positive")
     stage_timeout_secs = _require_positive_finite_number(
         args.stage_timeout_secs, "--stage-timeout-secs"
@@ -1283,6 +1497,7 @@ def run(args: argparse.Namespace) -> int:
         if verify_stage is not None:
             planned_stages.append(_plan_to_json(verify_stage))
         summary: dict[str, Any] = {
+            "version": CANARY_SUMMARY_VERSION,
             "provider": provider,
             "environment": environment,
             "config_path": str(resolved_config_path),
@@ -1333,7 +1548,10 @@ def run(args: argparse.Namespace) -> int:
             if verify_result.returncode != 0:
                 prior_failure = True
 
+    _reject_secret_stage_output(results)
+
     summary: dict[str, Any] = {
+        "version": CANARY_SUMMARY_VERSION,
         "provider": provider,
         "environment": environment,
         "config_path": str(resolved_config_path),
@@ -1397,6 +1615,27 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
+        _preflight_raw_cli_secrets(
+            argv,
+            {
+                "--config",
+                "--output-limit-bytes",
+                "--stage-timeout-secs",
+                "--summary-out",
+            },
+        )
+        _preflight_boolean_cli_flags(
+            argv,
+            {
+                "--plan-only",
+                "--require-explicit-policy",
+            },
+        )
+        _preflight_numeric_cli_values(
+            argv,
+            integer_flags={"--output-limit-bytes"},
+            number_flags={"--stage-timeout-secs"},
+        )
         _preflight_output_cli_paths(argv, {"--config", "--summary-out"})
         args = parser.parse_args(argv)
         return run(args)

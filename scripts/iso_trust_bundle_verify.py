@@ -6,7 +6,7 @@ Purpose:
   profile trust material is merged into Torii ISO bridge configuration. It
   checks canonical SHA-256 pins, digest-bound DER blobs, duplicate material,
   revocation-material requirements, HTTPS provenance, and absence of
-  secret-looking fields.
+  secret-looking fields or values.
 
 Prerequisites:
   Python 3.11+. No third party Python packages are required.
@@ -39,6 +39,7 @@ from typing import Any
 
 
 BUNDLE_VERSION = 1
+TRUST_SUMMARY_VERSION = 1
 DEFAULT_POLICY = "require-verified"
 MAX_DER_BLOBS = 8
 MAX_DER_BYTES = 1024 * 1024
@@ -47,6 +48,37 @@ MAX_BUNDLE_JSON_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_URL_CHARS = 2048
 PLACEHOLDER_TRUST_SOURCE_MARKERS = ("placeholder", "replace-before-production")
 PLACEHOLDER_TRUST_SOURCE_HOSTS = {"example.invalid"}
+SECRET_VALUE_PATTERNS = [
+    re.compile(r"\bauthorization\s*:", re.IGNORECASE),
+    re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(
+        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
+]
+
+
+def _secret_scan_values(raw: str) -> tuple[str, ...]:
+    values = [raw]
+    decoded = raw
+    for _ in range(4):
+        if "%" not in decoded:
+            break
+        next_decoded = urllib.parse.unquote(decoded)
+        if next_decoded == decoded:
+            break
+        values.append(next_decoded)
+        decoded = next_decoded
+    return tuple(values)
+
+
+def _contains_secret_material(value: str) -> bool:
+    return any(
+        pattern.search(candidate)
+        for candidate in _secret_scan_values(value)
+        for pattern in SECRET_VALUE_PATTERNS
+    )
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
@@ -122,8 +154,10 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 
 def _read_regular_file(path: Path, *, max_bytes: int | None = None) -> bytes:
-    if max_bytes is not None and max_bytes <= 0:
-        raise TrustBundleError("max file bytes must be positive")
+    if max_bytes is not None and (
+        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+    ):
+        raise TrustBundleError("max file bytes must be a positive integer")
     _reject_symlinked_existing_ancestors(path.parent)
     try:
         metadata = path.lstat()
@@ -179,6 +213,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise TrustBundleError(f"{label} must use forward slashes")
     if ";" in raw:
         raise TrustBundleError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+        raise TrustBundleError(f"{label} must not contain secret-looking material")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise TrustBundleError(f"{label} must not contain leading-dash path segments")
@@ -201,6 +237,8 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise TrustBundleError(f"{label} must use forward slashes")
     if ";" in raw:
         raise TrustBundleError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+        raise TrustBundleError(f"{label} must not contain secret-looking material")
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -209,6 +247,85 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise TrustBundleError(f"{label} must not contain leading-dash path segments")
     if any(part in {".", ".."} for part in checked_parts):
         raise TrustBundleError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg in value_flags:
+            index += 2
+            continue
+        if any(arg.startswith(f"{flag}=") for flag in value_flags):
+            index += 1
+            continue
+        if _contains_secret_material(arg) or _is_secret_looking_key(arg):
+            raise TrustBundleError("CLI argument must not contain secret-looking material")
+        index += 1
+
+
+def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        flag, separator, _value = arg.partition("=")
+        if separator and flag in flags:
+            raise TrustBundleError(f"{flag} does not take a value")
+        if (
+            arg in flags
+            and index + 1 < len(raw_args)
+            and not raw_args[index + 1].startswith("--")
+        ):
+            raise TrustBundleError(f"{arg} does not take a value")
+        index += 1
+
+
+def _reject_raw_positive_int_cli_value(raw: str, flag: str) -> None:
+    if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise TrustBundleError(f"{flag} must be a positive integer")
+    try:
+        value = int(raw, 10)
+    except ValueError as error:
+        raise TrustBundleError(f"{flag} must be a positive integer") from error
+    if value <= 0:
+        raise TrustBundleError(f"{flag} must be a positive integer")
+
+
+def _preflight_positive_int_cli_values(
+    argv: list[str] | None,
+    flags: set[str],
+) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise TrustBundleError(f"{flag} requires a positive integer value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise TrustBundleError(f"{flag} requires a positive integer value")
+                _reject_raw_positive_int_cli_value(value, flag)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise TrustBundleError(f"{flag} requires a positive integer value")
+                _reject_raw_positive_int_cli_value(value, flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
@@ -221,14 +338,21 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
         matched = False
         for flag in flags:
             if arg == flag:
-                if index + 1 < len(raw_args):
-                    _reject_raw_output_path_smuggling(raw_args[index + 1], flag)
+                if index + 1 >= len(raw_args):
+                    raise TrustBundleError(f"{flag} requires a path value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise TrustBundleError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
                 index += 2
                 matched = True
                 break
             prefix = f"{flag}="
             if arg.startswith(prefix):
-                _reject_raw_output_path_smuggling(arg[len(prefix) :], flag)
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise TrustBundleError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
                 index += 1
                 matched = True
                 break
@@ -345,7 +469,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in seen:
-            raise TrustBundleError(f"JSON object contains duplicate key {key!r}")
+            raise TrustBundleError("JSON object contains duplicate key")
         seen.add(key)
         result[key] = value
     return result
@@ -377,22 +501,58 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
+        if any(_is_secret_looking_key(key) for key in unknown):
+            raise TrustBundleError(f"{label} contains unknown keys")
         raise TrustBundleError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
 
+def _is_secret_looking_key(value: Any) -> bool:
+    markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private_key",
+        "private-key",
+        "password",
+        "passphrase",
+        "api_key",
+        "api-key",
+        "access_key",
+        "access-key",
+        "session_key",
+        "session-key",
+        "client_secret",
+        "client-secret",
+        "cookie",
+        "set-cookie",
+        "x-iroha-signature",
+        "x_iroha_signature",
+    )
+    return any(
+        marker in candidate.lower()
+        for candidate in _secret_scan_values(str(value))
+        for marker in markers
+    )
+
+
+def _reject_secret_looking_identifier(value: str, label: str) -> None:
+    if _contains_secret_material(value) or _is_secret_looking_key(value):
+        raise TrustBundleError(f"{label} must not contain secret-looking material")
+
+
 def _check_no_secret_material(value: Any, path: str = "$") -> None:
-    forbidden = ("authorization", "bearer", "token", "secret", "private_key", "x-iroha-signature")
     if isinstance(value, dict):
         for key, child in value.items():
-            lowered = str(key).lower()
-            if any(word in lowered for word in forbidden):
-                raise TrustBundleError(f"{path}.{key} is a forbidden secret-looking field")
+            if _is_secret_looking_key(key):
+                raise TrustBundleError(f"{path} contains forbidden secret-looking field")
             _check_no_secret_material(child, f"{path}.{key}")
     elif isinstance(value, list):
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{path}[{offset}]")
-    elif isinstance(value, str) and value.strip().lower().startswith("bearer "):
-        raise TrustBundleError(f"{path} contains bearer-token material")
+    elif isinstance(value, str):
+        if _contains_secret_material(value):
+            raise TrustBundleError(f"{path} contains secret-looking material")
 
 
 def _has_ascii_control(value: str) -> bool:
@@ -433,6 +593,7 @@ def _required_string(bundle: dict[str, Any], key: str, label: str) -> str:
 
 def _required_profile_id(bundle: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(bundle, key, label)
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if PROFILE_ID_RE.fullmatch(raw) is None:
         raise TrustBundleError(f"{label}.{key} must be a canonical lowercase profile id")
     return raw
@@ -440,6 +601,7 @@ def _required_profile_id(bundle: dict[str, Any], key: str, label: str) -> str:
 
 def _required_rail(bundle: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(bundle, key, label)
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if raw not in KNOWN_RAILS:
         raise TrustBundleError(
             f"{label}.{key} must be one of " + ", ".join(sorted(KNOWN_RAILS))
@@ -493,6 +655,7 @@ def _is_lower_sha256(value: Any) -> bool:
 
 
 def _validate_sha256(value: str, label: str) -> str:
+    _reject_secret_looking_identifier(value, label)
     if not _is_lower_sha256(value):
         raise TrustBundleError(f"{label} must be canonical lowercase SHA-256 hex")
     if all(ch == "0" for ch in value):
@@ -513,7 +676,7 @@ def _sha256_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
             raise TrustBundleError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
         digest = _validate_sha256(item, f"{label}.{key}[{offset}]")
         if digest in seen:
-            raise TrustBundleError(f"{label}.{key}[{offset}] duplicates SHA-256 {digest}")
+            raise TrustBundleError(f"{label}.{key}[{offset}] duplicates SHA-256")
         seen.add(digest)
         result.append(digest)
     return result
@@ -531,10 +694,11 @@ def _oid_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
         if item != item.strip():
             raise TrustBundleError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
         value = item
+        _reject_secret_looking_identifier(value, f"{label}.{key}[{offset}]")
         if not _valid_oid(value):
             raise TrustBundleError(f"{label}.{key}[{offset}] must be a dotted numeric OID")
         if value in seen:
-            raise TrustBundleError(f"{label}.{key}[{offset}] duplicates OID {value}")
+            raise TrustBundleError(f"{label}.{key}[{offset}] duplicates OID")
         seen.add(value)
         result.append(value)
     return result
@@ -749,10 +913,14 @@ def _der_objects(
         _reject_unknown_keys(obj, DER_OBJECT_KEYS, f"{label}.{key}[{offset}]")
         name = _optional_string(obj, "label", f"{label}.{key}[{offset}]")
         if name is not None:
+            _reject_secret_looking_identifier(
+                name,
+                f"{label}.{key}[{offset}].label",
+            )
             if len(name) > 128:
                 raise TrustBundleError(f"{label}.{key}[{offset}].label must be no longer than 128 characters")
             if name in seen_labels:
-                raise TrustBundleError(f"{label}.{key}[{offset}].label duplicates label {name!r}")
+                raise TrustBundleError(f"{label}.{key}[{offset}].label duplicates label")
             seen_labels.add(name)
         der_b64 = _required_string(obj, "der_base64", f"{label}.{key}[{offset}]")
         der, canonical_b64 = _strict_base64_der(
@@ -773,7 +941,7 @@ def _der_objects(
             if _validate_sha256(declared_digest, f"{label}.{key}[{offset}].sha256") != digest:
                 raise TrustBundleError(f"{label}.{key}[{offset}].sha256 does not match der_base64")
         if digest in seen:
-            raise TrustBundleError(f"{label}.{key}[{offset}] duplicates DER SHA-256 {digest}")
+            raise TrustBundleError(f"{label}.{key}[{offset}] duplicates DER SHA-256")
         seen.add(digest)
         entry = {
             "sha256": digest,
@@ -797,9 +965,13 @@ def _source(
         raise TrustBundleError(f"{label}.source is required")
     source = _require_object(raw, f"{label}.source")
     _reject_unknown_keys(source, SOURCE_KEYS, f"{label}.source")
+    authority = _required_string(source, "authority", f"{label}.source")
+    _reject_secret_looking_identifier(authority, f"{label}.source.authority")
+    version = _required_string(source, "version", f"{label}.source")
+    _reject_secret_looking_identifier(version, f"{label}.source.version")
     normalized: dict[str, Any] = {
-        "authority": _required_string(source, "authority", f"{label}.source"),
-        "version": _required_string(source, "version", f"{label}.source"),
+        "authority": authority,
+        "version": version,
     }
     retrieved_at = _required_string(source, "retrieved_at", f"{label}.source")
     _validate_retrieved_at(retrieved_at, f"{label}.source.retrieved_at")
@@ -855,7 +1027,7 @@ def _validate_source_url(
     try:
         port = parsed.port
     except ValueError as error:
-        raise TrustBundleError(f"{label} has invalid port: {error}") from error
+        raise TrustBundleError(f"{label} has invalid port") from error
     port_text = _raw_url_port_text(parsed)
     if port_text == "":
         raise TrustBundleError(f"{label} must not include an empty port")
@@ -879,6 +1051,7 @@ def _validate_source_url(
         raise TrustBundleError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise TrustBundleError(f"{label} host must not end with a dot")
+    _reject_secret_looking_identifier(raw_host, f"{label} host")
     _validate_host_labels(raw_host, label)
     if parsed.params or parsed.query or parsed.fragment:
         raise TrustBundleError(f"{label} must not contain params, query, or fragment")
@@ -1085,6 +1258,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise TrustBundleError(f"{label} path must not contain empty segments")
     if any(segment in {".", ".."} for segment in segments):
         raise TrustBundleError(f"{label} path must not contain dot segments")
+    if _contains_secret_material(path) or _is_secret_looking_key(path):
+        raise TrustBundleError(f"{label} path must not contain secret-looking material")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
         raise TrustBundleError(f"{label} path must not contain encoded dot or separator characters")
@@ -1101,7 +1276,7 @@ def _merge_unique(values: list[str], additions: list[str], label: str) -> list[s
     result = list(values)
     for value in additions:
         if value in seen:
-            raise TrustBundleError(f"{label} duplicates SHA-256 {value}")
+            raise TrustBundleError(f"{label} duplicates SHA-256")
         seen.add(value)
         result.append(value)
     return result
@@ -1110,7 +1285,7 @@ def _merge_unique(values: list[str], additions: list[str], label: str) -> list[s
 def _reject_overlap(left: list[str], right: list[str], label: str) -> None:
     overlap = sorted(set(left) & set(right))
     if overlap:
-        raise TrustBundleError(f"{label} contains conflicting SHA-256 {overlap[0]}")
+        raise TrustBundleError(f"{label} contains conflicting SHA-256")
 
 
 def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
@@ -1118,9 +1293,7 @@ def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
     for offset, path in enumerate(paths):
         key = str(path)
         if key in seen:
-            raise TrustBundleError(
-                f"{label}[{offset}] duplicates {label}[{seen[key]}]: {key}"
-            )
+            raise TrustBundleError(f"{label}[{offset}] duplicates {label}[{seen[key]}]")
         seen[key] = offset
 
 
@@ -1135,7 +1308,7 @@ def _reject_duplicate_summary_field(
         if value in seen:
             raise TrustBundleError(
                 f"{label}[{offset}].{field} duplicates "
-                f"{label}[{seen[value]}].{field}: {value}"
+                f"{label}[{seen[value]}].{field}"
             )
         seen[value] = offset
 
@@ -1152,13 +1325,21 @@ def verify_bundle(
     bundle = _require_object(_load_json(path), str(path))
     _reject_unknown_keys(bundle, TOP_LEVEL_KEYS, str(path))
     _check_no_secret_material(bundle)
-    if bundle.get("version") != BUNDLE_VERSION:
+    bundle_version = bundle.get("version")
+    if (
+        isinstance(bundle_version, bool)
+        or not isinstance(bundle_version, int)
+        or bundle_version != BUNDLE_VERSION
+    ):
         raise TrustBundleError(f"{path}.version must be {BUNDLE_VERSION}")
 
     profile_id = _required_profile_id(bundle, "profile_id", str(path))
     rail = _required_rail(bundle, "rail", str(path))
     environment = _required_string(bundle, "environment", str(path))
+    _reject_secret_looking_identifier(environment, f"{path}.environment")
     policy = bundle.get("embedded_signature_policy", DEFAULT_POLICY)
+    if isinstance(policy, str):
+        _reject_secret_looking_identifier(policy, f"{path}.embedded_signature_policy")
     if not isinstance(policy, str) or policy not in POLICIES:
         raise TrustBundleError(f"{path}.embedded_signature_policy is unsupported")
     if policy != REQUIRE_VERIFIED and not allow_record_only:
@@ -1340,6 +1521,7 @@ def run(args: argparse.Namespace) -> int:
         profile_text = json.dumps(profile_config, indent=2, sort_keys=True) + "\n"
         profile_json_sha256 = sha256_hex(profile_text.encode("utf-8"))
     output: dict[str, Any] = {
+        "version": TRUST_SUMMARY_VERSION,
         "verified_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         "verified_bundles": len(summaries),
         "allow_record_only": args.allow_record_only,
@@ -1410,6 +1592,24 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
+        _preflight_raw_cli_secrets(
+            argv,
+            {
+                "--bundle",
+                "--emit-profile-json",
+                "--max-source-age-days",
+                "--summary-out",
+            },
+        )
+        _preflight_boolean_cli_flags(
+            argv,
+            {
+                "--allow-insecure-source-url",
+                "--allow-record-only",
+                "--allow-synthetic-der",
+            },
+        )
+        _preflight_positive_int_cli_values(argv, {"--max-source-age-days"})
         _preflight_output_cli_paths(
             argv,
             {"--bundle", "--emit-profile-json", "--summary-out"},

@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   buildKaigiRosterJoinProof,
@@ -16,6 +17,90 @@ import {
 } from "../src/crypto.browser.js";
 import * as srcBrowserCrypto from "../src/crypto.browser.js";
 import * as distBrowserCrypto from "../dist/crypto.browser.js";
+
+const TEST_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
+const TEST_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
+const TEST_CRC64_TABLE = (() => {
+  const table = new Array(256);
+  for (let index = 0; index < 256; index += 1) {
+    let crc = BigInt(index);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 1n) !== 0n
+          ? (crc >> 1n) ^ TEST_CRC64_REFLECTED_POLY
+          : crc >> 1n;
+    }
+    table[index] = crc;
+  }
+  return table;
+})();
+
+function testCrc64(payload) {
+  let crc = TEST_CRC64_MASK;
+  for (const byte of payload) {
+    const index = Number((crc ^ BigInt(byte)) & 0xffn);
+    crc = TEST_CRC64_TABLE[index] ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ TEST_CRC64_MASK);
+}
+
+function browserNoritoFrameFromPayload(schemaByte, payload) {
+  const payloadBuffer = Buffer.from(payload);
+  const frame = Buffer.concat([browserNoritoFrame(schemaByte), payloadBuffer]);
+  frame.writeBigUInt64LE(BigInt(payloadBuffer.length), 23);
+  frame.writeBigUInt64LE(testCrc64(payloadBuffer), 31);
+  return frame;
+}
+
+function browserNoritoFrame(schemaByte) {
+  const frame = Buffer.alloc(40);
+  frame.write("NRT0", 0, "ascii");
+  frame.fill(schemaByte, 6, 22);
+  return frame;
+}
+
+function kagemushaZk1Tlv(tag, payload) {
+  const payloadBuffer = Buffer.from(payload);
+  const length = Buffer.alloc(4);
+  length.writeUInt32LE(payloadBuffer.length);
+  return Buffer.concat([Buffer.from(tag, "ascii"), length, payloadBuffer]);
+}
+
+function kagemushaLineageVerifierKey(circuitId, seed) {
+  return Buffer.concat([
+    Buffer.from([0x5a, 0x4b, 0x31, 0x00]),
+    kagemushaZk1Tlv("IPAK", Buffer.from([8, 0, 0, 0])),
+    kagemushaZk1Tlv("CID1", Buffer.from(circuitId, "utf8")),
+    kagemushaZk1Tlv("H2VK", Buffer.alloc(32, seed)),
+  ]);
+}
+
+function kagemushaVerifierKeyCommitment(crypto, verifierKey) {
+  const backend = Buffer.from(crypto.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "utf8");
+  const backendLength = Buffer.alloc(8);
+  backendLength.writeBigUInt64BE(BigInt(backend.length));
+  const verifierKeyLength = Buffer.alloc(8);
+  verifierKeyLength.writeBigUInt64BE(BigInt(verifierKey.length));
+  return createHash("sha256")
+    .update("iroha:zk:v1:vk")
+    .update(backendLength)
+    .update(backend)
+    .update(verifierKeyLength)
+    .update(verifierKey)
+    .digest();
+}
+
+function kagemushaLineageProvingKeyArchive(crypto, circuitId, verifierKey, seed) {
+  return browserNoritoFrameFromPayload(
+    0x9a,
+    Buffer.concat([
+      Buffer.from([1, 0]),
+      Buffer.from(circuitId, "utf8"),
+      kagemushaVerifierKeyCommitment(crypto, verifierKey),
+      Buffer.alloc(64, seed),
+    ]),
+  );
+}
 
 test("browser crypto bundle exposes Kaigi roster proof helper as unsupported", () => {
   assert.throws(
@@ -166,6 +251,67 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
     assert.equal(
       crypto.requiresKagemushaRecursiveSpendPreviousProofOpenEnvelopesForAppend("", 1),
       false,
+    );
+    assert.equal(crypto.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "halo2/ipa");
+    assert.equal(
+      crypto.isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(128),
+      true,
+    );
+    assert.equal(
+      crypto.isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen(3),
+      false,
+    );
+    const verifierKey = kagemushaLineageVerifierKey(
+      crypto.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+      0xe7,
+    );
+    const provingKeyArchive = kagemushaLineageProvingKeyArchive(
+      crypto,
+      crypto.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+      verifierKey,
+      0xe8,
+    );
+    const artifacts = crypto.kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+      128,
+      crypto.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+      verifierKey,
+      provingKeyArchive,
+    );
+    assert.equal(
+      artifacts.proofCircuitId,
+      crypto.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+    );
+    assert.equal(artifacts.isInitArtifact, true);
+    assert.equal(artifacts.isAppendArtifact, false);
+    assert.deepEqual(artifacts.lineageVerifierKey, verifierKey);
+    assert.deepEqual(artifacts.lineageProvingKeyArchive, provingKeyArchive);
+    const exposedVerifierKey = artifacts.lineageVerifierKey;
+    const exposedProvingKey = artifacts.lineageProvingKeyArchive;
+    exposedVerifierKey[0] = 0;
+    exposedProvingKey[0] = 0;
+    assert.equal(artifacts.lineageVerifierKey[0], 0x5a);
+    assert.equal(artifacts.lineageProvingKeyArchive[0], 0x4e);
+    assert.notStrictEqual(artifacts.lineageVerifierKey, artifacts.lineageVerifierKey);
+    assert.throws(
+      () => crypto.kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        crypto.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        kagemushaLineageVerifierKey(
+          crypto.KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+          0xa7,
+        ),
+        provingKeyArchive,
+      ),
+      /lineage_verifier_key/,
+    );
+    assert.throws(
+      () => crypto.kagemushaRecursiveSpendLineageKeyArtifactsForAppend(
+        3,
+        crypto.KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        Buffer.from([1]),
+        Buffer.from([2]),
+      ),
+      /verifier_opening_len/,
     );
     assert.equal(crypto.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES, 64 * 1024 * 1024);
     assert.equal(crypto.PRIVACY_FFI_VERSION_V1, 1);

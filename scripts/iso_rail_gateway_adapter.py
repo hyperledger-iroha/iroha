@@ -55,7 +55,49 @@ PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MAX_RAIL_MESSAGE_ID_CHARS = 128
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
 SIDECAR_KEYS = {"message_type", "profile", "payload_sha256", "rail_message_id"}
-SECRET_PREVIEW_MARKERS = ("authorization", "bearer ", "private_key", "secret", "token")
+SECRET_PREVIEW_MARKERS = (
+    "authorization",
+    "bearer ",
+    "private_key",
+    "private-key",
+    "password",
+    "passphrase",
+    "api_key",
+    "api-key",
+    "access_key",
+    "access-key",
+    "session_key",
+    "session-key",
+    "client_secret",
+    "client-secret",
+    "cookie",
+    "secret",
+    "token",
+    "x_iroha_signature",
+)
+SECRET_VALUE_PATTERNS = [
+    re.compile(r"\bauthorization\s*:", re.IGNORECASE),
+    re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(
+        r"\b(?:token|secret|private[_-]?key|password|passphrase|api[_-]?key|access[_-]?key|session[_-]?key|client[_-]?secret|cookie|set-cookie)\s*[:=]\s*\S+",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\bx-iroha-signature\s*:", re.IGNORECASE),
+]
+CLI_OPTION_FLAGS = {
+    "--allow-default-profile",
+    "--allow-insecure-http",
+    "--allow-legacy-colr007",
+    "--bearer-token-file",
+    "--dry-run",
+    "--inbox-dir",
+    "--max-payload-bytes",
+    "--message",
+    "--receipt-dir",
+    "--response-limit-bytes",
+    "--timeout-secs",
+    "--torii-base-url",
+}
 REDACTED_RESPONSE_PREVIEW = "[redacted: sensitive response body]"
 REDACTED_ERROR = "[redacted: sensitive error]"
 
@@ -76,6 +118,41 @@ ENDPOINTS = {
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *_args: object, **_kwargs: object) -> None:
         return None
+
+
+def _secret_scan_values(raw: str) -> tuple[str, ...]:
+    values = [raw]
+    decoded = raw
+    for _ in range(4):
+        if "%" not in decoded:
+            break
+        next_decoded = urllib.parse.unquote(decoded)
+        if next_decoded == decoded:
+            break
+        values.append(next_decoded)
+        decoded = next_decoded
+    return tuple(values)
+
+
+def _contains_secret_material(value: str) -> bool:
+    return any(
+        pattern.search(candidate)
+        for candidate in _secret_scan_values(value)
+        for pattern in SECRET_VALUE_PATTERNS
+    )
+
+
+def _check_no_secret_material(value: Any, label: str = "$") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if _is_secret_looking_key(str(key)):
+                raise AdapterError(f"{label} contains forbidden secret-looking field")
+            _check_no_secret_material(child, f"{label}.{key}")
+    elif isinstance(value, list):
+        for offset, child in enumerate(value):
+            _check_no_secret_material(child, f"{label}[{offset}]")
+    elif isinstance(value, str) and _contains_secret_material(value):
+        raise AdapterError(f"{label} contains secret-looking material")
 
 
 NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)
@@ -149,9 +226,46 @@ def _validate_rail_message_id(value: str, label: str) -> None:
         raise AdapterError(f"{label} must be a canonical ASCII rail message id")
 
 
+def _is_secret_looking_key(value: Any) -> bool:
+    markers = (
+        "authorization",
+        "bearer",
+        "token",
+        "secret",
+        "private_key",
+        "private-key",
+        "password",
+        "passphrase",
+        "api_key",
+        "api-key",
+        "access_key",
+        "access-key",
+        "session_key",
+        "session-key",
+        "client_secret",
+        "client-secret",
+        "cookie",
+        "set-cookie",
+        "x-iroha-signature",
+        "x_iroha_signature",
+    )
+    return any(
+        marker in candidate.lower()
+        for candidate in _secret_scan_values(str(value))
+        for marker in markers
+    )
+
+
+def _reject_secret_looking_identifier(value: str, label: str) -> None:
+    if _contains_secret_material(value) or _is_secret_looking_key(value):
+        raise AdapterError(f"{label} must not contain secret-looking material")
+
+
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
+        if any(_is_secret_looking_key(key) for key in unknown):
+            raise AdapterError(f"{label} contains unknown keys")
         raise AdapterError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
 
@@ -160,7 +274,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in seen:
-            raise AdapterError(f"JSON object contains duplicate key {key!r}")
+            raise AdapterError("JSON object contains duplicate key")
         seen.add(key)
         result[key] = value
     return result
@@ -171,42 +285,51 @@ def _read_regular_file(
     *,
     max_bytes: int | None = None,
     limit_label: str = "input",
+    path_label: str | None = None,
 ) -> bytes:
-    if max_bytes is not None and max_bytes <= 0:
-        raise AdapterError("max file bytes must be positive")
-    _reject_symlinked_existing_ancestors(path.parent)
+    if max_bytes is not None and (
+        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0
+    ):
+        raise AdapterError("max file bytes must be a positive integer")
+    display_path = path_label if path_label is not None else str(path)
+    try:
+        _reject_symlinked_existing_ancestors(path.parent)
+    except AdapterError as error:
+        if path_label is not None:
+            raise AdapterError(f"{display_path} ancestor must not be a symlink") from error
+        raise
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
-        raise AdapterError(f"{path} does not exist") from error
+        raise AdapterError(f"{display_path} does not exist") from error
     if stat.S_ISLNK(metadata.st_mode):
-        raise AdapterError(f"{path} must not be a symlink")
+        raise AdapterError(f"{display_path} must not be a symlink")
     if not stat.S_ISREG(metadata.st_mode):
-        raise AdapterError(f"{path} must be a regular file")
+        raise AdapterError(f"{display_path} must be a regular file")
     if max_bytes is not None and metadata.st_size > max_bytes:
-        raise AdapterError(f"{path} exceeds {max_bytes} byte {limit_label} limit")
+        raise AdapterError(f"{display_path} exceeds {max_bytes} byte {limit_label} limit")
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     fd = -1
     try:
         fd = os.open(path, flags)
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode):
-            raise AdapterError(f"{path} must be a regular file")
+            raise AdapterError(f"{display_path} must be a regular file")
         if max_bytes is not None and opened.st_size > max_bytes:
-            raise AdapterError(f"{path} exceeds {max_bytes} byte {limit_label} limit")
+            raise AdapterError(f"{display_path} exceeds {max_bytes} byte {limit_label} limit")
         with os.fdopen(fd, "rb") as handle:
             fd = -1
             limit = max_bytes + 1 if max_bytes is not None else -1
             raw = handle.read(limit)
         if max_bytes is not None and len(raw) > max_bytes:
-            raise AdapterError(f"{path} exceeds {max_bytes} byte {limit_label} limit")
+            raise AdapterError(f"{display_path} exceeds {max_bytes} byte {limit_label} limit")
         return raw
     except FileNotFoundError as error:
-        raise AdapterError(f"{path} does not exist") from error
+        raise AdapterError(f"{display_path} does not exist") from error
     except OSError as error:
         if error.errno == errno.ELOOP:
-            raise AdapterError(f"{path} must not be a symlink") from error
-        raise AdapterError(f"cannot open {path} for reading: {error.strerror}") from error
+            raise AdapterError(f"{display_path} must not be a symlink") from error
+        raise AdapterError(f"cannot open {display_path} for reading: {error.strerror}") from error
     finally:
         if fd >= 0:
             os.close(fd)
@@ -255,6 +378,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+        raise AdapterError(f"{label} must not contain secret-looking material")
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise AdapterError(f"{label} must not contain leading-dash path segments")
@@ -277,6 +402,8 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+        raise AdapterError(f"{label} must not contain secret-looking material")
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -285,6 +412,39 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise AdapterError(f"{label} must not contain leading-dash path segments")
     if any(part in {".", ".."} for part in checked_parts):
         raise AdapterError(f"{label} must not contain dot or parent segments")
+
+
+def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg in value_flags:
+            index += 2
+            continue
+        if any(arg.startswith(f"{flag}=") for flag in value_flags):
+            index += 1
+            continue
+        if _contains_secret_material(arg) or _is_secret_looking_key(arg):
+            raise AdapterError("CLI argument must not contain secret-looking material")
+        index += 1
+
+
+def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        flag, separator, _value = arg.partition("=")
+        if separator and flag in flags:
+            raise AdapterError(f"{flag} does not take a value")
+        if (
+            arg in flags
+            and index + 1 < len(raw_args)
+            and not raw_args[index + 1].startswith("--")
+        ):
+            raise AdapterError(f"{arg} does not take a value")
+        index += 1
 
 
 def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None:
@@ -297,14 +457,102 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
         matched = False
         for flag in flags:
             if arg == flag:
-                if index + 1 < len(raw_args):
-                    _reject_raw_output_path_smuggling(raw_args[index + 1], flag)
+                if index + 1 >= len(raw_args):
+                    raise AdapterError(f"{flag} requires a path value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
                 index += 2
                 matched = True
                 break
             prefix = f"{flag}="
             if arg.startswith(prefix):
-                _reject_raw_output_path_smuggling(arg[len(prefix) :], flag)
+                value = arg[len(prefix) :]
+                if not value or value in CLI_OPTION_FLAGS:
+                    raise AdapterError(f"{flag} requires a path value")
+                _reject_raw_output_path_smuggling(value, flag)
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _preflight_required_cli_values(
+    argv: list[str] | None,
+    flags: set[str],
+    value_name: str,
+) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise AdapterError(f"{flag} requires a {value_name} value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a {value_name} value")
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a {value_name} value")
+                index += 1
+                matched = True
+                break
+        if not matched:
+            index += 1
+
+
+def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
+    if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise AdapterError(f"{flag} must be a numeric value")
+    try:
+        int(raw, 10) if integer else float(raw)
+    except ValueError as error:
+        raise AdapterError(f"{flag} must be a numeric value") from error
+
+
+def _preflight_numeric_cli_values(
+    argv: list[str] | None,
+    *,
+    integer_flags: set[str],
+    number_flags: set[str],
+) -> None:
+    raw_args = sys.argv[1:] if argv is None else argv
+    flags = integer_flags | number_flags
+    index = 0
+    while index < len(raw_args):
+        arg = raw_args[index]
+        if arg == "--":
+            return
+        matched = False
+        for flag in flags:
+            if arg == flag:
+                if index + 1 >= len(raw_args):
+                    raise AdapterError(f"{flag} requires a numeric value")
+                value = raw_args[index + 1]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
+                index += 2
+                matched = True
+                break
+            prefix = f"{flag}="
+            if arg.startswith(prefix):
+                value = arg[len(prefix) :]
+                if not value or value.startswith("--"):
+                    raise AdapterError(f"{flag} requires a numeric value")
+                _reject_raw_numeric_cli_value(value, flag, integer=flag in integer_flags)
                 index += 1
                 matched = True
                 break
@@ -445,8 +693,8 @@ def _reject_json_surrogates(value: Any) -> None:
 
 
 def _bounded_read(path: Path, max_bytes: int) -> bytes:
-    if max_bytes <= 0:
-        raise AdapterError("max payload bytes must be positive")
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise AdapterError("max payload bytes must be a positive integer")
     try:
         metadata = path.lstat()
     except FileNotFoundError as error:
@@ -498,26 +746,39 @@ def verify_message_file(
 ) -> GatewayMessage:
     """Verify a gateway XML payload and its sidecar metadata."""
 
+    _reject_raw_output_path_smuggling(str(xml_path), "message XML path")
     _validate_path_argument(str(xml_path.name), f"{xml_path} filename")
     if xml_path.suffix.lower() != ".xml":
         raise AdapterError(f"{xml_path} must use a .xml suffix")
     sidecar_path = xml_path.with_suffix(xml_path.suffix + ".json")
+    _reject_raw_output_path_smuggling(str(sidecar_path), "message sidecar path")
     sidecar = _load_json(sidecar_path, max_bytes=MAX_SIDECAR_JSON_BYTES)
     if not isinstance(sidecar, dict):
         raise AdapterError(f"{sidecar_path} must contain a JSON object")
     _reject_unknown_keys(sidecar, SIDECAR_KEYS, str(sidecar_path))
+    _check_no_secret_material(sidecar, str(sidecar_path))
 
     payload = _bounded_read(xml_path, max_payload_bytes)
     actual_sha256 = sha256_hex(payload)
     expected_sha256 = sidecar.get("payload_sha256")
+    if isinstance(expected_sha256, str):
+        _reject_secret_looking_identifier(
+            expected_sha256,
+            f"{sidecar_path} payload_sha256",
+        )
+    if not _is_lower_hex_sha256(expected_sha256):
+        raise AdapterError(f"{sidecar_path} payload_sha256 must be lowercase SHA-256 hex")
     if expected_sha256 != actual_sha256:
         raise AdapterError(
             f"{xml_path} payload_sha256 mismatch: expected {expected_sha256}, got {actual_sha256}"
         )
-    if not _is_lower_hex_sha256(expected_sha256):
-        raise AdapterError(f"{sidecar_path} payload_sha256 must be lowercase SHA-256 hex")
 
     message_type = sidecar.get("message_type")
+    if isinstance(message_type, str):
+        _reject_secret_looking_identifier(
+            message_type,
+            f"{sidecar_path} message_type",
+        )
     if not isinstance(message_type, str) or message_type not in ENDPOINTS:
         raise AdapterError(f"{sidecar_path} has unsupported message_type {message_type!r}")
     if message_type in LEGACY_MESSAGE_TYPES and not allow_legacy_colr007:
@@ -548,6 +809,7 @@ def verify_message_file(
             raise AdapterError(
                 f"{sidecar_path} profile must be a canonical lowercase profile id"
             )
+        _reject_secret_looking_identifier(profile, f"{sidecar_path} profile")
 
     rail_message_id_present = "rail_message_id" in sidecar
     rail_message_id = None
@@ -571,6 +833,10 @@ def verify_message_file(
                 f"{sidecar_path} rail_message_id must not contain whitespace"
             )
         _validate_rail_message_id(rail_message_id, f"{sidecar_path} rail_message_id")
+        _reject_secret_looking_identifier(
+            rail_message_id,
+            f"{sidecar_path} rail_message_id",
+        )
 
     return GatewayMessage(
         xml_path=xml_path,
@@ -597,6 +863,8 @@ def discover_messages(inbox_dir: Path) -> list[Path]:
 
 
 def _validate_path_argument(raw: str, label: str) -> None:
+    if _contains_secret_material(raw) or _is_secret_looking_key(raw):
+        raise AdapterError(f"{label} must not contain secret-looking material")
     if any(ch.isspace() for ch in raw):
         raise AdapterError(f"{label} must not contain whitespace")
     if raw.startswith("-"):
@@ -657,7 +925,7 @@ def _validate_url_port(parsed: urllib.parse.ParseResult, label: str) -> None:
     try:
         port = parsed.port
     except ValueError as error:
-        raise AdapterError(f"{label} has invalid port: {error}") from error
+        raise AdapterError(f"{label} has invalid port") from error
     port_text = _raw_url_port_text(parsed)
     if port_text == "":
         raise AdapterError(f"{label} must not include an empty port")
@@ -704,6 +972,7 @@ def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise AdapterError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise AdapterError(f"{label} host must not end with a dot")
+    _reject_secret_looking_identifier(raw_host, f"{label} host")
     if len(raw_host) > 253:
         raise AdapterError(f"{label} host must be at most 253 characters")
     try:
@@ -802,6 +1071,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise AdapterError(f"{label} path must not contain empty segments")
     if any(segment in {".", ".."} for segment in segments):
         raise AdapterError(f"{label} path must not contain dot segments")
+    if _contains_secret_material(path) or _is_secret_looking_key(path):
+        raise AdapterError(f"{label} path must not contain secret-looking material")
     lowered = path.lower()
     if any(token in lowered for token in ("%2e", "%2f", "%5c")):
         raise AdapterError(f"{label} path must not contain encoded dot or separator characters")
@@ -827,7 +1098,7 @@ def _validate_base_url(base_url: str, allow_insecure_http: bool) -> str:
         parsed = urllib.parse.urlparse(base_url)
         hostname = parsed.hostname
     except ValueError as error:
-        raise AdapterError(f"{label} is not a valid URL: {error}") from error
+        raise AdapterError(f"{label} is not a valid URL") from error
     if parsed.scheme != "https" and not (
         parsed.scheme == "http" and allow_insecure_http
     ):
@@ -856,23 +1127,25 @@ def _validate_base_url(base_url: str, allow_insecure_http: bool) -> str:
 def _load_bearer_token(path: Path | None) -> str | None:
     if path is None:
         return None
+    label = "bearer token file"
     raw = _read_regular_file(
         path,
         max_bytes=MAX_BEARER_TOKEN_BYTES,
         limit_label="bearer token",
+        path_label=label,
     )
     try:
         token = raw.decode("utf-8")
     except UnicodeDecodeError as error:
-        raise AdapterError(f"bearer token file {path} is not UTF-8") from error
+        raise AdapterError(f"{label} is not UTF-8") from error
     if not token:
-        raise AdapterError(f"bearer token file {path} is empty")
+        raise AdapterError(f"{label} is empty")
     if token != token.strip():
-        raise AdapterError(f"bearer token file {path} must not have surrounding whitespace")
+        raise AdapterError(f"{label} must not have surrounding whitespace")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in token):
-        raise AdapterError(f"bearer token file {path} must not contain control characters")
+        raise AdapterError(f"{label} must not contain control characters")
     if any(ch.isspace() for ch in token):
-        raise AdapterError(f"bearer token file {path} must not contain whitespace")
+        raise AdapterError(f"{label} must not contain whitespace")
     return token
 
 
@@ -958,8 +1231,11 @@ def _response_preview(body: bytes) -> str:
 
 
 def _response_preview_looks_secret(preview: str) -> bool:
-    lowered = preview.lower()
-    return any(marker in lowered for marker in SECRET_PREVIEW_MARKERS)
+    return any(
+        marker in candidate.lower()
+        for candidate in _secret_scan_values(preview)
+        for marker in SECRET_PREVIEW_MARKERS
+    )
 
 
 def _receipt_error(message: str) -> str:
@@ -1017,8 +1293,7 @@ def _reject_duplicate_gateway_messages(messages: list[GatewayMessage]) -> None:
         if payload_sha256 in seen_payloads:
             raise AdapterError(
                 f"messages[{offset}].payload_sha256 duplicates "
-                f"messages[{seen_payloads[payload_sha256]}].payload_sha256: "
-                f"{payload_sha256}"
+                f"messages[{seen_payloads[payload_sha256]}].payload_sha256"
             )
         seen_payloads[payload_sha256] = offset
         if message.rail_message_id is None:
@@ -1027,8 +1302,7 @@ def _reject_duplicate_gateway_messages(messages: list[GatewayMessage]) -> None:
         if rail_message_id in seen_rail_ids:
             raise AdapterError(
                 f"messages[{offset}].rail_message_id duplicates "
-                f"messages[{seen_rail_ids[rail_message_id]}].rail_message_id: "
-                f"{rail_message_id}"
+                f"messages[{seen_rail_ids[rail_message_id]}].rail_message_id"
             )
         seen_rail_ids[rail_message_id] = offset
 
@@ -1171,9 +1445,37 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
+        _preflight_raw_cli_secrets(
+            argv,
+            {
+                "--bearer-token-file",
+                "--inbox-dir",
+                "--max-payload-bytes",
+                "--message",
+                "--receipt-dir",
+                "--response-limit-bytes",
+                "--timeout-secs",
+                "--torii-base-url",
+            },
+        )
+        _preflight_boolean_cli_flags(
+            argv,
+            {
+                "--allow-default-profile",
+                "--allow-insecure-http",
+                "--allow-legacy-colr007",
+                "--dry-run",
+            },
+        )
+        _preflight_required_cli_values(argv, {"--torii-base-url"}, "URL")
+        _preflight_numeric_cli_values(
+            argv,
+            integer_flags={"--max-payload-bytes", "--response-limit-bytes"},
+            number_flags={"--timeout-secs"},
+        )
         _preflight_output_cli_paths(
             argv,
-            {"--bearer-token-file", "--inbox-dir", "--receipt-dir"},
+            {"--bearer-token-file", "--inbox-dir", "--message", "--receipt-dir"},
         )
         args = parser.parse_args(argv)
         return run(args)

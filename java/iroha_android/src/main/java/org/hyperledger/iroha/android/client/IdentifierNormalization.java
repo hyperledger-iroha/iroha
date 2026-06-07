@@ -31,7 +31,7 @@ public enum IdentifierNormalization {
   public String normalize(final String value, final String field) {
     Objects.requireNonNull(field, "field");
     final String trimmed =
-        Objects.requireNonNull(value, field + " must not be null").trim();
+        trimWhitespace(Objects.requireNonNull(value, field + " must not be null"));
     if (trimmed.isEmpty()) {
       throw new IllegalArgumentException(field + " must not be blank");
     }
@@ -114,5 +114,17 @@ public enum IdentifierNormalization {
       throw new IllegalArgumentException(field + " must not be blank");
     }
     return builder.toString();
+  }
+
+  private static String trimWhitespace(final String value) {
+    int start = 0;
+    int end = value.length();
+    while (start < end && Character.isWhitespace(value.charAt(start))) {
+      start++;
+    }
+    while (end > start && Character.isWhitespace(value.charAt(end - 1))) {
+      end--;
+    }
+    return value.substring(start, end);
   }
 }

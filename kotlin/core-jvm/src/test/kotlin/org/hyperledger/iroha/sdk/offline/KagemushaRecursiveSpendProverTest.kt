@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.offline
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -537,7 +538,64 @@ class KagemushaRecursiveSpendProverTest {
             "kagemusha-recursive-compact-v1",
             KagemushaRecursiveCompactPaymentTokenProver.RECURSIVE_COMPACT_CIRCUIT_ID_V1,
         )
+        val verifierNativeAvailable =
+            KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable()
+        assertEquals(
+            verifierNativeAvailable,
+            KagemushaRecursiveCompactPaymentTokenProver.isVerifierNativeAvailable(),
+        )
+        assertTrue(
+            KagemushaRecursiveCompactPaymentTokenProver.isRecursiveCompactUnavailable(
+                IllegalArgumentException(
+                    "recursive compact Kagemusha payment-token proving requires a composed private-hop verifier-slice proof",
+                ),
+            ),
+        )
+        assertTrue(
+            KagemushaRecursiveCompactPaymentTokenProver.isRecursiveCompactUnavailable(
+                IllegalArgumentException(
+                    "recursive compact Kagemusha multi-hop payment-token proving requires the composed private-hop verifier batch",
+                ),
+            ),
+        )
+        assertFalse(KagemushaRecursiveCompactPaymentTokenProver.isRecursiveCompactUnavailable(null))
+        assertFalse(
+            KagemushaRecursiveCompactPaymentTokenProver.isRecursiveCompactUnavailable(
+                IllegalArgumentException(),
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveCompactPaymentTokenProver.isRecursiveCompactUnavailable(
+                IllegalArgumentException("recordBundleArchive must be a valid Norito archive"),
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveCompactPaymentTokenProver.isRecursiveCompactUnavailable(
+                IllegalArgumentException(
+                    "Kagemusha recursive compact token public instance column 0 must contain exactly one row; found 2",
+                ),
+            ),
+        )
+        assertFalse(
+            KagemushaRecursiveCompactPaymentTokenProver.isRecursiveCompactUnavailable(
+                IllegalArgumentException(
+                    "Kagemusha recursive compact token envelope verifier-key hash mismatch",
+                ),
+            ),
+        )
         val validRecursiveCompactInput = kagemushaNoritoFrameWithPayload(0x4b)
+        val recursiveCompactCopyInput = kagemushaNoritoFrameWithPayload(0x4c)
+        val expectedRecursiveCompactInput = recursiveCompactCopyInput.copyOf()
+        val ownedRecursiveCompactInput =
+            KagemushaRecursiveCompactPaymentTokenProver.ownedNativeInput(
+                recursiveCompactCopyInput,
+                "compactTokenArchive",
+            )
+        recursiveCompactCopyInput[6] = 0x7f.toByte()
+        assertFalse(ownedRecursiveCompactInput === recursiveCompactCopyInput)
+        assertContentEquals(expectedRecursiveCompactInput, ownedRecursiveCompactInput)
+        val oversizedRecursiveCompactInput =
+            ByteArray(KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1)
         assertIllegalArgumentContains("recordBundleArchive must not be empty") {
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -550,6 +608,20 @@ class KagemushaRecursiveSpendProverTest {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     validRecursiveCompactInput,
                     ByteArray(0),
+                )
+        }
+        assertIllegalArgumentContains("recordBundleArchive must not exceed") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    oversizedRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                )
+        }
+        assertIllegalArgumentContains("pallasOpenEnvelopesArchive must not exceed") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput,
+                    oversizedRecursiveCompactInput,
                 )
         }
         assertIllegalArgumentContains("recordBundleArchive must be a valid Norito archive") {
@@ -584,6 +656,12 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(ByteArray(0))
         }
         assertTrue(emptyCompactToken.message.orEmpty().contains("compactTokenArchive"))
+        val oversizedCompactToken = assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                oversizedRecursiveCompactInput,
+            )
+        }
+        assertTrue(oversizedCompactToken.message.orEmpty().contains("compactTokenArchive must not exceed"))
         val malformedCompactToken = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 byteArrayOf(0x01, 0x02),
@@ -609,8 +687,26 @@ class KagemushaRecursiveSpendProverTest {
         assertFalse(KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(3))
         assertFalse(KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(0))
 
-        val verifierKey = ByteArray(64) { 0xE7.toByte() }
-        val provingKeyArchive = ByteArray(64) { 0xE8.toByte() }
+        val initVerifierKey = lineageVerifierKey(
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            0xa1.toByte(),
+        )
+        val initProvingKeyArchive = lineageProvingKeyArchive(
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            initVerifierKey,
+            0xa2.toByte(),
+        )
+        val appendVerifierKey = lineageVerifierKey(
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            0xa3.toByte(),
+        )
+        val appendProvingKeyArchive = lineageProvingKeyArchive(
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+            appendVerifierKey,
+            0xa4.toByte(),
+        )
+        val verifierKey = initVerifierKey.copyOf()
+        val provingKeyArchive = initProvingKeyArchive.copyOf()
         val initArtifacts = KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
             2,
             KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
@@ -619,28 +715,136 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertTrue(initArtifacts.isInitArtifact())
         assertFalse(initArtifacts.isAppendArtifact())
-        assertContentEquals(verifierKey, initArtifacts.lineageVerifierKey())
-        assertContentEquals(provingKeyArchive, initArtifacts.lineageProvingKeyArchive())
+        assertContentEquals(initVerifierKey, initArtifacts.lineageVerifierKey())
+        assertContentEquals(initProvingKeyArchive, initArtifacts.lineageProvingKeyArchive())
         assertTrue(
             KagemushaRecursiveSpendProver.validateLineageKeyArtifacts(initArtifacts) === initArtifacts,
         )
 
         verifierKey[0] = 0
         provingKeyArchive[0] = 0
-        assertEquals(0xE7.toByte(), initArtifacts.lineageVerifierKey()[0])
-        assertEquals(0xE8.toByte(), initArtifacts.lineageProvingKeyArchive()[0])
+        assertEquals(0x5a.toByte(), initArtifacts.lineageVerifierKey()[0])
+        assertContentEquals(initProvingKeyArchive, initArtifacts.lineageProvingKeyArchive())
         val exposedVerifierKey = initArtifacts.lineageVerifierKey()
         exposedVerifierKey[0] = 0
-        assertEquals(0xE7.toByte(), initArtifacts.lineageVerifierKey()[0])
+        assertEquals(0x5a.toByte(), initArtifacts.lineageVerifierKey()[0])
+        val exposedProvingKeyArchive = initArtifacts.lineageProvingKeyArchive()
+        exposedProvingKeyArchive[0] = 0
+        assertContentEquals(initProvingKeyArchive, initArtifacts.lineageProvingKeyArchive())
 
         val appendArtifacts = KagemushaRecursiveSpendProver.lineageKeyArtifactsForAppend(
             2,
             KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
-            ByteArray(64) { 0xA7.toByte() },
-            ByteArray(64) { 0xA8.toByte() },
+            appendVerifierKey,
+            appendProvingKeyArchive,
         )
         assertFalse(appendArtifacts.isInitArtifact())
         assertTrue(appendArtifacts.isAppendArtifact())
+
+        assertEquals(
+            "lineage_verifier_key",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    appendVerifierKey,
+                    appendProvingKeyArchive,
+                )
+            }.message,
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    appendProvingKeyArchive,
+                )
+            }.message,
+        )
+        assertEquals(
+            "lineage_verifier_key",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    "not-zk1".toByteArray(Charsets.UTF_8),
+                    initProvingKeyArchive,
+                )
+            }.message,
+        )
+        val duplicateCidVerifierKey = initVerifierKey + zk1Tlv(
+            "CID1",
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
+                .toByteArray(Charsets.UTF_8),
+        )
+        assertEquals(
+            "lineage_verifier_key",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    duplicateCidVerifierKey,
+                    initProvingKeyArchive,
+                )
+            }.message,
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    "not-norito".toByteArray(Charsets.UTF_8),
+                )
+            }.message,
+        )
+        val missingCircuitArchive = kagemushaNoritoFrameFromPayload(
+            0x9a,
+            "package".toByteArray(Charsets.UTF_8) +
+                verifierKeyCommitment(initVerifierKey) +
+                ByteArray(64) { 0xa5.toByte() },
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    missingCircuitArchive,
+                )
+            }.message,
+        )
+        val wrongCommitmentArchive = lineageProvingKeyArchive(
+            KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+            appendVerifierKey,
+            0xa6.toByte(),
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    wrongCommitmentArchive,
+                )
+            }.message,
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    2,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    initVerifierKey,
+                    kagemushaNoritoFrame(0x9a),
+                )
+            }.message,
+        )
 
         assertEquals(
             "proof_circuit_id",
@@ -698,6 +902,119 @@ class KagemushaRecursiveSpendProverTest {
                 )
             }.message,
         )
+    }
+
+    @Test
+    fun lineageKeyArtifactsRejectJavaNullsWithStableFieldMarkers() {
+        assertEquals(
+            "lineage_key_artifacts",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.validateLineageKeyArtifacts(null)
+            }.message,
+        )
+        assertEquals(
+            "proof_circuit_id",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifacts(
+                    null,
+                    128,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    byteArrayOf(1),
+                    byteArrayOf(2),
+                )
+            }.message,
+        )
+        assertEquals(
+            "lineage_verifier_key",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    128,
+                    null,
+                    byteArrayOf(1),
+                    byteArrayOf(2),
+                )
+            }.message,
+        )
+        assertEquals(
+            "lineage_verifier_key",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    null,
+                    byteArrayOf(2),
+                )
+            }.message,
+        )
+        assertEquals(
+            "lineage_proving_key_archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                    128,
+                    KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND,
+                    byteArrayOf(1),
+                    null,
+                )
+            }.message,
+        )
+    }
+
+    @Test
+    fun nativeArchiveEntrypointsRejectJavaNullsWithStableFieldMarkers() {
+        val validArchive = kagemushaNoritoFrameWithPayload(0x4b)
+        assertIllegalArgumentContains("requestArchive must not be empty") {
+            KagemushaRecursiveSpendProver.initSpend(null)
+        }
+        assertIllegalArgumentContains("requestArchive must not be empty") {
+            KagemushaRecursiveSpendProver.appendSpend(null)
+        }
+        assertIllegalArgumentContains("requestArchive must not be empty") {
+            KagemushaRecursiveSpendProver.transitionProfileInit(null)
+        }
+        assertIllegalArgumentContains("requestArchive must not be empty") {
+            KagemushaRecursiveSpendProver.transitionProfileAppend(null)
+        }
+        assertIllegalArgumentContains("profileArchive must not be empty") {
+            KagemushaRecursiveSpendProver.lineageAppendBoundary(null)
+        }
+        assertIllegalArgumentContains("requestArchive must not be empty") {
+            KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(null, validArchive)
+        }
+        assertIllegalArgumentContains("bundleArchive must not be empty") {
+            KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(validArchive, null)
+        }
+        assertIllegalArgumentContains("previousWitnessArchive must not be empty") {
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(null, validArchive, validArchive)
+        }
+        assertIllegalArgumentContains("requestArchive must not be empty") {
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(validArchive, null, validArchive)
+        }
+        assertIllegalArgumentContains("bundleArchive must not be empty") {
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(validArchive, validArchive, null)
+        }
+        assertIllegalArgumentContains("requestArchive must not be empty") {
+            KagemushaRecursiveSpendProver.verifySpend(null)
+        }
+        assertIllegalArgumentContains("requestArchive must not be empty") {
+            KagemushaRecursiveSpendProver.redeemSpend(null)
+        }
+        assertIllegalArgumentContains("recordBundleArchive must not be empty") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    null,
+                    validArchive,
+                )
+        }
+        assertIllegalArgumentContains("pallasOpenEnvelopesArchive must not be empty") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validArchive,
+                    null,
+                )
+        }
+        assertIllegalArgumentContains("compactTokenArchive must not be empty") {
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(null)
+        }
     }
 
     @Test
@@ -902,10 +1219,44 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
+    fun copiesNativeInputArchivesBeforeDispatch() {
+        val archive = kagemushaNoritoFrameWithPayload(0x4c)
+        val expected = archive.copyOf()
+        val ownedArchive = KagemushaRecursiveSpendProver.ownedNativeInput(
+            archive,
+            "requestArchive",
+        )
+
+        archive[6] = 0x7f.toByte()
+
+        assertFalse(ownedArchive === archive)
+        assertContentEquals(expected, ownedArchive)
+        assertEquals(
+            "requestArchive must not be empty",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.ownedNativeInput(ByteArray(0), "requestArchive")
+            }.message,
+        )
+        assertIllegalArgumentContains("requestArchive must not exceed") {
+            KagemushaRecursiveSpendProver.ownedNativeInput(
+                ByteArray(KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + 1),
+                "requestArchive",
+            )
+        }
+        assertEquals(
+            "requestArchive must be a valid Norito archive",
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaRecursiveSpendProver.ownedNativeInput(byteArrayOf(0x01), "requestArchive")
+            }.message,
+        )
+    }
+
+    @Test
     fun rejectsMalformedAndEmptyPayloadArchivesBeforeNativeDispatch() {
         val validArchive = kagemushaNoritoFrameWithPayload(0x4b)
         val malformedArchive = byteArrayOf(0x01, 0x02)
         val emptyPayloadArchive = kagemushaNoritoFrame(0x4b)
+        val oversizedArchive = ByteArray(KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES + 1)
 
         for (entrypoint in listOf(
             KagemushaRecursiveSpendProver::initSpend,
@@ -923,11 +1274,18 @@ class KagemushaRecursiveSpendProverTest {
             }
         }
 
+        assertIllegalArgumentContains("requestArchive must not exceed") {
+            KagemushaRecursiveSpendProver.initSpend(oversizedArchive)
+        }
+
         assertIllegalArgumentContains("profileArchive must be a valid Norito archive") {
             KagemushaRecursiveSpendProver.lineageAppendBoundary(malformedArchive)
         }
         assertIllegalArgumentContains("profileArchive must contain a non-empty Norito payload") {
             KagemushaRecursiveSpendProver.lineageAppendBoundary(emptyPayloadArchive)
+        }
+        assertIllegalArgumentContains("profileArchive must not exceed") {
+            KagemushaRecursiveSpendProver.lineageAppendBoundary(oversizedArchive)
         }
 
         assertIllegalArgumentContains("requestArchive must be a valid Norito archive") {
@@ -952,6 +1310,18 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
                 validArchive,
                 emptyPayloadArchive,
+            )
+        }
+        assertIllegalArgumentContains("requestArchive must not exceed") {
+            KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                oversizedArchive,
+                validArchive,
+            )
+        }
+        assertIllegalArgumentContains("bundleArchive must not exceed") {
+            KagemushaRecursiveSpendProver.lineageWitnessFromInitResult(
+                validArchive,
+                oversizedArchive,
             )
         }
 
@@ -995,6 +1365,27 @@ class KagemushaRecursiveSpendProverTest {
                 validArchive,
                 validArchive,
                 emptyPayloadArchive,
+            )
+        }
+        assertIllegalArgumentContains("previousWitnessArchive must not exceed") {
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                oversizedArchive,
+                validArchive,
+                validArchive,
+            )
+        }
+        assertIllegalArgumentContains("requestArchive must not exceed") {
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                validArchive,
+                oversizedArchive,
+                validArchive,
+            )
+        }
+        assertIllegalArgumentContains("bundleArchive must not exceed") {
+            KagemushaRecursiveSpendProver.lineageWitnessAppendResult(
+                validArchive,
+                validArchive,
+                oversizedArchive,
             )
         }
     }
@@ -1206,5 +1597,97 @@ class KagemushaRecursiveSpendProverTest {
         frame[43] = 0x5a.toByte()
         frame[44] = 0x11.toByte()
         return frame
+    }
+
+    private fun kagemushaNoritoFrameFromPayload(schemaByte: Int, payload: ByteArray): ByteArray {
+        val frame = kagemushaNoritoFrame(schemaByte) + payload
+        writeLongLittleEndian(frame, 23, payload.size.toLong())
+        writeLongLittleEndian(frame, 31, testCrc64(payload))
+        return frame
+    }
+
+    private fun zk1Tlv(tag: String, payload: ByteArray): ByteArray {
+        val tagBytes = tag.toByteArray(Charsets.US_ASCII)
+        val encoded = ByteArray(8 + payload.size)
+        tagBytes.copyInto(encoded, 0)
+        writeIntLittleEndian(encoded, 4, payload.size)
+        payload.copyInto(encoded, 8)
+        return encoded
+    }
+
+    private fun lineageVerifierKey(circuitId: String, seed: Byte): ByteArray =
+        byteArrayOf(0x5a, 0x4b, 0x31, 0x00) +
+            zk1Tlv("IPAK", byteArrayOf(8, 0, 0, 0)) +
+            zk1Tlv("CID1", circuitId.toByteArray(Charsets.UTF_8)) +
+            zk1Tlv("H2VK", ByteArray(32) { seed })
+
+    private fun lineageProvingKeyArchive(
+        circuitId: String,
+        verifierKey: ByteArray,
+        seed: Byte,
+    ): ByteArray =
+        kagemushaNoritoFrameFromPayload(
+            0x9a,
+            byteArrayOf(1, 0) +
+                circuitId.toByteArray(Charsets.UTF_8) +
+                verifierKeyCommitment(verifierKey) +
+                ByteArray(64) { seed },
+        )
+
+    private fun verifierKeyCommitment(verifierKey: ByteArray): ByteArray {
+        val backend =
+            KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_BACKEND.toByteArray(Charsets.UTF_8)
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update("iroha:zk:v1:vk".toByteArray(Charsets.US_ASCII))
+        digest.update(longBigEndian(backend.size.toLong()))
+        digest.update(backend)
+        digest.update(longBigEndian(verifierKey.size.toLong()))
+        digest.update(verifierKey)
+        return digest.digest()
+    }
+
+    private val testCrc64Table: LongArray = run {
+        val table = LongArray(256)
+        val reflectedPoly = -3932672073523589310L
+        for (index in table.indices) {
+            var crc = index.toLong()
+            for (bit in 0 until 8) {
+                crc = if ((crc and 1L) != 0L) {
+                    (crc ushr 1) xor reflectedPoly
+                } else {
+                    crc ushr 1
+                }
+            }
+            table[index] = crc
+        }
+        table
+    }
+
+    private fun testCrc64(payload: ByteArray): Long {
+        var crc = -1L
+        for (byte in payload) {
+            crc = testCrc64Table[(crc.toInt() xor byte.toInt()) and 0xff] xor (crc ushr 8)
+        }
+        return crc xor -1L
+    }
+
+    private fun writeIntLittleEndian(bytes: ByteArray, offset: Int, value: Int) {
+        for (index in 0 until 4) {
+            bytes[offset + index] = ((value ushr (index * 8)) and 0xff).toByte()
+        }
+    }
+
+    private fun writeLongLittleEndian(bytes: ByteArray, offset: Int, value: Long) {
+        for (index in 0 until 8) {
+            bytes[offset + index] = ((value ushr (index * 8)) and 0xff).toByte()
+        }
+    }
+
+    private fun longBigEndian(value: Long): ByteArray {
+        val output = ByteArray(8)
+        for (index in output.indices) {
+            output[index] = ((value ushr ((7 - index) * 8)) and 0xff).toByte()
+        }
+        return output
     }
 }

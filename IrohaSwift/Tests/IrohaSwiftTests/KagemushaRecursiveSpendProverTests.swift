@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import XCTest
 @testable import IrohaSwift
 
@@ -40,16 +41,45 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         XCTAssertFalse(KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(3))
         XCTAssertFalse(KagemushaRecursiveSpendProver.isSupportedLineageKeyArtifactOpeningLen(0))
 
+        let initVerifierKey = Self.lineageVerifierKey(
+            circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1,
+            seed: 0xA1
+        )
+        let initProvingKeyArchive = Self.lineageProvingKeyArchive(
+            circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1,
+            verifierKey: initVerifierKey,
+            seed: 0xA2
+        )
+        let appendVerifierKey = Self.lineageVerifierKey(
+            circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
+            seed: 0xA3
+        )
+        let appendProvingKeyArchive = Self.lineageProvingKeyArchive(
+            circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageAppendProofCircuitIdV1,
+            verifierKey: appendVerifierKey,
+            seed: 0xA4
+        )
+
+        var verifierKey = initVerifierKey
+        var provingKeyArchive = initProvingKeyArchive
         let initArtifacts = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
             verifierOpeningLen: 2,
             lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
-            lineageVerifierKey: Data(repeating: 0xE7, count: 64),
-            lineageProvingKeyArchive: Data(repeating: 0xE8, count: 64)
+            lineageVerifierKey: verifierKey,
+            lineageProvingKeyArchive: provingKeyArchive
         )
+        verifierKey[0] = 0
+        provingKeyArchive[0] = 0
         XCTAssertTrue(initArtifacts.isInitArtifact)
         XCTAssertFalse(initArtifacts.isAppendArtifact)
-        XCTAssertEqual(initArtifacts.lineageVerifierKey, Data(repeating: 0xE7, count: 64))
-        XCTAssertEqual(initArtifacts.lineageProvingKeyArchive, Data(repeating: 0xE8, count: 64))
+        XCTAssertEqual(initArtifacts.lineageVerifierKey, initVerifierKey)
+        XCTAssertEqual(initArtifacts.lineageProvingKeyArchive, initProvingKeyArchive)
+        var exposedVerifierKey = initArtifacts.lineageVerifierKey
+        var exposedProvingKeyArchive = initArtifacts.lineageProvingKeyArchive
+        exposedVerifierKey[0] = 0
+        exposedProvingKeyArchive[0] = 0
+        XCTAssertEqual(initArtifacts.lineageVerifierKey[0], 0x5A)
+        XCTAssertEqual(initArtifacts.lineageProvingKeyArchive, initProvingKeyArchive)
         XCTAssertEqual(
             try KagemushaRecursiveSpendProver.validateLineageKeyArtifacts(initArtifacts),
             initArtifacts
@@ -58,11 +88,92 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
         let appendArtifacts = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForAppend(
             verifierOpeningLen: 2,
             lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
-            lineageVerifierKey: Data(repeating: 0xA7, count: 64),
-            lineageProvingKeyArchive: Data(repeating: 0xA8, count: 64)
+            lineageVerifierKey: appendVerifierKey,
+            lineageProvingKeyArchive: appendProvingKeyArchive
         )
         XCTAssertFalse(appendArtifacts.isInitArtifact)
         XCTAssertTrue(appendArtifacts.isAppendArtifact)
+
+        try assertInvalidLineageKeyArtifact("lineage_verifier_key") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: appendVerifierKey,
+                lineageProvingKeyArchive: appendProvingKeyArchive
+            )
+        }
+        try assertInvalidLineageKeyArtifact("lineage_proving_key_archive") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: initVerifierKey,
+                lineageProvingKeyArchive: appendProvingKeyArchive
+            )
+        }
+        try assertInvalidLineageKeyArtifact("lineage_verifier_key") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: Data("not-zk1".utf8),
+                lineageProvingKeyArchive: initProvingKeyArchive
+            )
+        }
+        let duplicateCidVerifierKey = initVerifierKey + Self.zk1Tlv(
+            tag: "CID1",
+            payload: Data(KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1.utf8)
+        )
+        try assertInvalidLineageKeyArtifact("lineage_verifier_key") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: duplicateCidVerifierKey,
+                lineageProvingKeyArchive: initProvingKeyArchive
+            )
+        }
+        try assertInvalidLineageKeyArtifact("lineage_proving_key_archive") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: initVerifierKey,
+                lineageProvingKeyArchive: Data("not-norito".utf8)
+            )
+        }
+        var missingCircuitPayload = Data("package".utf8)
+        missingCircuitPayload.append(Self.verifierKeyCommitment(verifierKey: initVerifierKey))
+        missingCircuitPayload.append(Data(repeating: 0xA5, count: 64))
+        let missingCircuitArchive = noritoEncode(
+            typeName: "KagemushaRecursiveSpendLineageProvingKeyArchiveV1",
+            payload: missingCircuitPayload
+        )
+        try assertInvalidLineageKeyArtifact("lineage_proving_key_archive") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: initVerifierKey,
+                lineageProvingKeyArchive: missingCircuitArchive
+            )
+        }
+        let wrongCommitmentArchive = Self.lineageProvingKeyArchive(
+            circuitId: KagemushaRecursiveSpendProver.recursiveSpendLineageOneHopProofCircuitIdV1,
+            verifierKey: appendVerifierKey,
+            seed: 0xA6
+        )
+        try assertInvalidLineageKeyArtifact("lineage_proving_key_archive") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: initVerifierKey,
+                lineageProvingKeyArchive: wrongCommitmentArchive
+            )
+        }
+        try assertInvalidLineageKeyArtifact("lineage_proving_key_archive") {
+            _ = try KagemushaRecursiveSpendProver.lineageKeyArtifactsForInit(
+                verifierOpeningLen: 2,
+                lineageVerifierKeyBackend: KagemushaRecursiveSpendProver.recursiveAggregationProofBackend,
+                lineageVerifierKey: initVerifierKey,
+                lineageProvingKeyArchive: Self.emptyPayloadKagemushaNoritoArchive()
+            )
+        }
 
         try assertInvalidLineageKeyArtifact("proof_circuit_id") {
             _ = try KagemushaRecursiveSpendProver.lineageKeyArtifacts(
@@ -1243,6 +1354,60 @@ final class KagemushaRecursiveSpendProverTests: XCTestCase {
             typeName: "KagemushaRecursiveSpendInputArchiveV1",
             payload: Data()
         )
+    }
+
+    private static func zk1Tlv(tag: String, payload: Data) -> Data {
+        var encoded = Data(tag.utf8)
+        appendUInt32LE(UInt32(payload.count), to: &encoded)
+        encoded.append(payload)
+        return encoded
+    }
+
+    private static func lineageVerifierKey(circuitId: String, seed: UInt8) -> Data {
+        var verifierKey = Data([0x5A, 0x4B, 0x31, 0x00])
+        verifierKey.append(zk1Tlv(tag: "IPAK", payload: Data([8, 0, 0, 0])))
+        verifierKey.append(zk1Tlv(tag: "CID1", payload: Data(circuitId.utf8)))
+        verifierKey.append(zk1Tlv(tag: "H2VK", payload: Data(repeating: seed, count: 32)))
+        return verifierKey
+    }
+
+    private static func lineageProvingKeyArchive(
+        circuitId: String,
+        verifierKey: Data,
+        seed: UInt8
+    ) -> Data {
+        var payload = Data([1, 0])
+        payload.append(Data(circuitId.utf8))
+        payload.append(verifierKeyCommitment(verifierKey: verifierKey))
+        payload.append(Data(repeating: seed, count: 64))
+        return noritoEncode(
+            typeName: "KagemushaRecursiveSpendLineageProvingKeyArchiveV1",
+            payload: payload
+        )
+    }
+
+    private static func verifierKeyCommitment(verifierKey: Data) -> Data {
+        let backend = Data(KagemushaRecursiveSpendProver.recursiveAggregationProofBackend.utf8)
+        var preimage = Data("iroha:zk:v1:vk".utf8)
+        appendUInt64BE(UInt64(backend.count), to: &preimage)
+        preimage.append(backend)
+        appendUInt64BE(UInt64(verifierKey.count), to: &preimage)
+        preimage.append(verifierKey)
+        return Data(SHA256.hash(data: preimage))
+    }
+
+    private static func appendUInt32LE(_ value: UInt32, to data: inout Data) {
+        var littleEndian = value.littleEndian
+        withUnsafeBytes(of: &littleEndian) { bytes in
+            data.append(contentsOf: bytes)
+        }
+    }
+
+    private static func appendUInt64BE(_ value: UInt64, to data: inout Data) {
+        var bigEndian = value.bigEndian
+        withUnsafeBytes(of: &bigEndian) { bytes in
+            data.append(contentsOf: bytes)
+        }
     }
 
     private func assertInvalidLineageKeyArtifact(

@@ -12,6 +12,7 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
     case emptyCompactTokenPayload
     case oversizedCompactTokenArchive
     case bridgeUnavailable
+    case recursiveCompactUnavailable
     case proofRejected
     case verificationRejected
 
@@ -41,6 +42,8 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
             return NoritoNativeBridge.bridgeUnavailableMessage(
                 "Kagemusha recursive compact-token prover/verifier is unavailable."
             )
+        case .recursiveCompactUnavailable:
+            return "Kagemusha recursive compact-token proving is reserved until the composed private-hop verifier-slice proof is available."
         case .proofRejected:
             return "Kagemusha recursive compact-token inputs were rejected by the native prover."
         case .verificationRejected:
@@ -56,6 +59,10 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
 
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenProverAvailable
+    }
+
+    public static var isVerifierNativeAvailable: Bool {
+        NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenVerifierAvailable
     }
 
     public static func proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -80,7 +87,7 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
     ) throws -> Bool {
         try verifyRecursiveCompactPaymentToken(
             compactTokenArchive: compactTokenArchive,
-            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenProverAvailable
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenVerifierAvailable
         ) {
             try NoritoNativeBridge.shared.verifyKagemushaRecursiveCompactPaymentToken(
                 compactTokenArchive: compactTokenArchive
@@ -116,6 +123,8 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
         let token: Data?
         do {
             token = try body()
+        } catch NativeBridgeError.kagemushaRecursiveCompactUnavailable {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.recursiveCompactUnavailable
         } catch NativeBridgeError.kagemushaProve {
             throw KagemushaRecursiveCompactPaymentTokenProverError.proofRejected
         } catch {
@@ -146,6 +155,8 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
         let valid: Bool?
         do {
             valid = try body()
+        } catch NativeBridgeError.kagemushaRecursiveCompactUnavailable {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.recursiveCompactUnavailable
         } catch NativeBridgeError.kagemushaProve {
             throw KagemushaRecursiveCompactPaymentTokenProverError.verificationRejected
         } catch {

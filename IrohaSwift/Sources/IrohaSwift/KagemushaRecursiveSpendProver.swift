@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public enum KagemushaRecursiveSpendProverError: Error, Equatable, LocalizedError {
     case emptyRequestArchive
@@ -76,6 +77,10 @@ public enum KagemushaRecursiveSpendProver {
     public static let recursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1 =
         "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1"
     private static let maxNoritoHeaderPaddingBytes = 64
+    private static let kagemushaZk1Magic = Data([0x5A, 0x4B, 0x31, 0x00])
+    private static let kagemushaZk1TlvCid1 = Data("CID1".utf8)
+    private static let kagemushaZk1TlvIpaK = Data("IPAK".utf8)
+    private static let kagemushaZk1TlvH2Vk = Data("H2VK".utf8)
 
     public static var isNativeAvailable: Bool {
         NoritoNativeBridge.shared.isKagemushaRecursiveSpendAvailable
@@ -246,6 +251,132 @@ public enum KagemushaRecursiveSpendProver {
         }
         guard !lineageProvingKeyArchive.isEmpty else {
             throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        try validateLineageKeyArtifactPackageBinding(
+            proofCircuitId: proofCircuitId,
+            lineageVerifierKeyBackend: lineageVerifierKeyBackend,
+            lineageVerifierKey: lineageVerifierKey,
+            lineageProvingKeyArchive: lineageProvingKeyArchive
+        )
+    }
+
+    private static func validateLineageKeyArtifactPackageBinding(
+        proofCircuitId: String,
+        lineageVerifierKeyBackend: String,
+        lineageVerifierKey: Data,
+        lineageProvingKeyArchive: Data
+    ) throws {
+        let verifierCircuitId = try lineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey)
+        guard verifierCircuitId == proofCircuitId else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+        }
+        let archivePayload = try lineageProvingKeyArchivePayload(lineageProvingKeyArchive)
+        let circuitIdBytes = Data(proofCircuitId.utf8)
+        let verifierKeyCommitment = verifyingKeyCommitment(
+            lineageVerifierKeyBackend: lineageVerifierKeyBackend,
+            lineageVerifierKey: lineageVerifierKey
+        )
+        guard archivePayload.range(of: circuitIdBytes) != nil,
+              archivePayload.range(of: verifierKeyCommitment) != nil
+        else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+    }
+
+    private static func lineageVerifierKeyEnvelopeCircuitId(_ lineageVerifierKey: Data) throws -> String {
+        guard lineageVerifierKey.starts(with: kagemushaZk1Magic) else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+        }
+        var offset = kagemushaZk1Magic.count
+        var circuitId: String?
+        var sawIpaK = false
+        var sawH2Vk = false
+        while offset < lineageVerifierKey.count {
+            guard offset + 8 <= lineageVerifierKey.count,
+                  let payloadLength = readUInt32LE(lineageVerifierKey, at: offset + 4)
+            else {
+                throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+            }
+            let payloadStart = offset + 8
+            let payloadEnd = payloadStart + Int(payloadLength)
+            guard payloadEnd <= lineageVerifierKey.count else {
+                throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+            }
+            let tag = Data(lineageVerifierKey[offset..<(offset + 4)])
+            let payload = Data(lineageVerifierKey[payloadStart..<payloadEnd])
+            if tag == kagemushaZk1TlvCid1 {
+                guard circuitId == nil,
+                      !payload.isEmpty,
+                      !payload.contains(where: { $0 < 0x20 || $0 > 0x7E }),
+                      let decoded = String(data: payload, encoding: .utf8)
+                else {
+                    throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+                }
+                let trimmed = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else {
+                    throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+                }
+                circuitId = trimmed
+            } else if tag == kagemushaZk1TlvIpaK {
+                guard !sawIpaK, payload.count == 4 else {
+                    throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+                }
+                sawIpaK = true
+            } else if tag == kagemushaZk1TlvH2Vk {
+                guard !sawH2Vk, !payload.isEmpty else {
+                    throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+                }
+                sawH2Vk = true
+            } else {
+                throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+            }
+            offset = payloadEnd
+        }
+        guard let circuitId, sawIpaK, sawH2Vk else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_verifier_key")
+        }
+        return circuitId
+    }
+
+    private static func lineageProvingKeyArchivePayload(_ lineageProvingKeyArchive: Data) throws -> Data {
+        guard let frame = noritoDecodeFrame(lineageProvingKeyArchive),
+              frame.paddingLength <= maxNoritoHeaderPaddingBytes,
+              frame.header.length > 0
+        else {
+            throw KagemushaRecursiveSpendProverError.invalidLineageKeyArtifact("lineage_proving_key_archive")
+        }
+        return frame.payload
+    }
+
+    private static func verifyingKeyCommitment(
+        lineageVerifierKeyBackend: String,
+        lineageVerifierKey: Data
+    ) -> Data {
+        let backend = Data(lineageVerifierKeyBackend.utf8)
+        var preimage = Data("iroha:zk:v1:vk".utf8)
+        appendUInt64BE(UInt64(backend.count), to: &preimage)
+        preimage.append(backend)
+        appendUInt64BE(UInt64(lineageVerifierKey.count), to: &preimage)
+        preimage.append(lineageVerifierKey)
+        return Data(SHA256.hash(data: preimage))
+    }
+
+    private static func readUInt32LE(_ data: Data, at offset: Int) -> UInt32? {
+        guard offset >= 0, offset + 4 <= data.count else {
+            return nil
+        }
+        var value: UInt32 = 0
+        data[offset..<(offset + 4)].withUnsafeBytes { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            memcpy(&value, baseAddress, 4)
+        }
+        return UInt32(littleEndian: value)
+    }
+
+    private static func appendUInt64BE(_ value: UInt64, to data: inout Data) {
+        var bigEndian = value.bigEndian
+        withUnsafeBytes(of: &bigEndian) { bytes in
+            data.append(contentsOf: bytes)
         }
     }
 

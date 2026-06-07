@@ -76,3 +76,8 @@ javac -d "${JAVA_OUT}" \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java
 java -ea -cp "${JAVA_OUT}" \
   org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest
+
+cd "${ROOT_DIR}/java/iroha_android"
+ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest \
+  ./gradlew --no-daemon -q :core:test \
+  --tests org.hyperledger.iroha.android.GradleHarnessTests
