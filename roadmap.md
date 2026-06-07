@@ -2696,8 +2696,13 @@ and completed history lives in [`status.md`](./status.md).
   committed+GST spec-step terminal stuttering,
   committed spec-step non-stuttering GST observation exclusivity,
   committed spec-step stutter/GST closure,
+  committed spec-step finality-stack preservation,
+  committed spec-step GST-only data-change footprint,
+  committed spec-step no protocol-action footprint,
   post-finality progress-action quiescence,
-  honest/fault roster-budgeted vote counters, RBC delivery stability, fast
+  committed spec-step progress-gate quiescence, honest/fault roster-budgeted
+  vote counters, RBC delivery stability, committed spec-step budgeted-RBC
+  evidence stability, fast
   canonical frontier recovery, small exhaustive frontier recovery,
   frontier committed source future-stage isolation,
   frontier view-bound drop future-stage isolation,
@@ -2783,12 +2788,7 @@ and completed history lives in [`status.md`](./status.md).
   RBC chunk post scheduling/debug-mask semantics,
   RBC READY/DELIVER deferral throttle semantics,
   RBC missing-INIT broad rebroadcast semantics,
-  RBC persisted chunk sampling/proof semantics,
-  RBC persisted session-store guard semantics,
-  RBC store status accounting semantics,
-  RBC store pressure-log throttling semantics,
   round-gap marker/snapshot/EMA status semantics,
-  RBC stale-message/payload-refetch helper semantics,
   RBC missing BlockCreated recovery semantics,
   RBC unverified-roster escape-hatch semantics,
   RBC signing-preimage binding semantics,
@@ -2810,8 +2810,10 @@ and completed history lives in [`status.md`](./status.md).
   cached block-message wire-frame semantics,
   BlockCreated frontier metadata wire/rebuild semantics,
   cached proposal rebroadcast semantics,
-  exact-slot frontier recovery activity semantics,
-  frontier reassembly activity semantics,
+  exact-slot frontier recovery activity semantics, exact-slot aggregate
+  activity-source exactness,
+  frontier reassembly activity semantics, frontier reassembly aggregate
+  activity-source exactness,
   frontier quorum-owner cleanup preservation semantics,
   contiguous-frontier sidecar retarget semantics,
   contiguous-frontier sidecar expected-hash semantics,
@@ -6541,11 +6543,12 @@ proof artifact wrapper first, so manifest, public-input, or submission-package
 metadata drift cannot be hidden behind otherwise valid OpenVerify proof bytes,
 and Torii/CLI artifact renderers omit OpenVerify summaries for wrappers that
 fail that typed gate.
-helpers gated as diagnostic/backlog-only surfaces, with production
-readiness and release-evidence summaries refusing to mark those lanes ready
-transition verifiers now also require the ordered transition chain to terminate
-at the adapter's declared active epoch/set id, so stale chains cannot pass by
-replaying the same final validator or authority-set hash. ETH, BSC, Solana,
+Keep any diagnostic/backlog-only helpers gated as non-production surfaces, with
+production readiness and release-evidence summaries refusing to mark those
+lanes ready. Transition verifiers now also require the ordered transition chain
+to terminate at the adapter's declared active epoch/set id, so stale chains
+cannot pass by replaying the same final validator or authority-set hash. ETH,
+BSC, Solana,
 non-canonical signer bitmap width/padding, empty signer sets, signature-count
 drift, claimed stake/weight drift, and sub-quorum certificates before
 transcript hashing. ETH source-adapter preflight also recomputes the active
@@ -6605,12 +6608,14 @@ circuit. The ETH/BSC adapter proof shapes are now preflight-bounded across Rust
 and the web/mobile SDK helper surfaces: ETH caps sync committees at 512
 authorities and 64 transition proofs, while BSC caps validator sets at 255
 validators and 64 transition proofs before transcript hashing. Backlog-only
-support is re-opened, use the offline
-hashes, including the runtime storage-proof verifier hash, and non-canonical
-source-adapter OpenVerify VK hashes before rendering governance TOML using the
-same runtime-storage template preimage as Rust. JavaScript, Python, Swift,
-Kotlin, and Java Android runtime-storage request builders also reject that
-template source-state verifier hash before invoking the app-linked prover, and
+runtime-storage support must remain outside launch scope unless a future design
+pass reopens it. If that happens, require the offline evidence renderer to
+reject template component hashes, including the runtime storage-proof verifier
+hash, and non-canonical source-adapter OpenVerify VK hashes before rendering
+governance TOML using the same runtime-storage template preimage as Rust.
+JavaScript, Python, Swift, Kotlin, and Java Android runtime-storage request
+builders also reject that template source-state verifier hash before invoking
+the app-linked prover, and
 they derive the exact statement bytes, verification context, schema descriptor,
 public-input columns, FastPQ public inputs, and metadata transitions from the
 UI-collected `System.Events` storage proof witness. JavaScript and Python also
@@ -7825,10 +7830,27 @@ or ABI behavior.
 					  typed diagonal packed-slot linear transforms, and crypto exposes exact and
 					  bounded deterministic evaluators for those transforms through the registered
 							  RNS paths. The blind-rotation artifact now carries canonical packed-slot
-							  rotation schedules bound to the governed accumulator artifact. The
-							  sample-extraction artifact now carries typed source/output ciphertext shape
-							  and extracted-coefficient metadata, rejecting opaque, wrong-slot-count,
-							  bad-component-count, or out-of-range payloads. The accumulator artifact now
+							  rotation schedules bound to the governed accumulator artifact, and crypto
+							  exposes exact and bounded registered-RNS execution helpers plus matching
+							  public bound propagation that consume those governed selector schedules
+							  directly. The sample-extraction artifact now carries typed source/output
+							  ciphertext shape and extracted-coefficient metadata, rejects opaque,
+							  wrong-slot-count, bad-component-count, or out-of-range payloads, and crypto
+							  can extract the selected RLWE coefficient into a raw LWE-style sample whose
+							  decrypt matches the selected `c0 + c1 * s` coefficient under the existing
+							  secret polynomial basis, with exact and bounded raw-sample bound propagation.
+							  Crypto now composes the governed coefficient-to-slot, blind-rotation, and
+							  raw sample-extraction artifacts into an exact/bounded execution-prefix trace
+							  with propagated bounds, coefficient-zero diagnostic repack output, and
+							  missing-key fail-closed checks. Artifact-aware
+							  exact/bounded final-output entry points now execute that prefix or its bound
+							  propagation before stopping at the final-stage unavailable error, so missing
+							  Galois keys and malformed executable artifacts fail before the unfinished
+							  stage. Crypto also exposes an explicit coefficient-zero raw-sample repack
+							  diagnostic bridge with exact and bounded coefficient-zero bounds; final
+							  governed sample key-switch/repacking into the full BFV output ciphertext
+							  shape remains part of the unfinished full-bootstrap evaluator. The
+							  accumulator artifact now
 							  carries typed packed-slot test-vector material and rejects opaque,
 							  wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
 							  public-input schema and prover/verifier key artifacts now also carry typed
@@ -7842,10 +7864,12 @@ or ABI behavior.
 							  bounded proof mode, and input/output bound metadata for the future verifier.
 							  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts,
 							  provenance signs them, and Core routes exact/bounded full-mode jobs through
-							  artifact-aware preflight before the current unavailable-evaluator error.
+							  artifact-aware crypto prefix execution and prefix-bound propagation before
+							  the current final-stage unavailable error.
 						  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-						  Remaining work is the executable full BFV bootstrapping evaluator and the real
-						  prover/verifier artifacts and implementation.
+						  Remaining work is the final governed sample key-switch/repacking stage that
+						  turns the executable prefix trace into the full BFV output ciphertext, plus the
+						  real prover/verifier artifacts and implementation.
 	  Soracloud transcript digesting now preflights the advertised BFV public-key
 	  shape before evaluation-key bundle validation, so malformed transcript key
 	  material is reported at the public-key boundary instead of being masked by
@@ -8456,6 +8480,11 @@ ZK/FHE fixture corridor into broader release validation.
   land.
 - Use measured matrix runs, not speculative settings, before accepting higher
   throughput targets.
+- Treat the explicit DA/RBC integration soft fallbacks as closed:
+  `sumeragi_adversarial_chunk_drop_recovery` now requires post-drop progress
+  and bounded peer skew, while the NPoS restart/large-payload tests require
+  restarted-peer catch-up, recovered-session evidence, primary-cluster height,
+  and quorum-visible commit height before accepting RBC persistence proofs.
 - Keep hardware acceleration paths feature-gated with deterministic scalar
   fallbacks.
 
@@ -8515,82 +8544,7 @@ RBC targeted READY/DELIVER repair helper gate (`rbc-targeted-repair`),
 RBC outbound chunk flush helper gate (`rbc-outbound-flush`),
 RBC chunk post scheduling/debug-mask helper gate (`rbc-chunk-post-debug`),
 RBC READY/DELIVER deferral throttle helper gate (`rbc-deferral-throttle`),
-RBC missing-INIT broad rebroadcast gate (`rbc-missing-init-rebroadcast`),
-RBC persisted chunk sampling helper gate
-(`rbc-sampling`), RBC persisted session-store guard gate
-(`rbc-store`), RBC store status accounting helper gate (`rbc-store-status`),
-RBC store pressure log throttling helper gate (`rbc-store-pressure-log`),
 round-gap marker/snapshot/EMA status helper gate (`round-gap-status`),
-RBC recovery helper gate, RBC missing BlockCreated recovery
-helper gate (`rbc-missing-block-recovery`), RBC unverified-roster escape-hatch gate,
-RBC signing-preimage gate, classic Vote/VRF
-signing-preimage gate, classic Vote/QC signature-verification gate,
-invalid-signature kind/outcome label helper gate
-(`invalid-signature-labels`),
-invalid-signature throttle/penalty helper gate (`invalid-signature-throttle`),
-TLC-cross-checked vote-validation drop telemetry status helper gate
-(`vote-validation-drop-status`),
-penalty offender/epoch/roster selection helper gate
-(`penalty-offender-selection`),
-consensus penalty action derivation/application helper gate
-(`consensus-penalty-action`),
-penalty status projection helper gate (`penalty-status`),
-local peer removed flag helper gate (`local-peer-removed-status`),
-TLC-cross-checked execution-witness recorder lifecycle/keying helper gate
-(`exec-witness-recorder`),
-TLC-cross-checked execution-witness access-key parser helper gate
-(`exec-witness-access-key`),
-execution-witness root projection helper gate (`exec-witness-roots`),
-TLC-cross-checked sparse-Merkle path/hash helper gate (`smt-path-hash`),
-RBC compact block-message helper gate (`block-message-rbc-compact`),
-consensus block-message priority helper gate (`block-message-priority`),
-consensus block-message height/view projection helper gate
-(`block-message-height-view`),
-consensus block-message log/status kind projection helper gate
-(`block-message-kind`),
-TLC-cross-checked Kura replica advert ingress helper gate
-(`kura-replica-advert`),
-consensus message timing/control/native-AMX projection helper gate
-(`message-projection`),
-pipeline event emission helper gate (`pipeline-event-emission`),
-cached block-message Norito frame helper gate (`block-message-wire`),
-BlockCreated frontier metadata wire/rebuild helper gate
-(`block-created-frontier-wire`),
-TLC-cross-checked canonical block payload bytes helper gate
-(`block-payload-canonicalization`),
-cached proposal rebroadcast helper gate (`cached-proposal-rebroadcast`),
-TLC-cross-checked frontier block-sync hint/direct-response permit gate
-(`frontier-block-sync-hint`),
-exact-slot frontier recovery activity helper gate
-(`frontier-same-slot-activity`),
-frontier reassembly activity helper gate
-(`frontier-reassembly-activity`),
-frontier quorum-timeout actionable-owner cleanup helper gate
-(`frontier-quorum-owner-actionable`),
-contiguous-frontier sidecar retarget helper gate
-(`frontier-sidecar-retarget`),
-contiguous-frontier sidecar expected-hash helper gate
-(`frontier-sidecar-expected-hash`),
-contiguous-frontier payload-hint selector helper gate
-(`contiguous-frontier-payload-hint`),
-contiguous-frontier parent QC-hint retarget helper gate
-(`frontier-parent-qc-hint-retarget`),
-TLC-cross-checked live-frontier idle missing-QC suppression helper gate
-(`live-frontier-idle-missing-qc`),
-TLC-cross-checked missing-QC reacquire admission helper gate
-(`missing-qc-reacquire-admission`),
-TLC-cross-checked missing-QC reacquire action orchestration helper gate
-(`missing-qc-reacquire-action`),
-TLC-cross-checked missing commit-QC actionable dependency helper gate
-(`missing-commit-qc-actionable`),
-TLC-cross-checked same-height missing-QC stall dampening helper gate
-(`missing-qc-height-stall`),
-TLC-cross-checked same-height missing-QC stall range-pull helper gate
-(`missing-qc-stall-range-pull`),
-TLC-cross-checked same-height missing-payload fetch-window and hash-miss cap helper gate
-(`missing-payload-fetch-window`),
-TLC-cross-checked canonical contiguous-frontier reanchor helper gate
-(`canonical-frontier-reanchor`),
 TLC-cross-checked contiguous-frontier repair view-change suppression helper gate
 (`frontier-repair-view-change`),
 TLC-cross-checked contiguous-frontier recovery advance state-machine helper gate
@@ -8927,7 +8881,7 @@ TLC-cross-checked proposal stale same-height vote helper gate,
 TLC-cross-checked same-height vote recovery view-gap helper gate,
 TLC-cross-checked tip-extension helper gate,
 TLC-cross-checked DA gate helper gate,
-TLC-cross-checked DA gate status counter/snapshot helper gate
+TLC-cross-checked DA gate status transition semantics helper gate
 (`da-gate-status`),
 TLC-cross-checked DA manifest guard helper gate,
 TLC-cross-checked consensus handshake capability construction helper gate,

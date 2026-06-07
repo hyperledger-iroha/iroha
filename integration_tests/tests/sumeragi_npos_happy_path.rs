@@ -330,18 +330,13 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
         return Ok(());
     }
     let restart_phase_start = Instant::now();
-    match timeout(COMMIT_WAIT_BUDGET, restart_peer.once_block(expected_height)).await {
-        Ok(()) => {}
-        Err(_) => {
-            // TODO: tighten this back to a hard restarted-peer height requirement once the
-            // grouped `consensus_and_da` harness catches restarted peers up reliably under
-            // serialized network startup and heavy RBC load.
-            eprintln!(
-                "restart peer did not reach height {expected_height} within {:?}; continuing because recovered RBC state and primary-cluster progress are the actual persistence signal",
-                COMMIT_WAIT_BUDGET
-            );
-        }
-    }
+    timeout(COMMIT_WAIT_BUDGET, restart_peer.once_block(expected_height))
+        .await
+        .wrap_err_with(|| {
+            format!(
+                "restart peer did not reach height {expected_height} within {COMMIT_WAIT_BUDGET:?}"
+            )
+        })?;
 
     let restart_store_dir = restart_peer.kura_store_dir().join("rbc_sessions");
     if let Err(endpoint_err) = wait_for_rbc_session_recovered(
@@ -363,16 +358,15 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
         )
         .await
         {
-            // TODO: tighten this back to a hard restarted-peer recovered-session requirement once
-            // the restart path reliably surfaces either the operator-endpoint `recovered` flag or
-            // a persisted `recovered_from_disk` summary under serialized heavy-payload runs.
-            eprintln!(
-                "restart peer did not expose a recovered RBC session via endpoint ({endpoint_err}) or persisted snapshot ({persisted_err}); continuing because primary-cluster progress and delivered-session persistence remain the stable restart signal"
-            );
+            return Err(persisted_err).wrap_err_with(|| {
+                format!(
+                    "restart peer did not expose a recovered RBC session via endpoint ({endpoint_err}) or persisted snapshot"
+                )
+            });
         }
     }
 
-    if let Err(err) = wait_for_block_height(
+    wait_for_block_height(
         &http,
         &status_url_primary,
         expected_height,
@@ -380,15 +374,9 @@ async fn npos_rbc_persists_payload_across_restart() -> eyre::Result<()> {
         COMMIT_WAIT_BUDGET,
     )
     .await
-    {
-        // TODO: tighten this back to a hard primary-cluster height requirement once grouped
-        // heavy-payload runs expose commit progress consistently enough across the sampled
-        // primary status endpoint. Persisted recovered sessions are the primary signal here.
-        eprintln!(
-            "primary status endpoint did not expose commit height {expected_height} within {:?}; continuing because recovered-session persistence across peers is the actual restart signal: {err:?}",
-            COMMIT_WAIT_BUDGET
-        );
-    }
+    .wrap_err_with(|| {
+        format!("primary status endpoint did not expose commit height {expected_height} within {COMMIT_WAIT_BUDGET:?}")
+    })?;
 
     ensure_rbc_sessions_persisted(
         &network,
@@ -443,7 +431,7 @@ async fn npos_rbc_large_payload_delivers_and_commits() -> eyre::Result<()> {
 
     submit_handle.await.wrap_err("submit log instruction")??;
 
-    if let Err(err) = wait_for_block_height_quorum(
+    wait_for_block_height_quorum(
         &http,
         &status_urls,
         expected_height,
@@ -451,16 +439,7 @@ async fn npos_rbc_large_payload_delivers_and_commits() -> eyre::Result<()> {
         COMMIT_WAIT_BUDGET,
         network.peers().len().saturating_sub(1).max(1),
     )
-    .await
-    {
-        // TODO: tighten this back to a hard quorum-visible commit-height requirement once the
-        // heavy-payload NPoS path exposes `/status` commit progress reliably across grouped and
-        // exact integration runs. Delivered multi-chunk RBC persistence is the stable signal here.
-        eprintln!(
-            "status endpoints did not expose commit height {expected_height} within {:?}; continuing because delivered multi-chunk RBC persistence is the actual large-payload signal: {err:?}",
-            COMMIT_WAIT_BUDGET
-        );
-    }
+    .await?;
 
     ensure_rbc_sessions_persisted(&network, expected_height, start, COMMIT_WAIT_BUDGET, None)
         .await?;

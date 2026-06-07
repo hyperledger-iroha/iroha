@@ -53,6 +53,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pytests/scripts/sccp_ton_source_state_evidence_test.py",
         "pytests/scripts/sccp_tron_live_evidence_test.py",
         "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+        "pytests/scripts/sccp_retired_network_surface_test.py",
     ),
     "js-sdk": (
         "--test javascript/iroha_js/test/sccpSolanaProver.test.js",
@@ -2862,6 +2863,33 @@ SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = (
     ),
 )
 SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS = ()
+SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
+    (
+        "pytests/scripts/sccp_retired_network_surface_test.py",
+        (
+            "def test_retired_network_patterns_catch_adversarial_examples",
+            "def test_retired_network_surface_scan_covers_expected_files",
+            "def test_active_tree_excludes_retired_network_surface_tokens",
+            "BANNED_PATTERNS",
+            '_literal("sub", "strate")',
+            '_literal("pol", "kadot")',
+            '_literal("ku", "sama")',
+            '_literal(_RUNTIME, " ", _SC, _ALE)',
+            'Path("docs/source/engineering_backlog.md")',
+            'Path("crates/iroha_sccp/src/lib.rs")',
+            'Path("javascript/iroha_js/test/sccpPackageExports.test.js")',
+            'Path("python/iroha_torii_client/tests/sccp_test.py")',
+        ),
+    ),
+)
+SCCP_RETIRED_NETWORK_SURFACE_GUARD_FORBIDDEN_MARKERS = (
+    "APPROVED_RETIREMENT_NOTICE_PATTERNS",
+    "STATUS_RETIREMENT_NOTICE_PATTERN",
+    "_approved_retirement_notice_spans",
+    "_is_approved_retirement_notice_match",
+    "_CHAIN_STYLE_PHRASE",
+    "_CHAIN_NAMES_PHRASE",
+)
 ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS = (
     (
         "crates/iroha_core/src/smartcontracts/isi/world.rs",
@@ -5188,6 +5216,36 @@ def _sccp_public_discovery_documentation_inventory_errors(
     if forbidden_markers is None:
         forbidden_markers = SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS
     label = "SCCP public discovery documentation"
+    errors = _source_marker_inventory_errors(inventory, label=label)
+    for raw_path, _markers in inventory:
+        path = Path(raw_path)
+        display_path = str(path)
+        if not path.is_absolute():
+            display_path = path.as_posix()
+            path = ROOT / path
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for marker in forbidden_markers:
+            if marker in source:
+                errors.append(
+                    f"{label} source inventory {display_path} contains stale marker: {marker}"
+                )
+    return errors
+
+
+def _sccp_retired_network_surface_guard_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+    forbidden_markers: tuple[str, ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for retired SCCP network-surface guards."""
+
+    if inventory is None:
+        inventory = SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS
+    if forbidden_markers is None:
+        forbidden_markers = SCCP_RETIRED_NETWORK_SURFACE_GUARD_FORBIDDEN_MARKERS
+    label = "SCCP retired network-surface guard"
     errors = _source_marker_inventory_errors(inventory, label=label)
     for raw_path, _markers in inventory:
         path = Path(raw_path)
@@ -10757,6 +10815,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_launch_policy_selector_inventory_errors())
     errors.extend(_ethereum_launch_policy_documentation_inventory_errors())
     errors.extend(_sccp_public_discovery_documentation_inventory_errors())
+    errors.extend(_sccp_retired_network_surface_guard_inventory_errors())
     errors.extend(_ethereum_core_range_finality_binding_inventory_errors())
     errors.extend(_ethereum_core_message_replay_guard_inventory_errors())
     errors.extend(_ethereum_torii_pinned_message_proof_inventory_errors())

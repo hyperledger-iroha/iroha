@@ -48,119 +48,168 @@ pub fn parent_state_from_witness(w: &ExecWitness) -> Hash {
 
 #[cfg(test)]
 mod tests {
+    use super::super::consensus::{ExecKv, ExecWitness};
     use super::*;
 
-    #[test]
-    fn post_root_stable_for_order_variations() {
-        use super::super::consensus::{ExecKv, ExecWitness};
-        // Two reads, one write
-        let w1 = ExecWitness {
-            reads: vec![
-                ExecKv {
-                    key: b"a".to_vec(),
-                    value: b"1".to_vec(),
-                },
-                ExecKv {
-                    key: b"b".to_vec(),
-                    value: b"2".to_vec(),
-                },
-            ],
-            writes: vec![ExecKv {
-                key: b"c".to_vec(),
-                value: b"3".to_vec(),
-            }],
+    fn kv(key: &str, value: &str) -> ExecKv {
+        ExecKv {
+            key: key.as_bytes().to_vec(),
+            value: value.as_bytes().to_vec(),
+        }
+    }
+
+    fn witness(reads: Vec<ExecKv>, writes: Vec<ExecKv>) -> ExecWitness {
+        ExecWitness {
+            reads,
+            writes,
             fastpq_transcripts: Vec::new(),
             fastpq_batches: Vec::new(),
-        };
-        let mut w2 = w1.clone();
-        w2.reads.swap(0, 1); // reorder reads
-        let r1 = post_state_from_witness(&w1);
-        let r2 = post_state_from_witness(&w2);
-        assert_eq!(r1, r2);
+        }
     }
 
     #[test]
-    fn parent_root_uses_reads_only() {
-        use super::super::consensus::{ExecKv, ExecWitness};
-        // Same key read then written; parent root should reflect pre-value only.
-        let witness = ExecWitness {
-            reads: vec![ExecKv {
-                key: b"k".to_vec(),
-                value: b"old".to_vec(),
-            }],
-            writes: vec![ExecKv {
-                key: b"k".to_vec(),
-                value: b"new".to_vec(),
-            }],
-            fastpq_transcripts: Vec::new(),
-            fastpq_batches: Vec::new(),
-        };
-        let parent = parent_state_from_witness(&witness);
-        // If we compute a root with only the write, it must differ from the parent root
-        let writes_only = ExecWitness {
-            reads: vec![],
-            writes: witness.writes.clone(),
-            fastpq_transcripts: Vec::new(),
-            fastpq_batches: Vec::new(),
-        };
-        let post_from_w_only = post_state_from_witness(&writes_only);
-        assert_ne!(parent, post_from_w_only);
-        // Computing the post root with reads present also differs whenever writes exist,
-        // because the post root only commits to writes in that case.
-        let post = post_state_from_witness(&witness);
-        assert_ne!(parent, post);
-    }
-
-    #[test]
-    fn parent_root_ignores_incidental_reads_when_writes_exist() {
-        use super::super::consensus::{ExecKv, ExecWitness};
-
-        let base = ExecWitness {
-            reads: vec![ExecKv {
-                key: b"balance".to_vec(),
-                value: b"10".to_vec(),
-            }],
-            writes: vec![ExecKv {
-                key: b"balance".to_vec(),
-                value: b"7".to_vec(),
-            }],
-            fastpq_transcripts: Vec::new(),
-            fastpq_batches: Vec::new(),
-        };
-        let mut with_extra_read = base.clone();
-        with_extra_read.reads.push(ExecKv {
-            key: b"permission-cache".to_vec(),
-            value: b"true".to_vec(),
-        });
-
+    fn post_root_projection_matches_formal_empty_pure_read_write_and_conflict_cases() {
+        let empty = witness(Vec::new(), Vec::new());
         assert_eq!(
-            parent_state_from_witness(&base),
-            parent_state_from_witness(&with_extra_read)
+            post_state_from_witness(&empty),
+            compute_post_state_root(&[], &[])
+        );
+
+        let pure_reads = witness(vec![kv("account", "old")], Vec::new());
+        assert_eq!(
+            post_state_from_witness(&pure_reads),
+            compute_post_state_root(&[KvPair::new(b"account", b"old")], &[])
+        );
+        assert_ne!(
+            post_state_from_witness(&pure_reads),
+            post_state_from_witness(&empty)
+        );
+
+        let writes_with_incidental_reads = witness(
+            vec![kv("account", "old"), kv("permission-cache", "true")],
+            vec![kv("account", "new")],
+        );
+        let writes_only = witness(Vec::new(), vec![kv("account", "new")]);
+        assert_eq!(
+            post_state_from_witness(&writes_with_incidental_reads),
+            post_state_from_witness(&writes_only)
+        );
+        assert_ne!(
+            post_state_from_witness(&writes_with_incidental_reads),
+            post_state_from_witness(&pure_reads)
         );
     }
 
     #[test]
-    fn parent_root_keeps_read_only_witness_for_pure_reads() {
-        use super::super::consensus::{ExecKv, ExecWitness};
+    fn parent_root_projection_matches_formal_empty_read_only_and_write_filter_cases() {
+        let empty = witness(Vec::new(), Vec::new());
+        assert_eq!(
+            parent_state_from_witness(&empty),
+            compute_post_state_root(&[], &[])
+        );
 
-        let base = ExecWitness {
-            reads: vec![ExecKv {
-                key: b"config".to_vec(),
-                value: b"1".to_vec(),
-            }],
-            writes: Vec::new(),
-            fastpq_transcripts: Vec::new(),
-            fastpq_batches: Vec::new(),
+        let read_only = witness(vec![kv("config", "1"), kv("other", "2")], Vec::new());
+        assert_eq!(
+            parent_state_from_witness(&read_only),
+            compute_post_state_root(
+                &[KvPair::new(b"config", b"1"), KvPair::new(b"other", b"2")],
+                &[]
+            )
+        );
+
+        let witness_with_writes = witness(
+            vec![kv("balance", "10"), kv("permission-cache", "true")],
+            vec![kv("balance", "7"), kv("write-only", "created")],
+        );
+        let parent = parent_state_from_witness(&witness_with_writes);
+        assert_eq!(
+            parent,
+            compute_post_state_root(&[KvPair::new(b"balance", b"10")], &[])
+        );
+
+        let changed_write_values = witness(
+            witness_with_writes.reads.clone(),
+            vec![kv("balance", "999"), kv("write-only", "different")],
+        );
+        assert_eq!(parent, parent_state_from_witness(&changed_write_values));
+        assert_ne!(parent, post_state_from_witness(&witness_with_writes));
+    }
+
+    #[test]
+    fn root_projection_is_order_independent_and_deduplicates_identical_keys() {
+        let ordered = witness(
+            vec![kv("a", "old-a"), kv("b", "old-b")],
+            vec![kv("a", "new-a"), kv("b", "new-b")],
+        );
+        let reordered = witness(
+            vec![kv("b", "old-b"), kv("a", "old-a")],
+            vec![kv("b", "new-b"), kv("a", "new-a")],
+        );
+        assert_eq!(
+            post_state_from_witness(&ordered),
+            post_state_from_witness(&reordered)
+        );
+        assert_eq!(
+            parent_state_from_witness(&ordered),
+            parent_state_from_witness(&reordered)
+        );
+
+        let duplicated_reads = witness(vec![kv("config", "1"), kv("config", "1")], Vec::new());
+        let single_read = witness(vec![kv("config", "1")], Vec::new());
+        assert_eq!(
+            post_state_from_witness(&duplicated_reads),
+            post_state_from_witness(&single_read)
+        );
+
+        let duplicated_writes = witness(Vec::new(), vec![kv("balance", "7"), kv("balance", "7")]);
+        let single_write = witness(Vec::new(), vec![kv("balance", "7")]);
+        assert_eq!(
+            post_state_from_witness(&duplicated_writes),
+            post_state_from_witness(&single_write)
+        );
+    }
+
+    #[test]
+    fn roots_ignore_fastpq_payloads_match_formal_gate() {
+        use iroha_data_model::fastpq::{
+            FastpqOperationKind, FastpqPublicInputs, FastpqStateTransition, FastpqTransitionBatch,
+            TransferTranscriptBundle,
         };
-        let mut with_extra_read = base.clone();
-        with_extra_read.reads.push(ExecKv {
-            key: b"other".to_vec(),
-            value: b"2".to_vec(),
+
+        let base = witness(vec![kv("balance", "10")], vec![kv("balance", "7")]);
+        let mut with_fastpq = base.clone();
+        with_fastpq
+            .fastpq_transcripts
+            .push(TransferTranscriptBundle {
+                entry_hash: Hash::prehashed([0x11; Hash::LENGTH]),
+                transcripts: Vec::new(),
+            });
+        with_fastpq.fastpq_batches.push(FastpqTransitionBatch {
+            parameter: String::from("test-params"),
+            public_inputs: FastpqPublicInputs {
+                dsid: [0x01; 16],
+                slot: 7,
+                old_root: [0x02; 32],
+                new_root: [0x03; 32],
+                perm_root: [0x04; 32],
+                tx_set_hash: [0x05; 32],
+            },
+            transitions: vec![FastpqStateTransition {
+                key: b"fastpq-key".to_vec(),
+                pre_value: b"fastpq-pre".to_vec(),
+                post_value: b"fastpq-post".to_vec(),
+                operation: FastpqOperationKind::Transfer,
+            }],
+            metadata: std::collections::BTreeMap::from([(String::from("entry"), vec![0xAA])]),
         });
 
-        assert_ne!(
+        assert_eq!(
+            post_state_from_witness(&base),
+            post_state_from_witness(&with_fastpq)
+        );
+        assert_eq!(
             parent_state_from_witness(&base),
-            parent_state_from_witness(&with_extra_read)
+            parent_state_from_witness(&with_fastpq)
         );
     }
 }

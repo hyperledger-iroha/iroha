@@ -4351,7 +4351,7 @@ mod status_tests {
         let snap = sumeragi::StatusSnapshot {
             da_gate: status::DaGateSnapshot {
                 reason: status::DaGateReasonSnapshot::MissingLocalData,
-                last_satisfied: status::DaGateSatisfactionSnapshot::MissingDataRecovered,
+                last_satisfied: status::DaGateSatisfactionSnapshot::ManifestGuardRecovered,
                 missing_local_data_total: 2,
                 manifest_guard_total: 4,
             },
@@ -4384,7 +4384,7 @@ mod status_tests {
         );
         assert_eq!(
             gate.get("last_satisfied").and_then(Value::as_str),
-            Some("missing_data_recovered")
+            Some("manifest_guard_recovered")
         );
         assert_eq!(
             gate.get("missing_local_data_total").and_then(Value::as_u64),
@@ -5054,6 +5054,9 @@ pub async fn handle_v1_sumeragi_status(
                     }
                     sumeragi::status::DaGateSatisfactionSnapshot::MissingDataRecovered => {
                         SumeragiDaGateSatisfaction::MissingDataRecovered
+                    }
+                    sumeragi::status::DaGateSatisfactionSnapshot::ManifestGuardRecovered => {
+                        SumeragiDaGateSatisfaction::ManifestGuardRecovered
                     }
                 },
                 missing_local_data_total: snap.da_gate.missing_local_data_total,

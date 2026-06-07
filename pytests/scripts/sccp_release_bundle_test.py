@@ -470,6 +470,91 @@ def test_release_bundle_verifier_guards_launch_scope_constant_inventory(
     )
 
 
+def test_release_bundle_verifier_guards_retired_network_surface_inventory() -> None:
+    """The strict verifier must pin the retired network-surface scan guard."""
+
+    verifier = load_verify_helpers()
+
+    assert verifier._sccp_retired_network_surface_guard_inventory_errors() == []
+
+
+def test_release_bundle_verifier_reports_sparse_retired_network_surface_inventory() -> None:
+    """Sparse retired network-surface guard inventories must fail verification."""
+
+    verifier = load_verify_helpers()
+    missing_marker = "def missing_retired_network_guard_marker"
+
+    errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
+        (
+            (
+                "pytests/scripts/sccp_retired_network_surface_test.py",
+                (missing_marker,),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP retired network-surface guard source inventory" in error
+        and "pytests/scripts/sccp_retired_network_surface_test.py" in error
+        and missing_marker in error
+        for error in errors
+    )
+
+
+def test_release_bundle_verifier_reports_stale_retired_network_surface_allowlist(
+    tmp_path: Path,
+) -> None:
+    """Retired network-surface guard allowlists must fail verification."""
+
+    verifier = load_verify_helpers()
+    stale_marker = "APPROVED_RETIREMENT_NOTICE_PATTERNS"
+    guard = tmp_path / "sccp_retired_network_surface_test.py"
+    guard.write_text(
+        "\n".join(
+            (
+                *verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS[0][1],
+                stale_marker,
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
+        (
+            (
+                guard,
+                verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS[0][1],
+            ),
+        ),
+        forbidden_markers=(stale_marker,),
+    )
+
+    assert any(
+        "SCCP retired network-surface guard source inventory" in error
+        and str(guard) in error
+        and f"contains stale marker: {stale_marker}" in error
+        for error in errors
+    )
+
+
+def test_release_bundle_verifier_reports_custom_retired_network_surface_forbidden_marker() -> None:
+    """Custom forbidden-marker checks must inspect the real guard file."""
+
+    verifier = load_verify_helpers()
+    forbidden_marker = "BANNED_PATTERNS"
+
+    errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
+        forbidden_markers=(forbidden_marker,)
+    )
+
+    assert any(
+        "SCCP retired network-surface guard source inventory" in error
+        and "pytests/scripts/sccp_retired_network_surface_test.py" in error
+        and f"contains stale marker: {forbidden_marker}" in error
+        for error in errors
+    )
+
+
 def test_release_bundle_evidence_phase_requires_evm_script_suites() -> None:
     """Report and verifier transcript inventories must include EVM evidence tests."""
 
@@ -496,6 +581,20 @@ def test_release_bundle_evidence_phase_inventory_matches_corridor_runner() -> No
         ]
         for test_path in corridor_evidence_script_tests():
             assert any(test_path in fragment for fragment in required_fragments)
+
+
+def test_release_bundle_evidence_phase_requires_retired_network_surface_scan() -> None:
+    """Release evidence must prove the retired-network surface scan ran."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    retired_scan = "pytests/scripts/sccp_retired_network_surface_test.py"
+
+    assert retired_scan in corridor_evidence_script_tests()
+    for module in (report, verifier):
+        assert retired_scan in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "evidence-scripts"
+        ]
 
 
 def test_release_bundle_java_android_phase_requires_source_proof_harness() -> None:
@@ -9716,6 +9815,55 @@ def test_release_bundle_verifier_requires_evm_evidence_script_transcript(
     output_dir = build_ready_bundle(tmp_path)
     report = load_report_module()
     omitted_fragment = "pytests/scripts/sccp_evm_live_evidence_test.py"
+    assert (
+        omitted_fragment
+        in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+    )
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "evidence-scripts"
+        ]
+        if fragment != omitted_fragment
+    ]
+    phase_log = output_dir / "corridor" / "evidence-scripts.log"
+    phase_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "evidence-scripts")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase evidence-scripts evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_requires_retired_network_scan_evidence(
+    tmp_path: Path,
+) -> None:
+    """Published evidence phase logs must prove the retired-network scan ran."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_retired_network_surface_test.py"
     assert (
         omitted_fragment
         in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]

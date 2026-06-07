@@ -17,6 +17,8 @@ use iroha_crypto::{
         bfv_bootstrap_key_refresh_output_residual_multiple_bound,
         bfv_full_bootstrap_bounded_noise_output_bound_v1,
         bfv_full_bootstrap_output_residual_multiple_bound_v1,
+        bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1,
+        bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1,
         bfv_multiply_bounded_noise_output_bound, bfv_multiply_output_residual_multiple_bound,
         bfv_packed_rotate_left_bounded_noise_output_bound,
         bfv_packed_rotate_left_output_residual_multiple_bound,
@@ -26,6 +28,8 @@ use iroha_crypto::{
         bootstrap_ciphertext_registered_rns_exact_rounds,
         full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1,
         full_bootstrap_ciphertext_registered_rns_exact_v1,
+        full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1,
+        full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1,
         multiply_ciphertexts_bounded_noise_registered_rns_basis_extension_exact,
         multiply_ciphertexts_registered_rns_exact, multiply_plain_scalar,
         ram_lfe_bfv_parameters_v1, registered_bfv_key_switch_decomposition_chain_digest,
@@ -6539,6 +6543,7 @@ fn soracloud_fhe_job_output_residual_multiple_bound(
     job: &FheJobSpecV1,
     inputs: &[BfvIdentifierCiphertext],
     input_residual_bounds: &[u128],
+    full_bootstrap_circuit_artifacts: Option<&BfvFullBootstrapCircuitArtifactBundleV1>,
 ) -> Result<Option<u128>, InstructionExecutionError> {
     if inputs.len() != input_residual_bounds.len() {
         return Err(invalid_parameter(
@@ -6649,11 +6654,21 @@ fn soracloud_fhe_job_output_residual_multiple_bound(
                     )
                 }
                 BfvBootstrapKeyMode::FullBootstrapV1 => {
-                    bfv_full_bootstrap_output_residual_multiple_bound_v1(
-                        params,
-                        bootstrap_key,
-                        input_bound,
-                    )
+                    if let Some(artifacts) = full_bootstrap_circuit_artifacts {
+                        bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
+                            params,
+                            bootstrap_key,
+                            artifacts,
+                            &evaluation_keys.galois_keys,
+                            input_bound,
+                        )
+                    } else {
+                        bfv_full_bootstrap_output_residual_multiple_bound_v1(
+                            params,
+                            bootstrap_key,
+                            input_bound,
+                        )
+                    }
                 }
             };
             result.map(Some).map_err(|err| {
@@ -6669,6 +6684,7 @@ fn soracloud_fhe_job_output_bounded_noise_bound(
     job: &FheJobSpecV1,
     inputs: &[BfvIdentifierCiphertext],
     input_noise_bounds: &[u128],
+    full_bootstrap_circuit_artifacts: Option<&BfvFullBootstrapCircuitArtifactBundleV1>,
 ) -> Result<Option<u128>, InstructionExecutionError> {
     if inputs.len() != input_noise_bounds.len() {
         return Err(invalid_parameter(
@@ -6781,11 +6797,21 @@ fn soracloud_fhe_job_output_bounded_noise_bound(
                     )
                 }
                 BfvBootstrapKeyMode::FullBootstrapV1 => {
-                    bfv_full_bootstrap_bounded_noise_output_bound_v1(
-                        params,
-                        bootstrap_key,
-                        input_bound,
-                    )
+                    if let Some(artifacts) = full_bootstrap_circuit_artifacts {
+                        bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
+                            params,
+                            bootstrap_key,
+                            artifacts,
+                            &evaluation_keys.galois_keys,
+                            input_bound,
+                        )
+                    } else {
+                        bfv_full_bootstrap_bounded_noise_output_bound_v1(
+                            params,
+                            bootstrap_key,
+                            input_bound,
+                        )
+                    }
                 }
             };
             result.map(Some).map_err(|err| {
@@ -6810,6 +6836,7 @@ fn execute_soracloud_fhe_job_with_residual_bounds(
         job,
         inputs,
         input_residual_bounds,
+        None,
     )?;
     let output = execute_soracloud_fhe_job(params, evaluation_keys, job, inputs)?;
     Ok((output, output_residual_bound))
@@ -6876,13 +6903,22 @@ fn execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
         inputs,
         full_bootstrap_circuit_artifacts,
     )?;
-    execute_soracloud_fhe_job_with_residual_bounds(
+    let output_residual_bound = soracloud_fhe_job_output_residual_multiple_bound(
         params,
         evaluation_keys,
         job,
         inputs,
         input_residual_bounds,
-    )
+        full_bootstrap_circuit_artifacts,
+    )?;
+    let output = execute_soracloud_fhe_job_with_full_bootstrap_artifacts(
+        params,
+        evaluation_keys,
+        job,
+        inputs,
+        full_bootstrap_circuit_artifacts,
+    )?;
+    Ok((output, output_residual_bound))
 }
 
 fn execute_soracloud_fhe_job_with_bounded_noise_bounds(
@@ -6900,6 +6936,7 @@ fn execute_soracloud_fhe_job_with_bounded_noise_bounds(
         job,
         inputs,
         input_noise_bounds,
+        None,
     )?;
     let output = execute_soracloud_fhe_job_bounded_noise(params, evaluation_keys, job, inputs)?;
     Ok((output, output_noise_bound))
@@ -6922,13 +6959,22 @@ fn execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifa
         inputs,
         full_bootstrap_circuit_artifacts,
     )?;
-    execute_soracloud_fhe_job_with_bounded_noise_bounds(
+    let output_noise_bound = soracloud_fhe_job_output_bounded_noise_bound(
         params,
         evaluation_keys,
         job,
         inputs,
         input_noise_bounds,
-    )
+        full_bootstrap_circuit_artifacts,
+    )?;
+    let output = execute_soracloud_fhe_job_bounded_noise_with_full_bootstrap_artifacts(
+        params,
+        evaluation_keys,
+        job,
+        inputs,
+        full_bootstrap_circuit_artifacts,
+    )?;
+    Ok((output, output_noise_bound))
 }
 
 fn execute_soracloud_fhe_job(
@@ -6936,6 +6982,22 @@ fn execute_soracloud_fhe_job(
     evaluation_keys: &BfvEvaluationKeyBundle,
     job: &FheJobSpecV1,
     inputs: &[BfvIdentifierCiphertext],
+) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
+    execute_soracloud_fhe_job_with_full_bootstrap_artifacts(
+        params,
+        evaluation_keys,
+        job,
+        inputs,
+        None,
+    )
+}
+
+fn execute_soracloud_fhe_job_with_full_bootstrap_artifacts(
+    params: &BfvParameters,
+    evaluation_keys: &BfvEvaluationKeyBundle,
+    job: &FheJobSpecV1,
+    inputs: &[BfvIdentifierCiphertext],
+    full_bootstrap_circuit_artifacts: Option<&BfvFullBootstrapCircuitArtifactBundleV1>,
 ) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
     ensure_matching_fhe_slots(inputs)?;
     validate_soracloud_fhe_evaluation_budget(job, inputs)?;
@@ -7000,11 +7062,21 @@ fn execute_soracloud_fhe_job(
                             )
                         }
                         BfvBootstrapKeyMode::FullBootstrapV1 => {
-                            full_bootstrap_ciphertext_registered_rns_exact_v1(
-                                params,
-                                bootstrap_key,
-                                slot,
-                            )
+                            if let Some(artifacts) = full_bootstrap_circuit_artifacts {
+                                full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
+                                    params,
+                                    bootstrap_key,
+                                    artifacts,
+                                    &evaluation_keys.galois_keys,
+                                    slot,
+                                )
+                            } else {
+                                full_bootstrap_ciphertext_registered_rns_exact_v1(
+                                    params,
+                                    bootstrap_key,
+                                    slot,
+                                )
+                            }
                         }
                     };
                     result.map_err(|err| invalid_parameter(format!("FHE bootstrap failed: {err}")))
@@ -7020,6 +7092,22 @@ fn execute_soracloud_fhe_job_bounded_noise(
     evaluation_keys: &BfvEvaluationKeyBundle,
     job: &FheJobSpecV1,
     inputs: &[BfvIdentifierCiphertext],
+) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
+    execute_soracloud_fhe_job_bounded_noise_with_full_bootstrap_artifacts(
+        params,
+        evaluation_keys,
+        job,
+        inputs,
+        None,
+    )
+}
+
+fn execute_soracloud_fhe_job_bounded_noise_with_full_bootstrap_artifacts(
+    params: &BfvParameters,
+    evaluation_keys: &BfvEvaluationKeyBundle,
+    job: &FheJobSpecV1,
+    inputs: &[BfvIdentifierCiphertext],
+    full_bootstrap_circuit_artifacts: Option<&BfvFullBootstrapCircuitArtifactBundleV1>,
 ) -> Result<BfvIdentifierCiphertext, InstructionExecutionError> {
     ensure_matching_fhe_slots(inputs)?;
     validate_soracloud_fhe_evaluation_budget(job, inputs)?;
@@ -7089,11 +7177,21 @@ fn execute_soracloud_fhe_job_bounded_noise(
                             )
                         }
                         BfvBootstrapKeyMode::FullBootstrapV1 => {
-                            full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
-                                params,
-                                bootstrap_key,
-                                slot,
-                            )
+                            if let Some(artifacts) = full_bootstrap_circuit_artifacts {
+                                full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                                    params,
+                                    bootstrap_key,
+                                    artifacts,
+                                    &evaluation_keys.galois_keys,
+                                    slot,
+                                )
+                            } else {
+                                full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_exact_v1(
+                                    params,
+                                    bootstrap_key,
+                                    slot,
+                                )
+                            }
                         }
                     };
                     result
@@ -12951,7 +13049,8 @@ mod tests {
             bfv_full_bootstrap_proof_public_input_schema_v1, bootstrap_ciphertext_rns_exact_round,
             bootstrap_ciphertext_rns_exact_rounds,
             bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed, bootstrap_key_from_seed,
-            bootstrap_key_with_max_refresh_rounds_from_seed, decode_packed_plaintext_slots,
+            bootstrap_key_with_max_refresh_rounds_from_seed,
+            decode_bfv_full_bootstrap_blind_rotation_artifact_v1, decode_packed_plaintext_slots,
             decrypt, decrypt_bounded_noise, decrypt_identifier,
             encode_bfv_full_bootstrap_accumulator_artifact_v1,
             encode_bfv_full_bootstrap_blind_rotation_artifact_v1,
@@ -13795,6 +13894,81 @@ mod tests {
             max_bootstrap_depth: 1,
         };
         (material, artifacts)
+    }
+
+    fn add_full_bootstrap_blind_rotation_galois_keys(
+        evaluation_keys: &mut BfvEvaluationKeyBundle,
+        params: &BfvParameters,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    ) {
+        let (secret_key, _public_key, _relinearization_key) =
+            keygen_from_seed(params, b"soracloud-fhe-test-keygen").expect("sample keygen");
+        let blind_rotation = decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+            params,
+            material,
+            &artifacts.blind_rotation_key,
+        )
+        .expect("decode sample full-bootstrap blind-rotation artifact");
+        for step in blind_rotation.steps {
+            if evaluation_keys
+                .galois_keys
+                .iter()
+                .any(|key| key.automorphism_power == step.automorphism_power)
+            {
+                continue;
+            }
+            let seed = format!(
+                "soracloud-full-bootstrap-blind-rotation-galois-key-{}",
+                step.automorphism_power
+            );
+            evaluation_keys.galois_keys.push(
+                galois_key_from_seed(
+                    params,
+                    &secret_key,
+                    step.automorphism_power,
+                    seed.as_bytes(),
+                )
+                .expect("sample full-bootstrap blind-rotation Galois key"),
+            );
+        }
+    }
+
+    fn add_full_bootstrap_blind_rotation_bounded_galois_keys(
+        evaluation_keys: &mut BfvEvaluationKeyBundle,
+        params: &BfvParameters,
+        secret_key: &BfvSecretKey,
+        material: &BfvFullBootstrapCircuitMaterialV1,
+        artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    ) {
+        let blind_rotation = decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+            params,
+            material,
+            &artifacts.blind_rotation_key,
+        )
+        .expect("decode sample bounded full-bootstrap blind-rotation artifact");
+        for step in blind_rotation.steps {
+            if evaluation_keys
+                .galois_keys
+                .iter()
+                .any(|key| key.automorphism_power == step.automorphism_power)
+            {
+                continue;
+            }
+            let seed = format!(
+                "soracloud-bounded-full-bootstrap-blind-rotation-galois-key-{}",
+                step.automorphism_power
+            );
+            evaluation_keys.galois_keys.push(
+                galois_key_bounded_noise_from_seed(
+                    params,
+                    secret_key,
+                    step.automorphism_power,
+                    seed.as_bytes(),
+                )
+                .expect("sample bounded full-bootstrap blind-rotation Galois key"),
+            );
+        }
     }
 
     fn sample_bfv_evaluation_key_digest() -> Hash {
@@ -19121,6 +19295,7 @@ mod tests {
             &job,
             std::slice::from_ref(&input),
             &[residual_capacity + 1],
+            None,
         )
         .expect_err("oversized residual metadata must fail before multiply arity");
         assert_invalid_parameter_contains(err, "FHE multiply residual bound exceeded");
@@ -19133,6 +19308,7 @@ mod tests {
             &job,
             std::slice::from_ref(&input),
             &[input_bound],
+            None,
         )
         .expect_err("valid single residual metadata must still reject multiply arity");
         assert_invalid_parameter_contains(err, "at least two input bounds");
@@ -19156,6 +19332,7 @@ mod tests {
             &job,
             std::slice::from_ref(&bounded_input),
             &[u128::MAX],
+            None,
         )
         .expect_err("oversized bounded-noise metadata must fail before multiply arity");
         assert_invalid_parameter_contains(err, "FHE multiply bounded-noise bound exceeded");
@@ -19168,6 +19345,7 @@ mod tests {
             &job,
             std::slice::from_ref(&bounded_input),
             &[fresh_bound],
+            None,
         )
         .expect_err("valid single bounded-noise metadata must still reject multiply arity");
         assert_invalid_parameter_contains(err, "at least two input bounds");
@@ -19479,8 +19657,114 @@ mod tests {
             &[1],
             Some(&artifacts),
         )
-        .expect_err("valid artifacts still fail closed until the evaluator lands");
-        assert_invalid_parameter_contains(err, "full BFV bootstrap execution is not implemented");
+        .expect_err(
+            "valid artifacts without schedule Galois keys must fail before the final stage",
+        );
+        assert_invalid_parameter_contains(err, "missing BFV Galois key");
+
+        let mut executable_prefix_keys = evaluation_keys.clone();
+        let material = executable_prefix_keys
+            .bootstrap_key
+            .as_ref()
+            .and_then(|key| key.full_bootstrap_material.as_ref())
+            .expect("sample full-bootstrap material")
+            .clone();
+        add_full_bootstrap_blind_rotation_galois_keys(
+            &mut executable_prefix_keys,
+            &params,
+            &material,
+            &artifacts,
+        );
+        let err = execute_soracloud_fhe_job_with_residual_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &executable_prefix_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[1],
+            Some(&artifacts),
+        )
+        .expect_err("valid executable prefix still fails closed until the final stage lands");
+        assert_invalid_parameter_contains(
+            err,
+            "final sample key-switch/repacking is not implemented",
+        );
+    }
+
+    #[test]
+    fn soracloud_bounded_bootstrap_full_material_requires_signed_artifact_bundle_on_runtime_path() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let (secret_key, public_key, mut evaluation_keys, _transcript, _digest) =
+            sample_registered_bounded_noise_bfv_material();
+        let (material, artifacts) = sample_full_bootstrap_material_and_artifacts(&params);
+        {
+            let bootstrap_key = evaluation_keys
+                .bootstrap_key
+                .as_mut()
+                .expect("sample bundle carries a bounded bootstrap key");
+            bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+            bootstrap_key.full_bootstrap_material = Some(material.clone());
+        }
+        let mut job = sample_fhe_job(Vec::new());
+        job.operation = FheJobOperationV1::Bootstrap;
+        job.bootstrap_count = 1;
+        let input = BfvIdentifierCiphertext {
+            slots: vec![
+                encrypt_bounded_noise_from_seed(
+                    &params,
+                    &public_key,
+                    &[11],
+                    b"soracloud-bounded-bootstrap-full-artifacts",
+                )
+                .expect("encrypt bounded full-bootstrap input"),
+            ],
+        };
+        let input_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            None,
+        )
+        .expect_err("bounded full-bootstrap runtime path must require artifact attachment");
+        assert_invalid_parameter_contains(err, "requires full-bootstrap circuit artifacts");
+
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            Some(&artifacts),
+        )
+        .expect_err(
+            "bounded valid artifacts without schedule Galois keys must fail before final stage",
+        );
+        assert_invalid_parameter_contains(err, "missing BFV Galois key");
+
+        add_full_bootstrap_blind_rotation_bounded_galois_keys(
+            &mut evaluation_keys,
+            &params,
+            &secret_key,
+            &material,
+            &artifacts,
+        );
+        let err = execute_soracloud_fhe_job_with_bounded_noise_bounds_and_full_bootstrap_artifacts(
+            &params,
+            &evaluation_keys,
+            &job,
+            std::slice::from_ref(&input),
+            &[input_bound],
+            Some(&artifacts),
+        )
+        .expect_err("bounded executable prefix still fails closed until final stage lands");
+        assert_invalid_parameter_contains(
+            err,
+            "final sample key-switch/repacking is not implemented",
+        );
     }
 
     #[test]

@@ -3065,6 +3065,12 @@ case "$mode" in
     apalache_length=2
     expect_failure=1
     ;;
+  rbc-bug-inbound-force-one-acceptance)
+    spec_file="$spec_dir/SumeragiRbcDeliverQuorum.tla"
+    cfg_file="$spec_dir/SumeragiRbcDeliverQuorum_bug_inbound_force_one_acceptance.cfg"
+    apalache_length=2
+    expect_failure=1
+    ;;
   rbc-causality-bug-*)
     bug_name="${mode#rbc-causality-bug-}"
     cfg_bug_name="${bug_name//-/_}"

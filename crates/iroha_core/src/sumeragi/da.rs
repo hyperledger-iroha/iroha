@@ -60,6 +60,8 @@ impl ManifestGateKind {
 pub enum GateSatisfaction {
     /// Missing local data was fetched successfully.
     MissingDataRecovered,
+    /// Required manifest material became available and passed the guard.
+    ManifestGuardRecovered,
 }
 
 /// Evaluate whether availability evidence is still missing for a block.
@@ -84,7 +86,16 @@ pub fn gate_satisfaction(
     current: Option<GateReason>,
 ) -> Option<GateSatisfaction> {
     match (previous, current) {
-        (Some(GateReason::MissingLocalData), None) => Some(GateSatisfaction::MissingDataRecovered),
+        (Some(GateReason::MissingLocalData), current)
+            if !matches!(current, Some(GateReason::MissingLocalData)) =>
+        {
+            Some(GateSatisfaction::MissingDataRecovered)
+        }
+        (Some(GateReason::ManifestGuard { .. }), current)
+            if !matches!(current, Some(GateReason::ManifestGuard { .. })) =>
+        {
+            Some(GateSatisfaction::ManifestGuardRecovered)
+        }
         _ => None,
     }
 }
@@ -113,6 +124,42 @@ mod tests {
         assert_eq!(
             gate_satisfaction(Some(GateReason::MissingLocalData), None),
             Some(GateSatisfaction::MissingDataRecovered)
+        );
+        assert_eq!(
+            gate_satisfaction(
+                Some(GateReason::MissingLocalData),
+                Some(GateReason::ManifestGuard {
+                    lane: iroha_data_model::nexus::LaneId::new(1),
+                    epoch: 2,
+                    sequence: 3,
+                    kind: super::ManifestGateKind::Missing,
+                })
+            ),
+            Some(GateSatisfaction::MissingDataRecovered)
+        );
+        assert_eq!(
+            gate_satisfaction(
+                Some(GateReason::ManifestGuard {
+                    lane: iroha_data_model::nexus::LaneId::new(1),
+                    epoch: 2,
+                    sequence: 3,
+                    kind: super::ManifestGateKind::Missing,
+                }),
+                None
+            ),
+            Some(GateSatisfaction::ManifestGuardRecovered)
+        );
+        assert_eq!(
+            gate_satisfaction(
+                Some(GateReason::ManifestGuard {
+                    lane: iroha_data_model::nexus::LaneId::new(1),
+                    epoch: 2,
+                    sequence: 3,
+                    kind: super::ManifestGateKind::Missing,
+                }),
+                Some(GateReason::MissingLocalData)
+            ),
+            Some(GateSatisfaction::ManifestGuardRecovered)
         );
         assert_eq!(gate_satisfaction(None, None), None);
         assert_eq!(

@@ -338,6 +338,7 @@ phase_evidence_scripts() {
     pytests/scripts/sccp_ton_source_state_evidence_test.py
     pytests/scripts/sccp_tron_live_evidence_test.py
     pytests/scripts/sccp_tron_source_bridge_evidence_test.py
+    pytests/scripts/sccp_retired_network_surface_test.py
   )
   run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q "${tests[@]}"
 }

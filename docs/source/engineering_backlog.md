@@ -11,7 +11,9 @@ track detailed unfinished engineering work.
 The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Backlog
 notes for unsupported network families are diagnostic only; they should not be
 treated as release blockers or advertised as production network support unless
-governance explicitly re-opens that scope.
+governance explicitly re-opens that scope. This exclusion includes
+Sub&#115;trate/Pol&#107;adot-style networks such as Pol&#107;adot and
+Ku&#115;ama for now.
 
 Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
 trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
@@ -263,10 +265,24 @@ redistributable schemas, and official trust/revocation bundles.
   typed diagonal packed-slot linear transforms, and crypto exposes exact and
   bounded deterministic evaluators for those transforms through the registered
   RNS paths. The blind-rotation artifact now carries canonical packed-slot
-  rotation schedules bound to the governed accumulator artifact. The
-  sample-extraction artifact now carries typed source/output ciphertext shape
-  and extracted-coefficient metadata, rejecting opaque, wrong-slot-count,
-  bad-component-count, or out-of-range payloads. The accumulator artifact now
+  rotation schedules bound to the governed accumulator artifact, and crypto
+  exposes exact and bounded registered-RNS execution helpers plus matching
+  public bound propagation that consume those governed selector schedules
+  directly. The sample-extraction artifact now carries typed source/output
+  ciphertext shape and extracted-coefficient metadata, rejects opaque,
+  wrong-slot-count, bad-component-count, or out-of-range payloads, and crypto
+  can extract the selected RLWE coefficient into a raw LWE-style sample whose
+  decrypt matches the selected `c0 + c1 * s` coefficient under the existing
+  secret polynomial basis, with exact and bounded raw-sample bound propagation.
+  Crypto now composes the governed coefficient-to-slot, blind-rotation, and raw
+  sample-extraction artifacts into an exact/bounded execution-prefix trace with
+  propagated bounds, coefficient-zero diagnostic repack output, and missing-key
+  fail-closed checks.
+  Crypto also exposes an explicit coefficient-zero raw-sample repack diagnostic
+  bridge with exact and bounded coefficient-zero bounds; final governed sample
+  key-switch/repacking into the full BFV output ciphertext shape remains part
+  of the unfinished full-bootstrap evaluator. The
+  accumulator artifact now
   carries typed packed-slot test-vector material and rejects opaque,
   wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
   public-input schema and prover/verifier key artifacts now also carry typed

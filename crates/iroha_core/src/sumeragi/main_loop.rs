@@ -6933,7 +6933,8 @@ impl Actor {
                         FrontierSlotMode::Finalized | FrontierSlotMode::PassiveCatchup
                     )
                     && recent(slot_progress_at)
-                    && (slot.exact_fetch_armed || (slot.block_created_seen && !slot.body_present()))
+                    && !slot.body_present()
+                    && (slot.exact_fetch_armed || slot.block_created_seen)
             });
 
         frontier_slot_progress_recent
@@ -9536,6 +9537,26 @@ impl Actor {
         }
         if self.rbc_session_has_complete_chunk_payload_for_progress(session) {
             return true;
+        }
+        let payload_hash = session
+            .payload_hash()
+            .expect("metadata match requires a payload hash");
+        self.with_authoritative_payload_for_progress(
+            key.0,
+            |height, view, _payload_bytes, local_payload_hash| {
+                height == key.1 && view == key.2 && local_payload_hash == payload_hash
+            },
+        )
+        .unwrap_or(false)
+    }
+
+    fn rbc_session_has_local_authoritative_payload_for_progress(
+        &self,
+        key: super::rbc_store::SessionKey,
+        session: &RbcSession,
+    ) -> bool {
+        if !self.rbc_session_metadata_matches_progress_slot(key, session) {
+            return false;
         }
         let payload_hash = session
             .payload_hash()
@@ -15046,7 +15067,7 @@ impl MessageTimingGuard {
 
 impl Drop for MessageTimingGuard {
     fn drop(&mut self) {
-        let elapsed_ms = u64::try_from(self.start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let elapsed_ms = duration_ms_u64(self.start.elapsed());
         debug!(
             kind = self.kind,
             height = self.height,
@@ -24655,8 +24676,12 @@ impl Actor {
         if force_quorum_one {
             1
         } else {
-            topology.min_votes_for_commit()
+            Self::rbc_protocol_deliver_quorum(topology)
         }
+    }
+
+    fn rbc_protocol_deliver_quorum(topology: &super::network_topology::Topology) -> usize {
+        topology.min_votes_for_commit()
     }
 
     fn rbc_deliver_quorum(&self, topology: &super::network_topology::Topology) -> usize {
@@ -27303,8 +27328,10 @@ impl Actor {
         let (_, mode_tag, prf_seed) = self.consensus_context_for_height(key.1);
         let signature_topology = topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
         let missing_ready_peers = Self::rbc_missing_ready_peers(&session, &signature_topology);
+        let local_authoritative_payload =
+            self.rbc_session_has_local_authoritative_payload_for_progress(key, &session);
         let authoritative_local_ready_bypass = allow_authoritative_local_ready_bypass
-            && authoritative_known_payload
+            && local_authoritative_payload
             && session.sent_ready
             && ready_count != 0;
         if ready_count < required && !authoritative_local_ready_bypass {

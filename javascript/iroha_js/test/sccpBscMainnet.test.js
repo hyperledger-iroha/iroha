@@ -7,6 +7,9 @@ import {
   BscTestnetSccpProver,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_BSC_TESTNET_EVM_CHAIN_ID,
   SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
@@ -31,10 +34,16 @@ import {
   buildBscTestnetSccpDestinationProofRequest,
   buildBscTestnetSccpDestinationSubmission,
   evmSccpSourceEventTopic,
+  parseBscMainnetNativeEvmProverBundleManifest,
+  parseBscMainnetNativeEvmProverParityFixture,
+  parseBscMainnetNativeEvmProverSelfTestFixture,
   parseBscTestnetNativeEvmProverBundleManifest,
   parseBscTestnetNativeEvmProverParityFixture,
   parseBscTestnetNativeEvmProverSelfTestFixture,
   runBscTestnetNativeProverSelfTest,
+  validateBscMainnetNativeEvmProverBundle,
+  validateBscMainnetNativeEvmProverParityFixture,
+  validateBscMainnetNativeEvmProverSelfTestFixture,
   validateBscTestnetNativeEvmProverBundle,
   validateBscTestnetNativeEvmProverParityFixture,
   validateBscTestnetNativeEvmProverSelfTestFixture,
@@ -1037,6 +1046,72 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
         { destinationBinding: fixture.destinationBinding },
       ),
     /chain must be bsc-testnet/u,
+  );
+});
+
+test("BscMainnetSccp validates native prover bundle manifests with mainnet literals", () => {
+  const destinationBinding = bscMainnetSccpDestinationBinding(
+    sampleDestinationBindingInput(),
+  );
+  const bundle = sampleBscTestnetNativeEvmProverBundle(
+    destinationBinding.bindingHash,
+    {
+      bundle_id: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+      chain: "bsc-mainnet",
+    },
+  );
+  const descriptor = validateBscMainnetNativeEvmProverBundle(bundle, {
+    destinationBinding,
+  });
+  assert.deepEqual(
+    parseBscMainnetNativeEvmProverBundleManifest(JSON.stringify(bundle), {
+      destinationBinding,
+    }),
+    descriptor,
+  );
+  assert.equal(
+    descriptor.bundleId,
+    SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  );
+  assert.equal(descriptor.chain, "bsc-mainnet");
+
+  const parityFixture = sampleBscTestnetNativeEvmProverParityFixture(bundle, {
+    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    chain: "bsc-mainnet",
+  });
+  assert.deepEqual(
+    parseBscMainnetNativeEvmProverParityFixture(
+      JSON.stringify(parityFixture),
+      bundle,
+    ),
+    validateBscMainnetNativeEvmProverParityFixture(parityFixture, bundle),
+  );
+
+  const selfTestFixture = sampleBscTestnetNativeEvmProverSelfTestFixture(
+    bundle,
+    {
+      schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+      chain: "bsc-mainnet",
+    },
+  );
+  assert.deepEqual(
+    parseBscMainnetNativeEvmProverSelfTestFixture(
+      JSON.stringify(selfTestFixture),
+      bundle,
+    ),
+    validateBscMainnetNativeEvmProverSelfTestFixture(selfTestFixture, bundle),
+  );
+
+  assert.throws(
+    () =>
+      validateBscMainnetNativeEvmProverBundle(
+        {
+          ...bundle,
+          bundle_id: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+        },
+        { destinationBinding },
+      ),
+    /bundleId must be/u,
   );
 });
 

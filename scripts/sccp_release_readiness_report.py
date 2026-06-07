@@ -205,6 +205,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pytests/scripts/sccp_ton_source_state_evidence_test.py",
         "pytests/scripts/sccp_tron_live_evidence_test.py",
         "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+        "pytests/scripts/sccp_retired_network_surface_test.py",
     ),
     "js-sdk": (
         "--test javascript/iroha_js/test/sccpSolanaProver.test.js",

@@ -1611,6 +1611,59 @@ pub struct BfvFullBootstrapSampleExtractionV1 {
     pub output_ciphertext_component_count: u16,
 }
 
+/// Raw LWE-style sample extracted from one BFV/RLWE ciphertext coefficient.
+///
+/// This is an executable full-bootstrap building block, not the final
+/// key-switched BFV ciphertext. `constant_term` and `secret_coefficients`
+/// decrypt against [`BfvSecretKey::s`] to the selected coefficient of
+/// `c0 + c1 * s` in `R_q`.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapRawExtractedSampleV1 {
+    /// Source ring coefficient selected by the sample-extraction artifact.
+    pub source_coefficient_index: u16,
+    /// Public constant term, equal to `c0[source_coefficient_index]`.
+    pub constant_term: u64,
+    /// Public coefficients aligned with `BfvSecretKey::s`.
+    pub secret_coefficients: Vec<u64>,
+}
+
+/// Executed full-bootstrap prefix trace before final sample key-switch/repacking.
+///
+/// This is the current executable boundary for governed full-bootstrap
+/// artifacts. It proves the concrete coefficient-to-slot, blind-rotation,
+/// sample-extraction, and coefficient-zero diagnostic repack bytes can drive
+/// deterministic BFV/RNS execution. It is not the final bootstrapped BFV
+/// ciphertext.
+#[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct BfvFullBootstrapExecutionPrefixTraceV1 {
+    /// Ciphertext emitted by the governed coefficient-to-slot transform.
+    pub coefficient_to_slot_output: BfvCiphertext,
+    /// Ciphertext emitted by the governed blind-rotation schedule.
+    pub blind_rotation_output: BfvCiphertext,
+    /// Raw sample extracted from `blind_rotation_output`.
+    pub raw_extracted_sample: BfvFullBootstrapRawExtractedSampleV1,
+    /// Diagnostic ciphertext whose coefficient zero decrypts to the raw sample.
+    pub coefficient_zero_repack_output: BfvCiphertext,
+}
+
+/// Public per-stage bounds for the executable full-bootstrap prefix trace.
+///
+/// `coefficient_zero_repack` only bounds coefficient zero of the diagnostic
+/// repack ciphertext. It is not a whole-ciphertext bootstrap-output bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BfvFullBootstrapExecutionPrefixTraceBoundsV1 {
+    /// Bound after the governed coefficient-to-slot transform.
+    pub coefficient_to_slot: u128,
+    /// Bound after the governed blind-rotation schedule.
+    pub blind_rotation: u128,
+    /// Bound for the raw extracted sample.
+    pub raw_extracted_sample: u128,
+    /// Coefficient-zero-only bound for the diagnostic repack ciphertext.
+    pub coefficient_zero_repack: u128,
+}
+
 /// Bootstrapping accumulator/test-vector material for the full-bootstrap circuit.
 ///
 /// This is the typed payload for the accumulator artifact. The accumulator must
@@ -5123,6 +5176,267 @@ pub fn decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
     Ok(sample_extraction)
 }
 
+/// Extract one raw LWE-style sample from a BFV ciphertext.
+///
+/// The returned sample decrypts under the coefficient vector in
+/// [`BfvSecretKey::s`] to the selected coefficient of the source ciphertext's
+/// scaled BFV decrypt polynomial. This intentionally stops before any future
+/// sample-extraction key switch or repacking step that would produce a normal
+/// two-component [`BfvCiphertext`].
+///
+/// # Errors
+/// Returns [`BfvError`] when the sample-extraction metadata or ciphertext shape
+/// is invalid.
+pub fn apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(
+    params: &BfvParameters,
+    ciphertext: &BfvCiphertext,
+    sample_extraction: BfvFullBootstrapSampleExtractionV1,
+) -> Result<BfvFullBootstrapRawExtractedSampleV1, BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
+    validate_ciphertext(params, ciphertext)?;
+    let coefficient_index = usize::from(sample_extraction.extracted_coefficient_index);
+    let degree = params.degree();
+    let mut secret_coefficients = Vec::with_capacity(degree);
+    for secret_index in 0..degree {
+        let (source_index, negate) = if secret_index <= coefficient_index {
+            (coefficient_index - secret_index, false)
+        } else {
+            (degree + coefficient_index - secret_index, true)
+        };
+        let coefficient = ciphertext.c1[source_index];
+        secret_coefficients.push(if negate {
+            sub_mod_u64(0, coefficient, params.ciphertext_modulus)
+        } else {
+            coefficient
+        });
+    }
+    let sample = BfvFullBootstrapRawExtractedSampleV1 {
+        source_coefficient_index: sample_extraction.extracted_coefficient_index,
+        constant_term: ciphertext.c0[coefficient_index],
+        secret_coefficients,
+    };
+    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, &sample)?;
+    Ok(sample)
+}
+
+/// Extract one bounded-noise raw LWE-style sample from a BFV ciphertext.
+///
+/// This is the rounded BFV counterpart to
+/// [`apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1`]. It performs the
+/// bounded-noise capacity preflight before extracting the same deterministic
+/// raw sample.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, or when the
+/// sample-extraction metadata or ciphertext shape is invalid.
+pub fn apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
+    params: &BfvParameters,
+    ciphertext: &BfvCiphertext,
+    sample_extraction: BfvFullBootstrapSampleExtractionV1,
+) -> Result<BfvFullBootstrapRawExtractedSampleV1, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(params, ciphertext, sample_extraction)
+}
+
+/// Return the exact residual-multiple bound for raw full-bootstrap sample extraction.
+///
+/// Raw extraction selects one coefficient from the source decrypt polynomial, so
+/// it preserves the source ciphertext residual-multiple bound for that
+/// coefficient.
+///
+/// # Errors
+/// Returns [`BfvError`] when the sample-extraction metadata is malformed or the
+/// input bound exceeds centered residual capacity.
+pub fn bfv_full_bootstrap_raw_sample_extraction_output_residual_multiple_bound_v1(
+    params: &BfvParameters,
+    sample_extraction: BfvFullBootstrapSampleExtractionV1,
+    input_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        input_bound,
+        "BFV full-bootstrap raw sample extraction input residual bound",
+    )?;
+    Ok(input_bound)
+}
+
+/// Return the bounded-noise bound for raw full-bootstrap sample extraction.
+///
+/// Raw extraction selects one coefficient from the source decrypt polynomial, so
+/// it preserves the source ciphertext noise bound for that coefficient.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the
+/// sample-extraction metadata is malformed, or the input bound exceeds rounded
+/// decoding capacity.
+pub fn bfv_full_bootstrap_raw_sample_extraction_bounded_noise_output_bound_v1(
+    params: &BfvParameters,
+    sample_extraction: BfvFullBootstrapSampleExtractionV1,
+    input_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_full_bootstrap_sample_extraction_v1(params, sample_extraction)?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        input_noise_bound,
+        "BFV full-bootstrap raw sample extraction input bounded-noise bound",
+    )?;
+    Ok(input_noise_bound)
+}
+
+/// Validate a raw full-bootstrap sample extracted from one BFV ciphertext coefficient.
+///
+/// # Errors
+/// Returns [`BfvError`] when the sample coefficient index, constant term, or
+/// secret-coefficient vector is outside the BFV parameter set.
+pub fn validate_bfv_full_bootstrap_raw_extracted_sample_v1(
+    params: &BfvParameters,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+) -> Result<(), BfvError> {
+    params.validate()?;
+    let degree_u16 = u16::try_from(params.degree()).map_err(|_| {
+        BfvError::InvalidParameters(
+            "BFV full-bootstrap raw sample degree exceeds u16 metadata".to_owned(),
+        )
+    })?;
+    if sample.source_coefficient_index >= degree_u16 {
+        return Err(BfvError::InvalidParameters(format!(
+            "BFV full-bootstrap raw sample source_coefficient_index {} must be less than polynomial_degree {}",
+            sample.source_coefficient_index, params.polynomial_degree
+        )));
+    }
+    if sample.constant_term >= params.ciphertext_modulus {
+        return Err(BfvError::ShapeMismatch(format!(
+            "BFV full-bootstrap raw sample constant_term is outside ciphertext modulus {}",
+            params.ciphertext_modulus
+        )));
+    }
+    validate_poly(
+        params,
+        &sample.secret_coefficients,
+        "BFV full-bootstrap raw sample secret_coefficients",
+    )
+}
+
+/// Repack a raw extracted sample as a coefficient-zero BFV ciphertext.
+///
+/// The returned ciphertext decrypts at coefficient zero to the same scaled
+/// value as `sample`. Other coefficients are still public linear artifacts of
+/// the raw sample coefficients and are not a governed final full-bootstrap
+/// output. This helper is therefore an executable diagnostic bridge before the
+/// real sample key-switch/repacking stage.
+///
+/// # Errors
+/// Returns [`BfvError`] when the raw sample is malformed.
+pub fn repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(
+    params: &BfvParameters,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
+    let degree = params.degree();
+    let mut c0 = vec![0_u64; degree];
+    c0[0] = sample.constant_term;
+    let mut c1 = vec![0_u64; degree];
+    c1[0] = sample.secret_coefficients[0];
+    for secret_index in 1..degree {
+        c1[degree - secret_index] = sub_mod_u64(
+            0,
+            sample.secret_coefficients[secret_index],
+            params.ciphertext_modulus,
+        );
+    }
+    let ciphertext = BfvCiphertext { c0, c1 };
+    validate_ciphertext(params, &ciphertext)?;
+    Ok(ciphertext)
+}
+
+/// Repack a bounded-noise raw extracted sample as a coefficient-zero ciphertext.
+///
+/// This is the rounded BFV counterpart to
+/// [`repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1`].
+/// It preserves the selected coefficient for diagnostics only; it is not the
+/// final full-bootstrap output ciphertext.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow or the raw
+/// sample is malformed.
+pub fn repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ciphertext_v1(
+    params: &BfvParameters,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+) -> Result<BfvCiphertext, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(params, sample)
+}
+
+/// Return the coefficient-zero bound for raw-sample repacking.
+///
+/// The diagnostic repack preserves the selected raw sample exactly at
+/// coefficient zero, so the coefficient-zero residual bound is the raw sample
+/// bound. This must not be interpreted as a whole-ciphertext output bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when the raw sample is malformed or the raw sample bound
+/// exceeds centered residual capacity.
+pub fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_output_residual_multiple_bound_v1(
+    params: &BfvParameters,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+    raw_sample_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
+    bfv_full_bootstrap_raw_sample_coefficient_zero_repack_residual_bound_from_raw_sample_bound_v1(
+        params,
+        raw_sample_bound,
+    )
+}
+
+fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_residual_bound_from_raw_sample_bound_v1(
+    params: &BfvParameters,
+    raw_sample_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        raw_sample_bound,
+        "BFV full-bootstrap raw sample coefficient-zero repack input residual bound",
+    )?;
+    Ok(raw_sample_bound)
+}
+
+/// Return the bounded-noise coefficient-zero bound for raw-sample repacking.
+///
+/// This is the rounded BFV counterpart to
+/// [`bfv_full_bootstrap_raw_sample_coefficient_zero_repack_output_residual_multiple_bound_v1`].
+/// It only bounds the repacked coefficient zero.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the raw sample
+/// is malformed, or the raw sample bound exceeds rounded decoding capacity.
+pub fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1(
+    params: &BfvParameters,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+    raw_sample_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
+    bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_bound_from_raw_sample_bound_v1(
+        params,
+        raw_sample_noise_bound,
+    )
+}
+
+fn bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_bound_from_raw_sample_bound_v1(
+    params: &BfvParameters,
+    raw_sample_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        raw_sample_noise_bound,
+        "BFV full-bootstrap raw sample coefficient-zero repack input bounded-noise bound",
+    )?;
+    Ok(raw_sample_noise_bound)
+}
+
 /// Validate a typed full-bootstrap accumulator/test-vector payload.
 ///
 /// # Errors
@@ -5711,6 +6025,109 @@ pub fn apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_ba
     })
 }
 
+/// Return the exact residual-multiple bound for a typed full-bootstrap linear transform.
+///
+/// The helper mirrors [`apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1`]:
+/// each diagonal optionally rotates the input, multiplies by the governed
+/// plaintext mask, and contributes to a public addition accumulator.
+///
+/// # Errors
+/// Returns [`BfvError`] when transform material is malformed, the input bound
+/// exceeds centered residual capacity, required Galois keys are missing or
+/// malformed, or any intermediate/output bound exceeds centered residual
+/// capacity.
+pub fn bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    transform: &BfvFullBootstrapLinearTransformV1,
+    input_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bfv_full_bootstrap_linear_transform_v1(params, transform)?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        input_bound,
+        "BFV full-bootstrap linear transform input residual bound",
+    )?;
+    let mut contribution_bounds = Vec::with_capacity(transform.diagonals.len());
+    for diagonal in &transform.diagonals {
+        let rotated_bound = if diagonal.rotation_steps == 0 {
+            input_bound
+        } else {
+            bfv_packed_rotate_left_output_residual_multiple_bound(
+                params,
+                galois_keys,
+                input_bound,
+                diagonal.rotation_steps,
+            )?
+        };
+        let masked_bound = bfv_multiply_plaintext_polynomial_output_residual_multiple_bound(
+            params,
+            rotated_bound,
+            &diagonal.plaintext,
+        )?;
+        contribution_bounds.push(masked_bound);
+    }
+    match contribution_bounds.as_slice() {
+        [] => Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap linear transform bound produced an empty accumulator".to_owned(),
+        )),
+        [only] => Ok(*only),
+        bounds => bfv_add_output_residual_multiple_bound(params, bounds),
+    }
+}
+
+/// Return the bounded-noise bound for a typed full-bootstrap linear transform.
+///
+/// This is the rounded BFV counterpart to
+/// [`bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, transform
+/// material is malformed, the input bound exceeds rounded decoding capacity,
+/// required Galois keys are missing or malformed, or any intermediate/output
+/// bound exceeds rounded decoding capacity.
+pub fn bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    transform: &BfvFullBootstrapLinearTransformV1,
+    input_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_full_bootstrap_linear_transform_v1(params, transform)?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        input_noise_bound,
+        "BFV full-bootstrap bounded-noise linear transform input bound",
+    )?;
+    let mut contribution_bounds = Vec::with_capacity(transform.diagonals.len());
+    for diagonal in &transform.diagonals {
+        let rotated_bound = if diagonal.rotation_steps == 0 {
+            input_noise_bound
+        } else {
+            bfv_packed_rotate_left_bounded_noise_output_bound(
+                params,
+                galois_keys,
+                input_noise_bound,
+                diagonal.rotation_steps,
+            )?
+        };
+        let masked_bound = bfv_multiply_plaintext_polynomial_bounded_noise_output_bound(
+            params,
+            rotated_bound,
+            &diagonal.plaintext,
+        )?;
+        contribution_bounds.push(masked_bound);
+    }
+    match contribution_bounds.as_slice() {
+        [] => Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap bounded-noise linear transform bound produced an empty accumulator"
+                .to_owned(),
+        )),
+        [only] => Ok(*only),
+        bounds => bfv_add_bounded_noise_output_bound(params, bounds),
+    }
+}
+
 /// Apply a typed full-bootstrap blind rotation through registered exact RNS paths.
 ///
 /// This consumes the governed selector schedule carried by
@@ -5838,6 +6255,139 @@ pub fn apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basi
                 .to_owned(),
         )
     })
+}
+
+/// Return the exact residual-multiple bound for typed full-bootstrap blind rotation.
+///
+/// This mirrors [`apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1`]:
+/// each governed schedule entry applies one Galois key switch, multiplies the
+/// switched ciphertext by the declared selector plaintext, and the masked
+/// contributions are accumulated.
+///
+/// # Errors
+/// Returns [`BfvError`] when the blind-rotation material is malformed, the
+/// input bound exceeds centered residual capacity, required Galois keys are
+/// missing or malformed, or any intermediate/output bound exceeds centered
+/// residual capacity.
+pub fn bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    key: &BfvFullBootstrapBlindRotationKeyV1,
+    input_bound: u128,
+) -> Result<u128, BfvError> {
+    validate_bfv_full_bootstrap_blind_rotation_key_v1(params, key)?;
+    validate_galois_key_set_metadata(
+        params,
+        galois_keys,
+        "BFV full-bootstrap blind rotation bound",
+    )?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        input_bound,
+        "BFV full-bootstrap blind rotation input residual bound",
+    )?;
+    validate_galois_key_set_entries(params, galois_keys)?;
+    let mut contribution_bounds = Vec::with_capacity(key.steps.len());
+    for step in &key.steps {
+        let galois_key = galois_keys
+            .iter()
+            .find(|galois_key| galois_key.automorphism_power == step.automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for full-bootstrap blind-rotation bound automorphism power {}",
+                    step.automorphism_power
+                ))
+            })?;
+        let switched_bound =
+            bfv_galois_key_switch_output_residual_multiple_bound(params, galois_key, input_bound)?;
+        let masked_bound = bfv_multiply_plaintext_polynomial_output_residual_multiple_bound(
+            params,
+            switched_bound,
+            &step.selector_plaintext,
+        )?;
+        contribution_bounds.push(masked_bound);
+    }
+    match contribution_bounds.as_slice() {
+        [] => Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap blind rotation bound produced an empty Galois key schedule"
+                .to_owned(),
+        )),
+        [only] => Ok(*only),
+        bounds => bfv_add_output_residual_multiple_bound(params, bounds),
+    }
+}
+
+/// Return the bounded-noise bound for typed full-bootstrap blind rotation.
+///
+/// This is the rounded BFV counterpart to
+/// [`bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1`], and
+/// mirrors
+/// [`apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basis_extension_exact_v1`]
+/// at the public bound-accounting layer.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, the
+/// blind-rotation material is malformed, the input bound exceeds rounded
+/// decoding capacity, required Galois keys are missing or malformed, or any
+/// intermediate/output bound exceeds rounded decoding capacity.
+pub fn bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
+    params: &BfvParameters,
+    galois_keys: &[BfvGaloisKey],
+    key: &BfvFullBootstrapBlindRotationKeyV1,
+    input_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    if let Err(err) = validate_bfv_bounded_noise_encryption_capacity(params) {
+        validate_bfv_full_bootstrap_blind_rotation_key_v1(params, key)?;
+        validate_galois_key_set_metadata(
+            params,
+            galois_keys,
+            "BFV full-bootstrap bounded-noise blind rotation bound",
+        )?;
+        return Err(err);
+    }
+    validate_bfv_full_bootstrap_blind_rotation_key_v1(params, key)?;
+    validate_galois_key_set_metadata(
+        params,
+        galois_keys,
+        "BFV full-bootstrap bounded-noise blind rotation bound",
+    )?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        input_noise_bound,
+        "BFV full-bootstrap bounded-noise blind rotation input bound",
+    )?;
+    validate_galois_key_set_entries(params, galois_keys)?;
+    let mut contribution_bounds = Vec::with_capacity(key.steps.len());
+    for step in &key.steps {
+        let galois_key = galois_keys
+            .iter()
+            .find(|galois_key| galois_key.automorphism_power == step.automorphism_power)
+            .ok_or_else(|| {
+                BfvError::InvalidParameters(format!(
+                    "missing BFV Galois key for full-bootstrap bounded-noise blind-rotation bound automorphism power {}",
+                    step.automorphism_power
+                ))
+            })?;
+        let switched_bound = bfv_galois_key_switch_bounded_noise_output_bound(
+            params,
+            galois_key,
+            input_noise_bound,
+        )?;
+        let masked_bound = bfv_multiply_plaintext_polynomial_bounded_noise_output_bound(
+            params,
+            switched_bound,
+            &step.selector_plaintext,
+        )?;
+        contribution_bounds.push(masked_bound);
+    }
+    match contribution_bounds.as_slice() {
+        [] => Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap bounded-noise blind rotation bound produced an empty Galois key schedule"
+                .to_owned(),
+        )),
+        [only] => Ok(*only),
+        bounds => bfv_add_bounded_noise_output_bound(params, bounds),
+    }
 }
 
 /// Validate the proof-facing profile bound by full-bootstrap material.
@@ -6562,6 +7112,296 @@ pub fn validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
     validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(params, material, artifacts)
 }
 
+fn full_bootstrap_material_from_key(
+    bootstrap_key: &BfvBootstrapKey,
+) -> Result<&BfvFullBootstrapCircuitMaterialV1, BfvError> {
+    bootstrap_key
+        .full_bootstrap_material
+        .as_ref()
+        .ok_or_else(|| {
+            BfvError::InvalidParameters(
+                "full BFV bootstrap key mode requires bootstrapping circuit material".to_owned(),
+            )
+        })
+}
+
+fn decode_full_bootstrap_execution_prefix_artifacts_v1(
+    params: &BfvParameters,
+    material: &BfvFullBootstrapCircuitMaterialV1,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+) -> Result<
+    (
+        BfvFullBootstrapLinearTransformV1,
+        BfvFullBootstrapBlindRotationKeyV1,
+        BfvFullBootstrapSampleExtractionV1,
+    ),
+    BfvError,
+> {
+    let coefficient_to_slot = decode_bfv_full_bootstrap_linear_transform_artifact_v1(
+        params,
+        material,
+        BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
+        &artifacts.coefficient_to_slot_key,
+    )?;
+    let blind_rotation = decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+        params,
+        material,
+        &artifacts.blind_rotation_key,
+    )?;
+    let sample_extraction = decode_bfv_full_bootstrap_sample_extraction_artifact_v1(
+        params,
+        material,
+        &artifacts.sample_extraction_key,
+    )?;
+    Ok((coefficient_to_slot, blind_rotation, sample_extraction))
+}
+
+/// Execute the governed exact-RNS full-bootstrap prefix through raw sample extraction.
+///
+/// This validates the same concrete artifacts as
+/// [`validate_bfv_full_bootstrap_execution_artifacts_preflight_v1`] and then
+/// consumes the coefficient-to-slot, blind-rotation, and sample-extraction
+/// payloads before embedding the raw sample in a coefficient-zero diagnostic
+/// ciphertext. The returned trace deliberately stops before the future
+/// governed sample key-switch and slot-to-coefficient repacking stage.
+///
+/// # Errors
+/// Returns [`BfvError`] when full-bootstrap key/material preflight fails,
+/// artifacts do not match governed commitments, required Galois keys are
+/// missing or malformed, or any executable prefix stage fails.
+pub fn apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvFullBootstrapExecutionPrefixTraceV1, BfvError> {
+    validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
+        params,
+        bootstrap_key,
+        ciphertext,
+        artifacts,
+    )?;
+    let material = full_bootstrap_material_from_key(bootstrap_key)?;
+    let (coefficient_to_slot, blind_rotation, sample_extraction) =
+        decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
+    let coefficient_to_slot_output =
+        apply_bfv_full_bootstrap_linear_transform_registered_rns_exact_v1(
+            params,
+            galois_keys,
+            ciphertext,
+            &coefficient_to_slot,
+        )?;
+    let blind_rotation_output = apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
+        params,
+        galois_keys,
+        &coefficient_to_slot_output,
+        &blind_rotation,
+    )?;
+    let raw_extracted_sample = apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(
+        params,
+        &blind_rotation_output,
+        sample_extraction,
+    )?;
+    let coefficient_zero_repack_output =
+        repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(
+            params,
+            &raw_extracted_sample,
+        )?;
+    // TODO: Feed this raw sample into the governed sample-extraction key switch
+    // and slot-to-coefficient repacking stage once that key material lands.
+    Ok(BfvFullBootstrapExecutionPrefixTraceV1 {
+        coefficient_to_slot_output,
+        blind_rotation_output,
+        raw_extracted_sample,
+        coefficient_zero_repack_output,
+    })
+}
+
+/// Execute the governed bounded-noise full-bootstrap prefix through raw sample extraction.
+///
+/// This is the rounded BFV counterpart to
+/// [`apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1`].
+/// It validates bounded-noise capacity and the governed artifacts before
+/// executing the prefix stages.
+///
+/// # Errors
+/// Returns [`BfvError`] when bounded-noise capacity is too narrow,
+/// full-bootstrap key/material preflight fails, artifacts do not match governed
+/// commitments, required Galois keys are missing or malformed, or any executable
+/// prefix stage fails.
+pub fn apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvFullBootstrapExecutionPrefixTraceV1, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
+        params,
+        bootstrap_key,
+        ciphertext,
+        artifacts,
+    )?;
+    let material = full_bootstrap_material_from_key(bootstrap_key)?;
+    let (coefficient_to_slot, blind_rotation, sample_extraction) =
+        decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
+    let coefficient_to_slot_output =
+        apply_bfv_full_bootstrap_linear_transform_bounded_noise_registered_rns_basis_extension_exact_v1(
+            params,
+            galois_keys,
+            ciphertext,
+            &coefficient_to_slot,
+        )?;
+    let blind_rotation_output =
+        apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basis_extension_exact_v1(
+            params,
+            galois_keys,
+            &coefficient_to_slot_output,
+            &blind_rotation,
+        )?;
+    let raw_extracted_sample = apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
+        params,
+        &blind_rotation_output,
+        sample_extraction,
+    )?;
+    let coefficient_zero_repack_output =
+        repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ciphertext_v1(
+            params,
+            &raw_extracted_sample,
+        )?;
+    // TODO: Feed this raw sample into the governed bounded-noise sample switch
+    // and slot-to-coefficient repacking stage once that key material lands.
+    Ok(BfvFullBootstrapExecutionPrefixTraceV1 {
+        coefficient_to_slot_output,
+        blind_rotation_output,
+        raw_extracted_sample,
+        coefficient_zero_repack_output,
+    })
+}
+
+/// Return exact residual bounds for the executable full-bootstrap prefix trace.
+///
+/// The helper validates the governed full-bootstrap key and artifact bundle,
+/// then composes the coefficient-to-slot, blind-rotation, and raw
+/// sample-extraction and coefficient-zero diagnostic-repack bound rules used
+/// by the executable prefix trace.
+///
+/// # Errors
+/// Returns [`BfvError`] when full-bootstrap key/material preflight fails,
+/// artifacts do not match governed commitments, required Galois keys are
+/// missing or malformed, the input bound exceeds centered residual capacity, or
+/// any intermediate/output bound exceeds centered residual capacity.
+pub fn bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    input_bound: u128,
+) -> Result<BfvFullBootstrapExecutionPrefixTraceBoundsV1, BfvError> {
+    validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
+    let material = full_bootstrap_material_from_key(bootstrap_key)?;
+    validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(params, material, artifacts)?;
+    validate_exact_residual_bound_within_centered_capacity(
+        params,
+        input_bound,
+        "BFV full-bootstrap execution prefix input residual bound",
+    )?;
+    let (coefficient_to_slot, blind_rotation, sample_extraction) =
+        decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
+    let coefficient_to_slot =
+        bfv_full_bootstrap_linear_transform_output_residual_multiple_bound_v1(
+            params,
+            galois_keys,
+            &coefficient_to_slot,
+            input_bound,
+        )?;
+    let blind_rotation = bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
+        params,
+        galois_keys,
+        &blind_rotation,
+        coefficient_to_slot,
+    )?;
+    let raw_extracted_sample =
+        bfv_full_bootstrap_raw_sample_extraction_output_residual_multiple_bound_v1(
+            params,
+            sample_extraction,
+            blind_rotation,
+        )?;
+    let coefficient_zero_repack =
+        bfv_full_bootstrap_raw_sample_coefficient_zero_repack_residual_bound_from_raw_sample_bound_v1(
+            params,
+            raw_extracted_sample,
+        )?;
+    Ok(BfvFullBootstrapExecutionPrefixTraceBoundsV1 {
+        coefficient_to_slot,
+        blind_rotation,
+        raw_extracted_sample,
+        coefficient_zero_repack,
+    })
+}
+
+/// Return bounded-noise bounds for the executable full-bootstrap prefix trace.
+///
+/// This is the rounded BFV counterpart to
+/// [`bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1`].
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow,
+/// full-bootstrap key/material preflight fails, artifacts do not match governed
+/// commitments, required Galois keys are missing or malformed, the input bound
+/// exceeds rounded decoding capacity, or any intermediate/output bound exceeds
+/// rounded decoding capacity.
+pub fn bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    input_noise_bound: u128,
+) -> Result<BfvFullBootstrapExecutionPrefixTraceBoundsV1, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    validate_bfv_full_bootstrap_key_execution_preflight_v1(params, bootstrap_key)?;
+    let material = full_bootstrap_material_from_key(bootstrap_key)?;
+    validate_bfv_full_bootstrap_circuit_artifact_bundle_v1(params, material, artifacts)?;
+    validate_bounded_noise_bound_within_decoding_capacity(
+        params,
+        input_noise_bound,
+        "BFV full-bootstrap bounded-noise execution prefix input bound",
+    )?;
+    let (coefficient_to_slot, blind_rotation, sample_extraction) =
+        decode_full_bootstrap_execution_prefix_artifacts_v1(params, material, artifacts)?;
+    let coefficient_to_slot = bfv_full_bootstrap_linear_transform_bounded_noise_output_bound_v1(
+        params,
+        galois_keys,
+        &coefficient_to_slot,
+        input_noise_bound,
+    )?;
+    let blind_rotation = bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
+        params,
+        galois_keys,
+        &blind_rotation,
+        coefficient_to_slot,
+    )?;
+    let raw_extracted_sample =
+        bfv_full_bootstrap_raw_sample_extraction_bounded_noise_output_bound_v1(
+            params,
+            sample_extraction,
+            blind_rotation,
+        )?;
+    let coefficient_zero_repack =
+        bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_bound_from_raw_sample_bound_v1(
+            params,
+            raw_extracted_sample,
+        )?;
+    Ok(BfvFullBootstrapExecutionPrefixTraceBoundsV1 {
+        coefficient_to_slot,
+        blind_rotation,
+        raw_extracted_sample,
+        coefficient_zero_repack,
+    })
+}
+
 fn validate_bfv_full_bootstrap_key_execution_preflight_v1(
     params: &BfvParameters,
     bootstrap_key: &BfvBootstrapKey,
@@ -6574,6 +7414,44 @@ fn validate_bfv_full_bootstrap_key_execution_preflight_v1(
     }
     validate_bootstrap_key_admission_shape_metadata(params, bootstrap_key)?;
     validate_bootstrap_key_entries(params, bootstrap_key)
+}
+
+fn full_bootstrap_final_stage_unavailable() -> BfvError {
+    BfvError::InvalidParameters(
+        "full BFV bootstrap final sample key-switch/repacking is not implemented".to_owned(),
+    )
+}
+
+/// Execute one full BFV bootstrap with concrete governed artifacts.
+///
+/// This artifact-aware entry point executes the deterministic
+/// coefficient-to-slot, blind-rotation, and raw sample-extraction prefix before
+/// stopping at the missing final sample key-switch/repacking stage. It lets
+/// callers validate the executable governed prefix and required Galois keys
+/// without accidentally routing through the refresh-only bridge.
+///
+/// # Errors
+/// Returns [`BfvError`] when full-bootstrap key/material/artifact preflight
+/// fails, required Galois keys are missing or malformed, any executable prefix
+/// stage fails, or until the final sample key-switch/repacking stage is
+/// implemented.
+pub fn full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        ciphertext,
+    )?;
+    // TODO: Finish the governed sample key-switch/repacking stage and feed its
+    // output through the slot-to-coefficient transform.
+    Err(full_bootstrap_final_stage_unavailable())
 }
 
 /// Execute one full BFV bootstrap over the registered exact RNS profile.
@@ -6594,6 +7472,36 @@ pub fn full_bootstrap_ciphertext_registered_rns_exact_v1(
     Err(BfvError::InvalidParameters(
         "full BFV bootstrap execution is not implemented".to_owned(),
     ))
+}
+
+/// Return the exact residual-multiple bound for artifact-aware full bootstrap.
+///
+/// The known executable prefix bound is propagated through the governed
+/// coefficient-to-slot, blind-rotation, and raw sample-extraction stages before
+/// the helper stops at the missing final sample key-switch/repacking bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when full-bootstrap key/material/artifact preflight or
+/// input residual metadata fails, required Galois keys are missing or malformed,
+/// any executable prefix bound fails, or until the final full-bootstrap bound
+/// model is implemented.
+pub fn bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    input_bound: u128,
+) -> Result<u128, BfvError> {
+    bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        input_bound,
+    )?;
+    // TODO: Add final sample key-switch/repacking and slot-to-coefficient bound
+    // propagation once the final output stage is implemented.
+    Err(full_bootstrap_final_stage_unavailable())
 }
 
 /// Return the exact residual-multiple bound for one full BFV bootstrap.
@@ -6622,6 +7530,38 @@ pub fn bfv_full_bootstrap_output_residual_multiple_bound_v1(
     ))
 }
 
+/// Execute one bounded-noise full BFV bootstrap with concrete governed artifacts.
+///
+/// This is the rounded BFV counterpart to
+/// [`full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1`]. It
+/// executes the deterministic bounded-noise prefix through registered target
+/// RNS basis extension, then stops at the missing final sample
+/// key-switch/repacking stage.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow,
+/// full-bootstrap key/material/artifact preflight fails, required Galois keys
+/// are missing or malformed, any executable prefix stage fails, or until the
+/// final sample key-switch/repacking stage is implemented.
+pub fn full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    ciphertext: &BfvCiphertext,
+) -> Result<BfvCiphertext, BfvError> {
+    apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        ciphertext,
+    )?;
+    // TODO: Finish the governed bounded-noise sample key-switch/repacking stage
+    // and feed its output through the slot-to-coefficient transform.
+    Err(full_bootstrap_final_stage_unavailable())
+}
+
 /// Execute one bounded-noise full BFV bootstrap over the registered RNS profile.
 ///
 /// The bounded-noise full evaluator is still unavailable, but this entry point
@@ -6641,6 +7581,36 @@ pub fn full_bootstrap_ciphertext_bounded_noise_registered_rns_basis_extension_ex
     Err(BfvError::InvalidParameters(
         "full BFV bootstrap execution is not implemented".to_owned(),
     ))
+}
+
+/// Return the bounded-noise bound for artifact-aware full bootstrap.
+///
+/// The known executable prefix bound is propagated through the governed
+/// coefficient-to-slot, blind-rotation, and raw sample-extraction stages before
+/// the helper stops at the missing final sample key-switch/repacking bound.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow,
+/// full-bootstrap key/material/artifact preflight or input noise metadata fails,
+/// required Galois keys are missing or malformed, any executable prefix bound
+/// fails, or until the final full-bootstrap bound model is implemented.
+pub fn bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
+    params: &BfvParameters,
+    bootstrap_key: &BfvBootstrapKey,
+    artifacts: &BfvFullBootstrapCircuitArtifactBundleV1,
+    galois_keys: &[BfvGaloisKey],
+    input_noise_bound: u128,
+) -> Result<u128, BfvError> {
+    bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+        params,
+        bootstrap_key,
+        artifacts,
+        galois_keys,
+        input_noise_bound,
+    )?;
+    // TODO: Add final bounded-noise sample key-switch/repacking and
+    // slot-to-coefficient bound propagation once the output stage is implemented.
+    Err(full_bootstrap_final_stage_unavailable())
 }
 
 /// Return the bounded-noise output bound for one full BFV bootstrap.
@@ -7103,6 +8073,70 @@ pub fn decrypt_with_bounded_noise_profile(
 ) -> Result<BfvBoundedNoiseProfile, BfvError> {
     let scaled = decrypt_bounded_noise_scaled_coefficients(params, secret_key, ciphertext)?;
     bounded_noise_profile_from_scaled(params, &scaled)
+}
+
+/// Decrypt a raw full-bootstrap extracted sample to one scaled BFV coefficient.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, secret key, or extracted sample shape
+/// is invalid.
+pub fn decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+) -> Result<u64, BfvError> {
+    validate_bfv_full_bootstrap_raw_extracted_sample_v1(params, sample)?;
+    validate_secret_key(params, secret_key)?;
+    let mut scaled = sample.constant_term;
+    for (&sample_coefficient, &secret_coefficient) in
+        sample.secret_coefficients.iter().zip(&secret_key.s)
+    {
+        scaled = add_mod_u64(
+            scaled,
+            mul_mod_u64(
+                sample_coefficient,
+                secret_coefficient,
+                params.ciphertext_modulus,
+            ),
+            params.ciphertext_modulus,
+        );
+    }
+    Ok(scaled)
+}
+
+/// Decrypt a raw full-bootstrap extracted sample and return its exact residual profile.
+///
+/// The returned profile has one coefficient: the selected source coefficient.
+///
+/// # Errors
+/// Returns [`BfvError`] when parameters, secret key, or extracted sample shape
+/// is invalid.
+pub fn decrypt_bfv_full_bootstrap_raw_extracted_sample_with_exact_residual_profile_v1(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+) -> Result<BfvExactResidualProfile, BfvError> {
+    let scaled =
+        decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1(params, secret_key, sample)?;
+    Ok(exact_residual_profile_from_scaled(params, &[scaled]))
+}
+
+/// Decrypt a raw full-bootstrap extracted sample and return its bounded-noise profile.
+///
+/// The returned profile has one coefficient: the selected source coefficient.
+///
+/// # Errors
+/// Returns [`BfvError`] when rounded BFV capacity is too narrow, or when
+/// parameters, secret key, or extracted sample shape is invalid.
+pub fn decrypt_bfv_full_bootstrap_raw_extracted_sample_with_bounded_noise_profile_v1(
+    params: &BfvParameters,
+    secret_key: &BfvSecretKey,
+    sample: &BfvFullBootstrapRawExtractedSampleV1,
+) -> Result<BfvBoundedNoiseProfile, BfvError> {
+    validate_bfv_bounded_noise_encryption_capacity(params)?;
+    let scaled =
+        decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1(params, secret_key, sample)?;
+    bounded_noise_profile_from_scaled(params, &[scaled])
 }
 
 /// Validate a rounded BFV ciphertext against a centered noise bound.
@@ -17352,6 +18386,31 @@ mod tests {
                 .expect("decode blind-rotation output slots"),
             expected_slots
         );
+        let input_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("input bound");
+        let governed_bound = bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
+            &params,
+            &galois_keys,
+            &key,
+            input_bound,
+        )
+        .expect("full-bootstrap blind-rotation residual bound");
+        let baseline_bound = bfv_packed_rotate_left_output_residual_multiple_bound(
+            &params,
+            &galois_keys,
+            input_bound,
+            key.rotation_steps,
+        )
+        .expect("packed RotateLeft residual bound");
+        assert_eq!(governed_bound, baseline_bound);
+        validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &rotated,
+            governed_bound,
+            "full-bootstrap blind rotation output",
+        )
+        .expect("blind-rotation output fits governed residual bound");
 
         let missing_power = key.steps[0].automorphism_power;
         assert_error_contains(
@@ -17363,6 +18422,16 @@ mod tests {
             ),
             &format!("automorphism power {missing_power}"),
             "blind rotation must reject missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_blind_rotation_output_residual_multiple_bound_v1(
+                &params,
+                &galois_keys[1..],
+                &key,
+                input_bound,
+            ),
+            &format!("automorphism power {missing_power}"),
+            "blind-rotation bounds must reject missing Galois keys",
         );
 
         let (bounded_secret_key, bounded_public_key) = keygen_bounded_noise_from_seed(
@@ -17414,6 +18483,41 @@ mod tests {
             decode_packed_plaintext_slots(&params, &bounded_rotated_plaintext)
                 .expect("decode bounded blind-rotation output slots"),
             expected_slots
+        );
+        let input_noise_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let governed_noise_bound = bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
+            &params,
+            &bounded_galois_keys,
+            &key,
+            input_noise_bound,
+        )
+        .expect("full-bootstrap bounded-noise blind-rotation bound");
+        let baseline_noise_bound = bfv_packed_rotate_left_bounded_noise_output_bound(
+            &params,
+            &bounded_galois_keys,
+            input_noise_bound,
+            key.rotation_steps,
+        )
+        .expect("bounded-noise packed RotateLeft bound");
+        assert_eq!(governed_noise_bound, baseline_noise_bound);
+        validate_ciphertext_bounded_noise(
+            &params,
+            &bounded_secret_key,
+            &bounded_rotated,
+            governed_noise_bound,
+            "bounded full-bootstrap blind rotation output",
+        )
+        .expect("bounded blind-rotation output fits governed noise bound");
+        assert_error_contains(
+            bfv_full_bootstrap_blind_rotation_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_galois_keys[1..],
+                &key,
+                input_noise_bound,
+            ),
+            &format!("automorphism power {missing_power}"),
+            "bounded blind-rotation bounds must reject missing Galois keys",
         );
 
         let opaque_payload = sample_full_bootstrap_artifact_payload(
@@ -17659,6 +18763,633 @@ mod tests {
             validate_bfv_full_bootstrap_sample_extraction_v1(&params, wrong_output_components),
             "output_ciphertext_component_count",
             "sample extraction must reject incompatible output ciphertext shapes",
+        );
+    }
+
+    #[test]
+    fn full_bootstrap_raw_sample_extraction_matches_source_decrypt_coefficient() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let coefficient_index = (params.polynomial_degree / 3).max(1);
+        let sample_extraction = BfvFullBootstrapSampleExtractionV1 {
+            extracted_coefficient_index: coefficient_index,
+            ..sample_full_bootstrap_sample_extraction(&params)
+        };
+        let plaintext = (0..params.degree())
+            .map(|index| {
+                u64::try_from((index * 7 + 11) % 251).expect("plaintext coefficient fits")
+                    % params.plaintext_modulus
+            })
+            .collect::<Vec<_>>();
+
+        let (secret_key, public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"bfv-full-bootstrap-raw-sample-keygen").expect("keygen");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &plaintext,
+            b"bfv-full-bootstrap-raw-sample-input",
+        )
+        .expect("encrypt source ciphertext");
+        let sample = apply_bfv_full_bootstrap_sample_extraction_raw_lwe_v1(
+            &params,
+            &ciphertext,
+            sample_extraction,
+        )
+        .expect("extract raw sample");
+        validate_bfv_full_bootstrap_raw_extracted_sample_v1(&params, &sample)
+            .expect("raw sample shape is valid");
+        let index = usize::from(coefficient_index);
+        assert_eq!(sample.constant_term, ciphertext.c0[index]);
+        assert_eq!(sample.secret_coefficients[0], ciphertext.c1[index]);
+        assert_eq!(
+            sample.secret_coefficients[index + 1],
+            sub_mod_u64(
+                0,
+                ciphertext.c1[params.degree() - 1],
+                params.ciphertext_modulus
+            ),
+            "sample extraction must apply the negacyclic sign for wrapped c1 coefficients",
+        );
+
+        let source_scaled =
+            decrypt_scaled_coefficients(&params, &secret_key, &ciphertext).expect("decrypt source");
+        let sample_scaled = decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1(
+            &params,
+            &secret_key,
+            &sample,
+        )
+        .expect("decrypt raw sample");
+        assert_eq!(sample_scaled, source_scaled[index]);
+        let source_profile = decrypt_with_exact_residual_profile(&params, &secret_key, &ciphertext)
+            .expect("source exact profile");
+        let sample_profile =
+            decrypt_bfv_full_bootstrap_raw_extracted_sample_with_exact_residual_profile_v1(
+                &params,
+                &secret_key,
+                &sample,
+            )
+            .expect("sample exact profile");
+        assert_eq!(
+            sample_profile.plaintext,
+            vec![source_profile.plaintext[index]]
+        );
+        assert_eq!(
+            sample_profile.residual_multiples,
+            vec![source_profile.residual_multiples[index]],
+        );
+        let input_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("input bound");
+        let sample_bound =
+            bfv_full_bootstrap_raw_sample_extraction_output_residual_multiple_bound_v1(
+                &params,
+                sample_extraction,
+                input_bound,
+            )
+            .expect("raw sample residual bound");
+        assert_eq!(sample_bound, input_bound);
+        assert!(
+            sample_profile.max_abs_residual_multiple <= sample_bound,
+            "raw sample residual {} must fit propagated bound {sample_bound}",
+            sample_profile.max_abs_residual_multiple,
+        );
+        let repacked = repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(
+            &params, &sample,
+        )
+        .expect("repack raw sample at coefficient zero");
+        let repacked_scaled =
+            decrypt_scaled_coefficients(&params, &secret_key, &repacked).expect("decrypt repack");
+        assert_eq!(
+            repacked_scaled[0], sample_scaled,
+            "coefficient-zero repack must preserve the raw sample decrypt"
+        );
+        let repacked_profile = decrypt_with_exact_residual_profile(&params, &secret_key, &repacked)
+            .expect("repacked exact profile");
+        assert_eq!(repacked_profile.plaintext[0], sample_profile.plaintext[0]);
+        assert_eq!(
+            repacked_profile.residual_multiples[0],
+            sample_profile.residual_multiples[0]
+        );
+        let repacked_bound =
+            bfv_full_bootstrap_raw_sample_coefficient_zero_repack_output_residual_multiple_bound_v1(
+                &params,
+                &sample,
+                sample_bound,
+            )
+            .expect("coefficient-zero repack residual bound");
+        assert_eq!(repacked_bound, sample_bound);
+        assert!(
+            repacked_profile.max_abs_residual_multiple
+                >= repacked_profile.residual_multiples[0].unsigned_abs(),
+            "whole diagnostic repack profile should still include coefficient zero"
+        );
+        assert!(
+            sample_profile.max_abs_residual_multiple <= repacked_bound,
+            "coefficient-zero repack residual {} must fit propagated bound {repacked_bound}",
+            sample_profile.max_abs_residual_multiple,
+        );
+
+        let (bounded_secret_key, bounded_public_key) = keygen_bounded_noise_from_seed(
+            &params,
+            b"bfv-full-bootstrap-bounded-raw-sample-keygen",
+        )
+        .expect("bounded keygen");
+        let bounded_ciphertext = encrypt_bounded_noise_from_seed(
+            &params,
+            &bounded_public_key,
+            &plaintext,
+            b"bfv-full-bootstrap-bounded-raw-sample-input",
+        )
+        .expect("encrypt bounded source ciphertext");
+        let bounded_sample = apply_bfv_full_bootstrap_sample_extraction_bounded_noise_raw_lwe_v1(
+            &params,
+            &bounded_ciphertext,
+            sample_extraction,
+        )
+        .expect("extract bounded raw sample");
+        let bounded_source_profile =
+            decrypt_with_bounded_noise_profile(&params, &bounded_secret_key, &bounded_ciphertext)
+                .expect("bounded source profile");
+        let bounded_sample_profile =
+            decrypt_bfv_full_bootstrap_raw_extracted_sample_with_bounded_noise_profile_v1(
+                &params,
+                &bounded_secret_key,
+                &bounded_sample,
+            )
+            .expect("bounded sample profile");
+        assert_eq!(
+            bounded_sample_profile.plaintext,
+            vec![bounded_source_profile.plaintext[index]],
+        );
+        assert_eq!(
+            bounded_sample_profile.noise,
+            vec![bounded_source_profile.noise[index]],
+        );
+        let input_noise_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let sample_noise_bound =
+            bfv_full_bootstrap_raw_sample_extraction_bounded_noise_output_bound_v1(
+                &params,
+                sample_extraction,
+                input_noise_bound,
+            )
+            .expect("raw sample bounded-noise bound");
+        assert_eq!(sample_noise_bound, input_noise_bound);
+        assert!(
+            bounded_sample_profile.max_abs_noise <= sample_noise_bound,
+            "raw bounded sample noise {} must fit propagated bound {sample_noise_bound}",
+            bounded_sample_profile.max_abs_noise,
+        );
+        let bounded_repacked =
+            repack_bfv_full_bootstrap_raw_sample_as_bounded_noise_coefficient_zero_ciphertext_v1(
+                &params,
+                &bounded_sample,
+            )
+            .expect("repack bounded raw sample at coefficient zero");
+        let bounded_repacked_profile =
+            decrypt_with_bounded_noise_profile(&params, &bounded_secret_key, &bounded_repacked)
+                .expect("bounded repacked profile");
+        assert_eq!(
+            bounded_repacked_profile.plaintext[0],
+            bounded_sample_profile.plaintext[0]
+        );
+        assert_eq!(
+            bounded_repacked_profile.noise[0],
+            bounded_sample_profile.noise[0]
+        );
+        let bounded_repacked_bound =
+            bfv_full_bootstrap_raw_sample_coefficient_zero_repack_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_sample,
+                sample_noise_bound,
+            )
+            .expect("bounded coefficient-zero repack noise bound");
+        assert_eq!(bounded_repacked_bound, sample_noise_bound);
+        assert!(
+            bounded_sample_profile.max_abs_noise <= bounded_repacked_bound,
+            "bounded coefficient-zero repack noise {} must fit propagated bound {bounded_repacked_bound}",
+            bounded_sample_profile.max_abs_noise,
+        );
+
+        let wrong_index = BfvFullBootstrapRawExtractedSampleV1 {
+            source_coefficient_index: params.polynomial_degree,
+            ..sample.clone()
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_raw_extracted_sample_v1(&params, &wrong_index),
+            "source_coefficient_index",
+            "raw extracted samples must reject out-of-range coefficient indexes",
+        );
+        let wrong_coefficients = BfvFullBootstrapRawExtractedSampleV1 {
+            secret_coefficients: Vec::new(),
+            ..sample
+        };
+        assert_error_contains(
+            validate_bfv_full_bootstrap_raw_extracted_sample_v1(&params, &wrong_coefficients),
+            "secret_coefficients",
+            "raw extracted samples must reject malformed coefficient vectors",
+        );
+        assert_error_contains(
+            repack_bfv_full_bootstrap_raw_sample_as_coefficient_zero_ciphertext_v1(
+                &params,
+                &wrong_coefficients,
+            ),
+            "secret_coefficients",
+            "coefficient-zero repack must reject malformed raw samples",
+        );
+    }
+
+    #[test]
+    fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
+        let params = ram_lfe_bfv_parameters_v1();
+        let artifacts = sample_full_bootstrap_circuit_artifacts(&params);
+        let material = sample_full_bootstrap_circuit_material(&params);
+        let blind_rotation = decode_bfv_full_bootstrap_blind_rotation_artifact_v1(
+            &params,
+            &material,
+            &artifacts.blind_rotation_key,
+        )
+        .expect("decode blind-rotation artifact");
+
+        let (secret_key, public_key, _relinearization_key) =
+            keygen_from_seed(&params, b"bfv-full-bootstrap-prefix-keygen").expect("keygen");
+        let mut bootstrap_key = bootstrap_key_from_seed(
+            &params,
+            &public_key,
+            "bfv-full-bootstrap-prefix-refresh-key",
+            b"bfv-full-bootstrap-prefix-refresh-seed",
+        )
+        .expect("bootstrap refresh key");
+        bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        bootstrap_key.full_bootstrap_material = Some(material.clone());
+        let slots = (0..params.degree())
+            .map(|slot| u64::try_from((slot * 9 + 5) % 257).expect("slot fits"))
+            .collect::<Vec<_>>();
+        let packed_plaintext =
+            encode_packed_plaintext_slots(&params, &slots).expect("encode packed slots");
+        let ciphertext = encrypt_from_seed(
+            &params,
+            &public_key,
+            &packed_plaintext,
+            b"bfv-full-bootstrap-prefix-input",
+        )
+        .expect("encrypt packed input");
+        let galois_keys = blind_rotation
+            .steps
+            .iter()
+            .map(|step| {
+                galois_key_from_seed(
+                    &params,
+                    &secret_key,
+                    step.automorphism_power,
+                    b"bfv-full-bootstrap-prefix-galois",
+                )
+                .expect("Galois key")
+            })
+            .collect::<Vec<_>>();
+
+        let trace = apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+            &params,
+            &bootstrap_key,
+            &artifacts,
+            &galois_keys,
+            &ciphertext,
+        )
+        .expect("execute exact full-bootstrap prefix trace");
+        assert_eq!(trace.coefficient_to_slot_output, ciphertext);
+        let input_bound =
+            bfv_encrypted_zero_refresh_residual_multiple_bound(&params).expect("input bound");
+        let prefix_bounds =
+            bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                input_bound,
+            )
+            .expect("exact prefix trace bounds");
+        validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &trace.coefficient_to_slot_output,
+            prefix_bounds.coefficient_to_slot,
+            "full-bootstrap prefix coefficient-to-slot output",
+        )
+        .expect("coefficient-to-slot output fits propagated prefix bound");
+        let baseline_blind_rotation =
+            apply_bfv_full_bootstrap_blind_rotation_registered_rns_exact_v1(
+                &params,
+                &galois_keys,
+                &ciphertext,
+                &blind_rotation,
+            )
+            .expect("baseline exact blind rotation");
+        assert_eq!(trace.blind_rotation_output, baseline_blind_rotation);
+        let blind_rotation_profile = validate_ciphertext_exact_residual_multiple_bound(
+            &params,
+            &secret_key,
+            &trace.blind_rotation_output,
+            prefix_bounds.blind_rotation,
+            "full-bootstrap prefix blind-rotation output",
+        )
+        .expect("blind-rotation output fits propagated prefix bound");
+        let sample_scaled = decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1(
+            &params,
+            &secret_key,
+            &trace.raw_extracted_sample,
+        )
+        .expect("decrypt exact trace sample");
+        let blind_rotation_scaled =
+            decrypt_scaled_coefficients(&params, &secret_key, &trace.blind_rotation_output)
+                .expect("decrypt blind rotation scaled coefficients");
+        assert_eq!(
+            sample_scaled,
+            blind_rotation_scaled[usize::from(trace.raw_extracted_sample.source_coefficient_index)],
+        );
+        let sample_profile =
+            decrypt_bfv_full_bootstrap_raw_extracted_sample_with_exact_residual_profile_v1(
+                &params,
+                &secret_key,
+                &trace.raw_extracted_sample,
+            )
+            .expect("decrypt exact trace sample profile");
+        let sample_index = usize::from(trace.raw_extracted_sample.source_coefficient_index);
+        assert_eq!(
+            sample_profile.plaintext,
+            vec![blind_rotation_profile.plaintext[sample_index]],
+        );
+        assert!(
+            sample_profile.max_abs_residual_multiple <= prefix_bounds.raw_extracted_sample,
+            "prefix raw sample residual {} must fit propagated bound {}",
+            sample_profile.max_abs_residual_multiple,
+            prefix_bounds.raw_extracted_sample,
+        );
+        let prefix_repack_scaled = decrypt_scaled_coefficients(
+            &params,
+            &secret_key,
+            &trace.coefficient_zero_repack_output,
+        )
+        .expect("decrypt exact prefix coefficient-zero repack");
+        assert_eq!(
+            prefix_repack_scaled[0], sample_scaled,
+            "prefix coefficient-zero repack must preserve the raw sample decrypt"
+        );
+        let prefix_repack_profile = decrypt_with_exact_residual_profile(
+            &params,
+            &secret_key,
+            &trace.coefficient_zero_repack_output,
+        )
+        .expect("exact prefix coefficient-zero repack profile");
+        assert_eq!(
+            prefix_repack_profile.plaintext[0],
+            sample_profile.plaintext[0]
+        );
+        assert_eq!(
+            prefix_repack_profile.residual_multiples[0],
+            sample_profile.residual_multiples[0]
+        );
+        assert!(
+            sample_profile.max_abs_residual_multiple <= prefix_bounds.coefficient_zero_repack,
+            "prefix coefficient-zero repack residual {} must fit propagated bound {}",
+            sample_profile.max_abs_residual_multiple,
+            prefix_bounds.coefficient_zero_repack,
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                &ciphertext,
+            ),
+            "final sample key-switch/repacking is not implemented",
+            "artifact-aware exact full bootstrap must reach the final unavailable stage after prefix execution",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_artifacts_output_residual_multiple_bound_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys,
+                input_bound,
+            ),
+            "final sample key-switch/repacking is not implemented",
+            "artifact-aware exact full-bootstrap bounds must reach the final unavailable stage after prefix bounds",
+        );
+        let missing_power = blind_rotation.steps[0].automorphism_power;
+        assert_error_contains(
+            apply_bfv_full_bootstrap_execution_prefix_trace_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys[1..],
+                &ciphertext,
+            ),
+            &format!("automorphism power {missing_power}"),
+            "exact full-bootstrap prefix trace must reject missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prefix_trace_output_residual_multiple_bounds_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys[1..],
+                input_bound,
+            ),
+            &format!("automorphism power {missing_power}"),
+            "exact full-bootstrap prefix bounds must reject missing Galois keys",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_artifacts_registered_rns_exact_v1(
+                &params,
+                &bootstrap_key,
+                &artifacts,
+                &galois_keys[1..],
+                &ciphertext,
+            ),
+            &format!("automorphism power {missing_power}"),
+            "artifact-aware exact full bootstrap must reject missing Galois keys before the final unavailable stage",
+        );
+
+        let (bounded_secret_key, bounded_public_key) =
+            keygen_bounded_noise_from_seed(&params, b"bfv-full-bootstrap-bounded-prefix-keygen")
+                .expect("bounded keygen");
+        let mut bounded_bootstrap_key =
+            bootstrap_key_bounded_noise_with_max_refresh_rounds_from_seed(
+                &params,
+                &bounded_public_key,
+                "bfv-full-bootstrap-bounded-prefix-refresh-key",
+                1,
+                b"bfv-full-bootstrap-bounded-prefix-refresh-seed",
+            )
+            .expect("bounded bootstrap refresh key");
+        bounded_bootstrap_key.mode = BfvBootstrapKeyMode::FullBootstrapV1;
+        bounded_bootstrap_key.full_bootstrap_material = Some(material);
+        let bounded_ciphertext = encrypt_bounded_noise_from_seed(
+            &params,
+            &bounded_public_key,
+            &packed_plaintext,
+            b"bfv-full-bootstrap-bounded-prefix-input",
+        )
+        .expect("encrypt bounded packed input");
+        let bounded_galois_keys = blind_rotation
+            .steps
+            .iter()
+            .map(|step| {
+                galois_key_bounded_noise_from_seed(
+                    &params,
+                    &bounded_secret_key,
+                    step.automorphism_power,
+                    b"bfv-full-bootstrap-bounded-prefix-galois",
+                )
+                .expect("bounded Galois key")
+            })
+            .collect::<Vec<_>>();
+        let bounded_trace =
+            apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &artifacts,
+                &bounded_galois_keys,
+                &bounded_ciphertext,
+            )
+            .expect("execute bounded full-bootstrap prefix trace");
+        assert_eq!(bounded_trace.coefficient_to_slot_output, bounded_ciphertext);
+        let input_noise_bound =
+            bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh bounded-noise bound");
+        let bounded_prefix_bounds =
+            bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &artifacts,
+                &bounded_galois_keys,
+                input_noise_bound,
+            )
+            .expect("bounded prefix trace bounds");
+        validate_ciphertext_bounded_noise(
+            &params,
+            &bounded_secret_key,
+            &bounded_trace.coefficient_to_slot_output,
+            bounded_prefix_bounds.coefficient_to_slot,
+            "bounded full-bootstrap prefix coefficient-to-slot output",
+        )
+        .expect("bounded coefficient-to-slot output fits propagated prefix bound");
+        let bounded_baseline_blind_rotation =
+            apply_bfv_full_bootstrap_blind_rotation_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_galois_keys,
+                &bounded_ciphertext,
+                &blind_rotation,
+            )
+            .expect("baseline bounded blind rotation");
+        assert_eq!(
+            bounded_trace.blind_rotation_output,
+            bounded_baseline_blind_rotation,
+        );
+        let bounded_blind_rotation_profile = validate_ciphertext_bounded_noise(
+            &params,
+            &bounded_secret_key,
+            &bounded_trace.blind_rotation_output,
+            bounded_prefix_bounds.blind_rotation,
+            "bounded full-bootstrap prefix blind-rotation output",
+        )
+        .expect("bounded blind-rotation output fits propagated prefix bound");
+        let bounded_sample_profile =
+            decrypt_bfv_full_bootstrap_raw_extracted_sample_with_bounded_noise_profile_v1(
+                &params,
+                &bounded_secret_key,
+                &bounded_trace.raw_extracted_sample,
+            )
+            .expect("decrypt bounded trace sample profile");
+        let bounded_sample_index =
+            usize::from(bounded_trace.raw_extracted_sample.source_coefficient_index);
+        assert_eq!(
+            bounded_sample_profile.plaintext,
+            vec![bounded_blind_rotation_profile.plaintext[bounded_sample_index]],
+        );
+        assert_eq!(
+            bounded_sample_profile.noise,
+            vec![bounded_blind_rotation_profile.noise[bounded_sample_index]],
+        );
+        assert!(
+            bounded_sample_profile.max_abs_noise <= bounded_prefix_bounds.raw_extracted_sample,
+            "bounded prefix raw sample noise {} must fit propagated bound {}",
+            bounded_sample_profile.max_abs_noise,
+            bounded_prefix_bounds.raw_extracted_sample,
+        );
+        let bounded_repack_profile = decrypt_with_bounded_noise_profile(
+            &params,
+            &bounded_secret_key,
+            &bounded_trace.coefficient_zero_repack_output,
+        )
+        .expect("bounded prefix coefficient-zero repack profile");
+        assert_eq!(
+            bounded_repack_profile.plaintext[0],
+            bounded_sample_profile.plaintext[0]
+        );
+        assert_eq!(
+            bounded_repack_profile.noise[0],
+            bounded_sample_profile.noise[0]
+        );
+        assert!(
+            bounded_sample_profile.max_abs_noise <= bounded_prefix_bounds.coefficient_zero_repack,
+            "bounded prefix coefficient-zero repack noise {} must fit propagated bound {}",
+            bounded_sample_profile.max_abs_noise,
+            bounded_prefix_bounds.coefficient_zero_repack,
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &artifacts,
+                &bounded_galois_keys,
+                &bounded_ciphertext,
+            ),
+            "final sample key-switch/repacking is not implemented",
+            "artifact-aware bounded full bootstrap must reach the final unavailable stage after prefix execution",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_with_artifacts_bounded_noise_output_bound_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &artifacts,
+                &bounded_galois_keys,
+                input_noise_bound,
+            ),
+            "final sample key-switch/repacking is not implemented",
+            "artifact-aware bounded full-bootstrap bounds must reach the final unavailable stage after prefix bounds",
+        );
+        assert_error_contains(
+            apply_bfv_full_bootstrap_execution_prefix_trace_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &artifacts,
+                &bounded_galois_keys[1..],
+                &bounded_ciphertext,
+            ),
+            &format!("automorphism power {missing_power}"),
+            "bounded full-bootstrap prefix trace must reject missing Galois keys",
+        );
+        assert_error_contains(
+            bfv_full_bootstrap_execution_prefix_trace_bounded_noise_output_bounds_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &artifacts,
+                &bounded_galois_keys[1..],
+                input_noise_bound,
+            ),
+            &format!("automorphism power {missing_power}"),
+            "bounded full-bootstrap prefix bounds must reject missing Galois keys",
+        );
+        assert_error_contains(
+            full_bootstrap_ciphertext_with_artifacts_bounded_noise_registered_rns_basis_extension_exact_v1(
+                &params,
+                &bounded_bootstrap_key,
+                &artifacts,
+                &bounded_galois_keys[1..],
+                &bounded_ciphertext,
+            ),
+            &format!("automorphism power {missing_power}"),
+            "artifact-aware bounded full bootstrap must reject missing Galois keys before the final unavailable stage",
         );
     }
 

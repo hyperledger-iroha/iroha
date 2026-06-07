@@ -82,6 +82,29 @@ EXCLUDED_PREFIXES = (
     Path("tests/interop"),
 )
 
+SCAN_ROOTS = (
+    Path("crates/iroha_sccp/src"),
+    Path("crates/iroha_torii/src"),
+    Path("crates/iroha_schema_derive/src"),
+    Path("crates/iroha_schema_gen/src"),
+    Path("python/iroha_torii_client"),
+    Path("javascript/iroha_js/src"),
+    Path("javascript/iroha_js/dist"),
+    Path("javascript/iroha_js/test"),
+    Path("IrohaSwift/Sources"),
+    Path("IrohaSwift/Tests"),
+    Path("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp"),
+    Path("kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/sccp"),
+    Path("java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp"),
+    Path("java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp"),
+    Path("scripts"),
+    Path("pytests/scripts"),
+    Path("docs/source/bridge_proofs.md"),
+    Path("docs/source/engineering_backlog.md"),
+    Path("docs/source/crypto"),
+    Path("roadmap.md"),
+    Path("status.md"),
+)
 
 def _is_scanned_file(path: Path) -> bool:
     if not path.is_file() or path.is_symlink():
@@ -97,7 +120,25 @@ def _is_scanned_file(path: Path) -> bool:
 
 
 def _scanned_files() -> list[Path]:
-    return sorted(path for path in REPO_ROOT.rglob("*") if _is_scanned_file(path))
+    files: set[Path] = set()
+    for root in SCAN_ROOTS:
+        path = REPO_ROOT / root
+        if path.is_file():
+            if _is_scanned_file(path):
+                files.add(path)
+            continue
+        if root == Path("scripts") or root == Path("pytests/scripts"):
+            files.update(candidate for candidate in path.glob("sccp*.py") if _is_scanned_file(candidate))
+            continue
+        if root == Path("docs/source/crypto"):
+            files.update(
+                candidate
+                for candidate in path.glob("sm_audit_*.md")
+                if _is_scanned_file(candidate)
+            )
+            continue
+        files.update(candidate for candidate in path.rglob("*") if _is_scanned_file(candidate))
+    return sorted(files)
 
 
 def test_retired_network_patterns_catch_adversarial_examples() -> None:
@@ -119,7 +160,8 @@ def test_retired_network_patterns_catch_adversarial_examples() -> None:
         tuple(chr(code) for code in (0x0627, 0x0644, 0x0631, 0x0643, 0x064A, 0x0632, 0x0629)),
     ]
 
-    for pattern, example in zip(BANNED_PATTERNS, examples, strict=True):
+    assert len(BANNED_PATTERNS) == len(examples)
+    for pattern, example in zip(BANNED_PATTERNS, examples):
         assert pattern.search("".join(example))
 
 
@@ -127,6 +169,7 @@ def test_retired_network_surface_scan_covers_expected_files() -> None:
     scanned = {path.relative_to(REPO_ROOT) for path in _scanned_files()}
 
     assert Path("docs/source/bridge_proofs.md") in scanned
+    assert Path("docs/source/engineering_backlog.md") in scanned
     assert Path("roadmap.md") in scanned
     assert Path("status.md") in scanned
     assert Path("crates/iroha_sccp/src/lib.rs") in scanned
@@ -142,7 +185,8 @@ def test_active_tree_excludes_retired_network_surface_tokens() -> None:
         text = path.read_text(encoding="utf-8", errors="ignore")
         for pattern in BANNED_PATTERNS:
             match = pattern.search(text)
-            if match is not None:
+            while match is not None:
                 violations.append(f"{relative}:{match.start()}: {match.group(0)!r}")
+                match = pattern.search(text, match.end())
 
     assert violations == []

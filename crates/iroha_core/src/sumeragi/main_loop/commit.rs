@@ -7410,12 +7410,15 @@ impl Actor {
                     }
                     let reason = err.gate_reason();
                     let previous = pending.last_gate;
+                    let satisfaction = super::da::gate_satisfaction(previous, Some(reason));
+                    if let Some(satisfied) = satisfaction {
+                        pending.last_gate_satisfied = Some(satisfied);
+                    }
                     let changed = previous != Some(reason);
                     if changed {
                         super::status::record_da_gate_transition(previous, Some(reason));
                     }
                     pending.last_gate = Some(reason);
-                    pending.last_gate_satisfied = None;
                     warn!(
                         ?err,
                         lane,
@@ -7428,7 +7431,7 @@ impl Actor {
                     );
                     return DaGateStatus {
                         reason: Some(reason),
-                        satisfaction: None,
+                        satisfaction,
                         changed,
                         da_enabled,
                     };
@@ -9508,6 +9511,60 @@ mod tests {
     // This suite runs with the default parallel test runner and can be CPU-contended on CI.
     // Use a conservative timeout to avoid flakiness in wake/result channel assertions.
     const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(180);
+
+    #[test]
+    fn prevalidated_roots_match_witness_matches_formal_boundaries() {
+        use crate::sumeragi::consensus::{ExecKv, ExecWitness};
+
+        let witness = ExecWitness {
+            reads: vec![ExecKv {
+                key: b"balance".to_vec(),
+                value: b"10".to_vec(),
+            }],
+            writes: vec![ExecKv {
+                key: b"balance".to_vec(),
+                value: b"7".to_vec(),
+            }],
+            fastpq_transcripts: Vec::new(),
+            fastpq_batches: Vec::new(),
+        };
+        let header = iroha_data_model::block::BlockHeader::new(
+            core::num::NonZeroU64::new(1).expect("height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let artifact = ValidatedCommitArtifact {
+            block_hash: iroha_crypto::HashOf::new(&header),
+            height: 1,
+            view: 0,
+            parent_state_root: parent_state_from_witness(&witness),
+            post_state_root: post_state_from_witness(&witness),
+        };
+
+        assert!(!prevalidated_roots_match_witness(artifact, None));
+        assert!(prevalidated_roots_match_witness(artifact, Some(&witness)));
+
+        let parent_mismatch = ValidatedCommitArtifact {
+            parent_state_root: Hash::prehashed([0xA1; Hash::LENGTH]),
+            ..artifact
+        };
+        assert!(!prevalidated_roots_match_witness(
+            parent_mismatch,
+            Some(&witness)
+        ));
+
+        let post_mismatch = ValidatedCommitArtifact {
+            post_state_root: Hash::prehashed([0xB2; Hash::LENGTH]),
+            ..artifact
+        };
+        assert!(!prevalidated_roots_match_witness(
+            post_mismatch,
+            Some(&witness)
+        ));
+    }
 
     #[test]
     fn commit_stage_timings_threshold_uses_clear_latency_helpers() {

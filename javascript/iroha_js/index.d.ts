@@ -4889,27 +4889,77 @@ export function runBscTestnetNativeProverSelfTest(
   } & Record<string, unknown>,
 ): Promise<BscTestnetNativeEvmProverSelfTestSdkResult>;
 
-export type BscMainnetNativeEvmProverBundleInput =
-  EthereumMainnetNativeEvmProverBundleInput & Record<string, unknown>;
-export type BscMainnetNativeEvmProverBundle =
-  EthereumMainnetNativeEvmProverBundle & {
-    readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
-    readonly chain: "bsc-mainnet";
-  };
-export type BscMainnetNativeEvmProverParityFixtureInput =
-  EthereumMainnetNativeEvmProverParityFixtureInput & Record<string, unknown>;
-export type BscMainnetNativeEvmProverParityFixture =
-  EthereumMainnetNativeEvmProverParityFixture & {
-    readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
-    readonly chain: "bsc-mainnet";
-  };
-export type BscMainnetNativeEvmProverSelfTestFixtureInput =
-  EthereumMainnetNativeEvmProverSelfTestFixtureInput & Record<string, unknown>;
-export type BscMainnetNativeEvmProverSelfTestFixture =
-  EthereumMainnetNativeEvmProverSelfTestFixture & {
-    readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
-    readonly chain: "bsc-mainnet";
-  };
+export type BscMainnetNativeEvmProverBundleSdkArtifactInput =
+  EthereumMainnetNativeEvmProverBundleSdkArtifactInput;
+export type BscMainnetNativeEvmProverAuditHashesInput =
+  EthereumMainnetNativeEvmProverAuditHashesInput;
+export type BscMainnetNativeEvmProverAuditHashes =
+  EthereumMainnetNativeEvmProverAuditHashes;
+
+export interface BscMainnetNativeEvmProverBundleInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverBundleInput,
+    "bundleId" | "bundle_id" | "chain"
+  > {
+  bundleId?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+  bundle_id?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+  chain?: "bsc-mainnet";
+}
+
+export type BscMainnetNativeEvmProverBundleSdkArtifact =
+  EthereumMainnetNativeEvmProverBundleSdkArtifact;
+
+export interface BscMainnetNativeEvmProverBundle
+  extends Omit<EthereumMainnetNativeEvmProverBundle, "bundleId" | "chain"> {
+  readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+  readonly chain: "bsc-mainnet";
+}
+
+export type BscMainnetNativeEvmProverParitySdkResultInput =
+  EthereumMainnetNativeEvmProverParitySdkResultInput;
+export type BscMainnetNativeEvmProverParitySdkResult =
+  EthereumMainnetNativeEvmProverParitySdkResult;
+
+export interface BscMainnetNativeEvmProverParityFixtureInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverParityFixtureInput,
+    "schema" | "chain"
+  > {
+  schema?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  chain?: "bsc-mainnet";
+}
+
+export interface BscMainnetNativeEvmProverParityFixture
+  extends Omit<
+    EthereumMainnetNativeEvmProverParityFixture,
+    "schema" | "chain"
+  > {
+  readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  readonly chain: "bsc-mainnet";
+}
+
+export type BscMainnetNativeEvmProverSelfTestSdkResultInput =
+  EthereumMainnetNativeEvmProverSelfTestSdkResultInput;
+export type BscMainnetNativeEvmProverSelfTestSdkResult =
+  EthereumMainnetNativeEvmProverSelfTestSdkResult;
+
+export interface BscMainnetNativeEvmProverSelfTestFixtureInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverSelfTestFixtureInput,
+    "schema" | "chain"
+  > {
+  schema?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
+  chain?: "bsc-mainnet";
+}
+
+export interface BscMainnetNativeEvmProverSelfTestFixture
+  extends Omit<
+    EthereumMainnetNativeEvmProverSelfTestFixture,
+    "schema" | "chain"
+  > {
+  readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
+  readonly chain: "bsc-mainnet";
+}
 export interface BscMainnetNativeEvmProverArtifacts
   extends Omit<
     EthereumMainnetNativeEvmProverArtifacts,
@@ -4919,23 +4969,91 @@ export interface BscMainnetNativeEvmProverArtifacts
   readonly crossSdkFixtureParity: Readonly<BscMainnetNativeEvmProverParityFixture>;
   readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
 }
-export type BscMainnetNativeEvmProverArtifactsInput =
-  EthereumMainnetNativeEvmProverArtifactsInput & Record<string, unknown>;
-export type BscMainnetNativeEvmProverArtifactBundleInput =
-  EthereumMainnetNativeEvmProverArtifactBundleInput & Record<string, unknown>;
-export type BscMainnetNativeProverSelfTestContext =
-  EthereumMainnetNativeProverSelfTestContext & {
-    readonly nativeProverArtifacts: Readonly<BscMainnetNativeEvmProverArtifacts>;
-    readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
-  };
+
+export interface BscMainnetNativeEvmProverArtifactsInput
+  extends Omit<EthereumMainnetNativeEvmProverArtifactsInput, "nativeProverBundle" | "native_prover_bundle" | "proverBundle" | "prover_bundle" | "manifest"> {
+  nativeProverBundle?: BscMainnetNativeEvmProverBundleInput | string;
+  native_prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
+  proverBundle?: BscMainnetNativeEvmProverBundleInput | string;
+  prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
+  manifest?: BscMainnetNativeEvmProverBundleInput | string;
+}
+
+export interface BscMainnetNativeEvmProverArtifactResolverMetadata
+  extends Omit<
+    EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+    "nativeProverBundle"
+  > {
+  readonly nativeProverBundle: Readonly<BscMainnetNativeEvmProverBundle>;
+}
+
+export interface BscMainnetNativeEvmProverArtifactBundleInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverArtifactBundleInput,
+    "nativeProverBundle" | "native_prover_bundle" | "proverBundle" | "prover_bundle" | "manifest" | "artifactResolver" | "artifact_resolver" | "resolveArtifact" | "resolve_artifact" | "resolveArtifactBytes" | "resolve_artifact_bytes"
+  > {
+  nativeProverBundle?: BscMainnetNativeEvmProverBundleInput | string;
+  native_prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
+  proverBundle?: BscMainnetNativeEvmProverBundleInput | string;
+  prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
+  manifest?: BscMainnetNativeEvmProverBundleInput | string;
+  artifactResolver?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  artifact_resolver?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolveArtifact?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolve_artifact?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolveArtifactBytes?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolve_artifact_bytes?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+}
+
+export interface BscMainnetNativeProverSelfTestContext
+  extends Omit<
+    EthereumMainnetNativeProverSelfTestContext,
+    "nativeProverArtifacts" | "nativeProverSelfTest" | "expectedResult"
+  > {
+  readonly nativeProverArtifacts: Readonly<BscMainnetNativeEvmProverArtifacts>;
+  readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
+  readonly expectedResult: Readonly<BscMainnetNativeEvmProverSelfTestSdkResult>;
+}
+
 export type BscMainnetNativeProverSelfTestFn = (
   context: Readonly<BscMainnetNativeProverSelfTestContext>,
   options?: Record<string, unknown>,
 ) =>
-  | EthereumMainnetNativeEvmProverSelfTestSdkResultInput
-  | Promise<EthereumMainnetNativeEvmProverSelfTestSdkResultInput>;
-export type BscMainnetNativeProverSelfTestRunInput =
-  EthereumMainnetNativeProverSelfTestRunInput & Record<string, unknown>;
+  | BscMainnetNativeEvmProverSelfTestSdkResultInput
+  | Promise<BscMainnetNativeEvmProverSelfTestSdkResultInput>;
+
+export interface BscMainnetNativeProverSelfTestRunInput
+  extends Omit<
+    EthereumMainnetNativeProverSelfTestRunInput,
+    "nativeProverArtifacts" | "native_prover_artifacts" | "verifiedNativeProverArtifacts" | "verified_native_prover_artifacts" | "nativeProverSelfTest" | "native_prover_self_test" | "selfTestNativeProver" | "self_test_native_prover"
+  > {
+  nativeProverArtifacts?: BscMainnetNativeEvmProverArtifacts;
+  native_prover_artifacts?: BscMainnetNativeEvmProverArtifacts;
+  verifiedNativeProverArtifacts?: BscMainnetNativeEvmProverArtifacts;
+  verified_native_prover_artifacts?: BscMainnetNativeEvmProverArtifacts;
+  nativeProverSelfTest?: BscMainnetNativeProverSelfTestFn;
+  native_prover_self_test?: BscMainnetNativeProverSelfTestFn;
+  selfTestNativeProver?: BscMainnetNativeProverSelfTestFn;
+  self_test_native_prover?: BscMainnetNativeProverSelfTestFn;
+}
 
 export function validateBscMainnetNativeEvmProverBundle(
   manifest: BscMainnetNativeEvmProverBundleInput,
@@ -5013,7 +5131,7 @@ export function runBscMainnetNativeProverSelfTest(
     selfTestNativeProver?: BscMainnetNativeProverSelfTestFn;
     self_test_native_prover?: BscMainnetNativeProverSelfTestFn;
   } & Record<string, unknown>,
-): Promise<EthereumMainnetNativeEvmProverSelfTestSdkResult>;
+): Promise<BscMainnetNativeEvmProverSelfTestSdkResult>;
 
 export interface EvmSccpProofRequestInput {
   publicInputs?: SccpMessageTransparentPublicInputsInput;

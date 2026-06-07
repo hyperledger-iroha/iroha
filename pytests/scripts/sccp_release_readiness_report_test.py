@@ -1559,6 +1559,18 @@ def test_release_readiness_evidence_phase_inventory_matches_corridor_runner() ->
         assert any(test_path in fragment for fragment in required_fragments)
 
 
+def test_release_readiness_evidence_phase_requires_retired_network_surface_scan() -> None:
+    """Readiness reports must prove the retired-network surface scan ran."""
+
+    report = load_report_module()
+    retired_scan = "pytests/scripts/sccp_retired_network_surface_test.py"
+
+    assert retired_scan in corridor_evidence_script_tests()
+    assert retired_scan in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "evidence-scripts"
+    ]
+
+
 def test_release_readiness_java_android_phase_requires_source_proof_harness() -> None:
     """Android readiness evidence must prove source-proof hardening ran."""
 
@@ -4855,6 +4867,63 @@ def test_release_readiness_report_requires_release_verifier_tests_in_evidence_ph
             "production corridor phase evidence-scripts evidence artifact is missing "
             f"expected phase-block command: {omitted}"
         ) in completed.stdout
+
+
+def test_release_readiness_report_requires_retired_network_scan_evidence(
+    tmp_path: Path,
+) -> None:
+    """The evidence phase must prove the retired-network surface scan ran."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_retired_network_surface_test.py"
+    assert omitted_fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "evidence-scripts"
+    ]
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+        if fragment != omitted_fragment
+    ]
+    corridor_log = tmp_path / "evidence-scripts-without-retired-network-scan.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "evidence-scripts=passed",
+            "--phase-evidence",
+            f"evidence-scripts={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase evidence-scripts evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in completed.stdout
 
 
 def test_release_readiness_report_rejects_phase_log_without_phase_completion(

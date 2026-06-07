@@ -41,12 +41,14 @@ arithmetic mutation configs.
   validator topology,
 - topologies of one to three validators require all validators; larger
   topologies require `floor(2 * validators / 3) + 1`,
-- the debug force-one path uses threshold one,
+- the debug force-one path uses threshold one only for local DELIVER emission,
+- inbound DELIVER acceptance keeps the protocol quorum even when debug
+  force-one is enabled,
 - READY counting uses distinct senders, so duplicate READY observations cannot
   inflate the deliver decision,
 - deliver is impossible before the distinct READY count reaches the required
   threshold.
-Its TLC cross-check exhausts the fast config and four expected-failure deliver
+Its TLC cross-check exhausts the fast config and five expected-failure deliver
 quorum mutation configs.
 
 `SumeragiRbcCausalityGate.tla` captures implementation-side RBC message
@@ -1057,6 +1059,10 @@ configs as Apalache.
 - missing-block, missing-commit-QC, and missing-payload recovery predicates
   require fresh exact-slot actionable dependencies and reject old views,
   wrong phases, stale work, and body-present payload recovery.
+- `FrontierSameSlotActivityExactness` composes those family checks into one
+  aggregate invariant: every accepted same-slot activity source keeps exact
+  positive evidence, and every stale, cross-slot, terminal, passive,
+  body-present, no-actionable, or bookkeeping-only source is rejected.
 
 `SumeragiFrontierReassemblyActivityGate.tla` captures
 `frontier_recovery_same_slot_reassembly_active(...)` and
@@ -1070,6 +1076,10 @@ configs as Apalache.
   work, while stale or wrong-height sender records do not count, and
 - validation and deferred BlockSyncUpdate sources require exact height/view,
   non-aborted pending validation work, and do not allow no-source reassembly.
+- `FrontierReassemblyActivityExactness` composes those source families into one
+  aggregate invariant: reassembly keeps exact dependency, ingress, sender,
+  validation, and deferred-update evidence while rejecting stale, wrong-height,
+  wrong-view, aborted, non-pending, no-backlog, and no-source activity.
 
 `SumeragiFrontierQuorumOwnerActionableGate.tla` captures
 `frontier_quorum_timeout_owner_still_actionable(...)` and
@@ -5940,6 +5950,7 @@ verification, and full networking details.
 - `SumeragiRbcDeliverQuorum_bug_under_quorum_deliver.cfg`: expected-failure under-quorum delivery mutation.
 - `SumeragiRbcDeliverQuorum_bug_wrong_commit_formula.cfg`: expected-failure commit-quorum arithmetic mutation.
 - `SumeragiRbcDeliverQuorum_bug_force_one_ignored.cfg`: expected-failure force-one debug path mutation.
+- `SumeragiRbcDeliverQuorum_bug_inbound_force_one_acceptance.cfg`: expected-failure receiver-side debug force-one leakage mutation.
 - `SumeragiRbcCausalityGate.tla`: RBC INIT/chunk/READY/DELIVER causality model.
 - `SumeragiRbcCausalityGate_fast.cfg`: CI-friendly RBC causality check.
 - `SumeragiRbcCausalityGate_bug_*.cfg`: expected-failure INIT evidence, chunk integrity, READY validation, DELIVER validation, stash, duplicate, and commit-wakeup mutations.
@@ -8777,6 +8788,25 @@ Temporal properties:
   `[Next]_vars` closure: after finality, spec steps either stutter in the
   current committed state or observe GST and enter committed+GST terminal
   quiescence.
+- `CommittedSpecStepPreservesFinalityStack` proves that every committed
+  `[Next]_vars` step preserves the full finality/certificate/live-gate/RBC
+  evidence stack in both the pre-state and post-state.
+- `CommittedSpecStepOnlyChangesGstFlag` proves that every committed
+  `[Next]_vars` step keeps all consensus, vote, certificate, and RBC artifacts
+  stable; the only possible non-stuttering data change is the pre-GST
+  `GstElapsed` flip into committed+GST terminal quiescence.
+- `CommittedSpecStepNeverRunsProtocolActions` proves that committed
+  `[Next]_vars` steps never execute proposal, prepare, commit, NewView, RBC,
+  timeout, or Byzantine-fault actions; `Next` itself is equivalent to
+  `GstElapsed` after finality.
+- `CommittedSpecStepKeepsProgressActionsQuiescent` proves that committed
+  `[Next]_vars` steps keep all progress, timeout, Byzantine-commit, and fault
+  guards disabled in both the pre-state and post-state; any non-stuttering step
+  is still only the `GstElapsed` observation.
+- `CommittedSpecStepPreservesBudgetedRbcEvidence` proves that committed
+  `[Next]_vars` steps preserve the honest/fault roster-budgeted vote counters,
+  signed-stake accounting, latched commit evidence bounds, and delivered-RBC
+  evidence in both pre-state and post-state.
 - `CommitArtifactsOnlyInstallAtFinality` proves that the latched commit-view
   and commit-certificate witnesses can change only on the `CommitVote` to
   `Committed` finality transition, where they are installed from the live
@@ -13548,15 +13578,19 @@ activity helpers: payload progress evidence, ingress backlog/payload gates,
 vote-backed activity evidence, missing-block request actionability,
 missing-commit-QC repair actionability, missing-payload recovery actionability,
 old-view and wrong-height suppression, stale-window rejection, and
-bookkeeping-only refresh exclusion. Its TLC cross-check independently exhausts
-the same thirty-six expected-failure configs as Apalache.
+bookkeeping-only refresh exclusion. The fast check also includes the aggregate
+`FrontierSameSlotActivityExactness` invariant tying positive exact evidence and
+non-exact-source rejection across all helper families. Its TLC cross-check
+independently exhausts the same thirty-six expected-failure configs as Apalache.
 `frontier-reassembly-activity-fast` and
 `frontier-reassembly-activity-bug-*` cross-check frontier reassembly activity:
 fresh dependency progress with payload backlog, exact same-slot ingress,
 same-height RBC sender and deferral work, validation work, deferred block-sync
-updates, stale and wrong-height/view rejection, and no-source suppression. Its
-TLC cross-check independently exhausts the same thirty-two expected-failure
-configs as Apalache.
+updates, stale and wrong-height/view rejection, and no-source suppression. The
+fast check also includes the aggregate `FrontierReassemblyActivityExactness`
+invariant tying exact positive evidence and non-exact-source rejection across
+all reassembly sources. Its TLC cross-check independently exhausts the same
+thirty-two expected-failure configs as Apalache.
 `frontier-quorum-owner-actionable-fast` and
 `frontier-quorum-owner-actionable-bug-*` cross-check live contiguous-frontier
 cleanup preservation: owner, vote, dependency backlog, RBC sender,
@@ -14829,6 +14863,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-bug-duplicate-ready
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-under-quorum-deliver
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-wrong-commit-formula
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-force-one-ignored
+bash scripts/formal/sumeragi_apalache.sh rbc-bug-inbound-force-one-acceptance
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-header-hash
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-leader-signature
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-chunk-root
