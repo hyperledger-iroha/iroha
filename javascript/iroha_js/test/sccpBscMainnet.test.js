@@ -340,11 +340,11 @@ const sampleBscTestnetNativeEvmProverBundleWithFixtureBytes = (
   };
 };
 
-const nativeEvmProverArtifactBytes = (label) => {
+const nativeEvmProverArtifactBytes = (label, size = 96 * 1024) => {
   const seed = Buffer.from(`${label}\n`, "utf8");
-  const out = Buffer.alloc(256);
+  const out = Buffer.alloc(size);
   for (let index = 0; index < out.length; index += 1) {
-    out[index] = seed[index % seed.length];
+    out[index] = (seed[index % seed.length] + index * 31 + (index >> 7)) & 0xff;
   }
   return out;
 };
@@ -1046,6 +1046,53 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
         { destinationBinding: fixture.destinationBinding },
       ),
     /chain must be bsc-testnet/u,
+  );
+});
+
+test("BscTestnetSccp rejects tiny native prover material even when hashes are self-consistent", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+  const tinyProofArtifactBytes = nativeEvmProverArtifactBytes(
+    "tiny bsc proof artifact",
+    256,
+  );
+  const proofArtifactHash = sha256Hex(tinyProofArtifactBytes);
+  const draftBundle = {
+    ...fixture.bundle,
+    proof_artifact_hash: proofArtifactHash,
+    native_sdk_artifacts: fixture.bundle.native_sdk_artifacts.map((artifact) => ({
+      ...artifact,
+      prover_artifact_hash: proofArtifactHash,
+    })),
+  };
+  const parityFixtureBytes =
+    sampleBscTestnetNativeEvmProverParityFixtureBytes(draftBundle);
+  const selfTestFixtureBytes =
+    sampleBscTestnetNativeEvmProverSelfTestFixtureBytes(draftBundle);
+  const bundle = {
+    ...draftBundle,
+    audit_hashes: {
+      ...draftBundle.audit_hashes,
+      cross_sdk_fixture_parity: sha256Hex(parityFixtureBytes),
+      native_prover_self_test: sha256Hex(selfTestFixtureBytes),
+    },
+  };
+
+  assert.throws(
+    () =>
+      verifyBscTestnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: bundle,
+          proofArtifactBytes: tinyProofArtifactBytes,
+          provingKeyBytes: fixture.provingKeyBytes,
+          verifierKeyBytes: fixture.verifierKeyBytes,
+          crossSdkFixtureParityBytes: parityFixtureBytes,
+          nativeProverSelfTestBytes: selfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes: fixture.implementationBytes,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /proofArtifactBytes must be at least 65536 bytes/u,
   );
 });
 

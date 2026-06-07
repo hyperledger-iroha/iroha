@@ -9419,7 +9419,11 @@ const SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS = [
     0x74,
   ),
 ];
-const SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1 = 256;
+const SCCP_NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1 = 64 * 1024;
+const SCCP_NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1 = 64 * 1024;
+const SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1 = 128;
+const SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1 = 128;
+const SCCP_NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1 = 1024;
 
 const nativeEvmProverLowerAsciiByte = (byte) =>
   byte >= 0x41 && byte <= 0x5a ? byte + 0x20 : byte;
@@ -9458,10 +9462,14 @@ function assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
   }
 }
 
-function assertNativeEvmProverArtifactHasProductionSize(bytes, label) {
-  if (bytes.length < SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1) {
+function assertNativeEvmProverArtifactHasProductionSize(
+  bytes,
+  label,
+  minBytes,
+) {
+  if (bytes.length < minBytes) {
     throw new TypeError(
-      `${label} must be at least ${SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1} bytes`,
+      `${label} must be at least ${minBytes} bytes`,
     );
   }
 }
@@ -9583,14 +9591,27 @@ const verifyNativeEvmProverArtifacts = (
   assertNativeEvmProverArtifactHasProductionSize(
     proofArtifactBytes,
     "proofArtifactBytes",
+    SCCP_NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1,
   );
   assertNativeEvmProverArtifactHasProductionSize(
     provingKeyBytes,
     "provingKeyBytes",
+    SCCP_NATIVE_EVM_PROVER_MIN_PROVING_KEY_BYTES_V1,
   );
   assertNativeEvmProverArtifactHasProductionSize(
     verifierKeyBytes,
     "verifierKeyBytes",
+    SCCP_NATIVE_EVM_PROVER_MIN_VERIFIER_KEY_BYTES_V1,
+  );
+  assertNativeEvmProverArtifactHasProductionSize(
+    crossSdkFixtureParityBytes,
+    "crossSdkFixtureParityBytes",
+    SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1,
+  );
+  assertNativeEvmProverArtifactHasProductionSize(
+    nativeProverSelfTestBytes,
+    "nativeProverSelfTestBytes",
+    SCCP_NATIVE_EVM_PROVER_MIN_SUPPORT_ARTIFACT_BYTES_V1,
   );
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     proofArtifactBytes,
@@ -9665,6 +9686,7 @@ const verifyNativeEvmProverArtifacts = (
   assertNativeEvmProverArtifactHasProductionSize(
     implementationBytes,
     "implementationBytes",
+    SCCP_NATIVE_EVM_PROVER_MIN_IMPLEMENTATION_BYTES_V1,
   );
   assertNativeEvmProverArtifactHasNoForbiddenDependencyMarkers(
     implementationBytes,

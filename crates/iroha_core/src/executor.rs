@@ -527,6 +527,14 @@ fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn should_charge_pipeline_gas_asset(
+    skip_nexus_fee: bool,
+    nexus_fees: &NexusFees,
+    gas_asset_opt: &Option<String>,
+) -> bool {
+    !skip_nexus_fee && gas_asset_opt.is_some() && nexus_fees.per_gas_unit_fee <= Numeric::zero()
+}
+
 fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
     let hex = value.strip_prefix("0x").unwrap_or(value);
     hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -1763,7 +1771,12 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         bytes
     };
 
-    if !skip_nexus_fee && let Some(gas_asset_id_str) = gas_asset_opt {
+    if should_charge_pipeline_gas_asset(
+        skip_nexus_fee,
+        &state_transaction.nexus.fees,
+        &gas_asset_opt,
+    ) && let Some(gas_asset_id_str) = gas_asset_opt
+    {
         let (units_per_gas, twap_local_per_xor, volatility_bucket, liquidity_profile) = {
             let gas_rate = state_transaction
                 .pipeline
@@ -2398,7 +2411,12 @@ impl Executor {
         state_transaction.last_tx_gas_used = used;
 
         // 5) Charge gas fees when configured and the transaction specified a gas asset.
-        if !skip_nexus_fee && let Some(gas_asset_id_str) = gas_asset_opt {
+        if should_charge_pipeline_gas_asset(
+            skip_nexus_fee,
+            &state_transaction.nexus.fees,
+            &gas_asset_opt,
+        ) && let Some(gas_asset_id_str) = gas_asset_opt
+        {
             // Determine rate; require explicit mapping for determinism
             let gas_rate = state_transaction
                 .pipeline
@@ -3100,7 +3118,12 @@ impl Executor {
                 let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 state_transaction.last_tx_gas_used = gas_used;
 
-                if let Some(gas_asset_id_str) = gas_asset_opt {
+                if should_charge_pipeline_gas_asset(
+                    skip_nexus_fee,
+                    &state_transaction.nexus.fees,
+                    &gas_asset_opt,
+                ) && let Some(gas_asset_id_str) = gas_asset_opt
+                {
                     let gas_rate = state_transaction
                         .pipeline
                         .gas
@@ -3344,7 +3367,12 @@ impl Executor {
                 state_transaction.last_tx_gas_used = gas_used;
 
                 // Charge gas fees: if a gas asset was provided and accepted by policy.
-                if let Some(gas_asset_id_str) = gas_asset_opt {
+                if should_charge_pipeline_gas_asset(
+                    skip_nexus_fee,
+                    &state_transaction.nexus.fees,
+                    &gas_asset_opt,
+                ) && let Some(gas_asset_id_str) = gas_asset_opt
+                {
                     // Determine rate; require explicit mapping for determinism
                     let gas_rate = state_transaction
                         .pipeline
@@ -6004,6 +6032,33 @@ mod tests {
 
     fn alice() -> AccountId {
         iroha_test_samples::ALICE_ID.clone()
+    }
+
+    #[test]
+    fn pipeline_gas_asset_charge_is_disabled_when_nexus_gas_fee_is_active() {
+        let mut nexus_fees = NexusFees::default();
+        let gas_asset = Some("xor#universal".to_owned());
+
+        nexus_fees.per_gas_unit_fee = Numeric::zero();
+        assert!(should_charge_pipeline_gas_asset(
+            false,
+            &nexus_fees,
+            &gas_asset
+        ));
+
+        nexus_fees.per_gas_unit_fee = Numeric::new(1, 3);
+        assert!(!should_charge_pipeline_gas_asset(
+            false,
+            &nexus_fees,
+            &gas_asset
+        ));
+
+        assert!(!should_charge_pipeline_gas_asset(
+            true,
+            &nexus_fees,
+            &gas_asset
+        ));
+        assert!(!should_charge_pipeline_gas_asset(false, &nexus_fees, &None));
     }
 
     fn seed_verified_nexus_fee_budget(
