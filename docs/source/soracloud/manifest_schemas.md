@@ -161,8 +161,7 @@ Validation rejects unsupported versions with
 - FHE execution policy:
   - `max_plaintext_bytes <= max_ciphertext_bytes`.
   - `max_output_ciphertexts <= max_input_ciphertexts`.
-  - `bootstrap_key_zero_refresh_proof_statement_digest` is required when
-    `max_bootstrap_count > 0` and must be omitted when `max_bootstrap_count = 0`.
+  - Bootstrap-capable policies (`max_bootstrap_count > 0`) must bind exactly the statement class used by their bootstrap key material: `bootstrap_key_zero_refresh_proof_statement_digest` for `RefreshOnlyV1`, or `full_bootstrap_material_proof_statement_digest` for `FullBootstrapV1`. Policies with `max_bootstrap_count = 0` must omit both fields.
   - parameter-set binding must match by `(param_set, version)`.
   - `max_multiplication_depth` must not exceed parameter-set depth.
   - policy admission rejects `Proposed` or `Withdrawn` parameter-set lifecycle.
@@ -186,9 +185,13 @@ Validation rejects unsupported versions with
     evaluation-key bundle digest, refresh-transcript digest, bootstrap
     transcript seed/key id/round capacity, and refresh ciphertexts. Its
     verifier record must be active for the canonical Soracloud STARK circuit.
+    `FullBootstrapV1` keys use a separate signed
+    `full_bootstrap_material_proof` attachment whose statement hash matches
+    the policy-bound full-bootstrap material digest and whose verifier record
+    must be active for the canonical full-material Soracloud STARK circuit.
     Current generated `BfvBootstrapKey` material advertises `RefreshOnlyV1`;
-    reserved full-bootstrap mode is rejected until BFV bootstrapping circuit
-    material is represented and verified.
+    reserved full-bootstrap execution still fails closed until the executable
+    BFV bootstrapping evaluator and production prover/verifier artifacts land.
 - Decryption authority policy:
   - `approver_ids` must be non-empty, unique, and strictly lexicographically sorted.
   - `ClientHeld` mode requires exactly one approver, `approver_quorum=1`,

@@ -243,6 +243,52 @@ MissingPayloadRecoverySafety ==
   /\ ~MissingPayloadStale
   /\ ~MissingPayloadNoActionableDependency
 
+SameSlotActivityRejectsNonExactInputs ==
+  /\ ~PayloadOldView
+  /\ ~PayloadWrongHeight
+  /\ ~PayloadFinalizedSlot
+  /\ ~PayloadStaleSlot
+  /\ ~PayloadBodyPresent
+  /\ ~IngressNoBacklog
+  /\ ~IngressNoPayloadProgress
+  /\ ~VoteBackedOldView
+  /\ ~VoteBackedPassiveSlot
+  /\ ~VoteBackedStaleSlot
+  /\ ~VoteBackedNoEvidence
+  /\ ~VoteBackedWrongPhaseWork
+  /\ ~VoteBackedWrongEpochWork
+  /\ ~VoteBackedBookkeepingOnly
+  /\ ~MissingBlockOldView
+  /\ ~MissingBlockWrongPhase
+  /\ ~MissingBlockStale
+  /\ ~MissingBlockNoActionableDependency
+  /\ ~MissingCommitOldView
+  /\ ~MissingCommitPreparePhase
+  /\ ~MissingCommitStale
+  /\ ~MissingCommitNoActionableDependency
+  /\ ~MissingPayloadOldView
+  /\ ~MissingPayloadBodyPresent
+  /\ ~MissingPayloadWrongPhase
+  /\ ~MissingPayloadStale
+  /\ ~MissingPayloadNoActionableDependency
+
+SameSlotActivityHasExactPositiveEvidence ==
+  /\ (\/ PayloadCachedExact
+      \/ PayloadPendingExact
+      \/ PayloadCommitInflightExact
+      \/ PayloadFrontierSlotExact)
+  /\ IngressExact
+  /\ (\/ VoteBackedSlotExact
+      \/ VoteBackedWorkExact)
+  /\ MissingBlockExact
+  /\ MissingCommitExact
+  /\ (\/ MissingPayloadSlotExact
+      \/ MissingPayloadDeferredExact)
+
+FrontierSameSlotActivityExactness ==
+  /\ SameSlotActivityRejectsNonExactInputs
+  /\ SameSlotActivityHasExactPositiveEvidence
+
 SafetyFast ==
   /\ PayloadProgressSafety
   /\ IngressSafety
@@ -250,6 +296,7 @@ SafetyFast ==
   /\ MissingBlockRequestSafety
   /\ MissingCommitQcRepairSafety
   /\ MissingPayloadRecoverySafety
+  /\ FrontierSameSlotActivityExactness
 
 PayloadProgressAnchors ==
   /\ PayloadProgressSafety

@@ -9,9 +9,10 @@ This slice models `should_preserve_idle_view_budget_for_proposal(...)` and
 idle-view repair budget only when queued transaction work exists, no mode flip
 or commit job is in flight, and proposal pressure is healthy or pacing-only
 (queue saturation and/or consensus ingress pressure). Active pending blocks,
-RBC backlog, and relay backpressure are hard stops. If idle repair was skipped
-for a due proposal, it is retried after proposal handling only while the
-frontier is still empty and no commit job owns it.
+RBC backlog, and relay backpressure are hard stops. Zero queued work remains a
+hard stop even when pacing or hard backpressure signals are present. If idle
+repair was skipped for a due proposal, it is retried after proposal handling
+only while the frontier is still empty and no commit job owns it.
 ***************************************************************************)
 
 CONSTANT
@@ -38,6 +39,16 @@ vars == <<candidate, preserve_budget, idle_repair_deferred,
 
 Cases == {
   "preserve_no_queue",
+  "preserve_no_queue_queue_saturated",
+  "preserve_no_queue_consensus_pacing",
+  "preserve_no_queue_combined_pacing",
+  "preserve_no_queue_active_pending",
+  "preserve_no_queue_rbc_backlog",
+  "preserve_no_queue_relay_backpressure",
+  "preserve_no_queue_active_pending_with_pacing",
+  "preserve_no_queue_rbc_with_consensus",
+  "preserve_no_queue_relay_with_queue",
+  "preserve_no_queue_all_backpressure",
   "preserve_mode_flip",
   "preserve_commit_inflight",
   "preserve_deadline_not_due",
@@ -60,6 +71,16 @@ Cases == {
 
 PreserveCases == {
   "preserve_no_queue",
+  "preserve_no_queue_queue_saturated",
+  "preserve_no_queue_consensus_pacing",
+  "preserve_no_queue_combined_pacing",
+  "preserve_no_queue_active_pending",
+  "preserve_no_queue_rbc_backlog",
+  "preserve_no_queue_relay_backpressure",
+  "preserve_no_queue_active_pending_with_pacing",
+  "preserve_no_queue_rbc_with_consensus",
+  "preserve_no_queue_relay_with_queue",
+  "preserve_no_queue_all_backpressure",
   "preserve_mode_flip",
   "preserve_commit_inflight",
   "preserve_deadline_not_due",
@@ -74,7 +95,19 @@ PreserveCases == {
   "preserve_rbc_with_consensus",
   "preserve_relay_with_queue"
 }
-NoQueuePreserveCases == {"preserve_no_queue"}
+NoQueuePreserveCases == {
+  "preserve_no_queue",
+  "preserve_no_queue_queue_saturated",
+  "preserve_no_queue_consensus_pacing",
+  "preserve_no_queue_combined_pacing",
+  "preserve_no_queue_active_pending",
+  "preserve_no_queue_rbc_backlog",
+  "preserve_no_queue_relay_backpressure",
+  "preserve_no_queue_active_pending_with_pacing",
+  "preserve_no_queue_rbc_with_consensus",
+  "preserve_no_queue_relay_with_queue",
+  "preserve_no_queue_all_backpressure"
+}
 ModeFlipCases == {"preserve_mode_flip"}
 CommitInflightPreserveCases == {"preserve_commit_inflight"}
 DeadlineNotDueCases == {"preserve_deadline_not_due"}
@@ -87,15 +120,24 @@ PacingAllowedCases ==
 AllowedPreserveCases == HealthyDueCases \union PacingAllowedCases
 ActivePendingCases == {
   "preserve_active_pending_due",
-  "preserve_active_pending_with_pacing"
+  "preserve_active_pending_with_pacing",
+  "preserve_no_queue_active_pending",
+  "preserve_no_queue_active_pending_with_pacing",
+  "preserve_no_queue_all_backpressure"
 }
 RbcBacklogCases == {
   "preserve_rbc_backlog_due",
-  "preserve_rbc_with_consensus"
+  "preserve_rbc_with_consensus",
+  "preserve_no_queue_rbc_backlog",
+  "preserve_no_queue_rbc_with_consensus",
+  "preserve_no_queue_all_backpressure"
 }
 RelayBackpressureCases == {
   "preserve_relay_backpressure_due",
-  "preserve_relay_with_queue"
+  "preserve_relay_with_queue",
+  "preserve_no_queue_relay_backpressure",
+  "preserve_no_queue_relay_with_queue",
+  "preserve_no_queue_all_backpressure"
 }
 HardBackpressureCases ==
   ActivePendingCases \union RbcBacklogCases \union RelayBackpressureCases
@@ -130,6 +172,8 @@ ActualPreserveBudget(c) ==
           /\ c \in CombinedPacingCases)
   \/ /\ c \in NoQueuePreserveCases
      /\ Bug = "preserve_without_queue"
+  \/ /\ c \in {"preserve_no_queue_all_backpressure"}
+     /\ Bug = "preserve_no_queue_hard_stop"
   \/ /\ c \in ModeFlipCases
      /\ Bug = "preserve_during_mode_flip"
   \/ /\ c \in CommitInflightPreserveCases

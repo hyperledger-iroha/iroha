@@ -19,7 +19,7 @@ pub(super) fn derive_vrf_material_from_key(
     private_key: &PrivateKey,
     epoch: u64,
     signer: ValidatorIndex,
-) -> ([u8; 32], [u8; 32]) {
+) -> Result<([u8; 32], [u8; 32])> {
     let mut msg = Vec::with_capacity(
         VRF_INPUT_DOMAIN.len() + chain_hash.as_ref().len() + core::mem::size_of::<u64>() * 2,
     );
@@ -27,10 +27,11 @@ pub(super) fn derive_vrf_material_from_key(
     msg.extend_from_slice(chain_hash.as_ref());
     msg.extend_from_slice(&epoch.to_be_bytes());
     msg.extend_from_slice(&u64::from(signer).to_be_bytes());
-    let signature = Signature::new(private_key, &msg);
+    let signature = Signature::try_new(private_key, &msg)
+        .map_err(|err| eyre!("failed to sign local VRF input material: {err}"))?;
     let reveal: [u8; 32] = Hash::new(signature.payload()).into();
     let commitment: [u8; 32] = Hash::new(reveal).into();
-    (reveal, commitment)
+    Ok((reveal, commitment))
 }
 
 /// Local VRF emission state for the current epoch.
@@ -162,7 +163,11 @@ impl VrfActor {
 }
 
 impl Actor {
-    fn derive_vrf_material(&self, epoch: u64, signer: ValidatorIndex) -> ([u8; 32], [u8; 32]) {
+    fn derive_vrf_material(
+        &self,
+        epoch: u64,
+        signer: ValidatorIndex,
+    ) -> Result<([u8; 32], [u8; 32])> {
         derive_vrf_material_from_key(
             &self.chain_hash,
             self.common_config.key_pair.private_key(),
@@ -171,18 +176,30 @@ impl Actor {
         )
     }
 
-    fn sign_vrf_commit(&self, commit: &mut crate::sumeragi::consensus::VrfCommit, mode_tag: &str) {
+    fn sign_vrf_commit(
+        &self,
+        commit: &mut crate::sumeragi::consensus::VrfCommit,
+        mode_tag: &str,
+    ) -> Result<()> {
         commit.bls_sig.clear();
         let preimage = vrf_commit_preimage(&self.common_config.chain, mode_tag, commit);
-        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
+        let signature = Signature::try_new(self.common_config.key_pair.private_key(), &preimage)
+            .map_err(|err| eyre!("failed to sign local VRF commit: {err}"))?;
         commit.bls_sig = signature.payload().to_vec();
+        Ok(())
     }
 
-    fn sign_vrf_reveal(&self, reveal: &mut crate::sumeragi::consensus::VrfReveal, mode_tag: &str) {
+    fn sign_vrf_reveal(
+        &self,
+        reveal: &mut crate::sumeragi::consensus::VrfReveal,
+        mode_tag: &str,
+    ) -> Result<()> {
         reveal.bls_sig.clear();
         let preimage = vrf_reveal_preimage(&self.common_config.chain, mode_tag, reveal);
-        let signature = Signature::new(self.common_config.key_pair.private_key(), &preimage);
+        let signature = Signature::try_new(self.common_config.key_pair.private_key(), &preimage)
+            .map_err(|err| eyre!("failed to sign local VRF reveal: {err}"))?;
         reveal.bls_sig = signature.payload().to_vec();
+        Ok(())
     }
 
     fn verify_vrf_commit_signature(
@@ -300,7 +317,7 @@ impl Actor {
                 };
 
             if commit_needed {
-                let (reveal, commitment) = self.derive_vrf_material(epoch, local_signer);
+                let (reveal, commitment) = self.derive_vrf_material(epoch, local_signer)?;
                 if let Some(state) = self.subsystems.vrf.state_mut(self.consensus_mode, epoch) {
                     if !state.commit_sent {
                         state.reveal = reveal;
@@ -313,7 +330,7 @@ impl Actor {
                             signer: local_signer,
                             bls_sig: Vec::new(),
                         };
-                        self.sign_vrf_commit(&mut commit, mode_tag);
+                        self.sign_vrf_commit(&mut commit, mode_tag)?;
                         pending_commit = Some(commit);
                     }
                 }
@@ -393,7 +410,7 @@ impl Actor {
             );
         } else if should_emit_reveal {
             if needs_derivation {
-                let (derived_reveal, commitment) = self.derive_vrf_material(epoch, local_signer);
+                let (derived_reveal, commitment) = self.derive_vrf_material(epoch, local_signer)?;
                 if stored_commitment != [0; 32] && stored_commitment != commitment {
                     warn!(
                         epoch,
@@ -416,7 +433,7 @@ impl Actor {
                 signer: local_signer,
                 bls_sig: Vec::new(),
             };
-            self.sign_vrf_reveal(&mut reveal, mode_tag);
+            self.sign_vrf_reveal(&mut reveal, mode_tag)?;
             pending_reveal = Some(reveal);
         }
 

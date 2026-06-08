@@ -1907,13 +1907,14 @@ impl CacheAdmissionEnvelope {
     ///
     /// # Errors
     ///
-    /// Returns [`CacheAdmissionError::Serialization`] when canonicalisation fails.
+    /// Returns [`CacheAdmissionError`] when canonicalisation or signing fails.
     pub fn sign(
         body: CacheAdmissionRecord,
         key_pair: &KeyPair,
     ) -> Result<Self, CacheAdmissionError> {
         let canonical = body.canonical_bytes()?;
-        let signature = Signature::new(key_pair.private_key(), &canonical);
+        let signature = Signature::try_new(key_pair.private_key(), &canonical)
+            .map_err(|error| CacheAdmissionError::Signing(error.to_string()))?;
         Ok(Self {
             body,
             signer: key_pair.public_key().clone(),
@@ -2065,13 +2066,14 @@ impl CacheAdmissionGossip {
     ///
     /// # Errors
     ///
-    /// Returns [`CacheAdmissionError`] when canonicalisation fails.
+    /// Returns [`CacheAdmissionError`] when canonicalisation or signing fails.
     pub fn sign(
         body: CacheAdmissionGossipBody,
         key_pair: &KeyPair,
     ) -> Result<Self, CacheAdmissionError> {
         let canonical = body.canonical_bytes()?;
-        let signature = Signature::new(key_pair.private_key(), &canonical);
+        let signature = Signature::try_new(key_pair.private_key(), &canonical)
+            .map_err(|error| CacheAdmissionError::Signing(error.to_string()))?;
         Ok(Self {
             body,
             signer: key_pair.public_key().clone(),
@@ -2234,6 +2236,8 @@ pub enum CacheAdmissionError {
     TimestampOverflow,
     #[error("cache admission gossip nonce RNG failed: {0}")]
     RandomNonce(String),
+    #[error("cache admission signing failed: {0}")]
+    Signing(String),
     #[error("cache admission signature verification failed")]
     InvalidSignature,
     #[error("cache admission envelope expired at {expires_unix_ms}, now={now_unix_ms}")]
@@ -2446,6 +2450,20 @@ mod tests {
         let body =
             CacheAdmissionGossipBody::with_nonce(envelope, issued_ms, ttl, &mut rng).unwrap();
         CacheAdmissionGossip::sign(body, &key_pair).expect("gossip")
+    }
+
+    #[test]
+    fn cache_admission_envelope_and_gossip_signatures_verify() {
+        let issued_ms = 1_726_000_200_000;
+        let ttl = Duration::from_secs(30);
+        let gossip = cache_admission_gossip(TaikaiShardId(7), 42, issued_ms, ttl);
+
+        gossip
+            .body()
+            .envelope()
+            .verify(issued_ms)
+            .expect("admission envelope verifies");
+        gossip.verify(issued_ms).expect("admission gossip verifies");
     }
 
     #[test]

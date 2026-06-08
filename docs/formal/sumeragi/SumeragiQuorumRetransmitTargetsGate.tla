@@ -36,6 +36,36 @@ Cases == {
   "view_mapped_missing"
 }
 
+EmptyLocalCases == {
+  "empty_topology",
+  "single_local_only"
+}
+
+MissingTargetCases == {
+  "no_votes_four",
+  "one_remote_observed_below",
+  "all_remote_observed",
+  "local_middle_order",
+  "view_mapped_missing"
+}
+
+FanoutGateCases == {
+  "near_two_remote_observed",
+  "near_local_remote_observed",
+  "at_quorum_missing",
+  "min_zero_no_near"
+}
+
+MappingFallbackCases == {
+  "mapping_fail"
+}
+
+OrderDistinctCases == {
+  "one_remote_observed_below",
+  "local_middle_order",
+  "view_mapped_missing"
+}
+
 BoolToInt(b) == IF b THEN 1 ELSE 0
 
 TopologyLen(c) ==
@@ -237,6 +267,37 @@ SafetyFast ==
   /\ ActualOutput("mapping_fail") = SpecOutput("mapping_fail")
   /\ ActualOutput("local_middle_order") = SpecOutput("local_middle_order")
   /\ ActualOutput("view_mapped_missing") = SpecOutput("view_mapped_missing")
+
+QuorumRetransmitEmptyLocalExact ==
+  \A c \in EmptyLocalCases:
+    ActualOutput(c) = SpecOutput(c)
+
+QuorumRetransmitMissingTargetsExact ==
+  \A c \in MissingTargetCases:
+    ActualOutput(c) = SpecOutput(c)
+
+QuorumRetransmitFanoutGateExact ==
+  \A c \in FanoutGateCases:
+    /\ ActualOutput(c) = SpecOutput(c)
+    /\ ActualFullFanout(c) = FullFanout(c)
+
+QuorumRetransmitMappingFallbackExact ==
+  \A c \in MappingFallbackCases:
+    /\ ActualOutput(c) = SpecOutput(c)
+    /\ ActualFullFanout(c) = FullFanout(c)
+
+QuorumRetransmitOrderDistinctExact ==
+  \A c \in OrderDistinctCases:
+    /\ ActualOutput(c) = SpecOutput(c)
+    /\ ActualDistinct(c)
+
+QuorumRetransmitTargetExactness ==
+  /\ SafetyFast
+  /\ QuorumRetransmitEmptyLocalExact
+  /\ QuorumRetransmitMissingTargetsExact
+  /\ QuorumRetransmitFanoutGateExact
+  /\ QuorumRetransmitMappingFallbackExact
+  /\ QuorumRetransmitOrderDistinctExact
 
 BugEmptyReturnsFull ==
   ActualOutput("empty_topology") = SpecOutput("empty_topology")

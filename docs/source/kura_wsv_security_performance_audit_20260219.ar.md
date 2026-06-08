@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### إنتاج WSV
 
 - التغطية الحالية:
-  - السلوك الاحتياطي للتنافس: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - أمان أمر القفل حول الواجهة الخلفية ذات المستويات: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - السلوك الاحتياطي للتنافس: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - أمان أمر القفل حول الواجهة الخلفية ذات المستويات: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - الفجوات:
   - لا يوجد اختبار تنافس كمي يؤكد الحد الأقصى المقبول لوقت الالتزام في ظل الالتزامات العالمية الثقيلة
   - لا يوجد اختبار انحدار للتعامل بدون ذعر في حالة انقطاع ثوابت تقدم مؤشر DA بشكل غير متوقع
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## إضافات الاختبار المقترحة1. `kura_writer_io_failures_do_not_panic` (وحدة، حقن الخطأ)
 2. `kura_budget_check_scales_with_pending_depth` (انحدار الأداء)
 3.`kura_eviction_does_not_block_reads_beyond_threshold` (التكامل/الأداء)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (انحدار التنافس)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (انحدار التنافس)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (المرونة)
 6.`mock_wsv_admin_alias_requires_permissions` (الانحدار الأمني)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (حارس DoS)

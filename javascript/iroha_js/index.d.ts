@@ -616,9 +616,6 @@ export const SCCP_DOMAIN_BSC: number;
 export const SCCP_DOMAIN_SOL: number;
 export const SCCP_DOMAIN_TON: number;
 export const SCCP_DOMAIN_TRON: number;
-export const SCCP_DOMAIN_SORA_KUSAMA: number;
-export const SCCP_DOMAIN_SORA_POLKADOT: number;
-export const SCCP_DOMAIN_SORA2: number;
 export const SCCP_CODEC_TEXT_UTF8: 1;
 export const SCCP_CODEC_EVM_HEX: 2;
 export const SCCP_CODEC_SOLANA_BASE58: 3;
@@ -645,6 +642,9 @@ export const SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:eth:native-evm-groth
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-bsc-testnet-native-evm-prover-self-test-v1";
 export const SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1";
+export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1";
+export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1: "sccp-bsc-mainnet-native-evm-prover-self-test-v1";
+export const SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1: "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1";
 export const SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1: Readonly<{
   javascript: "pure-typescript";
   swift: "native-swift";
@@ -711,10 +711,6 @@ export const TAIRA_XOR_FINALIZE_FROM_TAIRA_ABI_V1: "finalizeFromTaira(bytes,byte
 export const TAIRA_XOR_BURN_TO_TAIRA_ABI_V1: "burnToTaira(bytes32,bytes32,bytes,uint256)";
 export const TAIRA_XOR_FINALIZE_FROM_TAIRA_SELECTOR_V1: string;
 export const TAIRA_XOR_BURN_TO_TAIRA_SELECTOR_V1: string;
-export const SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1: "substrate-runtime-v1";
-export const SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1: "scale_call_v1";
-export const SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1: "SccpBridge.submit_message_proof";
-export const SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1: "sccp-substrate-runtime-storage-v1";
 export const SCCP_CORE_REMOTE_DOMAINS: number[];
 
 export interface SccpBurnPayload {
@@ -2255,11 +2251,7 @@ export interface SccpSourceAdapterDeploymentBinding {
 
 export type SccpDestinationBindingDomainInput =
   | SccpDomainIdInput
-  | {
-      targetDomain?: SccpDomainIdInput;
-      target_domain?: SccpDomainIdInput;
-      domain?: SccpDomainIdInput;
-    };
+  | { targetDomain?: SccpDomainIdInput; target_domain?: SccpDomainIdInput; domain?: SccpDomainIdInput };
 
 export interface EvmSccpDestinationBindingInput {
   version?: SccpVersionInput;
@@ -3091,8 +3083,7 @@ export interface EthSyncCommitteeTransitionMessageInput {
   next_sync_committee_branch_hash?: string;
 }
 
-export interface EthBeaconSyncCommitteeProofInput
-  extends EthSyncCommitteePayloadInput {
+export interface EthBeaconSyncCommitteeProofInput extends EthSyncCommitteePayloadInput {
   version?: SccpVersionInput;
   totalWeight?: string | number | bigint;
   total_weight?: string | number | bigint;
@@ -3289,59 +3280,6 @@ export interface BscCommitSealInput {
   signersBitmap?: BinaryLike;
   signers_bitmap?: BinaryLike;
   signatures?: ReadonlyArray<BinaryLike>;
-}
-
-export interface SubstrateAuthoritySetPayloadInput {
-  authorityPublicKeys?: readonly string[];
-  authority_public_keys?: readonly string[];
-  authorityWeights?: readonly (string | number | bigint)[];
-  authority_weights?: readonly (string | number | bigint)[];
-}
-
-export interface SubstrateGrandpaJustificationProofInput
-  extends SubstrateAuthoritySetPayloadInput {
-  version?: SccpVersionInput;
-  totalWeight?: string | number | bigint;
-  total_weight?: string | number | bigint;
-  signedWeight?: string | number | bigint;
-  signed_weight?: string | number | bigint;
-  precommitMessageHash?: string;
-  precommit_message_hash?: string;
-  signersBitmap?: BinaryLike;
-  signers_bitmap?: BinaryLike;
-  signatures?: readonly BinaryLike[];
-}
-
-export interface SubstrateAuthoritySetTransitionMessageInput {
-  sourceDomain?: SccpDomainIdInput;
-  source_domain?: SccpDomainIdInput;
-  fromGrandpaSetId?: string | number | bigint;
-  from_grandpa_set_id?: string | number | bigint;
-  toGrandpaSetId?: string | number | bigint;
-  to_grandpa_set_id?: string | number | bigint;
-  transitionBlockNumber?: string | number | bigint;
-  transition_block_number?: string | number | bigint;
-  transitionBlockHash?: string;
-  transition_block_hash?: string;
-  parentAuthoritySetHash?: string;
-  parent_authority_set_hash?: string;
-  nextAuthoritySetHash?: string;
-  next_authority_set_hash?: string;
-  nextAuthoritySetPayload?: BinaryLike | SubstrateAuthoritySetPayloadInput;
-  next_authority_set_payload?: BinaryLike | SubstrateAuthoritySetPayloadInput;
-  nextAuthoritySetPayloadHash?: string;
-  next_authority_set_payload_hash?: string;
-  nextAuthoritySetProofHash?: string;
-  next_authority_set_proof_hash?: string;
-}
-
-export interface SubstrateAuthoritySetTransitionJustificationInput
-  extends SubstrateAuthoritySetTransitionMessageInput {
-  version?: SccpVersionInput;
-  transitionMessageHash?: string;
-  transition_message_hash?: string;
-  grandpaJustification?: SubstrateGrandpaJustificationProofInput;
-  grandpa_justification?: SubstrateGrandpaJustificationProofInput;
 }
 
 export interface TronSccpReceiptProofInput {
@@ -3603,95 +3541,6 @@ export interface TronWitnessScheduleTransitionSealInput
   seal_proof?: TronWitnessSealInput;
   witnessSealProof?: TronWitnessSealInput;
   witness_seal_proof?: TronWitnessSealInput;
-}
-
-export interface SubstrateSccpStorageProofInput {
-  sourceDomain?: SccpDomainIdInput;
-  source_domain?: SccpDomainIdInput;
-  sourceEventDigest?: string;
-  source_event_digest?: string;
-  sourceEventLeafIndex?: string | number | bigint;
-  source_event_leaf_index?: string | number | bigint;
-  leafIndex?: string | number | bigint;
-  leaf_index?: string | number | bigint;
-  finalizedBlockNumber?: string | number | bigint;
-  finalized_block_number?: string | number | bigint;
-  finalityHeight?: string | number | bigint;
-  finality_height?: string | number | bigint;
-  grandpaSetId?: string | number | bigint;
-  grandpa_set_id?: string | number | bigint;
-  blockHash?: string;
-  block_hash?: string;
-  finalityBlockHash?: string;
-  finality_block_hash?: string;
-  authoritySetHash?: string;
-  authority_set_hash?: string;
-  eventsRoot?: string;
-  events_root?: string;
-  receiptOrMessageRoot?: string;
-  receipt_or_message_root?: string;
-  inclusionBranch?: readonly (
-    | string
-    | Uint8Array
-    | ArrayBuffer
-    | ArrayBufferView
-    | number[]
-  )[];
-  inclusion_branch?: readonly (
-    | string
-    | Uint8Array
-    | ArrayBuffer
-    | ArrayBufferView
-    | number[]
-  )[];
-}
-
-export interface SubstrateSccpRuntimeStorageProofRequestInput
-  extends SubstrateSccpStorageProofInput,
-    SccpSourceVerifierMaterialInput {
-  storageProofHash?: string;
-  storage_proof_hash?: string;
-  sourceVerifierMaterial?: SccpSourceVerifierMaterialInput;
-  source_verifier_material?: SccpSourceVerifierMaterialInput;
-  material?: SccpSourceVerifierMaterialInput;
-}
-
-export interface SubstrateSccpRuntimeStorageFastpqPublicInputs {
-  readonly dsid: string;
-  readonly slot: string;
-  readonly oldRoot: string;
-  readonly newRoot: string;
-  readonly permRoot: string;
-  readonly txSetHash: string;
-}
-
-export interface SubstrateSccpRuntimeStorageFastpqTransition {
-  readonly key: string;
-  readonly operation: "meta_set";
-  readonly oldValue: "0x";
-  readonly newValue: string;
-}
-
-export interface SubstrateSccpRuntimeStorageProofRequest {
-  readonly version: 1;
-  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
-  readonly circuitId: typeof SCCP_SUBSTRATE_RUNTIME_STORAGE_OPEN_VERIFY_CIRCUIT_ID_V1;
-  readonly parameterSet: "fastpq-lane-balanced";
-  readonly sourceDomain: number;
-  readonly finalizedBlockNumber: string;
-  readonly grandpaSetId: string;
-  readonly sourceStateVerifierId: string;
-  readonly sourceStateVerifierHash: string;
-  readonly runtimeStorageProofPublicInputsHash: string;
-  readonly storageProofHash: string;
-  readonly statementBytes: Uint8Array;
-  readonly verificationContextBytes: Uint8Array;
-  readonly schemaDescriptor: Uint8Array;
-  readonly publicInputColumns: ReadonlyArray<ReadonlyArray<string>>;
-  readonly fastpqPublicInputs: Readonly<SubstrateSccpRuntimeStorageFastpqPublicInputs>;
-  readonly fastpqTransitions: ReadonlyArray<
-    Readonly<SubstrateSccpRuntimeStorageFastpqTransition>
-  >;
 }
 
 export interface SolanaSccpProofPublicInputs {
@@ -5040,6 +4889,250 @@ export function runBscTestnetNativeProverSelfTest(
   } & Record<string, unknown>,
 ): Promise<BscTestnetNativeEvmProverSelfTestSdkResult>;
 
+export type BscMainnetNativeEvmProverBundleSdkArtifactInput =
+  EthereumMainnetNativeEvmProverBundleSdkArtifactInput;
+export type BscMainnetNativeEvmProverAuditHashesInput =
+  EthereumMainnetNativeEvmProverAuditHashesInput;
+export type BscMainnetNativeEvmProverAuditHashes =
+  EthereumMainnetNativeEvmProverAuditHashes;
+
+export interface BscMainnetNativeEvmProverBundleInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverBundleInput,
+    "bundleId" | "bundle_id" | "chain"
+  > {
+  bundleId?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+  bundle_id?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+  chain?: "bsc-mainnet";
+}
+
+export type BscMainnetNativeEvmProverBundleSdkArtifact =
+  EthereumMainnetNativeEvmProverBundleSdkArtifact;
+
+export interface BscMainnetNativeEvmProverBundle
+  extends Omit<EthereumMainnetNativeEvmProverBundle, "bundleId" | "chain"> {
+  readonly bundleId: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1;
+  readonly chain: "bsc-mainnet";
+}
+
+export type BscMainnetNativeEvmProverParitySdkResultInput =
+  EthereumMainnetNativeEvmProverParitySdkResultInput;
+export type BscMainnetNativeEvmProverParitySdkResult =
+  EthereumMainnetNativeEvmProverParitySdkResult;
+
+export interface BscMainnetNativeEvmProverParityFixtureInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverParityFixtureInput,
+    "schema" | "chain"
+  > {
+  schema?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  chain?: "bsc-mainnet";
+}
+
+export interface BscMainnetNativeEvmProverParityFixture
+  extends Omit<
+    EthereumMainnetNativeEvmProverParityFixture,
+    "schema" | "chain"
+  > {
+  readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1;
+  readonly chain: "bsc-mainnet";
+}
+
+export type BscMainnetNativeEvmProverSelfTestSdkResultInput =
+  EthereumMainnetNativeEvmProverSelfTestSdkResultInput;
+export type BscMainnetNativeEvmProverSelfTestSdkResult =
+  EthereumMainnetNativeEvmProverSelfTestSdkResult;
+
+export interface BscMainnetNativeEvmProverSelfTestFixtureInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverSelfTestFixtureInput,
+    "schema" | "chain"
+  > {
+  schema?: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
+  chain?: "bsc-mainnet";
+}
+
+export interface BscMainnetNativeEvmProverSelfTestFixture
+  extends Omit<
+    EthereumMainnetNativeEvmProverSelfTestFixture,
+    "schema" | "chain"
+  > {
+  readonly schema: typeof SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1;
+  readonly chain: "bsc-mainnet";
+}
+export interface BscMainnetNativeEvmProverArtifacts
+  extends Omit<
+    EthereumMainnetNativeEvmProverArtifacts,
+    "nativeProverBundle" | "crossSdkFixtureParity" | "nativeProverSelfTest"
+  > {
+  readonly nativeProverBundle: Readonly<BscMainnetNativeEvmProverBundle>;
+  readonly crossSdkFixtureParity: Readonly<BscMainnetNativeEvmProverParityFixture>;
+  readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
+}
+
+export interface BscMainnetNativeEvmProverArtifactsInput
+  extends Omit<EthereumMainnetNativeEvmProverArtifactsInput, "nativeProverBundle" | "native_prover_bundle" | "proverBundle" | "prover_bundle" | "manifest"> {
+  nativeProverBundle?: BscMainnetNativeEvmProverBundleInput | string;
+  native_prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
+  proverBundle?: BscMainnetNativeEvmProverBundleInput | string;
+  prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
+  manifest?: BscMainnetNativeEvmProverBundleInput | string;
+}
+
+export interface BscMainnetNativeEvmProverArtifactResolverMetadata
+  extends Omit<
+    EthereumMainnetNativeEvmProverArtifactResolverMetadata,
+    "nativeProverBundle"
+  > {
+  readonly nativeProverBundle: Readonly<BscMainnetNativeEvmProverBundle>;
+}
+
+export interface BscMainnetNativeEvmProverArtifactBundleInput
+  extends Omit<
+    EthereumMainnetNativeEvmProverArtifactBundleInput,
+    "nativeProverBundle" | "native_prover_bundle" | "proverBundle" | "prover_bundle" | "manifest" | "artifactResolver" | "artifact_resolver" | "resolveArtifact" | "resolve_artifact" | "resolveArtifactBytes" | "resolve_artifact_bytes"
+  > {
+  nativeProverBundle?: BscMainnetNativeEvmProverBundleInput | string;
+  native_prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
+  proverBundle?: BscMainnetNativeEvmProverBundleInput | string;
+  prover_bundle?: BscMainnetNativeEvmProverBundleInput | string;
+  manifest?: BscMainnetNativeEvmProverBundleInput | string;
+  artifactResolver?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  artifact_resolver?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolveArtifact?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolve_artifact?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolveArtifactBytes?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+  resolve_artifact_bytes?: (
+    path: string,
+    metadata: BscMainnetNativeEvmProverArtifactResolverMetadata,
+  ) => BinaryLike | Promise<BinaryLike>;
+}
+
+export interface BscMainnetNativeProverSelfTestContext
+  extends Omit<
+    EthereumMainnetNativeProverSelfTestContext,
+    "nativeProverArtifacts" | "nativeProverSelfTest" | "expectedResult"
+  > {
+  readonly nativeProverArtifacts: Readonly<BscMainnetNativeEvmProverArtifacts>;
+  readonly nativeProverSelfTest: Readonly<BscMainnetNativeEvmProverSelfTestFixture>;
+  readonly expectedResult: Readonly<BscMainnetNativeEvmProverSelfTestSdkResult>;
+}
+
+export type BscMainnetNativeProverSelfTestFn = (
+  context: Readonly<BscMainnetNativeProverSelfTestContext>,
+  options?: Record<string, unknown>,
+) =>
+  | BscMainnetNativeEvmProverSelfTestSdkResultInput
+  | Promise<BscMainnetNativeEvmProverSelfTestSdkResultInput>;
+
+export interface BscMainnetNativeProverSelfTestRunInput
+  extends Omit<
+    EthereumMainnetNativeProverSelfTestRunInput,
+    "nativeProverArtifacts" | "native_prover_artifacts" | "verifiedNativeProverArtifacts" | "verified_native_prover_artifacts" | "nativeProverSelfTest" | "native_prover_self_test" | "selfTestNativeProver" | "self_test_native_prover"
+  > {
+  nativeProverArtifacts?: BscMainnetNativeEvmProverArtifacts;
+  native_prover_artifacts?: BscMainnetNativeEvmProverArtifacts;
+  verifiedNativeProverArtifacts?: BscMainnetNativeEvmProverArtifacts;
+  verified_native_prover_artifacts?: BscMainnetNativeEvmProverArtifacts;
+  nativeProverSelfTest?: BscMainnetNativeProverSelfTestFn;
+  native_prover_self_test?: BscMainnetNativeProverSelfTestFn;
+  selfTestNativeProver?: BscMainnetNativeProverSelfTestFn;
+  self_test_native_prover?: BscMainnetNativeProverSelfTestFn;
+}
+
+export function validateBscMainnetNativeEvmProverBundle(
+  manifest: BscMainnetNativeEvmProverBundleInput,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): BscMainnetNativeEvmProverBundle;
+
+export function parseBscMainnetNativeEvmProverBundleManifest(
+  json: string,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): BscMainnetNativeEvmProverBundle;
+
+export function validateBscMainnetNativeEvmProverParityFixture(
+  fixture: BscMainnetNativeEvmProverParityFixtureInput,
+  nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
+): BscMainnetNativeEvmProverParityFixture;
+
+export function parseBscMainnetNativeEvmProverParityFixture(
+  json: string,
+  nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
+): BscMainnetNativeEvmProverParityFixture;
+
+export function validateBscMainnetNativeEvmProverSelfTestFixture(
+  fixture: BscMainnetNativeEvmProverSelfTestFixtureInput,
+  nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
+): BscMainnetNativeEvmProverSelfTestFixture;
+
+export function parseBscMainnetNativeEvmProverSelfTestFixture(
+  json: string,
+  nativeProverBundle: BscMainnetNativeEvmProverBundleInput,
+): BscMainnetNativeEvmProverSelfTestFixture;
+
+export function verifyBscMainnetNativeEvmProverArtifacts(
+  input: BscMainnetNativeEvmProverArtifactsInput,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): BscMainnetNativeEvmProverArtifacts;
+
+export function verifyBscMainnetNativeEvmProverArtifactsFromBundle(
+  input: BscMainnetNativeEvmProverArtifactBundleInput,
+  options?: {
+    expectedDestinationBindingHash?: string;
+    expected_destination_binding_hash?: string;
+    destinationBindingHash?: string;
+    destination_binding_hash?: string;
+    destinationBinding?: EvmSccpDestinationBindingInput;
+    destination_binding?: EvmSccpDestinationBindingInput;
+  },
+): Promise<BscMainnetNativeEvmProverArtifacts>;
+
+export function runBscMainnetNativeProverSelfTest(
+  input: BscMainnetNativeProverSelfTestRunInput,
+  options?: {
+    nativeProverSelfTest?: BscMainnetNativeProverSelfTestFn;
+    native_prover_self_test?: BscMainnetNativeProverSelfTestFn;
+    selfTestNativeProver?: BscMainnetNativeProverSelfTestFn;
+    self_test_native_prover?: BscMainnetNativeProverSelfTestFn;
+  } & Record<string, unknown>,
+): Promise<BscMainnetNativeEvmProverSelfTestSdkResult>;
+
 export interface EvmSccpProofRequestInput {
   publicInputs?: SccpMessageTransparentPublicInputsInput;
   public_inputs?: SccpMessageTransparentPublicInputsInput;
@@ -5479,120 +5572,6 @@ export interface TronSccpBridgeProofSubmitPayloadInput
   sccp_submission?: TronSccpSubmission;
   destinationBinding?: TronSccpDestinationBindingInput;
   destination_binding?: TronSccpDestinationBindingInput;
-}
-
-export interface SubstrateSccpProofRequestInput {
-  publicInputs?: SccpMessageTransparentPublicInputsInput;
-  public_inputs?: SccpMessageTransparentPublicInputsInput;
-  bundleBytes?: BinaryLike;
-  bundle_bytes?: BinaryLike;
-  sourceProofBytes?: BinaryLike;
-  source_proof_bytes?: BinaryLike;
-  backend?: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
-  sourceDomain?: SccpDomainIdInput;
-  source_domain?: SccpDomainIdInput;
-  statementHash?: string;
-  statement_hash?: string;
-  destinationBindingHash?: string;
-  destination_binding_hash?: string;
-  proofContext?: SolanaSccpProofContextInput;
-  proof_context?: SolanaSccpProofContextInput;
-}
-
-export interface SubstrateSccpProofRequest {
-  readonly version: 1;
-  readonly backend: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
-  readonly sourceDomain: number;
-  readonly targetDomain: number;
-  readonly publicInputs: Readonly<
-    Required<{
-      version: number;
-      messageId: string;
-      payloadHash: string;
-      targetDomain: number;
-      commitmentRoot: string;
-      finalityHeight: string;
-      finalityBlockHash: string;
-    }>
-  >;
-  readonly publicInputsBytes: Uint8Array;
-  readonly bundleBytes: Uint8Array;
-  readonly sourceProofBytes: Uint8Array;
-  readonly proofContext: Readonly<SolanaSccpProofContext>;
-  readonly statementHash: string;
-  readonly destinationBindingHash: string;
-  readonly requestHash: string;
-}
-
-export interface SubstrateSccpProofResult {
-  readonly version: 1;
-  readonly backend: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
-  readonly proofBytes: Uint8Array;
-  readonly proofBase64: string;
-  readonly publicInputs: SubstrateSccpProofRequest["publicInputs"];
-  readonly bundleBytes: Uint8Array;
-  readonly sourceProofBytes: Uint8Array;
-  readonly proofContext: Readonly<SolanaSccpProofContext>;
-  readonly statementHash: string;
-  readonly destinationBindingHash: string;
-  readonly requestHash: string;
-  readonly envelopeHash: string;
-}
-
-export interface SubstrateSccpSubmissionInput {
-  proofResult?: SubstrateSccpProofResult;
-  proof_result?: SubstrateSccpProofResult;
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  publicInputs?: SccpMessageTransparentPublicInputsInput;
-  public_inputs?: SccpMessageTransparentPublicInputsInput;
-  publicInputsBytes?: BinaryLike;
-  public_inputs_bytes?: BinaryLike;
-  bundleBytes?: BinaryLike;
-  bundle_bytes?: BinaryLike;
-  /** Accepted only with `proofResult`; raw runtime-call payloads do not carry these request-bound bytes. */
-  sourceProofBytes?: BinaryLike;
-  /** Accepted only with `proof_result`; raw runtime-call payloads do not carry these request-bound bytes. */
-  source_proof_bytes?: BinaryLike;
-  sourceDomain?: SccpDomainIdInput;
-  source_domain?: SccpDomainIdInput;
-  statementHash?: string;
-  statement_hash?: string;
-  destinationBindingHash?: string;
-  destination_binding_hash?: string;
-  proofContext?: SolanaSccpProofContextInput;
-  proof_context?: SolanaSccpProofContextInput;
-}
-
-export interface SubstrateSccpSubmission {
-  readonly version: 1;
-  readonly proofFamily: typeof SCCP_STARK_FRI_PROOF_FAMILY_V1;
-  readonly verifierBackend: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
-  readonly platformPayload: "substrate_runtime_call";
-  readonly envelopeEncoding: typeof SCCP_SUBSTRATE_RUNTIME_CALL_SCALE_V1;
-  readonly submissionKind: "runtime_call";
-  readonly verifierEntrypoint: typeof SCCP_SUBSTRATE_SUBMIT_MESSAGE_PROOF_ENTRYPOINT_V1;
-  readonly sourceDomain: number;
-  readonly targetDomain: number;
-  readonly publicInputs: SubstrateSccpProofRequest["publicInputs"];
-  readonly proofContext: Readonly<SolanaSccpProofContext>;
-  readonly statementHash: string;
-  readonly destinationBindingHash: string;
-  readonly requestHash: string;
-  readonly proofBytes: Uint8Array;
-  readonly publicInputsBytes: Uint8Array;
-  readonly bundleBytes: Uint8Array;
-  readonly arguments: ReadonlyArray<
-    Readonly<{
-      key: "proof_bytes" | "public_inputs" | "bundle_bytes";
-      encoding: "raw_bytes";
-      bytes: string;
-    }>
-  >;
-  readonly runtimeCall: Uint8Array;
-  readonly runtimeCallHex: string;
-  readonly envelopeBytes: Uint8Array;
-  readonly envelopeHex: string;
 }
 
 export type SccpWitnessProviderFn<Input> = (
@@ -6552,53 +6531,6 @@ export class TronSccpProver {
   ): Promise<TronSccpProofResult>;
 }
 
-export type SubstrateSccpWitnessProvider =
-  SccpWitnessProviderResolverOption<SubstrateSccpProofRequestInput>;
-
-export interface SubstrateSccpProveResult {
-  proofBytes?: BinaryLike;
-  proof_bytes?: BinaryLike;
-  proof?: BinaryLike;
-  proofBase64?: string;
-  proof_base64?: string;
-  backend?: typeof SCCP_SUBSTRATE_RUNTIME_PROOF_BACKEND_V1;
-  requestHash?: string;
-  request_hash?: string;
-  envelopeHash?: string;
-  envelope_hash?: string;
-  publicInputs?: SccpMessageTransparentPublicInputsInput;
-  public_inputs?: SccpMessageTransparentPublicInputsInput;
-  proofContext?: SolanaSccpProofContextInput;
-  proof_context?: SolanaSccpProofContextInput;
-  statementHash?: string;
-  statement_hash?: string;
-  destinationBindingHash?: string;
-  destination_binding_hash?: string;
-}
-
-export type SubstrateSccpProveFn = (
-  request: SubstrateSccpProofRequest,
-  options?: Record<string, unknown>,
-) => SubstrateSccpProveResult | Promise<SubstrateSccpProveResult>;
-
-export type SubstrateSccpProverOptions = SccpProverWitnessProviderOption<
-  SubstrateSccpWitnessProvider,
-  SubstrateSccpProofRequestInput
-> &
-  SccpProverProveOption<SubstrateSccpProveFn>;
-
-export class SubstrateSccpProver {
-  constructor(options?: SubstrateSccpProverOptions);
-  buildRequest(
-    input: SubstrateSccpProofRequestInput,
-    options?: Record<string, unknown>,
-  ): Promise<SubstrateSccpProofRequest>;
-  prove(
-    input: SubstrateSccpProofRequestInput,
-    options?: Record<string, unknown>,
-  ): Promise<SubstrateSccpProofResult>;
-}
-
 export type SolanaSccpWitnessProvider =
   SccpWitnessProviderResolverOption<SolanaSccpWitnessInput>;
 
@@ -6756,16 +6688,6 @@ export function buildTronSccpSubmission(
 export function buildTronSccpBridgeProofSubmitPayload(
   input: TronSccpBridgeProofSubmitPayloadInput,
 ): ToriiBridgeProofSubmitPayload;
-export function buildSubstrateSccpProofRequest(
-  input: SubstrateSccpProofRequestInput,
-): SubstrateSccpProofRequest;
-export function wrapSubstrateSccpProofResult(
-  proofBytes: BinaryLike,
-  request: SubstrateSccpProofRequest,
-): SubstrateSccpProofResult;
-export function buildSubstrateSccpSubmission(
-  input: SubstrateSccpSubmissionInput,
-): SubstrateSccpSubmission;
 export function canonicalEvmSccpReceiptProofBytes(
   input: EvmSccpReceiptProofInput,
 ): Uint8Array;
@@ -6892,13 +6814,9 @@ export function canonicalBscValidatorSetTransitionMessageBytes(
 export function bscValidatorSetTransitionMessageHash(
   input: BscValidatorSetTransitionMessageInput,
 ): string;
-export function canonicalBscCommitMessageBytes(
-  input: BscCommitMessageInput,
-): Uint8Array;
+export function canonicalBscCommitMessageBytes(input: BscCommitMessageInput): Uint8Array;
 export function bscCommitMessageHash(input: BscCommitMessageInput): string;
-export function canonicalBscCommitSealBytes(
-  input: BscCommitSealInput,
-): Uint8Array;
+export function canonicalBscCommitSealBytes(input: BscCommitSealInput): Uint8Array;
 export function bscCommitSealHash(input: BscCommitSealInput): string;
 export function bscValidatorSetPayloadFromParliaExtra(
   extraData: BinaryLike,
@@ -7260,67 +7178,6 @@ export function canonicalTronWitnessScheduleTransitionSealBytes(
 ): Uint8Array;
 export function tronWitnessScheduleTransitionSealHash(
   input: TronWitnessScheduleTransitionSealInput,
-): string;
-export function canonicalSubstrateSccpStorageProofBytes(
-  input: SubstrateSccpStorageProofInput,
-): Uint8Array;
-export function substrateSccpStorageProofHash(
-  input: SubstrateSccpStorageProofInput,
-): string;
-export function canonicalSubstrateSccpRuntimeStorageVerificationStatementBytes(
-  input: SubstrateSccpRuntimeStorageProofRequestInput,
-): Uint8Array;
-export function substrateSccpRuntimeStorageProofPublicInputsHash(
-  input: SubstrateSccpRuntimeStorageProofRequestInput,
-): string;
-export function canonicalSubstrateSccpRuntimeStorageVerificationContextBytes(
-  input: SubstrateSccpRuntimeStorageProofRequestInput,
-): Uint8Array;
-export function substrateSccpRuntimeStoragePublicInputColumns(
-  input: SubstrateSccpRuntimeStorageProofRequestInput,
-): string[][];
-export function substrateSccpRuntimeStorageOpenVerifySchemaDescriptor(
-  input:
-    | SubstrateSccpRuntimeStorageProofRequestInput
-    | number
-    | string
-    | bigint,
-): Uint8Array;
-export function buildSubstrateSccpRuntimeStorageProofRequest(
-  input: SubstrateSccpRuntimeStorageProofRequestInput,
-): SubstrateSccpRuntimeStorageProofRequest;
-export function canonicalSubstrateAuthoritySetPayloadBytes(
-  input: SubstrateAuthoritySetPayloadInput,
-): Uint8Array;
-export function substrateAuthoritySetPayloadHash(
-  input:
-    | SubstrateAuthoritySetPayloadInput
-    | string
-    | Uint8Array
-    | ArrayBuffer
-    | ArrayBufferView
-    | number[],
-): string;
-export function substrateAuthoritySetHashFromPayload(
-  input:
-    | SubstrateAuthoritySetPayloadInput
-    | string
-    | Uint8Array
-    | ArrayBuffer
-    | ArrayBufferView
-    | number[],
-): string;
-export function canonicalSubstrateAuthoritySetTransitionMessageBytes(
-  input: SubstrateAuthoritySetTransitionMessageInput,
-): Uint8Array;
-export function substrateAuthoritySetTransitionMessageHash(
-  input: SubstrateAuthoritySetTransitionMessageInput,
-): string;
-export function canonicalSubstrateAuthoritySetTransitionJustificationBytes(
-  input: SubstrateAuthoritySetTransitionJustificationInput,
-): Uint8Array;
-export function substrateAuthoritySetTransitionJustificationHash(
-  input: SubstrateAuthoritySetTransitionJustificationInput,
 ): string;
 export function solanaSccpMainnetEpochForSlot(
   slot: string | number | bigint,
@@ -7751,14 +7608,12 @@ export function sccpTonFullLightClientGateHash(
   input: SccpSourceAdapterEngineDeploymentInput,
 ): string;
 export function sccpSourceAdapterVerifierVkHash(
-  input:
-    | SccpDomainIdInput
-    | {
-        sourceDomain?: SccpDomainIdInput;
-        source_domain?: SccpDomainIdInput;
-        targetDomain?: SccpDomainIdInput;
-        target_domain?: SccpDomainIdInput;
-      },
+  input: SccpDomainIdInput | {
+    sourceDomain?: SccpDomainIdInput;
+    source_domain?: SccpDomainIdInput;
+    targetDomain?: SccpDomainIdInput;
+    target_domain?: SccpDomainIdInput;
+  },
 ): string;
 export function sccpGroth16Bn254PublicSignalWords(
   input: SccpGroth16Bn254PublicSignalsInput,
@@ -12650,15 +12505,13 @@ export type ToriiSccpProofFinalityModel =
   | "BscValidatorSet"
   | "SolanaFinalizedSlot"
   | "TonMasterchain"
-  | "TronDpos"
-  | "SubstrateGrandpa";
+  | "TronDpos";
 
 export type ToriiSccpProofVerifierTarget =
   | "EvmContract"
   | "SolanaProgram"
   | "TonContract"
-  | "TronContract"
-  | "SubstrateRuntime";
+  | "TronContract";
 
 export type ToriiSccpProofSecurityModel = "RecursiveZk";
 
@@ -12676,8 +12529,7 @@ export type ToriiSccpDestinationVerifierPlan =
   | "SolanaProgramNativeRecursive"
   | "TonContractNativeRecursive"
   | "TronContractNativeRecursive"
-  | "TronContractGroth16Bn254"
-  | "SubstrateRuntimeNativeRecursive";
+  | "TronContractGroth16Bn254";
 
 export interface ToriiSccpDestinationRollout {
   version: number;
@@ -12829,14 +12681,6 @@ export type ToriiSccpPlatformSubmissionPayload =
       };
     }
   | {
-      kind: "substrate_runtime_call";
-      value: {
-        proofBytes: string;
-        publicInputsBytes: string;
-        bundleBytes: string;
-      };
-    }
-  | {
       kind: "ton_internal_message";
       value: {
         messageBodyBoc: string;
@@ -12905,8 +12749,7 @@ export type ToriiSccpChainFamily =
   | "Evm"
   | "Solana"
   | "Ton"
-  | "Tron"
-  | "Substrate";
+  | "Tron";
 
 export type ToriiSccpNormalizedCodecValue =
   | { kind: "TextUtf8"; value: string }

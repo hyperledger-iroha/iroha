@@ -10,7 +10,7 @@ subtracts a 250 ms margin from the commit quorum timeout with saturating
 arithmetic. If that result would fall below the 750 ms usable fast-timeout
 floor, the helper falls back to half of the quorum timeout with a one
 millisecond minimum. DA inline validation then applies its own 750 ms floor
-only when DA is enabled.
+only when DA is enabled; that floor must not cap larger fast-path timeouts.
 ***************************************************************************)
 
 CONSTANT
@@ -112,6 +112,9 @@ ActualCommitValidationInlineFallback(c, daEnabled) ==
     [] Bug = "da_floor_added"
        /\ daEnabled
        /\ c = "at_floor_boundary" -> ActualPendingFastTimeout(c) + DaInlineValidationFloor
+    [] Bug = "da_floor_caps_high"
+       /\ daEnabled
+       /\ c = "large_quorum" -> DaInlineValidationFloor
     [] OTHER ->
        IF daEnabled
        THEN Max(ActualPendingFastTimeout(c), DaInlineValidationFloor)
@@ -136,7 +139,8 @@ TypeInvariant ==
        "da_floor_omitted",
        "da_floor_without_da",
        "da_floor_uses_min",
-       "da_floor_added"
+       "da_floor_added",
+       "da_floor_caps_high"
      }
   /\ checked = 0
 
@@ -179,6 +183,8 @@ DaInlineFallbackAnchors ==
   /\ ActualCommitValidationInlineFallback("below_combined_floor", TRUE) = 750
   /\ ActualCommitValidationInlineFallback("below_combined_floor", FALSE) = 250
   /\ ActualCommitValidationInlineFallback("at_floor_boundary", TRUE) = 750
+  /\ ActualCommitValidationInlineFallback("large_quorum", TRUE) = 4750
+  /\ ActualCommitValidationInlineFallback("large_quorum", FALSE) = 4750
 
 SafetyFast ==
   /\ PendingFastTimeoutMatchesSpec
@@ -229,5 +235,9 @@ BugDaFloorUsesMin ==
 BugDaFloorAdded ==
   ActualCommitValidationInlineFallback("at_floor_boundary", TRUE)
     = SpecCommitValidationInlineFallback("at_floor_boundary", TRUE)
+
+BugDaFloorCapsHigh ==
+  ActualCommitValidationInlineFallback("large_quorum", TRUE)
+    = SpecCommitValidationInlineFallback("large_quorum", TRUE)
 
 ====

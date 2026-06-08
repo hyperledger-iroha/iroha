@@ -786,16 +786,30 @@ impl SealedTransactionCommitmentPayload {
 }
 
 impl SignedSealedTransactionCommitment {
+    /// Try to sign a sealed transaction commitment payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configured signature backend cannot sign the
+    /// commitment payload with the supplied private key.
+    pub fn try_sign(
+        payload: SealedTransactionCommitmentPayload,
+        private_key: &iroha_crypto::PrivateKey,
+    ) -> Result<Self, iroha_crypto::Error> {
+        Ok(Self {
+            signature: SignatureOf::try_new(private_key, &payload)?,
+            payload,
+        })
+    }
+
     /// Sign a sealed transaction commitment payload.
     #[must_use]
     pub fn sign(
         payload: SealedTransactionCommitmentPayload,
         private_key: &iroha_crypto::PrivateKey,
     ) -> Self {
-        Self {
-            signature: SignatureOf::new(private_key, &payload),
-            payload,
-        }
+        Self::try_sign(payload, private_key)
+            .expect("signing should succeed for a valid key pair and sealed commitment payload")
     }
 
     /// Commitment payload.
@@ -1040,10 +1054,11 @@ impl MultisigSignatures {
             .into_iter()
             .map(|private_key| {
                 let signer = PublicKey::from(private_key.clone());
-                let signature = SignatureOf::new(private_key, payload);
-                MultisigSignature::new(signer, signature)
+                let signature = SignatureOf::try_new(private_key, payload)
+                    .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))?;
+                Ok(MultisigSignature::new(signer, signature))
             })
-            .collect();
+            .collect::<Result<_, _>>()?;
 
         if signatures.is_empty() {
             return Err(TransactionSignatureError::NoSignatures);
@@ -1369,9 +1384,16 @@ impl TransactionBuilder {
         }
     }
 
-    /// Sign transaction with provided key pair.
-    #[must_use]
-    pub fn sign(self, private_key: &iroha_crypto::PrivateKey) -> SignedTransaction {
+    /// Try to sign transaction with provided key pair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configured signature backend cannot sign the
+    /// normalized transaction payload with the supplied private key.
+    pub fn try_sign(
+        self,
+        private_key: &iroha_crypto::PrivateKey,
+    ) -> Result<SignedTransaction, TransactionSignatureError> {
         let mut payload = self.payload;
 
         // Normalise the authority signatory so that the transaction carries a
@@ -1388,14 +1410,62 @@ impl TransactionBuilder {
             }
         }
 
-        let signature = TransactionSignature(SignatureOf::new(private_key, &payload));
+        let signature = TransactionSignature(
+            SignatureOf::try_new(private_key, &payload)
+                .map_err(|err| TransactionSignatureError::CryptoError(err.to_string()))?,
+        );
 
-        SignedTransaction {
+        Ok(SignedTransaction {
             signature,
             payload,
             attachments: self.attachments,
             multisig_signatures: self.multisig_signatures,
-        }
+        })
+    }
+
+    /// Sign transaction with provided key pair.
+    #[must_use]
+    pub fn sign(self, private_key: &iroha_crypto::PrivateKey) -> SignedTransaction {
+        self.try_sign(private_key)
+            .expect("signing should succeed for a valid private key and transaction payload")
+    }
+
+    /// Try to sign a transaction whose authority uses a multisig controller.
+    ///
+    /// The provided signer keys are used to produce a multisig signature bundle;
+    /// duplicate signers are retained here and later deduplicated during
+    /// verification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if no signer keys are provided or a signature backend
+    /// fails while signing one of the multisig entries.
+    #[allow(single_use_lifetimes)]
+    pub fn try_sign_multisig<'a>(
+        self,
+        signers: impl IntoIterator<Item = &'a iroha_crypto::PrivateKey>,
+    ) -> Result<SignedTransaction, TransactionSignatureError> {
+        let payload = self.payload;
+        let mut bundle = self
+            .multisig_signatures
+            .unwrap_or_else(|| MultisigSignatures::new(Vec::new()));
+
+        let produced = MultisigSignatures::from_signers(&payload, signers)?;
+        bundle.signatures.extend(produced.signatures);
+
+        let primary_signature = bundle
+            .signatures
+            .first()
+            .expect("multisig signing requires at least one signer")
+            .signature
+            .clone();
+
+        Ok(SignedTransaction {
+            signature: TransactionSignature(primary_signature),
+            payload,
+            attachments: self.attachments,
+            multisig_signatures: Some(bundle),
+        })
     }
 
     /// Sign a transaction whose authority uses a multisig controller.
@@ -1406,35 +1476,16 @@ impl TransactionBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if no signer keys are provided.
+    /// Panics if no signer keys are provided or a signature backend fails while
+    /// signing one of the multisig entries.
     #[must_use]
     #[allow(single_use_lifetimes)]
     pub fn sign_multisig<'a>(
         self,
         signers: impl IntoIterator<Item = &'a iroha_crypto::PrivateKey>,
     ) -> SignedTransaction {
-        let payload = self.payload;
-        let mut bundle = self
-            .multisig_signatures
-            .unwrap_or_else(|| MultisigSignatures::new(Vec::new()));
-
-        let produced = MultisigSignatures::from_signers(&payload, signers)
-            .expect("multisig signing requires at least one signer");
-        bundle.signatures.extend(produced.signatures);
-
-        let primary_signature = bundle
-            .signatures
-            .first()
-            .expect("multisig signing requires at least one signer")
-            .signature
-            .clone();
-
-        SignedTransaction {
-            signature: TransactionSignature(primary_signature),
-            payload,
-            attachments: self.attachments,
-            multisig_signatures: Some(bundle),
-        }
+        self.try_sign_multisig(signers)
+            .expect("multisig signing requires at least one valid signer")
     }
 }
 
@@ -1527,6 +1578,33 @@ mod tests {
         let signature = Signature::new(key_pair.private_key(), &builder.payload_hash_bytes());
         let signed = builder.build_with_signature(signature);
         assert!(signed.verify_signature().is_ok());
+    }
+
+    #[test]
+    fn transaction_builder_try_sign_matches_compatibility_sign() {
+        let chain: ChainId = "try-sign-chain".parse().unwrap();
+        let key_pair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let make_builder = || {
+            let mut builder = TransactionBuilder::new(chain.clone(), authority.clone())
+                .with_instructions([Log::new(Level::INFO, "fallible tx signing".into())])
+                .with_metadata(Metadata::default());
+            builder.set_creation_time(Duration::from_millis(1_234));
+            builder
+        };
+
+        let fallible = make_builder()
+            .try_sign(key_pair.private_key())
+            .expect("transaction signing should succeed");
+        let compatibility = make_builder().sign(key_pair.private_key());
+
+        assert_eq!(
+            norito::to_bytes(&fallible).expect("encode fallible signed transaction"),
+            norito::to_bytes(&compatibility).expect("encode compatibility signed transaction")
+        );
+        fallible
+            .verify_signature()
+            .expect("fallible signed transaction must verify");
     }
 
     #[test]
@@ -1915,6 +1993,24 @@ mod tests {
     }
 
     #[test]
+    fn transaction_builder_try_sign_multisig_rejects_empty_signers() {
+        let chain: ChainId = "multisig-empty-try-sign".parse().unwrap();
+        let signer = iroha_crypto::KeyPair::random();
+        let member =
+            MultisigMember::new(signer.public_key().clone(), 1).expect("multisig member valid");
+        let policy = MultisigPolicy::new(1, vec![member]).expect("multisig policy valid");
+        let authority = AccountId::new_multisig(policy);
+        let builder = TransactionBuilder::new(chain, authority)
+            .with_instructions([Log::new(Level::INFO, "empty multisig".into())]);
+
+        let err = builder
+            .try_sign_multisig(core::iter::empty::<&iroha_crypto::PrivateKey>())
+            .expect_err("empty signer set must be rejected");
+
+        assert!(matches!(err, TransactionSignatureError::NoSignatures));
+    }
+
+    #[test]
     fn verify_signature_rejects_empty_multisig_bundle() {
         let chain: ChainId = "multisig-chain-empty".parse().unwrap();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -2164,6 +2260,32 @@ mod tests {
             reveal.expected_commitment_with_deadline(reveal_deadline_height + 1),
             commitment
         );
+    }
+
+    #[test]
+    fn sealed_transaction_commitment_try_sign_matches_compatibility_sign() {
+        let tx = sample_signed_transaction();
+        let private_key: iroha_crypto::PrivateKey =
+            "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
+                .parse()
+                .unwrap();
+        let payload = SealedTransactionCommitmentPayload::new(
+            tx.chain().clone(),
+            tx.authority().clone(),
+            compute_sealed_transaction_commitment(tx.chain(), &tx, [0x5A; 32], 64),
+            11,
+            64,
+            core::num::NonZeroU64::new(9),
+        );
+
+        let fallible = SignedSealedTransactionCommitment::try_sign(payload.clone(), &private_key)
+            .expect("sealed commitment signing should succeed");
+        let compatibility = SignedSealedTransactionCommitment::sign(payload, &private_key);
+
+        assert_eq!(fallible, compatibility);
+        fallible
+            .verify_signature()
+            .expect("fallible sealed commitment signature verifies");
     }
 
     #[cfg(feature = "json")]

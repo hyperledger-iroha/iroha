@@ -6598,11 +6598,16 @@ pub mod isi {
                     .len()
                     .checked_sub(1)
                     .expect("recursive lineage fixture has a final note");
-                let sibling_output =
-                    fixed_bytes(b"recursive-redeem-final-note-sibling-output-collision");
-                output_collision_witness.record_bundle.bundle.steps[final_note_index]
-                    .output_commitments
-                    .push(sibling_output);
+                let final_note_commitment =
+                    output_collision_witness.current_notes[final_note_index].note_commitment;
+                let final_step =
+                    &output_collision_witness.record_bundle.bundle.steps[final_note_index];
+                let final_step_outputs = &final_step.output_commitments;
+                let sibling_output = final_step_outputs
+                    .iter()
+                    .copied()
+                    .find(|commitment| *commitment != final_note_commitment)
+                    .expect("recursive lineage final hop has a sibling output commitment");
                 output_collision_witness.current_notes[final_note_index].spend_nullifier =
                     sibling_output;
                 output_collision.instruction.lineage_witness = Some(output_collision_witness);

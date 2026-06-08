@@ -6291,7 +6291,7 @@ impl Actor {
                 ready_to_record.push((entry.sender, entry.signature.clone()));
             }
         }
-        let deliver_quorum = self.rbc_deliver_quorum(&topology);
+        let deliver_quorum = Self::rbc_protocol_deliver_quorum(&topology);
         let authoritative_known_payload = self
             .subsystems
             .da_rbc
@@ -6300,6 +6300,15 @@ impl Actor {
             .get(&key)
             .is_some_and(|session| {
                 self.rbc_session_has_authoritative_payload_for_progress(key, session)
+            });
+        let local_authoritative_payload = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .sessions
+            .get(&key)
+            .is_some_and(|session| {
+                self.rbc_session_has_local_authoritative_payload_for_progress(key, session)
             });
         let delivered_payload_bytes_fallback = self
             .subsystems
@@ -6310,7 +6319,7 @@ impl Actor {
             .and_then(|session| {
                 self.rbc_session_authoritative_payload_bytes_for_telemetry(key, session)
             });
-        let allow_missing_chunks = authoritative_known_payload;
+        let allow_missing_chunks = local_authoritative_payload;
         let (
             ignored,
             first_deliver,
@@ -6337,8 +6346,13 @@ impl Actor {
             }
             let _ = session
                 .sync_progress_observations(authoritative_known_payload, Some(deliver_quorum));
+            let required_ready = if local_authoritative_payload {
+                0
+            } else {
+                deliver_quorum
+            };
             Self::evaluate_rbc_deliver_outcome(
-                0,
+                required_ready,
                 session,
                 key,
                 &deliver,
@@ -6421,7 +6435,6 @@ impl Actor {
                 "dropping RBC READY entries from penalized senders"
             );
         }
-        self.maybe_emit_rbc_ready(key)?;
         if let Some(reason) = defer_reason {
             if let Some(defer_kind) = defer_kind {
                 self.record_consensus_message_handling(
@@ -6505,28 +6518,42 @@ impl Actor {
                             },
                         );
                     iroha_logger::debug!(
-                        height = key.1,
-                        view = key.2,
-                        block = %key.0,
-                        local_peer = %self.common_config.peer.id(),
-                        sender = deliver.sender,
-                        peer = ?deliver_peer,
-                        roster_source = ?roster_source,
-                        local_ready_sender = ?local_ready_sender,
-                        local_ready_sent,
-                        local_ready_deferral = ?local_ready_deferral,
-                        ready = ready_senders.len(),
-                        required = deliver_quorum,
-                        missing_ready_total,
-                        missing_ready = ?missing_ready,
-                        missing_ready_peers = ?missing_ready_peers,
-                        pending_ready_total,
-                        pending_ready = ?pending_ready,
-                        pending_ready_peers = ?pending_ready_peers,
-                        senders = ?ready_senders.iter().copied().collect::<Vec<_>>(),
-                        "deferring RBC DELIVER: READY quorum not yet satisfied"
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    local_peer = %self.common_config.peer.id(),
+                    sender = deliver.sender,
+                    peer = ?deliver_peer,
+                    roster_source = ?roster_source,
+                    local_ready_sender = ?local_ready_sender,
+                    local_ready_sent,
+                    local_ready_deferral = ?local_ready_deferral,
+                    ready = ready_senders.len(),
+                    required = deliver_quorum,
+                    missing_ready_total,
+                    missing_ready = ?missing_ready,
+                    missing_ready_peers = ?missing_ready_peers,
+                    pending_ready_total,
+                    pending_ready = ?pending_ready,
+                    pending_ready_peers = ?pending_ready_peers,
+                    senders = ?ready_senders.iter().copied().collect::<Vec<_>>(),
+                    "deferring RBC DELIVER: READY quorum not yet satisfied"
                     );
                 }
+            }
+            self.maybe_emit_rbc_ready(key)?;
+            let should_stash_deferred_deliver = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .get(&key)
+                .is_some_and(|session| !session.delivered && !session.is_invalid());
+            if !should_stash_deferred_deliver {
+                self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
+                self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
             }
             let sender = deliver.sender;
             let max_bytes = self.pending_rbc_caps().1;
@@ -6616,6 +6643,7 @@ impl Actor {
             self.publish_rbc_backlog_snapshot();
             return Ok(());
         }
+        self.maybe_emit_rbc_ready(key)?;
         if invalidate {
             self.clear_pending_rbc(&key);
         }

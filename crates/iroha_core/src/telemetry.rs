@@ -713,19 +713,31 @@ impl StateTelemetry {
         Arc::clone(&self.soranet_privacy)
     }
 
-    /// Observe view_lock wait/hold durations during block commit.
-    pub fn observe_state_commit_view_lock(&self, wait: Duration, hold: Duration) {
+    /// Observe state_write_lock wait/hold durations during block commit.
+    pub fn observe_state_commit_write_lock(&self, wait: Duration, hold: Duration) {
         if !self.enabled.load(Ordering::Relaxed) {
             return;
         }
         let wait_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
         let hold_ms = u64::try_from(hold.as_millis()).unwrap_or(u64::MAX);
         self.metrics
+            .state_commit_write_lock_wait_ms
+            .observe(u64_to_f64(wait_ms));
+        self.metrics
+            .state_commit_write_lock_hold_ms
+            .observe(u64_to_f64(hold_ms));
+        // Keep the legacy view_lock histograms populated for existing dashboards.
+        self.metrics
             .state_commit_view_lock_wait_ms
             .observe(u64_to_f64(wait_ms));
         self.metrics
             .state_commit_view_lock_hold_ms
             .observe(u64_to_f64(hold_ms));
+    }
+
+    /// Observe legacy view_lock wait/hold durations during block commit.
+    pub fn observe_state_commit_view_lock(&self, wait: Duration, hold: Duration) {
+        self.observe_state_commit_write_lock(wait, hold);
     }
 
     /// Replace the cached Nexus lane/dataspace metadata used for telemetry labels.
@@ -5583,6 +5595,7 @@ impl Telemetry {
     fn da_gate_satisfaction_label(satisfaction: GateSatisfaction) -> (&'static str, u64) {
         match satisfaction {
             GateSatisfaction::MissingDataRecovered => ("missing_data_recovered", 1),
+            GateSatisfaction::ManifestGuardRecovered => ("manifest_guard_recovered", 2),
         }
     }
 
@@ -10275,6 +10288,7 @@ mod tests {
         let telemetry = Telemetry::new(metrics.clone(), true);
 
         telemetry.note_da_gate_satisfaction(GateSatisfaction::MissingDataRecovered);
+        telemetry.note_da_gate_satisfaction(GateSatisfaction::ManifestGuardRecovered);
 
         assert_eq!(
             metrics
@@ -10283,7 +10297,14 @@ mod tests {
                 .get(),
             1
         );
-        assert_eq!(metrics.sumeragi_da_gate_last_satisfied.get(), 1);
+        assert_eq!(
+            metrics
+                .sumeragi_da_gate_satisfied_total
+                .with_label_values(&["manifest_guard_recovered"])
+                .get(),
+            1
+        );
+        assert_eq!(metrics.sumeragi_da_gate_last_satisfied.get(), 2);
     }
 
     #[test]
@@ -13065,11 +13086,37 @@ mod tests {
     }
 
     #[test]
-    fn state_commit_view_lock_metrics_recorded() {
+    fn state_commit_write_lock_metrics_recorded() {
+        let metrics = Arc::new(Metrics::default());
+        let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
+        telemetry
+            .observe_state_commit_write_lock(Duration::from_millis(12), Duration::from_millis(34));
+        assert_eq!(
+            metrics.state_commit_write_lock_wait_ms.get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics.state_commit_write_lock_hold_ms.get_sample_count(),
+            1
+        );
+        assert_eq!(metrics.state_commit_view_lock_wait_ms.get_sample_count(), 1);
+        assert_eq!(metrics.state_commit_view_lock_hold_ms.get_sample_count(), 1);
+    }
+
+    #[test]
+    fn state_commit_view_lock_metrics_remain_compatibility_aliases() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
         telemetry
             .observe_state_commit_view_lock(Duration::from_millis(12), Duration::from_millis(34));
+        assert_eq!(
+            metrics.state_commit_write_lock_wait_ms.get_sample_count(),
+            1
+        );
+        assert_eq!(
+            metrics.state_commit_write_lock_hold_ms.get_sample_count(),
+            1
+        );
         assert_eq!(metrics.state_commit_view_lock_wait_ms.get_sample_count(), 1);
         assert_eq!(metrics.state_commit_view_lock_hold_ms.get_sample_count(), 1);
     }

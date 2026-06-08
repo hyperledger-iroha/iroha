@@ -4512,7 +4512,9 @@ mod query {
             let with_auth = envelope
                 .into_signed_request(client.account.clone())
                 .map_err(|err| eyre!(format!("invalid query JSON: {err}")))?;
-            let signed = with_auth.sign(&client.key_pair);
+            let signed = with_auth
+                .try_sign(&client.key_pair)
+                .wrap_err("sign query request")?;
             let payload = norito::codec::Encode::encode(&signed);
             let resp = client.execute_signed_query_raw(&payload)?;
             match resp {
@@ -4545,7 +4547,9 @@ mod query {
                 authority: client.account.clone(),
                 request: req,
             };
-            let signed = with_auth.sign(&client.key_pair);
+            let signed = with_auth
+                .try_sign(&client.key_pair)
+                .wrap_err("sign query continuation request")?;
             let payload = norito::codec::Encode::encode(&signed);
             let resp = client.execute_signed_query_raw(&payload)?;
             match resp {

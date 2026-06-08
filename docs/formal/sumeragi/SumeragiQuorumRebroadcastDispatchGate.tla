@@ -80,6 +80,59 @@ Cases == {
   NoActionNoMark
 }
 
+LocalVoteCases == {
+  DropPendingNoLocalVote,
+  EmptyTopologyNoLocalVote,
+  LocalVoteEmitted
+}
+
+FailClosedExitCases == {
+  RelayBackpressureExit,
+  NoTargetsExit,
+  CooldownExit,
+  BacklogLimitZeroExit,
+  PacedTargetsEmptyExit,
+  NoActionNoMark
+}
+
+ForceFanoutCases == {
+  ForceFanoutBypassesCooldown,
+  ForceFanoutBypassesLimit
+}
+
+VoteReplayCases == {
+  ForceFanoutBypassesCooldown,
+  ForceFanoutBypassesLimit,
+  VoteReplayOnly,
+  CachedCommitQcSuppressesMissingFetch,
+  MissingFetchWithVoteBacking,
+  ContiguousNearQuorumBlockSync,
+  BlockCreatedWithVoteBacking,
+  AnyActionMarks
+}
+
+PayloadDispatchCases == {
+  DropPendingSuppressesPayload,
+  CachedCommitQcSuppressesMissingFetch,
+  MissingFetchWithVoteBacking,
+  BlockCreatedWithVoteBacking,
+  NoObservedBackingNoBlockCreated
+}
+
+BlockSyncDispatchCases == {
+  ContiguousNearQuorumBlockSync,
+  BlockSyncFrameTooLarge,
+  BlockSyncLocalOnlyTargets,
+  BlockSyncNonSyncPayload,
+  NonContiguousNoBlockSync,
+  NotNearQuorumNoBlockSync
+}
+
+MarkingCases == {
+  AnyActionMarks,
+  NoActionNoMark
+}
+
 BoolToInt(b) == IF b THEN 1 ELSE 0
 Min(a, b) == IF a <= b THEN a ELSE b
 
@@ -468,6 +521,62 @@ MarkingStable ==
   /\ SpecOutput(AnyActionMarks)[6] = 1
   /\ SpecOutput(NoActionNoMark)[6] = 0
 
+QuorumRebroadcastLocalVoteExact ==
+  \A c \in LocalVoteCases:
+    /\ ActualLocalVote(c) = SpecLocalVote(c)
+    /\ ActualOutput(c)[1] = BoolToInt(SpecLocalVoteOut(c))
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumRebroadcastFailClosedExitExact ==
+  \A c \in FailClosedExitCases:
+    /\ SpecEarlyExit(c)
+    /\ ActualEarlyExit(c) = SpecEarlyExit(c)
+    /\ ActualVotesOut(c) = 0
+    /\ ActualBlockSyncOut(c) = FALSE
+    /\ ActualBlockCreatedOut(c) = FALSE
+    /\ ActualMissingFetchOut(c) = FALSE
+    /\ ActualMarkRebroadcast(c) = FALSE
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumRebroadcastForceFanoutExact ==
+  \A c \in ForceFanoutCases:
+    /\ SpecForceFullFanout(c)
+    /\ ActualForceFullFanout(c) = SpecForceFullFanout(c)
+    /\ ActualTargetCount(c) = SpecTargetCount(c)
+    /\ ActualTargetCount(c) = 3
+    /\ ActualEarlyExit(c) = FALSE
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumRebroadcastVoteReplayExact ==
+  \A c \in VoteReplayCases:
+    /\ ~SpecEarlyExit(c)
+    /\ ActualVotesOut(c) = SpecVotesOut(c)
+    /\ ActualVotesOut(c) = ActualTargetCount(c)
+    /\ ActualOutput(c)[2] = SpecOutput(c)[2]
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumRebroadcastPayloadDispatchExact ==
+  \A c \in PayloadDispatchCases:
+    /\ ActualObservedVoteBacking(c) = SpecObservedVoteBacking(c)
+    /\ ActualBlockCreatedOut(c) = SpecBlockCreatedOut(c)
+    /\ ActualMissingFetchOut(c) = SpecMissingFetchOut(c)
+    /\ ActualOutput(c)[4] = SpecOutput(c)[4]
+    /\ ActualOutput(c)[5] = SpecOutput(c)[5]
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumRebroadcastBlockSyncDispatchExact ==
+  \A c \in BlockSyncDispatchCases:
+    /\ ActualBlockSyncBroadcast(c) = SpecBlockSyncBroadcast(c)
+    /\ ActualBlockSyncOut(c) = SpecBlockSyncOut(c)
+    /\ ActualOutput(c)[3] = SpecOutput(c)[3]
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumRebroadcastMarkingExact ==
+  \A c \in MarkingCases:
+    /\ ActualMarkRebroadcast(c) = SpecMarkRebroadcast(c)
+    /\ ActualOutput(c)[6] = BoolToInt(SpecMarkRebroadcast(c))
+    /\ ActualOutput(c) = SpecOutput(c)
+
 SafetyFast ==
   /\ SelectionExact
   /\ EarlyExitStable
@@ -475,6 +584,16 @@ SafetyFast ==
   /\ PayloadDispatchStable
   /\ BlockSyncDispatchStable
   /\ MarkingStable
+
+QuorumRebroadcastDispatchExactness ==
+  /\ SafetyFast
+  /\ QuorumRebroadcastLocalVoteExact
+  /\ QuorumRebroadcastFailClosedExitExact
+  /\ QuorumRebroadcastForceFanoutExact
+  /\ QuorumRebroadcastVoteReplayExact
+  /\ QuorumRebroadcastPayloadDispatchExact
+  /\ QuorumRebroadcastBlockSyncDispatchExact
+  /\ QuorumRebroadcastMarkingExact
 
 Safety ==
   SafetyFast

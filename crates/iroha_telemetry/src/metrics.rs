@@ -7108,10 +7108,14 @@ pub struct Metrics {
     pub sumeragi_pacemaker_propose_ms: Histogram,
     /// Sumeragi commit pipeline stage durations (ms) labeled by stage.
     pub sumeragi_commit_stage_ms: HistogramVec,
-    /// State commit: view_lock wait duration (ms) during block commit.
+    /// State commit: legacy view_lock wait duration (ms) during block commit.
     pub state_commit_view_lock_wait_ms: Histogram,
-    /// State commit: view_lock hold duration (ms) during block commit.
+    /// State commit: legacy view_lock hold duration (ms) during block commit.
     pub state_commit_view_lock_hold_ms: Histogram,
+    /// State commit: state_write_lock wait duration (ms) during block commit.
+    pub state_commit_write_lock_wait_ms: Histogram,
+    /// State commit: state_write_lock hold duration (ms) during block commit.
+    pub state_commit_write_lock_hold_ms: Histogram,
     /// Sumeragi pacemaker: commit pipeline executions triggered by timer tick (cumulative, labeled by mode/outcome)
     pub sumeragi_commit_pipeline_tick_total: IntCounterVec,
     /// Sumeragi pacemaker: prevote-quorum timeouts (cumulative, labeled by mode)
@@ -10708,7 +10712,7 @@ impl Default for Metrics {
         let state_commit_view_lock_wait_ms = Histogram::with_opts(
             HistogramOpts::new(
                 "state_commit_view_lock_wait_ms",
-                "State commit view_lock wait duration histogram (ms)",
+                "Legacy state commit view_lock wait duration histogram (ms)",
             )
             .buckets(vec![
                 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
@@ -10719,7 +10723,29 @@ impl Default for Metrics {
         let state_commit_view_lock_hold_ms = Histogram::with_opts(
             HistogramOpts::new(
                 "state_commit_view_lock_hold_ms",
-                "State commit view_lock hold duration histogram (ms)",
+                "Legacy state commit view_lock hold duration histogram (ms)",
+            )
+            .buckets(vec![
+                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                10000.0,
+            ]),
+        )
+        .expect("Infallible");
+        let state_commit_write_lock_wait_ms = Histogram::with_opts(
+            HistogramOpts::new(
+                "state_commit_write_lock_wait_ms",
+                "State commit state_write_lock wait duration histogram (ms)",
+            )
+            .buckets(vec![
+                1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+                10000.0,
+            ]),
+        )
+        .expect("Infallible");
+        let state_commit_write_lock_hold_ms = Histogram::with_opts(
+            HistogramOpts::new(
+                "state_commit_write_lock_hold_ms",
+                "State commit state_write_lock hold duration histogram (ms)",
             )
             .buckets(vec![
                 1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
@@ -14412,6 +14438,8 @@ impl Default for Metrics {
             sumeragi_commit_stage_ms,
             state_commit_view_lock_wait_ms,
             state_commit_view_lock_hold_ms,
+            state_commit_write_lock_wait_ms,
+            state_commit_write_lock_hold_ms,
             sumeragi_commit_pipeline_tick_total,
             sumeragi_prevote_timeout_total,
             sumeragi_rbc_backlog_chunks_total,
@@ -14937,6 +14965,8 @@ impl Default for Metrics {
             sumeragi_commit_stage_ms,
             state_commit_view_lock_wait_ms,
             state_commit_view_lock_hold_ms,
+            state_commit_write_lock_wait_ms,
+            state_commit_write_lock_hold_ms,
             sumeragi_commit_pipeline_tick_total,
             sumeragi_prevote_timeout_total,
             sumeragi_rbc_backlog_chunks_total,

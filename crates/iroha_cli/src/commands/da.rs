@@ -468,7 +468,7 @@ impl SubmitArgs {
             metadata,
             &context.config().key_pair,
             manifest_bytes,
-        );
+        )?;
         let request_bytes = to_bytes(&request)
             .map_err(|err| eyre!("failed to encode DA request as Norito: {err}"))?;
         let request_json = norito::json::to_json_pretty(&request)

@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### ፕሮዳክሽን WSV
 
 - ነባር ሽፋን;
-  - የክርክር ውድቀት ባህሪ፡ `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - የመቆለፊያ-ትዕዛዝ ደህንነት በደረጃ ጀርባ ዙሪያ፡ `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - የክርክር ውድቀት ባህሪ፡ `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - የመቆለፊያ-ትዕዛዝ ደህንነት በደረጃ ጀርባ ዙሪያ፡ `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - ክፍተቶች:
   - በከባድ አለም ቁርጠኝነት ከፍተኛ ተቀባይነት ያለው የቁርጥ ቀን ጊዜን የሚያረጋግጥ የቁጥር ክርክር የለም።
   - የDA ጠቋሚ እድገት ተለዋዋጮች ባልተጠበቀ ሁኔታ ከተሰበሩ ከፍርሃት ነጻ የሆነ አያያዝ ምንም አይነት የተሃድሶ ሙከራ የለም
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## የተጠቆሙ የሙከራ ተጨማሪዎች1. `kura_writer_io_failures_do_not_panic` (ክፍል፣ የስህተት መርፌ)
 2. `kura_budget_check_scales_with_pending_depth` (የአፈጻጸም መመለሻ)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (ውህደት/ፐርፍ)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (የክርክር መመለሻ)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (የክርክር መመለሻ)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (የመቋቋም ችሎታ)
 6. `mock_wsv_admin_alias_requires_permissions` (የደህንነት መመለሻ)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS ጠባቂ)

@@ -161,7 +161,7 @@ translator: machine-google-reviewed
 
 - ད་ལྟོ་ཡོད་པའི་ཁྱབ་ཚད།
   - རྩོད་རྙོགས་ཕོལ་བེག་སྤྱོད་ལམ་: ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༠༧༦ཨེགསི་ (ཨའི་༡༨ཨེན་ཨའི་༠༠༠༠༠༠༠༠༧༧ཨེགསི་)
-  - ལྡེ་མིག་བཀོད་སྒྲིག་ཉེན་སྲུང་མཐའ་འཁོར་གྱི་རིམ་པ་ཅན་གྱི་རྒྱབ་ཁམས།: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - ལྡེ་མིག་བཀོད་སྒྲིག་ཉེན་སྲུང་མཐའ་འཁོར་གྱི་རིམ་པ་ཅན་གྱི་རྒྱབ་ཁམས།: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - བར་སྟོང་:
   - འབོར་ཚད་ཀྱི་རྩོད་བསྡུར་བརྟག་དཔྱད་མེད་པས་ འཛམ་གླིང་ཁས་བླངས་ལྗིད་པོའི་འོག་ལུ་ ཁས་བླངས་མཐོ་ཤོས་ངོས་ལེན་འབད་ཚུགས་པའི་ ཁས་བླངས་དུས་ཚོད་བཀག་བཞག།
   - ཌི་ཨེ་འོད་རྟགས་གོང་འཕེལ་གྱི་འགྱུར་བ་མེད་མི་ཚུ་ རེ་བ་མེད་པར་ ཆད་སོང་པ་ཅིན་ འདྲོག་བྱེལ་མེད་པའི་ འཛིན་སྐྱོང་གི་དོན་ལུ་ ལོག་ལྟའི་བརྟག་དཔྱད་མེད།
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## བསམ་འཆར་བཀོད་ཡོད་པའི་བརྟག་དཔྱད་ཁ་སྐོང་ཚུ།1. `kura_writer_io_failures_do_not_panic` (ཆ་ཤས་, འཛོལ་བ་བཙུགས།)
 2. `kura_budget_check_scales_with_pending_depth` (ལས་དོན་གྱི་ཕྱིར་ལོག)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (མཉམ་བསྡོམས་/perf)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (རྩོད་བསྡུར་འགྱུར་ལྡོག་)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (རྩོད་བསྡུར་འགྱུར་ལྡོག་)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (བརྟན་ལྷིང་།)
 6. `mock_wsv_admin_alias_requires_permissions` (ཉེན་སྲུང་འགྱུར་ལྡོག་)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (DoS སྲུང་སྐྱོབ)

@@ -179,12 +179,49 @@ SidecarCommitQcSafety ==
   /\ SidecarWrongHashQcRejected
   /\ SidecarAbsentQcRejected
 
+SidecarExpectedHashRejectsNonExactInputs ==
+  /\ TrackedWrongHeightRejected
+  /\ TrackedAuthoritativeRejected
+  /\ ObservedWrongHeightRejected
+  /\ ObservedAuthoritativeRejected
+  /\ CacheNewViewRejected
+  /\ CacheWrongHeightRejected
+  /\ CacheAuthoritativeRejected
+  /\ SidecarPrepareQcRejected
+  /\ SidecarWrongHeightQcRejected
+  /\ SidecarWrongHashQcRejected
+  /\ SidecarAbsentQcRejected
+
+SidecarExpectedHashPreservesDeterministicOrdering ==
+  /\ TrackedHigherPhaseSelected
+  /\ TrackedHigherViewSelected
+  /\ TrackedHigherHashSelected
+  /\ TrackedPrecedesDeferred
+  /\ DeferredPrecedesObserved
+  /\ CacheHigherPhaseSelected
+  /\ CacheHigherViewSelected
+  /\ CacheHigherHashSelected
+
+SidecarExpectedHashHasExactPositiveEvidence ==
+  /\ TrackedExactSelected
+  /\ DeferredExactSelected
+  /\ ObservedExactSelected
+  /\ CachePrepareExactSelected
+  /\ CacheCommitExactSelected
+  /\ SidecarCommitQcExactAccepted
+
+FrontierSidecarExpectedHashExactness ==
+  /\ SidecarExpectedHashRejectsNonExactInputs
+  /\ SidecarExpectedHashPreservesDeterministicOrdering
+  /\ SidecarExpectedHashHasExactPositiveEvidence
+
 SafetyFast ==
   /\ TrackedHintSafety
   /\ DeferredHintSafety
   /\ ObservedHeadSafety
   /\ CacheHintSafety
   /\ SidecarCommitQcSafety
+  /\ FrontierSidecarExpectedHashExactness
 
 TrackedHintAnchors ==
   /\ TrackedHintSafety

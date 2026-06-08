@@ -3371,6 +3371,12 @@ public final class HttpClientTransportTests {
     assert "GB82WEST1234".equals(
             IdentifierNormalization.ACCOUNT_NUMBER.normalize(" gb82-west-1234 ", "account"))
         : "Account normalization mismatch";
+    assert "\u0001\u0002".equals(
+            IdentifierNormalization.EXACT.normalize("\u0001\u0002", "input"))
+        : "Exact normalization must preserve non-whitespace control bytes";
+    expectIllegalArgument(
+        () -> IdentifierNormalization.EXACT.normalize(" \t\n", "input"),
+        "Exact normalization must reject whitespace-only input");
   }
 
   private static void identifierBfvEnvelopeBuilderProducesDeterministicCiphertext() {
@@ -3551,6 +3557,39 @@ public final class HttpClientTransportTests {
           assertBfvOperationKeyComponentVectors(operationVectors);
         },
         "rotation key count drift must be rejected");
+
+    expectAssertionOrIllegalArgument(
+        () -> {
+          final Map<String, Object> operationVectors =
+              object(loadSharedBfvFixture(), "operation_vectors");
+          operationVectors.remove("full_bootstrap_material");
+          assertBfvOperationKeyComponentVectors(operationVectors);
+        },
+        "missing full-bootstrap material fixture must be rejected");
+
+    expectAssertionOrIllegalArgument(
+        () -> {
+          final Map<String, Object> operationVectors =
+              object(loadSharedBfvFixture(), "operation_vectors");
+          final Map<String, Object> material =
+              object(operationVectors, "full_bootstrap_material");
+          material.put("vk_commitment_hex", string(material, "expected_statement_digest_hex"));
+          assertBfvOperationKeyComponentVectors(operationVectors);
+        },
+        "full-bootstrap verifier commitment drift must be rejected");
+
+    expectAssertionOrIllegalArgument(
+        () -> {
+          final Map<String, Object> operationVectors =
+              object(loadSharedBfvFixture(), "operation_vectors");
+          final Map<String, Object> material =
+              object(operationVectors, "full_bootstrap_material");
+          material.put(
+              "expected_material_digest_hex",
+              string(material, "expected_material_digest_hex").toUpperCase(Locale.ROOT));
+          assertBfvOperationKeyComponentVectors(operationVectors);
+        },
+        "noncanonical full-bootstrap material digest must be rejected");
   }
 
   private static void identifierBfvEnvelopeBuilderRejectsAdversarialPublicParameters() {
@@ -4055,6 +4094,7 @@ public final class HttpClientTransportTests {
           .equals(string(roundRefreshes.get(1), "expected_refresh_sha256"))
           : "bootstrap round refresh material must be domain separated";
     }
+    assertBfvFullBootstrapMaterialFixture(operationVectors);
     final List<Map<String, Object>> bootstrapRefreshVectors =
         objectList(operationVectors, "bootstrap_refresh_vectors");
     assert !bootstrapRefreshVectors.isEmpty() : "bootstrap refresh vectors must not be empty";
@@ -4201,6 +4241,51 @@ public final class HttpClientTransportTests {
         : "packed RotateLeft schedule coefficient count mismatch";
     assertBfvComponentDigest("packed RotateLeft schedule c0", string(packedRotateScheduleComponents, "c0_sha256"), componentDigests);
     assertBfvComponentDigest("packed RotateLeft schedule c1", string(packedRotateScheduleComponents, "c1_sha256"), componentDigests);
+  }
+
+  private static void assertBfvFullBootstrapMaterialFixture(
+      final Map<String, Object> operationVectors) {
+    final Map<String, Object> material = object(operationVectors, "full_bootstrap_material");
+    assert "iroha_bfv_full_bootstrap_v1".equals(string(material, "circuit_id"))
+        : "full-bootstrap circuit id mismatch";
+    assert number(material, "max_bootstrap_depth").longValue() == 1
+        : "full-bootstrap max depth mismatch";
+
+    final List<String> digestFields =
+        java.util.Arrays.asList(
+            "parameter_digest_hex",
+            "rns_modulus_chain_digest_hex",
+            "key_switch_decomposition_chain_digest_hex",
+            "coefficient_to_slot_key_digest_hex",
+            "slot_to_coefficient_key_digest_hex",
+            "blind_rotation_key_digest_hex",
+            "sample_extraction_key_digest_hex",
+            "accumulator_digest_hex",
+            "proof_public_input_schema_digest_hex",
+            "prover_key_digest_hex",
+            "verifier_key_digest_hex",
+            "vk_commitment_hex",
+            "expected_material_digest_hex",
+            "expected_statement_digest_hex");
+    final List<String> uniqueDigestValues = new ArrayList<>();
+    for (final String field : digestFields) {
+      final String value = string(material, field);
+      assertBfvLowerDigest("full-bootstrap material " + field, value);
+      if (!"vk_commitment_hex".equals(field)) {
+        assert !uniqueDigestValues.contains(value)
+            : "full-bootstrap material digest roles must be unique";
+        uniqueDigestValues.add(value);
+      }
+    }
+    assert string(object(operationVectors, "rns_modulus_chain"), "expected_digest_hex")
+            .equals(string(material, "rns_modulus_chain_digest_hex"))
+        : "full-bootstrap RNS digest mismatch";
+    assert string(material, "verifier_key_digest_hex")
+            .equals(string(material, "vk_commitment_hex"))
+        : "full-bootstrap verifier-key commitment mismatch";
+    assert !string(material, "expected_material_digest_hex")
+            .equals(string(material, "expected_statement_digest_hex"))
+        : "full-bootstrap material and statement digests must differ";
   }
 
   private static void assertBfvRnsModulusChainFixture(

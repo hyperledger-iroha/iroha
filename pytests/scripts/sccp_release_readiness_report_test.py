@@ -6,6 +6,7 @@ import hashlib
 import importlib
 import json
 import re
+import shlex
 import subprocess
 import sys
 from importlib.util import module_from_spec, spec_from_file_location
@@ -14,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "sccp_release_readiness_report.py"
+VERIFY_SCRIPT = ROOT / "scripts" / "sccp_verify_release_bundle.py"
 CORRIDOR_SCRIPT = ROOT / "scripts" / "check_sccp_production_corridor.sh"
 ALL_LANES_TESTS = ROOT / "pytests" / "scripts" / "sccp_all_lanes_evidence_test.py"
 PHASES = (
@@ -1255,6 +1257,20 @@ def load_report_module():
     return module
 
 
+def load_verify_helpers():
+    """Load release-bundle verifier helpers without running its CLI."""
+
+    spec = spec_from_file_location(
+        "sccp_release_bundle_verify_helpers_for_readiness",
+        VERIFY_SCRIPT,
+    )
+    module = module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)  # type: ignore[assignment]
+    return module
+
+
 def active_evm_live_chain_id(report):
     """Return the decimal EVM chain id required by the active launch lane."""
 
@@ -1511,6 +1527,30 @@ def test_release_readiness_active_launch_policy_is_ethereum_mainnet() -> None:
     assert report.ACTIVE_LAUNCH_DISPLAY == "Ethereum mainnet"
 
 
+def test_release_readiness_submission_surfaces_match_supported_launch_scope() -> None:
+    """Public submission surfaces must match the supported SCCP launch lanes."""
+
+    report = load_report_module()
+    passed_phases = {
+        phase: "passed"
+        for phase in (
+            *report.USER_PROVER_SDK_PHASES,
+            report.EVM_NATIVE_DOTNET_PHASE,
+            "contract-smoke",
+            "core-admission",
+        )
+    }
+
+    surfaces = report._submission_surfaces(passed_phases)
+
+    assert [surface["lanes"] for surface in surfaces] == [
+        "eth,bsc",
+        "tron",
+        "sol",
+        "ton",
+    ]
+
+
 def test_release_readiness_evidence_phase_requires_evm_script_suites() -> None:
     """The evidence phase transcript must prove the EVM evidence suites ran."""
 
@@ -1533,6 +1573,101 @@ def test_release_readiness_evidence_phase_inventory_matches_corridor_runner() ->
 
     for test_path in corridor_evidence_script_tests():
         assert any(test_path in fragment for fragment in required_fragments)
+
+
+def test_release_readiness_evidence_phase_requires_retired_network_surface_scan() -> None:
+    """Readiness reports must prove the retired-network surface scan ran."""
+
+    report = load_report_module()
+    retired_scan = "pytests/scripts/sccp_retired_network_surface_test.py"
+
+    assert retired_scan in corridor_evidence_script_tests()
+    assert retired_scan in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "evidence-scripts"
+    ]
+
+
+def test_release_readiness_verifier_reports_removed_retired_network_pipeline_doc_guard(
+    tmp_path: Path,
+) -> None:
+    """Readiness coverage must keep translated pipeline-doc scan guards pinned."""
+
+    verifier = load_verify_helpers()
+    required_markers = verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS[0][1]
+    removed_marker = "def test_retired_network_surface_scan_covers_pipeline_translations"
+    guard = tmp_path / "sccp_retired_network_surface_test.py"
+    guard.write_text(
+        "\n".join(marker for marker in required_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
+        (
+            (
+                guard,
+                required_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP retired network-surface guard source inventory" in error
+        and str(guard) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+
+def test_release_readiness_evidence_phase_accepts_pytest_runner_command_shape() -> None:
+    """The transcript parser must accept the production corridor pytest command."""
+
+    report = load_report_module()
+    command = "+ python3 -m pytest -q " + " ".join(corridor_evidence_script_tests())
+
+    for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]:
+        assert report._phase_command_matches_required_fragment(
+            "evidence-scripts",
+            command,
+            fragment,
+        )
+
+
+def test_release_readiness_phase_command_matchers_accept_corridor_dry_run() -> None:
+    """All required phase commands must match the runner's real dry-run output."""
+
+    report = load_report_module()
+    completed = subprocess.run(
+        [str(CORRIDOR_SCRIPT), "--dry-run"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    for phase, fragments in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.items():
+        phase_block = report._phase_transcript_block(phase, completed.stdout)
+        assert phase_block is not None, f"missing dry-run phase block: {phase}"
+        for fragment in fragments:
+            assert report._phase_block_has_command_fragment(
+                phase,
+                phase_block,
+                fragment,
+            ), f"{phase} dry-run command did not satisfy {fragment}"
+
+
+def test_release_readiness_phase_command_matchers_reject_echoed_fragments() -> None:
+    """Required phase fragments cannot be satisfied by traced echo commands."""
+
+    report = load_report_module()
+
+    for phase, fragments in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS.items():
+        for fragment in fragments:
+            command = f"+ echo {shlex.quote(fragment)}"
+            assert not report._phase_command_matches_required_fragment(
+                phase,
+                command,
+                fragment,
+            ), f"{phase} accepted echoed command fragment: {fragment}"
 
 
 def test_release_readiness_java_android_phase_requires_source_proof_harness() -> None:
@@ -3554,14 +3689,11 @@ def test_release_readiness_report_passes_for_complete_evidence_and_corridor(
     assert "`1700144`" in completed.stdout
     assert "`solana_live_programdata_snapshot`" in completed.stdout
     assert "`ton_live_account_snapshot`" in completed.stdout
-    assert "`substrate_finalized_runtime_snapshot`" in completed.stdout
     assert "## User Prover Submission Surfaces" in completed.stdout
     assert "| `eth,bsc` | `evm-groth16-bn254-v1`" in completed.stdout
     assert "| `tron` | `tron-groth16-bn254-v1`" in completed.stdout
     assert "| `sol` | `sccp-solana-recursive-mainnet-v1`" in completed.stdout
     assert "| `ton` | `ton-contract-v1`" in completed.stdout
-    assert "| `substrate` | `substrate-runtime-v1`" not in completed.stdout
-    assert "Substrate runtime call envelope" not in completed.stdout
     assert " | passed |" in completed.stdout
     assert "`governed_deployment_evidence` | ready" in completed.stdout
     assert "`live_route_canary_evidence` | ready" in completed.stdout
@@ -4696,6 +4828,56 @@ def test_release_readiness_report_rejects_forged_phase_log(
     ) in completed.stdout
 
 
+def test_release_readiness_report_rejects_prefix_alias_phase_marker(
+    tmp_path: Path,
+) -> None:
+    """A phase marker must match the claimed phase name exactly."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    corridor_log = tmp_path / "forged-rust-sccp-prefix-alias.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp-forged",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "rust-sccp=passed",
+            "--phase-evidence",
+            f"rust-sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase rust-sccp evidence artifact is missing "
+        "the phase marker"
+    ) in completed.stdout
+
+
 def test_release_readiness_report_rejects_phase_log_without_expected_command(
     tmp_path: Path,
 ) -> None:
@@ -4836,6 +5018,176 @@ def test_release_readiness_report_requires_release_verifier_tests_in_evidence_ph
         ) in completed.stdout
 
 
+def test_release_readiness_report_requires_retired_network_scan_evidence(
+    tmp_path: Path,
+) -> None:
+    """The evidence phase must prove the retired-network surface scan ran."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_retired_network_surface_test.py"
+    assert omitted_fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "evidence-scripts"
+    ]
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+        if fragment != omitted_fragment
+    ]
+    corridor_log = tmp_path / "evidence-scripts-without-retired-network-scan.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "evidence-scripts=passed",
+            "--phase-evidence",
+            f"evidence-scripts={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase evidence-scripts evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in completed.stdout
+
+
+def test_release_readiness_report_rejects_output_only_retired_network_scan_evidence(
+    tmp_path: Path,
+) -> None:
+    """The retired-network scan must be listed as a traced corridor command."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_retired_network_surface_test.py"
+    assert omitted_fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+        "evidence-scripts"
+    ]
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+        if fragment != omitted_fragment
+    ]
+    corridor_log = tmp_path / "evidence-scripts-retired-network-output-only.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                omitted_fragment,
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "evidence-scripts=passed",
+            "--phase-evidence",
+            f"evidence-scripts={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase evidence-scripts evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in completed.stdout
+
+
+def test_release_readiness_report_rejects_echoed_retired_network_scan_command(
+    tmp_path: Path,
+) -> None:
+    """The retired-network scan path must appear on the pytest command line."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "pytests/scripts/sccp_retired_network_surface_test.py"
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["evidence-scripts"]
+        if fragment != omitted_fragment
+    ]
+    corridor_log = tmp_path / "evidence-scripts-retired-network-echo.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: evidence-scripts",
+                *phase_command_lines(required_fragments),
+                f"+ echo {omitted_fragment}",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["evidence-scripts"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "evidence-scripts=passed",
+            "--phase-evidence",
+            f"evidence-scripts={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase evidence-scripts evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
+    ) in completed.stdout
+
+
 def test_release_readiness_report_rejects_phase_log_without_phase_completion(
     tmp_path: Path,
 ) -> None:
@@ -4885,6 +5237,149 @@ def test_release_readiness_report_rejects_phase_log_without_phase_completion(
     ) in completed.stdout
 
 
+def test_release_readiness_report_rejects_command_line_only_completion_marker(
+    tmp_path: Path,
+) -> None:
+    """A traced echo must not satisfy the phase completion marker."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    corridor_log = tmp_path / "forged-rust-sccp-echoed-completion.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"]
+                ),
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"],
+                "+ echo SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence",
+            f"rust-sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase rust-sccp evidence artifact is missing "
+        "the phase-block completion sentinel"
+    ) in completed.stdout
+
+
+def test_release_readiness_report_rejects_command_line_only_full_completion_marker(
+    tmp_path: Path,
+) -> None:
+    """A full-corridor completion fallback must be observed output."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    lines: list[str] = []
+    for phase in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS:
+        lines.append(f"==> SCCP production corridor: {phase}")
+        if phase == "rust-sccp":
+            lines.extend(
+                phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"]
+                )
+            )
+            lines.extend(report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"])
+    lines.extend(("+ echo SCCP production corridor completed.", ""))
+    corridor_log = tmp_path / "forged-rust-sccp-echoed-full-completion.log"
+    corridor_log.write_text("\n".join(lines), encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence",
+            f"rust-sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase rust-sccp evidence artifact is missing "
+        "the phase-block completion sentinel"
+    ) in completed.stdout
+
+
+def test_release_readiness_report_rejects_command_line_only_success_marker(
+    tmp_path: Path,
+) -> None:
+    """Success markers must come from output, not traced echo commands."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    success_marker = report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["rust-sccp"][0]
+    corridor_log = tmp_path / "forged-rust-sccp-echoed-success.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: rust-sccp",
+                *phase_command_lines(
+                    report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["rust-sccp"]
+                ),
+                f"+ echo {success_marker}",
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence",
+            f"rust-sccp={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase rust-sccp evidence artifact is missing "
+        f"expected phase-block success marker: {success_marker}"
+    ) in completed.stdout
+
+
 def test_release_readiness_report_rejects_output_only_phase_command_fragment(
     tmp_path: Path,
 ) -> None:
@@ -4930,6 +5425,61 @@ def test_release_readiness_report_rejects_output_only_phase_command_fragment(
     assert (
         "production corridor phase rust-sccp evidence artifact is missing "
         "expected phase-block command: cargo test -p iroha_sccp -- --nocapture"
+    ) in completed.stdout
+
+
+def test_release_readiness_report_rejects_echoed_js_phase_command_fragment(
+    tmp_path: Path,
+) -> None:
+    """The JS phase must prove required tests came from the node test command."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    report = load_report_module()
+    omitted_fragment = "javascript/iroha_js/test/sccpPackageExports.test.js"
+    required_fragments = [
+        fragment
+        for fragment in report.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["js-sdk"]
+        if fragment != omitted_fragment
+    ]
+    corridor_log = tmp_path / "js-sdk-echoed-package-exports.log"
+    corridor_log.write_text(
+        "\n".join(
+            (
+                "==> SCCP production corridor: js-sdk",
+                *phase_command_lines(required_fragments),
+                f"+ echo {omitted_fragment}",
+                *report.PHASE_TRANSCRIPT_SUCCESS_FRAGMENTS["js-sdk"],
+                "SCCP production corridor completed.",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--require-phase-evidence",
+            "--phase-result",
+            "all=missing",
+            "--phase-result",
+            "js-sdk=passed",
+            "--phase-evidence",
+            f"js-sdk={corridor_log}",
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Status: NOT READY" in completed.stdout
+    assert (
+        "production corridor phase js-sdk evidence artifact is missing "
+        f"expected phase-block command: {omitted_fragment}"
     ) in completed.stdout
 
 

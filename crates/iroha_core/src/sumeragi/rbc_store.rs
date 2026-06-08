@@ -1176,6 +1176,7 @@ fn validate_chunks(session: &PersistedSession) -> Result<(), &'static str> {
 mod tests {
     use std::{
         fs,
+        path::{Path, PathBuf},
         time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
@@ -1240,6 +1241,66 @@ mod tests {
             last_updated_ms: 0,
             session_roster: Vec::new(),
         }
+    }
+
+    fn store_for_tests(dir: &Path) -> ChunkStore {
+        ChunkStore::new(
+            dir.to_path_buf(),
+            Duration::from_secs(120),
+            4,
+            1 << 19,
+            8,
+            1 << 20,
+        )
+        .expect("chunk store init")
+    }
+
+    fn write_persisted_session_at(
+        dir: &Path,
+        path_key: &SessionKey,
+        persisted: &PersistedSession,
+    ) -> PathBuf {
+        let path = ChunkStore::make_session_path(dir, path_key);
+        let encoded = to_bytes(persisted).expect("encode persisted session");
+        fs::write(&path, &encoded).expect("write persisted session");
+        path
+    }
+
+    fn assert_persisted_session_rejected_and_deleted(
+        label: &str,
+        path_key: SessionKey,
+        persisted: PersistedSession,
+        expected_chain_hash: Hash,
+        expected_manifest: SoftwareManifest,
+    ) {
+        let dir = tempdir().unwrap();
+        let store = store_for_tests(dir.path());
+        let path = write_persisted_session_at(dir.path(), &path_key, &persisted);
+
+        let load = store
+            .load(&expected_chain_hash, &expected_manifest)
+            .unwrap_or_else(|error| panic!("{label}: load failed: {error}"));
+
+        assert!(
+            load.sessions.is_empty(),
+            "{label}: rejected persisted session must not load"
+        );
+        assert!(
+            !path.exists(),
+            "{label}: rejected persisted session file must be deleted"
+        );
+    }
+
+    fn persisted_single_chunk_session(
+        key: SessionKey,
+        chain_hash: Hash,
+        manifest: &SoftwareManifest,
+        byte: u8,
+        len: usize,
+    ) -> PersistedSession {
+        let mut session = RbcSession::test_new(1, None, None, 0);
+        session.test_note_chunk(0, vec![byte; len], 0);
+        session.to_persisted(key, chain_hash, manifest, &[])
     }
 
     /// Debug helper: set `RBC_SESSION_PATH` to a persisted session file to validate it.
@@ -1705,6 +1766,378 @@ mod tests {
             .expect("load persisted sessions");
         assert!(load.sessions.is_empty(), "invalid root should be dropped");
         assert!(!path.exists(), "store should delete invalid session files");
+    }
+
+    #[test]
+    fn store_validation_deletes_adversarial_metadata_and_integrity_failures() {
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let base_key = session_key(20);
+        let mut wrong_manifest = manifest.clone();
+        wrong_manifest.version = "different-version".into();
+
+        let mut invalid = sample_persisted_session(base_key, chain_hash, manifest.clone());
+        invalid.invalid = true;
+        assert_persisted_session_rejected_and_deleted(
+            "invalid flag",
+            base_key,
+            invalid,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut unsupported_version =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        unsupported_version.format_version = PERSIST_VERSION.saturating_add(1);
+        assert_persisted_session_rejected_and_deleted(
+            "unsupported version",
+            base_key,
+            unsupported_version,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let wrong_path_key = session_key(21);
+        let mismatched_key =
+            sample_persisted_session(session_key(22), chain_hash, manifest.clone());
+        assert_persisted_session_rejected_and_deleted(
+            "path/key mismatch",
+            wrong_path_key,
+            mismatched_key,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let wrong_chain =
+            sample_persisted_session(base_key, Hash::new(b"other-chain"), manifest.clone());
+        assert_persisted_session_rejected_and_deleted(
+            "wrong chain",
+            base_key,
+            wrong_chain,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let wrong_manifest_session = sample_persisted_session(base_key, chain_hash, wrong_manifest);
+        assert_persisted_session_rejected_and_deleted(
+            "wrong manifest",
+            base_key,
+            wrong_manifest_session,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut zero_total_with_digest =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        zero_total_with_digest.chunk_digests.push([0x11; 32]);
+        assert_persisted_session_rejected_and_deleted(
+            "zero total with digest",
+            base_key,
+            zero_total_with_digest,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut zero_total_with_chunk =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        zero_total_with_chunk.chunks.push(PersistedChunk {
+            idx: 0,
+            bytes: vec![0xAA],
+        });
+        assert_persisted_session_rejected_and_deleted(
+            "zero total with chunk",
+            base_key,
+            zero_total_with_chunk,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut too_many_chunks =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xA0, 8);
+        too_many_chunks.chunks.push(PersistedChunk {
+            idx: 1,
+            bytes: vec![0xA1; 8],
+        });
+        assert_persisted_session_rejected_and_deleted(
+            "too many chunks",
+            base_key,
+            too_many_chunks,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut duplicate_chunk =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xA2, 8);
+        duplicate_chunk.chunks.push(PersistedChunk {
+            idx: 0,
+            bytes: vec![0xA3; 8],
+        });
+        assert_persisted_session_rejected_and_deleted(
+            "duplicate chunk",
+            base_key,
+            duplicate_chunk,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut chunk_out_of_range =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xA4, 8);
+        chunk_out_of_range.chunks[0].idx = 1;
+        assert_persisted_session_rejected_and_deleted(
+            "chunk out of range",
+            base_key,
+            chunk_out_of_range,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut empty_ready_signature =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        empty_ready_signature.ready_signatures.push(PersistedReady {
+            sender: 0,
+            signature: Vec::new(),
+        });
+        assert_persisted_session_rejected_and_deleted(
+            "empty ready signature",
+            base_key,
+            empty_ready_signature,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut duplicate_ready = sample_persisted_session(base_key, chain_hash, manifest.clone());
+        duplicate_ready.ready_signatures.push(PersistedReady {
+            sender: 0,
+            signature: vec![0x01],
+        });
+        duplicate_ready.ready_signatures.push(PersistedReady {
+            sender: 0,
+            signature: vec![0x02],
+        });
+        assert_persisted_session_rejected_and_deleted(
+            "duplicate ready sender",
+            base_key,
+            duplicate_ready,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut ready_sender_oob = sample_persisted_session(base_key, chain_hash, manifest.clone());
+        ready_sender_oob.session_roster.push(test_peer_id(1));
+        ready_sender_oob.ready_signatures.push(PersistedReady {
+            sender: 1,
+            signature: vec![0x01],
+        });
+        assert_persisted_session_rejected_and_deleted(
+            "ready sender out of roster",
+            base_key,
+            ready_sender_oob,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut deliver_sender_oob =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        deliver_sender_oob.session_roster.push(test_peer_id(1));
+        deliver_sender_oob.delivered = true;
+        deliver_sender_oob.deliver_sender = Some(1);
+        deliver_sender_oob.deliver_signature = Some(vec![0x01]);
+        assert_persisted_session_rejected_and_deleted(
+            "deliver sender out of roster",
+            base_key,
+            deliver_sender_oob,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut delivered_missing_signature =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        delivered_missing_signature.delivered = true;
+        delivered_missing_signature.deliver_sender = Some(0);
+        assert_persisted_session_rejected_and_deleted(
+            "delivered without signature",
+            base_key,
+            delivered_missing_signature,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut delivered_empty_signature =
+            sample_persisted_session(base_key, chain_hash, manifest.clone());
+        delivered_empty_signature.delivered = true;
+        delivered_empty_signature.deliver_sender = Some(0);
+        delivered_empty_signature.deliver_signature = Some(Vec::new());
+        assert_persisted_session_rejected_and_deleted(
+            "delivered with empty signature",
+            base_key,
+            delivered_empty_signature,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut payload_hash_mismatch =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xA5, 8);
+        payload_hash_mismatch.payload_hash = Some(Hash::prehashed([0xFF; 32]));
+        assert_persisted_session_rejected_and_deleted(
+            "payload hash mismatch",
+            base_key,
+            payload_hash_mismatch,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut digest_mismatch =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xA6, 8);
+        digest_mismatch.chunk_digests[0] = [0xEE; 32];
+        assert_persisted_session_rejected_and_deleted(
+            "chunk digest mismatch",
+            base_key,
+            digest_mismatch,
+            chain_hash,
+            manifest.clone(),
+        );
+
+        let mut computed_root_mismatch =
+            persisted_single_chunk_session(base_key, chain_hash, &manifest, 0xA7, 8);
+        computed_root_mismatch.computed_chunk_root = Some(Hash::prehashed([0xDD; 32]));
+        assert_persisted_session_rejected_and_deleted(
+            "computed root mismatch",
+            base_key,
+            computed_root_mismatch,
+            chain_hash,
+            manifest,
+        );
+    }
+
+    #[test]
+    fn non_destructive_metadata_inspection_rejects_invalid_chunks_without_deleting() {
+        let dir = tempdir().unwrap();
+        let key = session_key(23);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = persisted_single_chunk_session(key, chain_hash, &manifest, 0xB0, 8);
+        persisted.chunks.push(PersistedChunk {
+            idx: 0,
+            bytes: vec![0xB1; 8],
+        });
+        let path = write_persisted_session_at(dir.path(), &key, &persisted);
+
+        let metadata = inspect_session_metadata_from_dir(dir.path(), &key, &chain_hash)
+            .expect("inspect metadata");
+
+        assert!(metadata.is_none());
+        assert!(
+            path.exists(),
+            "non-destructive inspection must not delete invalid chunk snapshots"
+        );
+    }
+
+    #[test]
+    fn hard_session_limit_evicts_oldest_sessions_and_reports_hard_pressure() {
+        let dir = tempdir().unwrap();
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let keys = [session_key(24), session_key(25), session_key(26)];
+        for (idx, key) in keys.iter().enumerate() {
+            let mut persisted = sample_persisted_session(*key, chain_hash, manifest.clone());
+            persisted.last_updated_ms = u64::try_from(idx + 1).expect("timestamp fits");
+            write_persisted_session_at(dir.path(), key, &persisted);
+        }
+
+        let store = ChunkStore::new(
+            dir.path().to_path_buf(),
+            Duration::ZERO,
+            2,
+            1 << 20,
+            2,
+            1 << 20,
+        )
+        .expect("chunk store init");
+        let load = store.load(&chain_hash, &manifest).expect("load sessions");
+
+        assert_eq!(load.removed, vec![keys[0]]);
+        assert!(matches!(
+            load.pressure,
+            StorePressure::HardLimit {
+                sessions: 2,
+                bytes: 0
+            }
+        ));
+        let retained: Vec<SessionKey> = load.sessions.iter().map(PersistedSession::key).collect();
+        assert_eq!(retained, vec![keys[1], keys[2]]);
+        assert!(
+            !ChunkStore::make_session_path(dir.path(), &keys[0]).exists(),
+            "oldest session should be deleted"
+        );
+        assert!(ChunkStore::make_session_path(dir.path(), &keys[1]).exists());
+        assert!(ChunkStore::make_session_path(dir.path(), &keys[2]).exists());
+    }
+
+    #[test]
+    fn hard_byte_limit_evicts_oldest_payloads_until_under_cap() {
+        let dir = tempdir().unwrap();
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let keys = [session_key(27), session_key(28), session_key(29)];
+        for (idx, key) in keys.iter().enumerate() {
+            let mut persisted = persisted_single_chunk_session(
+                *key,
+                chain_hash,
+                &manifest,
+                u8::try_from(0xC0 + idx).expect("byte fits"),
+                20,
+            );
+            persisted.last_updated_ms = u64::try_from(idx + 1).expect("timestamp fits");
+            write_persisted_session_at(dir.path(), key, &persisted);
+        }
+
+        let store = ChunkStore::new(dir.path().to_path_buf(), Duration::ZERO, 8, 40, 8, 40)
+            .expect("chunk store init");
+        let load = store.load(&chain_hash, &manifest).expect("load sessions");
+
+        assert_eq!(load.removed, vec![keys[0]]);
+        assert!(matches!(
+            load.pressure,
+            StorePressure::HardLimit {
+                sessions: 2,
+                bytes: 40
+            }
+        ));
+        let retained: Vec<SessionKey> = load.sessions.iter().map(PersistedSession::key).collect();
+        assert_eq!(retained, vec![keys[1], keys[2]]);
+    }
+
+    #[test]
+    fn disabled_store_removes_existing_snapshot_on_persist() {
+        let dir = tempdir().unwrap();
+        let key = session_key(30);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut session = RbcSession::test_new(1, None, None, 0);
+        session.test_note_chunk(0, vec![0xD0; 8], 0);
+        let enabled = store_for_tests(dir.path());
+        enabled
+            .persist_session(key, &session, &chain_hash, &manifest, &[])
+            .expect("persist enabled session");
+        assert!(ChunkStore::make_session_path(dir.path(), &key).exists());
+
+        let disabled = ChunkStore::new(dir.path().to_path_buf(), Duration::ZERO, 0, 0, 0, 1 << 20)
+            .expect("disabled chunk store init");
+        let outcome = disabled
+            .persist_session(key, &session, &chain_hash, &manifest, &[])
+            .expect("persist through disabled store");
+
+        assert!(matches!(
+            outcome.pressure,
+            StorePressure::Normal {
+                sessions: 0,
+                bytes: 0
+            }
+        ));
+        assert!(
+            !ChunkStore::make_session_path(dir.path(), &key).exists(),
+            "disabled store should remove the old snapshot for the same key"
+        );
     }
 
     #[test]

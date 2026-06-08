@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import shlex
 import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -48,14 +49,12 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pytests/scripts/sccp_solana_destination_evidence_test.py",
         "pytests/scripts/sccp_solana_live_evidence_test.py",
         "pytests/scripts/sccp_solana_source_state_evidence_test.py",
-        "pytests/scripts/sccp_substrate_destination_evidence_test.py",
-        "pytests/scripts/sccp_substrate_live_evidence_test.py",
-        "pytests/scripts/sccp_substrate_source_evidence_test.py",
         "pytests/scripts/sccp_ton_destination_evidence_test.py",
         "pytests/scripts/sccp_ton_live_evidence_test.py",
         "pytests/scripts/sccp_ton_source_state_evidence_test.py",
         "pytests/scripts/sccp_tron_live_evidence_test.py",
         "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+        "pytests/scripts/sccp_retired_network_surface_test.py",
     ),
     "js-sdk": (
         "--test javascript/iroha_js/test/sccpSolanaProver.test.js",
@@ -118,9 +117,6 @@ SCCP_DOMAIN_BSC = 2
 SCCP_DOMAIN_SOL = 3
 SCCP_DOMAIN_TON = 4
 SCCP_DOMAIN_TRON = 5
-SCCP_DOMAIN_SORA_KUSAMA = 6
-SCCP_DOMAIN_SORA_POLKADOT = 7
-SCCP_DOMAIN_SORA2 = 8
 ACTIVE_LAUNCH_DOMAIN = SCCP_DOMAIN_ETH
 ACTIVE_LAUNCH_CHAIN = "eth"
 ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
@@ -148,8 +144,6 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
 ];""",
-            "pub const SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER_V1: &str =",
-            "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope",
         ),
     ),
     (
@@ -162,13 +156,6 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
 )""",
-            """SCCP_UNSUPPORTED_LAUNCH_REMOTE_DOMAINS = tuple(
-    domain
-    for domain in SCCP_CORE_REMOTE_DOMAINS
-    if domain not in SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS
-)""",
-            "SCCP_UNSUPPORTED_SUBSTRATE_POLKADOT_LAUNCH_BLOCKER = (",
-            "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope",
         ),
     ),
     (
@@ -188,9 +175,6 @@ ALL_LANES_REQUIRED_DOMAINS = (
     SCCP_DOMAIN_SOL,
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
-    SCCP_DOMAIN_SORA_KUSAMA,
-    SCCP_DOMAIN_SORA_POLKADOT,
-    SCCP_DOMAIN_SORA2,
 )
 ALL_LANES_SUPPORTED_LAUNCH_DOMAINS = (
     SCCP_DOMAIN_ETH,
@@ -199,23 +183,13 @@ ALL_LANES_SUPPORTED_LAUNCH_DOMAINS = (
     SCCP_DOMAIN_TON,
     SCCP_DOMAIN_TRON,
 )
-ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS = tuple(
-    domain
-    for domain in ALL_LANES_REQUIRED_DOMAINS
-    if domain not in ALL_LANES_SUPPORTED_LAUNCH_DOMAINS
-)
-ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER = (
-    "Substrate/Polkadot-family SCCP lanes are not supported in the current launch scope"
-)
+ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS: tuple[int, ...] = ()
 ALL_LANES_CHAIN_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: "eth",
     SCCP_DOMAIN_BSC: "bsc",
     SCCP_DOMAIN_SOL: "sol",
     SCCP_DOMAIN_TON: "ton",
     SCCP_DOMAIN_TRON: "tron",
-    SCCP_DOMAIN_SORA_KUSAMA: "sora-kusama",
-    SCCP_DOMAIN_SORA_POLKADOT: "sora-polkadot",
-    SCCP_DOMAIN_SORA2: "sora2",
 }
 ALL_LANES_ROUTE_ALLOWLIST_ID_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: "sccp:eth:route-allowlist:ethereum-mainnet:v1",
@@ -223,9 +197,6 @@ ALL_LANES_ROUTE_ALLOWLIST_ID_BY_DOMAIN = {
     SCCP_DOMAIN_SOL: "sccp:sol:route-allowlist:solana-mainnet-beta:v1",
     SCCP_DOMAIN_TON: "sccp:ton:route-allowlist:ton-mainnet:v1",
     SCCP_DOMAIN_TRON: "sccp:tron:route-allowlist:tron-mainnet:v1",
-    SCCP_DOMAIN_SORA_KUSAMA: "sccp:sora-kusama:route-allowlist:runtime:v1",
-    SCCP_DOMAIN_SORA_POLKADOT: "sccp:sora-polkadot:route-allowlist:runtime:v1",
-    SCCP_DOMAIN_SORA2: "sccp:sora2:route-allowlist:runtime:v1",
 }
 EVM_EXPECTED_RPC_CHAIN_IDS = {
     SCCP_DOMAIN_ETH: 1,
@@ -2880,6 +2851,54 @@ ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_FORBIDDEN_MARKERS = (
     "active BSC launch lane",
     "with the first-release BSC-mainnet launch policy",
 )
+SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = (
+    (
+        "docs/source/bridge_proofs.md",
+        (
+            "supported launch lanes only: `eth`, `bsc`, `sol`, `ton`, and `tron`",
+            "the intended verifier target (`EVM`, `Solana`, `TON`, or `TRON`)",
+            "the same pattern applies to supported `bsc`, `sol`, `ton`, and `tron`",
+            "canonical supported launch-domain key (`eth`,",
+            "`evm-groth16-bn254-v1`, and `tron-groth16-bn254-v1`)",
+        ),
+    ),
+)
+SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS = ()
+SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
+    (
+        "pytests/scripts/sccp_retired_network_surface_test.py",
+        (
+            "def test_retired_network_surface_scan_roots_exist_and_are_nonempty",
+            "def test_retired_network_patterns_catch_adversarial_examples",
+            "def test_retired_network_surface_scan_covers_expected_files",
+            "def test_retired_network_surface_scan_covers_pipeline_translations",
+            "def test_retired_network_surface_scan_allows_only_explicit_no_support_note",
+            "def test_active_tree_excludes_retired_network_surface_tokens",
+            "BANNED_PATTERNS",
+            "SCCP_EXPLICIT_UNSUPPORTED_SCOPE_NOTE_SNIPPETS",
+            "def _is_explicit_unsupported_scope_note_match",
+            '_literal("sub", "strate")',
+            '_literal("pol", "kadot")',
+            '_literal("ku", "sama")',
+            '_literal(_RUNTIME, " ", _SC, _ALE)',
+            'Path("docs/source/engineering_backlog.md")',
+            'Path("docs/source")',
+            'new_pipeline*.md',
+            'Path("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp")',
+            'Path("crates/iroha_sccp/src/lib.rs")',
+            'Path("javascript/iroha_js/test/sccpPackageExports.test.js")',
+            'Path("python/iroha_torii_client/tests/sccp_test.py")',
+        ),
+    ),
+)
+SCCP_RETIRED_NETWORK_SURFACE_GUARD_FORBIDDEN_MARKERS = (
+    "APPROVED_RETIREMENT_NOTICE_PATTERNS",
+    "STATUS_RETIREMENT_NOTICE_PATTERN",
+    "_approved_retirement_notice_spans",
+    "_is_approved_retirement_notice_match",
+    "_CHAIN_STYLE_PHRASE",
+    "_CHAIN_NAMES_PHRASE",
+)
 ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS = (
     (
         "crates/iroha_core/src/smartcontracts/isi/world.rs",
@@ -4065,48 +4084,6 @@ USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK = {
             "TonSccpProver.buildSubmission",
         ),
     },
-    "substrate": {
-        "js-sdk": (
-            "buildSubstrateSccpProofRequest",
-            "buildSubstrateSccpRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "witnessProvider",
-            "proveFn",
-            "buildSubstrateSccpSubmission",
-        ),
-        "python-sdk": (
-            "build_substrate_sccp_proof_request",
-            "build_substrate_sccp_runtime_storage_proof_request",
-            "SubstrateSccpProver",
-            "witness_provider",
-            "prove",
-            "build_substrate_sccp_submission",
-        ),
-        "swift-sdk": (
-            "buildSubstrateSccpProofRequest",
-            "buildSubstrateSccpRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "SubstrateSccpWitnessProvider",
-            "SubstrateSccpProver.ProveFunction",
-            "buildSubstrateSccpSubmission",
-        ),
-        "kotlin-sdk": (
-            "SccpSubstrate.buildProofRequest",
-            "SccpSourceProofs.buildSubstrateRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "SubstrateSccpWitnessProvider",
-            "SubstrateSccpProofEngine",
-            "SccpSubstrate.buildSubmission",
-        ),
-        "java-android": (
-            "SubstrateSccpProver.buildProofRequest",
-            "SourceSccpProofs.buildSubstrateRuntimeStorageProofRequest",
-            "SubstrateSccpProver",
-            "SubstrateSccpProver.WitnessProvider",
-            "SubstrateSccpProver.ProofEngine",
-            "SubstrateSccpProver.buildSubmission",
-        ),
-    },
 }
 RELEASE_CHECKLIST_KEYS = {"ready", "items"}
 RELEASE_CHECKLIST_ITEM_KEYS = {"id", "title", "ready", "blockers"}
@@ -4177,17 +4154,11 @@ ALL_LANES_SOURCE_ADAPTER_GATE_AUDIT_KEYS_BY_DOMAIN = {
         "ton_full_light_client_gate_hash",
     },
     SCCP_DOMAIN_TRON: {"tron_dpos_source_gate_hash"},
-    SCCP_DOMAIN_SORA_KUSAMA: {"substrate_runtime_storage_gate_hash"},
-    SCCP_DOMAIN_SORA_POLKADOT: {"substrate_runtime_storage_gate_hash"},
-    SCCP_DOMAIN_SORA2: {"substrate_runtime_storage_gate_hash"},
 }
 ALL_LANES_SOURCE_ADAPTER_GATE_HASH_KEY_BY_DOMAIN = {
     SCCP_DOMAIN_SOL: "solana_full_light_client_gate_hash",
     SCCP_DOMAIN_TON: "ton_full_light_client_gate_hash",
     SCCP_DOMAIN_TRON: "tron_dpos_source_gate_hash",
-    SCCP_DOMAIN_SORA_KUSAMA: "substrate_runtime_storage_gate_hash",
-    SCCP_DOMAIN_SORA_POLKADOT: "substrate_runtime_storage_gate_hash",
-    SCCP_DOMAIN_SORA2: "substrate_runtime_storage_gate_hash",
 }
 ALL_LANES_DESTINATION_BINDING_REQUIRED_KEYS = {
     "destination_binding_hash",
@@ -4208,9 +4179,6 @@ ALL_LANES_EVM_DESTINATION_DOMAINS = {SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC}
 ALL_LANES_STATIC_DESTINATION_DOMAINS = {
     SCCP_DOMAIN_SOL,
     SCCP_DOMAIN_TON,
-    SCCP_DOMAIN_SORA_KUSAMA,
-    SCCP_DOMAIN_SORA_POLKADOT,
-    SCCP_DOMAIN_SORA2,
 }
 ALL_LANES_ROUTE_ALLOWLIST_KEYS = {
     "route_allowlist_hash",
@@ -4276,21 +4244,12 @@ ALL_LANES_TON_ROUTE_CANARY_KEYS = ALL_LANES_ROUTE_CANARY_COMMON_KEYS | {
     "ton_last_transaction_hash",
     "ton_last_transaction_lt",
 }
-ALL_LANES_SUBSTRATE_ROUTE_CANARY_KEYS = ALL_LANES_ROUTE_CANARY_COMMON_KEYS | {
-    "substrate_finalized_head",
-    "substrate_runtime_code_hash",
-    "substrate_runtime_spec_version",
-    "substrate_runtime_transaction_version",
-}
 ALL_LANES_ROUTE_CANARY_KEYS_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: ALL_LANES_EVM_ROUTE_CANARY_KEYS,
     SCCP_DOMAIN_BSC: ALL_LANES_EVM_ROUTE_CANARY_KEYS,
     SCCP_DOMAIN_SOL: ALL_LANES_SOLANA_ROUTE_CANARY_KEYS,
     SCCP_DOMAIN_TON: ALL_LANES_TON_ROUTE_CANARY_KEYS,
     SCCP_DOMAIN_TRON: ALL_LANES_TRON_ROUTE_CANARY_KEYS,
-    SCCP_DOMAIN_SORA_KUSAMA: ALL_LANES_SUBSTRATE_ROUTE_CANARY_KEYS,
-    SCCP_DOMAIN_SORA_POLKADOT: ALL_LANES_SUBSTRATE_ROUTE_CANARY_KEYS,
-    SCCP_DOMAIN_SORA2: ALL_LANES_SUBSTRATE_ROUTE_CANARY_KEYS,
 }
 ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN = {
     SCCP_DOMAIN_ETH: "evm_message_proof_accepted_transaction",
@@ -4298,9 +4257,6 @@ ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN = {
     SCCP_DOMAIN_SOL: "solana_live_programdata_snapshot",
     SCCP_DOMAIN_TON: "ton_live_account_snapshot",
     SCCP_DOMAIN_TRON: "tron_message_proof_accepted_transaction",
-    SCCP_DOMAIN_SORA_KUSAMA: "substrate_finalized_runtime_snapshot",
-    SCCP_DOMAIN_SORA_POLKADOT: "substrate_finalized_runtime_snapshot",
-    SCCP_DOMAIN_SORA2: "substrate_finalized_runtime_snapshot",
 }
 
 
@@ -4709,7 +4665,9 @@ def _phase_transcript_errors(
             f"readiness report phase {phase} evidence artifact is missing the phase marker"
         )
     elif (
-        CORRIDOR_COMPLETION_SENTINEL not in phase_block
+        not _phase_block_has_output_fragment(
+            phase_block, CORRIDOR_COMPLETION_SENTINEL
+        )
         and not _transcript_has_full_corridor_completion(transcript)
     ):
         errors.append(
@@ -4724,7 +4682,7 @@ def _phase_transcript_errors(
         )
     elif phase_block is not None:
         for fragment in required_fragments:
-            if not _phase_block_has_command_fragment(phase_block, fragment):
+            if not _phase_block_has_command_fragment(phase, phase_block, fragment):
                 errors.append(
                     "readiness report phase "
                     f"{phase} evidence artifact is missing expected "
@@ -5258,6 +5216,66 @@ def _ethereum_launch_policy_documentation_inventory_errors(
     return errors
 
 
+def _sccp_public_discovery_documentation_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+    forbidden_markers: tuple[str, ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for public SCCP discovery documentation."""
+
+    if inventory is None:
+        inventory = SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS
+    if forbidden_markers is None:
+        forbidden_markers = SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_FORBIDDEN_MARKERS
+    label = "SCCP public discovery documentation"
+    errors = _source_marker_inventory_errors(inventory, label=label)
+    for raw_path, _markers in inventory:
+        path = Path(raw_path)
+        display_path = str(path)
+        if not path.is_absolute():
+            display_path = path.as_posix()
+            path = ROOT / path
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for marker in forbidden_markers:
+            if marker in source:
+                errors.append(
+                    f"{label} source inventory {display_path} contains stale marker: {marker}"
+                )
+    return errors
+
+
+def _sccp_retired_network_surface_guard_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+    forbidden_markers: tuple[str, ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for retired SCCP network-surface guards."""
+
+    if inventory is None:
+        inventory = SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS
+    if forbidden_markers is None:
+        forbidden_markers = SCCP_RETIRED_NETWORK_SURFACE_GUARD_FORBIDDEN_MARKERS
+    label = "SCCP retired network-surface guard"
+    errors = _source_marker_inventory_errors(inventory, label=label)
+    for raw_path, _markers in inventory:
+        path = Path(raw_path)
+        display_path = str(path)
+        if not path.is_absolute():
+            display_path = path.as_posix()
+            path = ROOT / path
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for marker in forbidden_markers:
+            if marker in source:
+                errors.append(
+                    f"{label} source inventory {display_path} contains stale marker: {marker}"
+                )
+    return errors
+
+
 def _ethereum_core_range_finality_binding_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -5475,6 +5493,7 @@ def _transcript_has_full_corridor_completion(transcript: str) -> bool:
         index
         for index, line in enumerate(lines)
         if CORRIDOR_COMPLETION_SENTINEL in line
+        and not line.lstrip().startswith("+ ")
     ]
     return bool(completion_positions) and max(completion_positions) > max(
         marker_positions
@@ -5489,8 +5508,196 @@ def _phase_command_lines(phase_block: str) -> list[str]:
     ]
 
 
-def _phase_block_has_command_fragment(phase_block: str, fragment: str) -> bool:
-    return any(fragment in command for command in _phase_command_lines(phase_block))
+def _phase_command_tokens(command: str) -> list[str]:
+    command = command.strip()
+    if command.startswith("+ "):
+        command = command[2:]
+    try:
+        return [
+            normalized
+            for token in shlex.split(command)
+            if (normalized := token.strip("()"))
+        ]
+    except ValueError:
+        return []
+
+
+def _command_token_basename(token: str) -> str:
+    return PurePosixPath(token).name
+
+
+def _command_token_is_env_assignment(token: str) -> bool:
+    name, separator, _ = token.partition("=")
+    return bool(separator and name and name.replace("_", "").isalnum())
+
+
+def _phase_effective_command_tokens(command: str) -> list[str]:
+    tokens = _phase_command_tokens(command)
+    if "&&" in tokens:
+        tokens = tokens[tokens.index("&&") + 1 :]
+    if tokens[:1] == ["env"]:
+        tokens = tokens[1:]
+    while tokens and _command_token_is_env_assignment(tokens[0]):
+        tokens = tokens[1:]
+    return tokens
+
+
+def _effective_command_starts_with(command: str, sequence: tuple[str, ...]) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    return tuple(tokens[: len(sequence)]) == sequence
+
+
+def _rust_sccp_command_has_fragment(command: str, _fragment: str) -> bool:
+    return _effective_command_starts_with(
+        command,
+        ("cargo", "test", "-p", "iroha_sccp", "--", "--nocapture"),
+    )
+
+
+def _evidence_pytest_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or not _command_token_basename(tokens[0]).startswith("python"):
+        return False
+    module_index = next(
+        (
+            index
+            for index in range(len(tokens) - 1)
+            if tokens[index] == "-m" and tokens[index + 1] == "pytest"
+        ),
+        None,
+    )
+    if module_index is None or "-q" not in tokens[module_index + 2 :]:
+        return False
+    if fragment.startswith("pytests/"):
+        return fragment in tokens
+    if fragment.startswith("python/"):
+        return fragment in tokens
+    if fragment.startswith("-m pytest"):
+        return all(part in tokens for part in shlex.split(fragment))
+    return fragment in command
+
+
+def _js_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or _command_token_basename(tokens[0]) != "node" or "--test" not in tokens:
+        return False
+    if fragment.startswith("--test "):
+        return all(part in tokens for part in shlex.split(fragment))
+    return fragment in tokens
+
+
+def _swift_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    if not _effective_command_starts_with(command, ("swift", "test")):
+        return False
+    tokens = _phase_effective_command_tokens(command)
+    if fragment.startswith("swift test "):
+        return all(part in tokens for part in shlex.split(fragment))
+    return fragment in tokens
+
+
+def _kotlin_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if fragment == "java -version":
+        return tuple(tokens[:2]) == ("java", "-version")
+    if not tokens or _command_token_basename(tokens[0]) != "gradlew":
+        return False
+    return (
+        ":core-jvm:test" in tokens
+        and "--tests" in tokens
+        and any(token.startswith("org.hyperledger.iroha.sdk.sccp.") for token in tokens)
+    )
+
+
+def _java_android_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if fragment == "java -version":
+        return tuple(tokens[:2]) == ("java", "-version")
+    if not tokens or _command_token_basename(tokens[0]) != "gradlew" or ":core:test" not in tokens:
+        return False
+    all_tokens = _phase_command_tokens(command)
+    if fragment.startswith("ANDROID_HARNESS_MAINS="):
+        return any(token.startswith(fragment) for token in all_tokens)
+    if fragment == "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests":
+        return any(
+            token.startswith("ANDROID_HARNESS_MAINS=") and fragment in token
+            for token in all_tokens
+        )
+    return all(part in tokens for part in shlex.split(fragment))
+
+
+def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+        return False
+    if fragment.startswith("FullyQualifiedName"):
+        normalized_fragment = fragment.replace("\\|", "|")
+        return "--filter" in tokens and any(
+            token.replace("\\|", "|") == normalized_fragment for token in tokens
+        )
+    if fragment.startswith("dotnet test "):
+        return all(part in tokens for part in shlex.split(fragment)[1:])
+    return all(part in tokens for part in shlex.split(fragment))
+
+
+def _contract_smoke_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if fragment.startswith("--check "):
+        return (
+            bool(tokens)
+            and _command_token_basename(tokens[0]) == "node"
+            and all(part in tokens for part in shlex.split(fragment))
+        )
+    return _effective_command_starts_with(command, ("bash", "scripts/sccp_evm_contract_smoke.sh"))
+
+
+def _core_admission_command_has_fragment(command: str, _fragment: str) -> bool:
+    return _effective_command_starts_with(
+        command,
+        ("cargo", "test", "-p", "iroha_core", "--test", "bridge_proofs", "--", "--nocapture"),
+    )
+
+
+def _phase_command_matches_required_fragment(
+    phase: str,
+    command: str,
+    fragment: str,
+) -> bool:
+    if command == f"+ {fragment}":
+        return True
+    if fragment not in command:
+        return False
+    if phase == "evidence-scripts":
+        return _evidence_pytest_command_has_fragment(command, fragment)
+    if phase == "rust-sccp":
+        return _rust_sccp_command_has_fragment(command, fragment)
+    if phase == "js-sdk":
+        return _js_sdk_command_has_fragment(command, fragment)
+    if phase == "python-sdk":
+        return _evidence_pytest_command_has_fragment(command, fragment)
+    if phase == "swift-sdk":
+        return _swift_sdk_command_has_fragment(command, fragment)
+    if phase == "kotlin-sdk":
+        return _kotlin_sdk_command_has_fragment(command, fragment)
+    if phase == "java-android":
+        return _java_android_command_has_fragment(command, fragment)
+    if phase == "dotnet-sdk":
+        return _dotnet_sdk_command_has_fragment(command, fragment)
+    if phase == "contract-smoke":
+        return _contract_smoke_command_has_fragment(command, fragment)
+    if phase == "core-admission":
+        return _core_admission_command_has_fragment(command, fragment)
+    return True
+
+
+def _phase_block_has_command_fragment(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+) -> bool:
+    return any(
+        _phase_command_matches_required_fragment(phase, command, fragment)
+        for command in _phase_command_lines(phase_block)
+    )
 
 
 def _phase_block_has_output_fragment(phase_block: str, fragment: str) -> bool:
@@ -9675,71 +9882,6 @@ def _all_lanes_route_canary_schema_errors(
                 byte_length=32,
             )
         )
-    elif domain in (
-        SCCP_DOMAIN_SORA_KUSAMA,
-        SCCP_DOMAIN_SORA_POLKADOT,
-        SCCP_DOMAIN_SORA2,
-    ):
-        for field in ("substrate_finalized_head", "substrate_runtime_code_hash"):
-            errors.extend(
-                _nonzero_fixed_hex_field_errors(
-                    label,
-                    route_canary,
-                    field,
-                    byte_length=32,
-                    type_label="bytes32",
-                )
-            )
-        for field in (
-            "substrate_runtime_spec_version",
-            "substrate_runtime_transaction_version",
-        ):
-            errors.extend(
-                _decimal_text_field_errors(
-                    label,
-                    route_canary,
-                    field,
-                    positive=False,
-                )
-            )
-        substrate_hash_fields = (
-            "substrate_finalized_head",
-            "substrate_runtime_code_hash",
-            "evidence_hash",
-        )
-        governed_hash_fields = []
-        source_hashes = lane.get("source_record_hashes")
-        if isinstance(source_hashes, dict):
-            governed_hash_fields.extend(
-                (
-                    (field, source_hashes.get(field))
-                    for field in (
-                        "source_verifier_material_hash",
-                        "source_adapter_engine_deployment_hash",
-                    )
-                )
-            )
-        if isinstance(route_allowlist, dict):
-            governed_hash_fields.append(
-                ("route_allowlist_hash", route_allowlist.get("route_allowlist_hash"))
-            )
-        if isinstance(destination_binding, dict):
-            governed_hash_fields.append(
-                (
-                    "destination_binding_hash",
-                    destination_binding.get("destination_binding_hash"),
-                )
-            )
-        governed_hash_fields.extend(
-            (field, route_canary.get(field)) for field in substrate_hash_fields
-        )
-        errors.extend(
-            _distinct_nonzero_hex_field_errors(
-                f"{label} hash role",
-                tuple(governed_hash_fields),
-                byte_length=32,
-            )
-        )
     return errors
 
 
@@ -9791,20 +9933,6 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         blockers = lane.get("blockers")
         if domain == ACTIVE_LAUNCH_DOMAIN and isinstance(blockers, list) and blockers:
             errors.append(f"{lane_label} blockers must be empty")
-        if domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS:
-            if lane.get("production_ready") is not False:
-                errors.append(
-                    f"{lane_label} production_ready must be false for unsupported "
-                    "diagnostic launch domains"
-                )
-            if (
-                isinstance(blockers, list)
-                and ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER not in blockers
-            ):
-                errors.append(
-                    f"{lane_label} blockers must include the unsupported "
-                    "launch-scope blocker"
-                )
         records = lane.get("records")
         if isinstance(records, dict):
             records_label = f"{lane_label} records"
@@ -9827,21 +9955,8 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         if (
             domain != ACTIVE_LAUNCH_DOMAIN
             and lane.get("production_ready") is False
-            and not (
-                domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS and records_complete
-            )
         ):
             continue
-        if (
-            domain in ALL_LANES_UNSUPPORTED_LAUNCH_DOMAINS
-            and records_complete
-            and isinstance(blockers, list)
-            and blockers != [ALL_LANES_UNSUPPORTED_LAUNCH_BLOCKER]
-        ):
-            errors.append(
-                f"{lane_label} blockers must contain only the unsupported "
-                "launch-scope blocker when diagnostic evidence is complete"
-            )
         source_hashes = lane.get("source_record_hashes")
         if isinstance(source_hashes, dict):
             source_hashes_label = f"{lane_label} source_record_hashes"
@@ -10899,6 +11014,8 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_evm_source_adapter_deployment_gate_inventory_errors())
     errors.extend(_ethereum_launch_policy_selector_inventory_errors())
     errors.extend(_ethereum_launch_policy_documentation_inventory_errors())
+    errors.extend(_sccp_public_discovery_documentation_inventory_errors())
+    errors.extend(_sccp_retired_network_surface_guard_inventory_errors())
     errors.extend(_ethereum_core_range_finality_binding_inventory_errors())
     errors.extend(_ethereum_core_message_replay_guard_inventory_errors())
     errors.extend(_ethereum_torii_pinned_message_proof_inventory_errors())

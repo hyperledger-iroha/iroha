@@ -41,12 +41,14 @@ arithmetic mutation configs.
   validator topology,
 - topologies of one to three validators require all validators; larger
   topologies require `floor(2 * validators / 3) + 1`,
-- the debug force-one path uses threshold one,
+- the debug force-one path uses threshold one only for local DELIVER emission,
+- inbound DELIVER acceptance keeps the protocol quorum even when debug
+  force-one is enabled,
 - READY counting uses distinct senders, so duplicate READY observations cannot
   inflate the deliver decision,
 - deliver is impossible before the distinct READY count reaches the required
   threshold.
-Its TLC cross-check exhausts the fast config and four expected-failure deliver
+Its TLC cross-check exhausts the fast config and five expected-failure deliver
 quorum mutation configs.
 
 `SumeragiRbcCausalityGate.tla` captures implementation-side RBC message
@@ -1057,6 +1059,10 @@ configs as Apalache.
 - missing-block, missing-commit-QC, and missing-payload recovery predicates
   require fresh exact-slot actionable dependencies and reject old views,
   wrong phases, stale work, and body-present payload recovery.
+- `FrontierSameSlotActivityExactness` composes those family checks into one
+  aggregate invariant: every accepted same-slot activity source keeps exact
+  positive evidence, and every stale, cross-slot, terminal, passive,
+  body-present, no-actionable, or bookkeeping-only source is rejected.
 
 `SumeragiFrontierReassemblyActivityGate.tla` captures
 `frontier_recovery_same_slot_reassembly_active(...)` and
@@ -1070,6 +1076,10 @@ configs as Apalache.
   work, while stale or wrong-height sender records do not count, and
 - validation and deferred BlockSyncUpdate sources require exact height/view,
   non-aborted pending validation work, and do not allow no-source reassembly.
+- `FrontierReassemblyActivityExactness` composes those source families into one
+  aggregate invariant: reassembly keeps exact dependency, ingress, sender,
+  validation, and deferred-update evidence while rejecting stale, wrong-height,
+  wrong-view, aborted, non-pending, no-backlog, and no-source activity.
 
 `SumeragiFrontierQuorumOwnerActionableGate.tla` captures
 `frontier_quorum_timeout_owner_still_actionable(...)` and
@@ -1083,6 +1093,11 @@ configs as Apalache.
   decisions do not count as actionable, and
 - live cleanup preservation requires committed+1 height, the phase tracker's
   current view, and an actionable owner or recovery source.
+- `FrontierQuorumOwnerCleanupExactness` composes those checks into one
+  aggregate invariant: cleanup preservation keeps exact owner, vote,
+  dependency, sender, repair, vote-backed recovery, and preservation-source
+  evidence while rejecting wrong-view, stale, wrong-phase, passive,
+  non-frontier, stale-current-view, and no-actionable cleanup.
 
 `SumeragiFrontierSidecarRetargetGate.tla` captures contiguous-frontier sidecar
 retargeting across `frontier_sidecar_hint_can_override_stall_gate(...)`,
@@ -1098,6 +1113,12 @@ retargeting across `frontier_sidecar_hint_can_override_stall_gate(...)`,
 - tracked request retargets, untracked request seeds, and idle reacquire reject
   non-frontier, unconfirmed, no-gate, same-hash, authoritative-payload, and
   local-evidence-without-commit-QC cases.
+- `FrontierSidecarRetargetExactness` composes those retargeting families into
+  one aggregate invariant: accepted override, stall-gate, confirmation,
+  tracked/untracked routing, and reacquire paths keep exact positive evidence
+  while generic, quarantined, unstalled, unconfirmed, non-frontier, no-gate,
+  same-hash, authoritative-payload, and local-evidence-without-commit-QC cases
+  are rejected together.
 
 `SumeragiFrontierSidecarExpectedHashGate.tla` captures
 `contiguous_frontier_sidecar_expected_hash_hint(...)` and
@@ -1108,6 +1129,12 @@ retargeting across `frontier_sidecar_hint_can_override_stall_gate(...)`,
   ordering while rejecting wrong-height or already-authoritative payloads, and
 - sidecar commit-QC views require Commit phase, the sidecar height, and the
   sidecar block hash.
+- `FrontierSidecarExpectedHashExactness` composes those source families into
+  one aggregate invariant: expected-hash selection keeps exact tracked,
+  deferred, observed, cached Prepare/Commit, and sidecar commit-QC evidence,
+  preserves deterministic phase/view/hash and source-precedence ordering, and
+  rejects wrong-height, authoritative, NewView, Prepare-QC, wrong-hash, and
+  absent-QC inputs together.
 
 `SumeragiContiguousFrontierPayloadHintGate.tla` captures
 `deferred_qc_phase_payload_hint_rank(...)` and
@@ -1119,6 +1146,10 @@ retargeting across `frontier_sidecar_hint_can_override_stall_gate(...)`,
 - proposal missing-payload markers are used only as the fallback source, with
   wrong-height and non-actionable markers ignored before deterministic view/hash
   tie-breaking.
+- `ContiguousFrontierPayloadHintExactness` composes those cases into one
+  aggregate invariant: payload-hint selection keeps exact deferred and marker
+  evidence, preserves Commit/Prepare/NewView rank plus view/hash tie-breaks,
+  and rejects wrong-height, non-actionable, and no-eligible inputs together.
 
 `SumeragiFrontierParentQcHintRetargetGate.tla` captures
 `should_retarget_contiguous_frontier_parent_from_qc_hint(...)` and the
@@ -1129,6 +1160,11 @@ deferred-QC payload-hint branch in `request_missing_parent(...)`:
 - the request branch rewrites only exact-frontier parent requests with a
   present, different QC hint, preserving the original expected parent for
   absent hints, same-hash hints, and non-frontier parents.
+- `FrontierParentQcHintRetargetExactness` composes those branches into one
+  aggregate invariant: parent retargeting keeps exact stall/reanchor progress
+  evidence, rejects wrong-frontier, advanced/created/no-emit/absent-gate,
+  absent-hint, same-hash, and non-frontier inputs, and rewrites only eligible
+  targets to the QC hint while preserving every ineligible expected parent.
 
 `SumeragiLiveFrontierIdleMissingQcGate.tla` captures
 `should_suppress_live_frontier_idle_missing_qc_reacquire(...)` and the
@@ -2048,6 +2084,10 @@ decisions:
   plans return no target and keep their sent count,
 - the gossip fallback trigger returns `true` exactly once and keeps the
   triggered flag set afterwards.
+- `CollectorPlanRetryGossipExactness` composes constructor preservation,
+  restored sent-count capping, read-only peek, exact next advancement,
+  exhaustion semantics, and one-shot gossip fallback into one aggregate
+  invariant.
 
 `SumeragiCollectorSelectionGate.tla` captures the topology collector-selection
 helpers feeding `CollectorPlan`:
@@ -2062,6 +2102,9 @@ helpers feeding `CollectorPlan`:
 - PRF-backed selection is abstracted to distinct, in-range non-leader
   collectors, and `deterministic_collectors(...)` chooses PRF output exactly
   when a seed is present.
+- `CollectorSelectionExactness` composes exact quorum/proxy-tail derivation,
+  effective fanout, default and fallback collector selection, PRF selection, and
+  deterministic seed-based source routing across every bounded case.
 
 `SumeragiTopologyMutationGate.tla` captures ordered-roster mutation helpers:
 - `Topology::new(...)` deduplicates peers while preserving first-seen order,
@@ -2076,6 +2119,9 @@ helpers feeding `CollectorPlan`:
   view-change index to zero,
 - `canonicalize_order(...)` sorts and deduplicates without resetting the
   view-change index.
+- `TopologyOrderedRosterMutationExactness` composes exact rotate, forward-only
+  `nth_rotation`, deduplicating construction, peer-list update, block-commit
+  reset, and canonicalization behavior across every bounded case.
 
 `SumeragiPrfLeaderShuffleGate.tla` captures PRF topology permutation helpers:
 - `leader_index_prf(...)` returns zero for empty rosters and otherwise selects
@@ -2086,6 +2132,9 @@ helpers feeding `CollectorPlan`:
   applying a deterministic permutation for multi-peer rosters, and
 - `shuffled_for_prf_seed(...)` canonicalizes and deduplicates peers before
   shuffling, then returns a view-zero topology.
+- `PrfLeaderShuffleExactness` composes exact leader selection, cycle
+  periodicity/distinctness, shuffle permutation behavior, and wrapper
+  canonicalization/deduplication plus view reset across every bounded case.
 
 `SumeragiTopologyFanoutGate.tla` captures topology fanout and redundant-send
 helpers used by retry/rebroadcast paths:
@@ -2099,6 +2148,9 @@ helpers used by retry/rebroadcast paths:
 - `topology_fanout_from_tail(...)` returns no targets for single-peer or
   zero-count inputs, otherwise starts at the proxy tail, wraps once as needed,
   skips the leader, preserves uniqueness, and caps to the non-leader set.
+- `TopologyFanoutHelperExactness` composes redundant-send count, view-change
+  quorum, configured redundant floor, and tail fanout selection exactness across
+  every bounded case.
 
 `SumeragiTopologyRoleFilterGate.tla` captures topology role classification and
 role-filtered signature selection:
@@ -2114,6 +2166,9 @@ role-filtered signature selection:
 - `audit_roles_for_prev_block_hash(...)` canonicalizes, deduplicates, rotates
   the commit-quorum prefix from the previous block hash, then labels roles in
   the rotated topology order.
+- `TopologyRoleFilterExactness` composes exact role partitioning, role-slice
+  projection, role-filtered signature preservation, and audit-role
+  canonicalization/rotation across every bounded case.
 
 `SumeragiActiveTopologySelectionGate.tla` captures active validator topology
 selection in `derive_active_topology_from_views(...)`:
@@ -2127,6 +2182,9 @@ selection in `derive_active_topology_from_views(...)`:
   unfiltered baseline, with small rosters requiring every baseline member, and
 - an empty primary result falls through to trusted validators, while empty
   inputs everywhere return an empty roster instead of synthesizing peers.
+- `ActiveTopologySelectionExactness` composes exact source-priority,
+  BLS/dedup/canonical output normalization, PoP filtering/quorum-guard, and
+  final trusted-fallback behavior across every bounded case.
 
 `SumeragiP2pTopologyTrustedGate.tla` captures trusted-peer P2P topology refresh
 helpers:
@@ -2136,6 +2194,9 @@ helpers:
 - `peer_ids_outside_topology(...)` returns only online peers outside the
   expected topology while preserving observed order and duplicate stray
   observations.
+- `TrustedP2pTopologyExactness` composes exact trusted-topology union/dedup
+  behavior with outside-peer filtering, trusted-observer non-stray handling, and
+  online-order plus duplicate-stray preservation.
 
 `SumeragiP2pTopologyRefreshGate.tla` captures P2P topology refresh
 coordination:
@@ -2151,6 +2212,9 @@ coordination:
 - normal refreshes clear the local-removed status, update `last_advertised` to
   the current world set, gossip only the world set, and update the network with
   the trusted-peer-augmented topology.
+- `P2pTopologyRefreshExactness` composes exact decision/last-state updates,
+  gossip and network advertisement behavior, local-seen/removal handling,
+  queue clearing, idle skips, and stray-count propagation.
 
 `SumeragiQuorumRetransmitTargetsGate.tla` captures
 `quorum_retransmit_targets_for_missing_votes(...)`, the commit-vote repair
@@ -2165,6 +2229,10 @@ target selector:
 - signer-mapping failure conservatively targets every non-local peer,
 - targets preserve canonical topology order, exclude the local peer, and remain
   distinct.
+- `QuorumRetransmitTargetExactness` composes exact empty/local-only no-op
+  behavior, missing-voter targeting, near-quorum full fanout, mapping-failure
+  fallback, local exclusion, canonical ordering, duplicate rejection, and
+  view-mapped signer resolution.
 
 `SumeragiRetransmitBackpressureGate.tla` captures retransmit pacing helpers in
 `main_loop/reschedule.rs`:
@@ -2179,6 +2247,9 @@ target selector:
   zero base backoff remains zero,
 - near-quorum payload repair timeout is `2 * rebroadcast_cooldown` clamped to
   the 200ms..2000ms window.
+- `RetransmitBackpressurePacingExactness` composes exact queue pressure
+  thresholds, RBC level/byte pressure, additive scoring, target-limit liveness
+  floors, cooldown multipliers, backlog backoff precedence, and timeout clamps.
 
 `SumeragiPacedRetransmitTargetsGate.tla` captures deterministic target
 selection in `paced_retransmit_targets(...)` after the pressure helper chooses
@@ -2191,6 +2262,10 @@ a limit:
 - still-over-limit lists rotate left by the height/view-derived offset modulo
   the deduplicated length, and
 - the rotated list is truncated exactly to the requested limit.
+- `PacedRetransmitTargetSelectionExactness` composes exact fail-closed
+  zero/empty handling, pre-cap order and duplicate preservation, sort/dedup
+  behavior, deterministic height/view offset rotation, and exact limit
+  truncation.
 
 `SumeragiQuorumRescheduleBackoffGate.tla` captures quorum-reschedule backoff
 and contiguous-frontier fast resend helpers:
@@ -2203,6 +2278,20 @@ and contiguous-frontier fast resend helpers:
 - contiguous-frontier fast resend is enabled only for contiguous, vote-backed,
   below-quorum pending blocks with no relay, vote-queue, or RBC-availability
   backpressure.
+- `QuorumRescheduleBackoffExactness` composes exact zero-base handling,
+  deficit multiplier arithmetic, stall escalation boundaries, resend-window
+  clamping, accepted fast-resend windows, and every fast-resend rejection gate.
+
+`SumeragiRbcAvailabilityRescheduleGate.tla` captures
+`rbc_availability_unresolved_for_reschedule(...)`:
+- DA-disabled, timed-out, local-payload, absent, invalid, delivered,
+  complete-ready, and zero-total READY sessions fail open,
+- pending entries, zero-timeout pending entries, missing chunks, missing READY
+  quorum, and complete-but-not-ready sessions block rescheduling before
+  timeout, and
+- `RbcAvailabilityRescheduleExactness` composes exact fail-open gates,
+  terminal-session exits, pending-entry blocks, missing-chunk blocks, and
+  missing-READY quorum blocks.
 
 `SumeragiVoteBackedReassemblyStallGate.tla` captures the vote-backed
 same-height frontier reassembly stall helpers:
@@ -2215,6 +2304,9 @@ same-height frontier reassembly stall helpers:
 - owner stall age uses the latest slot/recovery progress timestamp, and
 - expiry requires both owner stall age and quorum stall age to reach the hard
   cap.
+- `VoteBackedReassemblyStallExactness` composes exact hard-cap arithmetic,
+  accepted/rejected slot ownership, recovery ownership and fallback,
+  latest-progress age selection, and expiry thresholds.
 
 `SumeragiCompletedQuorumViewAdvanceGate.tla` captures the deterministic view
 advance after completed quorum reschedule work:
@@ -2229,6 +2321,9 @@ advance after completed quorum reschedule work:
   advance by one with saturation, update progress timestamps, and
 - exact slot events clear the quorum-timeout rebroadcast latch while generic
   routing preserves slot state.
+- `CompletedQuorumViewAdvanceExactness` composes exact slot routing, exact
+  no-slot/stale-slot fallback, generic routing, current-view max selection,
+  slot-state mutation, cause preservation, and generic slot-state preservation.
 
 `SumeragiQuorumRebroadcastDispatchGate.tla` captures pending-block rebroadcast
 dispatch after quorum-reschedule target selection and pacing have already run:
@@ -2242,6 +2337,9 @@ dispatch after quorum-reschedule target selection and pacing have already run:
   vote-backed pending state, and
 - contiguous near-quorum frontier blocks may send a fitting non-local
   `BlockSyncUpdate` while any actual work stamps the rebroadcast marker.
+- `QuorumRebroadcastDispatchExactness` composes local-vote gating,
+  fail-closed exits, forced fanout, vote replay, payload dispatch, block-sync
+  dispatch, and rebroadcast marker stamping.
 
 `SumeragiIsolatedVoteBackedHandoffGate.tla` captures the isolated one-vote
 frontier handoff path in
@@ -2256,6 +2354,9 @@ frontier handoff path in
   body, have no commit QC, and remain vote-backed by its owner state, and
 - successful handoff returns true only when the anchor range-pull request is
   sent with the `frontier_stall_reset_fallback` reason.
+- `IsolatedVoteBackedHandoffExactness` composes admission rejection, admitted
+  recovery/body-event side effects, slot validation, anchor requests, range-pull
+  action results, and reason labeling.
 
 `SumeragiPreemptiveVoteBackedRetransmitGate.tla` captures the pre-timeout
 vote-backed frontier retransmit handoff around
@@ -2272,6 +2373,9 @@ vote-backed frontier retransmit handoff around
   `BlockSyncUpdate`, or `BlockCreated`, and
 - the downstream near-quorum flag is exactly `vote_count < min_votes_for_commit`
   for both below-quorum and at-quorum retransmit candidates.
+- `PreemptiveVoteBackedRetransmitExactness` composes candidate rejection and
+  admission, missing-pending preservation, target-source selection, output-based
+  progress, pending retention, and near-quorum flag exactness.
 
 `SumeragiNearQuorumPreemptiveEscalationGate.tla` captures the pre-timeout
 near-quorum missing-payload recovery escalation loop in
@@ -2288,6 +2392,9 @@ near-quorum missing-payload recovery escalation loop in
   `max(recovery_missing_block_height_ttl, 1ms)`, and
 - escalation counts and progress are recorded only when
   `maybe_escalate_missing_block_height_recovery(...)` returns true.
+- `NearQuorumPreemptiveEscalationExactness` composes budget and missing-pending
+  fail-closed gates, fresh-request suppression, in-flight suppression, delegate
+  result authority, per-tick cap enforcement, and progress/counter consistency.
 
 `SumeragiManifestGateRescheduleGate.tla` captures the `ManifestGuard` branch
 inside `reschedule_pending_quorum_block(...)`:
@@ -2299,6 +2406,10 @@ inside `reschedule_pending_quorum_block(...)`:
   rotation, even when the local payload is already available,
 - empty retransmit-target sets remain no-op reschedules and do not stamp a
   fresh quorum-reschedule marker.
+- `ManifestGateRescheduleExactness` composes manifest effectiveness,
+  manifest-action and manifest-no-target behavior, plain zero-work cleanup,
+  vote-backed action and no-target behavior, authoritative rotation
+  admission/suppression, and passive vote-backed evidence preservation.
 
 `SumeragiQcSignerBitmap.tla` captures QC signer-bitmap admission:
 - bitmap length must match the topology-derived byte length,
@@ -2307,6 +2418,10 @@ inside `reschedule_pending_quorum_block(...)`:
 - observer or padding indices cannot satisfy quorum on behalf of voting
   validators,
 - accepted QC signer evidence must match the voting-set quorum predicate.
+- `QcSignerBitmapAdmissionExactness` composes topology-width matching,
+  parser/spec equality, voting-only quorum accounting, observer/padding
+  rejection, out-of-bounds rejection, length-mismatch rejection, and accepted
+  evidence exactness.
 
 `SumeragiQcSignerCountGate.tla` captures the raw `qc_signer_count(...)`
 projection:
@@ -2316,6 +2431,9 @@ projection:
 - multi-byte bitmaps sum every byte without truncation or saturation, and
 - malformed padding bits are still counted because the helper has no roster
   context and reports the raw aggregate bitmap population.
+- `QcSignerRawCountExactness` composes bitmap-width bounds, raw anchor counts,
+  empty/zero-byte handling, single-bit handling, full-byte and padding-bit
+  handling, and multi-byte accumulation.
 
 `SumeragiBuildSignersBitmapGate.tla` captures QC signer-bitmap construction:
 - zero-length rosters return an empty bitmap,
@@ -2327,6 +2445,10 @@ projection:
   preserve every valid signer,
 - duplicate observations collapse through the `BTreeSet` input, and
   out-of-roster/padding indexes never set bits or extend the bitmap.
+- `BuildSignersBitmapExactness` composes exact bitmap length, zero-roster and
+  non-empty allocation behavior, single-signer bit placement, multi-signer OR
+  behavior, out-of-range/padding filtering, duplicate collapse, and full-roster
+  coverage.
 
 `SumeragiSignerIndexNormalizationGate.tla` captures canonical/view signer-index
 normalization:
@@ -2340,6 +2462,9 @@ normalization:
 - repeated peer observations collapse through set semantics, and
 - canonical signers whose peers are present in both topologies round-trip
   through view indexes without changing the canonical set.
+- `SignerIndexNormalizationExactness` composes canonical normalization anchors,
+  canonical-to-view index lookup, canonical-set-to-view normalization,
+  round-trip preservation/filtering, and exact actual/spec result equality.
 
 `SumeragiCommitRootConsistency.tla` captures commit-QC execution-root
 consistency:
@@ -2350,6 +2475,9 @@ consistency:
 - NPoS mode selects the heaviest same-root stake group with the same tie-break,
 - wrong-context votes cannot help satisfy quorum,
 - QC validation rejects signer votes whose roots do not match the QC roots.
+- `CommitRootConsistencyExactness` composes root selection/evidence exactness,
+  permissioned and NPoS quorum exactness, mixed-root rejection, wrong-context
+  signer/stake rejection, and QC root-validation exactness.
 
 `SumeragiCommitPipelineRecoveryGate.tla` captures adapter-side commit-pipeline
 recovery ordering:
@@ -2364,6 +2492,8 @@ recovery ordering:
 - cached near-quorum commit votes are rebroadcast to quorum missing-signer
   targets, not the proposal collector subset, and empty/committed vote sets do
   not rebroadcast.
+- `CommitPipelineRecoveryExactness` composes local commit-QC ordering,
+  missing-QC recovery gates, and quorum retransmit target exactness.
 
 `SumeragiKnownBlockCommitQcRecoveryGate.tla` captures known-block commit-QC
 recovery helpers:
@@ -2486,6 +2616,9 @@ before recovery/finalization candidates are processed:
 - duplicate signer observations are collapsed by the `BTreeSet` input before
   counting,
 - higher in-range indexes remain eligible for support.
+- `VotingSignerSupportCountExactness` composes exact support counts with
+  empty/zero-roster handling, in-range support, boundary filtering,
+  duplicate-collapse, full-roster support, high-index support, and count bounds.
 
 `SumeragiDistinctVoteEpochsGate.tla` captures cached vote-log epoch replay:
 - `distinct_epochs_for_block_votes(...)` reads stored vote values, not vote-log
@@ -2982,6 +3115,8 @@ reporting:
   already been reported,
 - already-reported jobs keep their timeout marker but do not duplicate status
   or warning diagnostics,
+- new timeout reports persist their timeout marker so the same inflight job
+  cannot report again on a later tick,
 - reporting preserves the inflight owner so a late worker result remains
   attachable,
 - timeout reporting does not requeue or abort pending work, prune proposal
@@ -2991,6 +3126,8 @@ reporting:
 `SumeragiPostCommitPacemakerKickGate.tla` captures post-commit pacemaker
 kickstart gating:
 - durable commits kick the pacemaker only when queued transaction work remains,
+- absence of queued work suppresses the kick even when pacing or hard
+  backpressure signals are present,
 - healthy proposal backpressure and pacing-only pressure from queue saturation
   or consensus ingress backlog still allow the kick,
 - active pending blocks, RBC backlog, and relay backpressure suppress the kick,
@@ -3001,6 +3138,8 @@ kickstart gating:
 budget preservation:
 - due proposals with queued work can preserve the idle-view repair budget only
   when no mode flip or commit job is in flight,
+- absence of queued work suppresses budget preservation even when pacing or
+  hard backpressure signals are present,
 - healthy proposal state and pacing-only queue/consensus pressure preserve the
   budget for proposal work,
 - active pending blocks, RBC backlog, and relay backpressure keep idle-view
@@ -3059,8 +3198,8 @@ selection:
 - the shortened timeout is capped by the ordinary quorum timeout,
 - zero votes, far-from-quorum votes, already-satisfied quorum, missing-data
   absence, consensus backlog, and RBC incompleteness keep the ordinary timeout,
-- repeated NPoS cached-slot timeouts compute a next streak from same-height
-  newer-view history and cap the hysteresis factor,
+- repeated NPoS cached-slot timeouts compute a saturating next streak from
+  same-height newer-view history and cap the hysteresis factor,
 - permissioned mode, zero quorum timeout, absent history, height mismatch,
   non-advancing views, and elapsed boundary/after-boundary cases do not wait.
 
@@ -3072,7 +3211,7 @@ derivation:
   quorum timeout with a one-millisecond minimum,
 - the 1000 ms boundary returns exactly 750 ms instead of falling back to half,
 - DA inline validation applies its separate 750 ms floor only when DA is
-  enabled.
+  enabled, and larger fast-path timeouts are left unchanged.
 
 `SumeragiStalledPendingTimeoutDecisionGate.tla` captures stalled pending-block
 timeout classification:
@@ -3085,7 +3224,9 @@ timeout classification:
   is open,
 - active recovery backlog includes worker recovery, residual round backlog,
   unresolved RBC, pending validation recovery, commit-QC repair, same-block
-  recovery, and valid queued commit-pipeline work with recovery evidence,
+  recovery, and valid queued commit-pipeline work with recovery evidence from
+  observed commit QC, validated commit artifacts, near-quorum votes, or
+  active commit-QC repair,
 - invalid queued work, queue-active-only work, validation inflight without
   pending validation, zero votes, existing quorum, payload-present, DA-disabled,
   and gate-closed cases do not select the near-quorum fallback.
@@ -3132,25 +3273,34 @@ state helpers:
   and applies the transition helper only to that slot.
 
 `SumeragiFrontierSlotTrackerGate.tla` captures the exact-frontier
-`FrontierSlot` constructor and step FSM:
+`FrontierSlot` constructor, step FSM, and `apply_frontier_slot_event(...)`
+wrapper:
 - constructor phase/owner selection tracks body availability, `BlockCreated`
-  evidence, exact-fetch arming, requester stashing, and compatibility mirrors,
+  evidence, exact-fetch arming, requester stashing, and nested state sources,
 - higher-view and authoritative ownership updates reset quorum progress,
   unlock stale local-vote locks, clear the rebroadcast guard, and update the
   active view while mismatched stale events preserve the current candidate,
+- same-candidate `BlockCreated`, body-available, and future-gap observations
+  merge the peer/requester hints needed by later exact body repair and commit
+  pipeline work,
 - body, vote, and commit-QC observations distinguish missing-body repair from
   payload-present commit work and keep duplicate observations from clearing the
   bounded quorum-timeout rebroadcast guard,
 - exact body waits spend one urgent-fetch rebroadcast before rotating views,
   lag expiry moves only missing-body normal slots into deep catch-up, and
   passive/deep catch-up plus finalization keep their distinct side effects.
+- absent-slot wrapper events either return default actions or request the
+  exact-frontier view change, stale non-commit slots are dropped before the
+  next event runs, same-height slots are reused, and committed-height events
+  remove only retired slots while retaining still-live slot state.
 
 `SumeragiFrontierSlotHelpersGate.tla` captures the small `FrontierSlot`
 helper methods that support the exact-frontier FSM:
 - lag-start lookup returns the existing lag window when present and falls back
   to last progress otherwise,
-- body-missing and local-vote helpers preserve unrelated slot state while
-  reporting body availability or locking the local owner,
+- body-missing, body-available, and local-vote helpers preserve unrelated slot
+  state while reporting body availability, moving Unknown validation into
+  Pending, or locking the local owner,
 - timeout view selection uses the maximum of active, requested, and candidate
   views,
 - progress and lag helpers refresh only the intended timers and clear or
@@ -3165,8 +3315,9 @@ helper methods that support the exact-frontier FSM:
 helper derivation:
 - proposal transaction-count clamping respects both world parameters and local
   config caps with a one-transaction floor,
-- assembly stale windows use ceiling batch counts, full-batch grace, multiplier
-  caps, and saturating duration multiplication,
+- assembly stale windows consume the clamped transaction-count budget, use
+  ceiling batch counts, full-batch grace, multiplier caps, and saturating
+  duration multiplication,
 - ingress drain grace applies the idle floor and active-backlog ceiling before
   full proposal grace adds the larger of ingress drain and rebroadcast
   cooldown,
@@ -3184,6 +3335,10 @@ retained-branch helpers:
   conflicting retained branches available for later passive recovery,
 - authoritative frontier metadata replacement keeps only one same-slot hash
   while preserving entries for other slots,
+- proposal-seen tracking inserts new `(height, view)` observations, preserves
+  duplicate observations, answers exact-match lookups, drops old same-height
+  views after a view change, and applies the bounded
+  `prune_proposals_seen_horizon(...)` height/view window,
 - retained-branch refresh preserves old frontier info when new metadata is
   absent, replaces it when supplied, ORs payload availability, and refreshes the
   timestamp,
@@ -4227,6 +4382,9 @@ worker configuration:
   a floor of four, while explicit work caps are preserved,
 - zero result queue caps derive from the effective thread count times eight
   with a floor of eight, while explicit result caps are preserved.
+- `VoteVerifyWorkerConfigExactness` composes the full resolved-config tuple
+  equality with thread resolution, zero-cap derivation, explicit-cap
+  preservation, and positive channel-capacity floors.
 
 `SumeragiQcVerifyAsyncGate.tla` captures actor-side async QC aggregate
 verification:
@@ -4255,6 +4413,9 @@ worker configuration:
   a floor of four, while explicit work caps are preserved,
 - zero result queue caps derive from the effective thread count times eight
   with a floor of eight, while explicit result caps are preserved.
+- `QcVerifyWorkerConfigExactness` composes the full resolved-config tuple
+  equality with thread resolution, zero-cap derivation, explicit-cap
+  preservation, and positive channel-capacity floors.
 
 `SumeragiActorGatePriorityGate.tla` captures actor-gate priority and fairness:
 - `ActorGate::can_enter(...)` serializes access while any priority is already
@@ -5655,7 +5816,8 @@ cleanup:
   `max(commit_quorum_timeout, propose_interval, 1ms) * 8`.
 
 `SumeragiFrontierLiveOwnerWorkGate.tla` captures
-`frontier_slot_has_live_local_owner_work_for_view(...)`:
+`frontier_slot_has_live_local_owner_work_for_view(...)` and
+`frontier_slot_conflicts_with_live_local_owner(...)`:
 - finalized and passive-catchup frontier slots suppress all live-owner work,
 - exact active pending work, commit inflight work, validation inflight work,
   observed slot commit QC, later-view competing quorum lockout, explicit
@@ -5664,6 +5826,9 @@ cleanup:
 - terminal pending wrappers without observed commit QC block only local-lock
   and local-history paths, while independent validation or slot-QC evidence
   still keeps the owner live.
+- the conflict adapter blocks same-height handoffs only when the candidate hash
+  differs and the tracked owner still has live work; same-hash, wrong-height,
+  passive, and no-work cases fall through.
 
 `SumeragiKeepFrontierPendingActiveGate.tla` captures
 `keep_frontier_pending_active_across_view_change(...)`:
@@ -5914,6 +6079,7 @@ verification, and full networking details.
 - `SumeragiRbcDeliverQuorum_bug_under_quorum_deliver.cfg`: expected-failure under-quorum delivery mutation.
 - `SumeragiRbcDeliverQuorum_bug_wrong_commit_formula.cfg`: expected-failure commit-quorum arithmetic mutation.
 - `SumeragiRbcDeliverQuorum_bug_force_one_ignored.cfg`: expected-failure force-one debug path mutation.
+- `SumeragiRbcDeliverQuorum_bug_inbound_force_one_acceptance.cfg`: expected-failure receiver-side debug force-one leakage mutation.
 - `SumeragiRbcCausalityGate.tla`: RBC INIT/chunk/READY/DELIVER causality model.
 - `SumeragiRbcCausalityGate_fast.cfg`: CI-friendly RBC causality check.
 - `SumeragiRbcCausalityGate_bug_*.cfg`: expected-failure INIT evidence, chunk integrity, READY validation, DELIVER validation, stash, duplicate, and commit-wakeup mutations.
@@ -6743,13 +6909,13 @@ verification, and full networking details.
 - `SumeragiCommitStageTimingThresholdGate_bug_*.cfg`: expected-failure zero-threshold, blocking-total, boundary, stage maximum, validation substage, prevalidated-only, and empty-timing mutations.
 - `SumeragiCommitInflightTimeoutGate.tla`: commit-inflight timeout reporting gate model.
 - `SumeragiCommitInflightTimeoutGate_fast.cfg`: CI-friendly commit-inflight timeout gate check.
-- `SumeragiCommitInflightTimeoutGate_bug_*.cfg`: expected-failure timeout-boundary, one-shot reporting, inflight preservation, late-result attachability, and no-consensus-mutation mutations.
+- `SumeragiCommitInflightTimeoutGate_bug_*.cfg`: expected-failure timeout-boundary, one-shot reporting, timeout-mark persistence, inflight preservation, late-result attachability, and no-consensus-mutation mutations.
 - `SumeragiPostCommitPacemakerKickGate.tla`: post-commit pacemaker kickstart gate model.
 - `SumeragiPostCommitPacemakerKickGate_fast.cfg`: CI-friendly post-commit pacemaker kickstart gate check.
-- `SumeragiPostCommitPacemakerKickGate_bug_*.cfg`: expected-failure queue, pacing-only backpressure, hard-backpressure, callback-result, return, and timestamp-capture mutations.
+- `SumeragiPostCommitPacemakerKickGate_bug_*.cfg`: expected-failure queue, no-queue hard-stop, pacing-only backpressure, hard-backpressure, callback-result, return, and timestamp-capture mutations.
 - `SumeragiIdleViewProposalBudgetGate.tla`: proposal-side idle-view budget preservation gate model.
 - `SumeragiIdleViewProposalBudgetGate_fast.cfg`: CI-friendly proposal idle-view budget preservation gate check.
-- `SumeragiIdleViewProposalBudgetGate_bug_*.cfg`: expected-failure queue, mode-flip, commit-inflight, deadline, pacing-only backpressure, hard-backpressure, idle-repair deferral, proposal reservation, and post-proposal retry mutations.
+- `SumeragiIdleViewProposalBudgetGate_bug_*.cfg`: expected-failure queue, no-queue hard-stop, mode-flip, commit-inflight, deadline, pacing-only backpressure, hard-backpressure, idle-repair deferral, proposal reservation, and post-proposal retry mutations.
 - `SumeragiPacemakerCoreGate.tla`: Pacemaker state-machine helper model.
 - `SumeragiPacemakerCoreGate_fast.cfg`: CI-friendly Pacemaker state-machine helper check.
 - `SumeragiPacemakerCoreGate_bug_*.cfg`: expected-failure construction, interval reset, deadline boundary, fire advancement, zero-interval, and accessor mutations.
@@ -6761,13 +6927,13 @@ verification, and full networking details.
 - `SumeragiPacingGovernorGate_bug_*.cfg`: expected-failure sample-count, target-time, pressure/clear threshold, factor-bound, step-clamp, saturating-delta, current-clamp, and ambiguous-window mutations.
 - `SumeragiCachedSlotTimeoutGate.tla`: cached proposal-slot timeout gate model.
 - `SumeragiCachedSlotTimeoutGate_fast.cfg`: CI-friendly cached proposal-slot timeout gate check.
-- `SumeragiCachedSlotTimeoutGate_bug_*.cfg`: expected-failure near-quorum fast-timeout, min-boundary, backlog, NPoS hysteresis, streak, and factor-cap mutations.
+- `SumeragiCachedSlotTimeoutGate_bug_*.cfg`: expected-failure near-quorum fast-timeout, min-boundary, backlog, NPoS hysteresis, streak, streak-saturation, and factor-cap mutations.
 - `SumeragiPendingFastPathTimeoutGate.tla`: pending fast-path timeout and DA inline validation floor model.
 - `SumeragiPendingFastPathTimeoutGate_fast.cfg`: CI-friendly pending fast-path timeout check.
-- `SumeragiPendingFastPathTimeoutGate_bug_*.cfg`: expected-failure margin, floor-boundary, division, underflow, and DA-floor mutations.
+- `SumeragiPendingFastPathTimeoutGate_bug_*.cfg`: expected-failure margin, floor-boundary, division, underflow, and DA-floor/cap mutations.
 - `SumeragiStalledPendingTimeoutDecisionGate.tla`: stalled pending-block timeout decision model.
 - `SumeragiStalledPendingTimeoutDecisionGate_fast.cfg`: CI-friendly stalled pending-block timeout decision check.
-- `SumeragiStalledPendingTimeoutDecisionGate_bug_*.cfg`: expected-failure class-priority, near-quorum, recovery-backlog, and timeout-selection mutations.
+- `SumeragiStalledPendingTimeoutDecisionGate_bug_*.cfg`: expected-failure class-priority, near-quorum, recovery-backlog, commit-pipeline evidence, and timeout-selection mutations.
 - `SumeragiStalledPendingFrontierTimeoutGate.tla`: stalled pending-frontier timeout helper model.
 - `SumeragiStalledPendingFrontierTimeoutGate_fast.cfg`: CI-friendly stalled pending-frontier timeout helper check.
 - `SumeragiStalledPendingFrontierTimeoutGate_bug_*.cfg`: expected-failure backlog-extension, deferred-QC multiplier, active-gap cap, and saturating-arithmetic mutations.
@@ -6780,18 +6946,18 @@ verification, and full networking details.
 - `SumeragiProposalLivenessGate.tla`: missing-QC proposal-liveness state helper model.
 - `SumeragiProposalLivenessGate_fast.cfg`: CI-friendly proposal-liveness state helper check.
 - `SumeragiProposalLivenessGate_bug_*.cfg`: expected-failure transition, fresh-slot, ensure-slot, and mark-state mutations.
-- `SumeragiFrontierSlotTrackerGate.tla`: exact-frontier slot constructor/step FSM model.
+- `SumeragiFrontierSlotTrackerGate.tla`: exact-frontier slot constructor/step/apply-wrapper FSM model.
 - `SumeragiFrontierSlotTrackerGate_fast.cfg`: CI-friendly exact-frontier slot tracker check.
-- `SumeragiFrontierSlotTrackerGate_bug_*.cfg`: expected-failure constructor, ownership, body/vote/QC, timeout, catch-up, finalization, and compatibility-mirror mutations.
+- `SumeragiFrontierSlotTrackerGate_bug_*.cfg`: expected-failure constructor, ownership, body/vote/QC, same-candidate peer evidence, timeout, catch-up, finalization, nested-state, and apply-wrapper slot lifecycle mutations.
 - `SumeragiFrontierSlotHelpersGate.tla`: exact-frontier slot helper model.
 - `SumeragiFrontierSlotHelpersGate_fast.cfg`: CI-friendly exact-frontier slot helper check.
-- `SumeragiFrontierSlotHelpersGate_bug_*.cfg`: expected-failure lag-start, body-state, local-vote, timeout-view, progress/lag, catch-up marker, and compatibility-sync mutations.
+- `SumeragiFrontierSlotHelpersGate_bug_*.cfg`: expected-failure lag-start, body-state/body-available, local-vote, timeout-view, progress/lag, catch-up marker, and nested-state mutations.
 - `SumeragiFrontierProposalGraceGate.tla`: exact-frontier proposal grace helper model.
 - `SumeragiFrontierProposalGraceGate_fast.cfg`: CI-friendly exact-frontier proposal grace check.
-- `SumeragiFrontierProposalGraceGate_bug_*.cfg`: expected-failure transaction-count, assembly-window, ingress-drain, DA/SLA gating, active-gap, missing-QC, and saturating-arithmetic mutations.
-- `SumeragiSlotTrackerStateGate.tla`: slot tracker map/retained-branch helper model.
+- `SumeragiFrontierProposalGraceGate_bug_*.cfg`: expected-failure transaction-count, full-grace transaction-budget, assembly-window, ingress-drain, DA/SLA gating, active-gap, missing-QC, and saturating-arithmetic mutations.
+- `SumeragiSlotTrackerStateGate.tla`: slot tracker map/proposal-seen/retained-branch helper model.
 - `SumeragiSlotTrackerStateGate_fast.cfg`: CI-friendly slot tracker state helper check.
-- `SumeragiSlotTrackerStateGate_bug_*.cfg`: expected-failure authoritative owner/frontier, retained branch, seed-priority, clear, and height-prune mutations.
+- `SumeragiSlotTrackerStateGate_bug_*.cfg`: expected-failure authoritative owner/frontier, proposal-seen, horizon-prune, retained branch, seed-priority, clear, and height-prune mutations.
 - `SumeragiTimeoutDerivationGate.tla`: timeout and cooldown derivation helper model.
 - `SumeragiTimeoutDerivationGate_fast.cfg`: CI-friendly timeout and cooldown derivation helper check.
 - `SumeragiTimeoutDerivationGate_bug_*.cfg`: expected-failure cooldown, backoff, quorum-timeout, pacemaker, availability, and stale-gate mutations.
@@ -7647,9 +7813,9 @@ verification, and full networking details.
 - `SumeragiConsensusRecoveryPruneGate.tla`: consensus recovery prune/clear helper model.
 - `SumeragiConsensusRecoveryPruneGate_fast.cfg`: CI-friendly consensus recovery prune/clear helper check.
 - `SumeragiConsensusRecoveryPruneGate_bug_*.cfg`: expected-failure clear-height, status reset, dwell clear, committed-height floor, age boundary, timeout max, retention floor, and short-circuit mutations.
-- `SumeragiFrontierLiveOwnerWorkGate.tla`: frontier live-owner work helper model.
+- `SumeragiFrontierLiveOwnerWorkGate.tla`: frontier live-owner work helper and conflict-adapter model.
 - `SumeragiFrontierLiveOwnerWorkGate_fast.cfg`: CI-friendly frontier live-owner work helper check.
-- `SumeragiFrontierLiveOwnerWorkGate_bug_*.cfg`: expected-failure mode, pending, inflight, validation, slot-QC, competing-quorum, local-lock, local-history, and no-work mutations.
+- `SumeragiFrontierLiveOwnerWorkGate_bug_*.cfg`: expected-failure mode, pending, inflight, validation, slot-QC, competing-quorum, local-lock, local-history, no-work, and conflict-adapter mutations.
 - `SumeragiKeepFrontierPendingActiveGate.tla`: keep-frontier-pending-active helper model.
 - `SumeragiKeepFrontierPendingActiveGate_fast.cfg`: CI-friendly keep-frontier-pending-active helper check.
 - `SumeragiKeepFrontierPendingActiveGate_bug_*.cfg`: expected-failure live-owner gate, pending evidence, view bridge, exact-hash inflight, fall-through, and no-source mutations.
@@ -7721,12 +7887,19 @@ verification, and full networking details.
 - `SumeragiFrontierRecovery_deep.cfg`: larger frontier backlog/window/view bound set.
 - `SumeragiFrontierRecovery_wide.cfg`: wider frontier bound set used by formal CI.
 - `SumeragiFrontierRecovery_bug_stale_owner.cfg`: expected-failure stale-owner mutation.
+- `SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup.cfg`: expected-failure stale recovery-owner cleanup mutation.
 - `SumeragiFrontierRecovery_bug_vote_queue.cfg`: expected-failure vote-queue mutation.
 - `SumeragiFrontierRecovery_bug_payload_recovery.cfg`: expected-failure payload-recovery mutation.
+- `SumeragiFrontierRecovery_bug_payload_recovery_owner.cfg`: expected-failure payload recovery-owner mutation.
 - `SumeragiFrontierRecovery_bug_retransmit_followthrough.cfg`: expected-failure retransmit-follow-through mutation.
+- `SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg`: expected-failure quorum retransmit window-cleanup mutation.
+- `SumeragiFrontierRecovery_bug_view_bound_retransmit_evidence.cfg`: expected-failure view-bound retransmit-evidence mutation.
 - `SumeragiFrontierRecovery_bug_future_promotion.cfg`: expected-failure future-promotion mutation.
 - `SumeragiFrontierRecovery_bug_future_reanchor_clear.cfg`: expected-failure reanchor-clear mutation.
+- `SumeragiFrontierRecovery_bug_future_reanchor_active_marker.cfg`: expected-failure reanchor active-marker preservation mutation.
+- `SumeragiFrontierRecovery_bug_future_reanchor_rotated.cfg`: expected-failure reanchor rotated-marker mutation.
 - `SumeragiFrontierRecovery_bug_future_evidence_drop.cfg`: expected-failure future-evidence drop mutation.
+- `SumeragiFrontierRecovery_bug_zero_evidence_future_drop.cfg`: expected-failure zero-evidence staged-future drop mutation.
 - `SumeragiFrontierRecovery_bug_promotion_reset.cfg`: expected-failure promotion-reset mutation.
 - `SumeragiFrontierRecovery_bug_future_stale_owner.cfg`: expected-failure future stale-owner mutation.
 - `SumeragiFrontierRecovery_bug_progress_touch.cfg`: expected-failure pending progress-touch mutation.
@@ -7761,6 +7934,7 @@ Invariants:
 - `CommitViewMatchesFinality`
 - `CommitViewDoesNotLeadCurrentView`
 - `GstElapsedGateMatchesPreGst`
+- `CommittedPreGstOnlyEnablesGstElapsed`
 - `TimeoutTickGateMatchesStalledProgress`
 - `ByzantineCommitVoteDoesNotBlockTimeoutStall`
 - `ViewEvidenceMatchesActiveView`
@@ -8709,6 +8883,20 @@ Temporal properties:
 - `CommittedOnlyGstObservationCanChange` proves that after finality all
   consensus/progress/fault actions are disabled, and any remaining post-finality
   state change is exactly `GstElapsed` observing GST.
+- `CommittedPreGstOnlyEnablesGstElapsed` proves that a committed state before
+  GST enables the `GstElapsed` observation gate while every protocol, RBC,
+  timeout, fault, Byzantine-commit, and post-GST progress gate remains disabled.
+- `CommittedPreGstOnlyGstElapsedCanMove` proves that the only real
+  post-finality movement before GST is the `GstElapsed` observation step, and
+  that this step preserves the complete finality/certificate/RBC stack while
+  reaching the committed+GST terminal state with every action disabled.
+- `CommittedPreGstNextOnlyGstElapsed` proves that the `Next` relation itself
+  is exactly the `GstElapsed` action in committed pre-GST states, and that any
+  such non-stuttering step reaches committed+GST terminal quiescence.
+- `CommittedPreGstSpecStepStuttersOrObservesGst` proves that the
+  stuttering-closed `[Next]_vars` relation from committed pre-GST states either
+  stutters while preserving the only-GST gate state or observes GST and reaches
+  committed+GST terminal quiescence.
 - `CommittedGstStateNeverChanges` proves that once finality is reached and GST
   has already been observed, every model variable is stable across real or
   stuttering steps.
@@ -8718,6 +8906,36 @@ Temporal properties:
 - `CommittedGstOnlyAllowsStuttering` proves that the committed+GST terminal
   state rejects `Next` itself, leaving only the stuttering branch of
   `[Next]_vars`.
+- `CommittedGstSpecStepOnlyStutters` proves that the stuttering-closed
+  `[Next]_vars` relation from committed+GST terminal states can only stutter
+  while preserving the complete finality/certificate/RBC stack and disabled
+  action gates.
+- `CommittedSpecNonStutteringOnlyObservesGst` proves that the only
+  non-stuttering spec step after finality is the pre-GST `GstElapsed`
+  observation into committed+GST terminal quiescence.
+- `CommittedSpecStepStuttersOrObservesGst` proves the complete committed
+  `[Next]_vars` closure: after finality, spec steps either stutter in the
+  current committed state or observe GST and enter committed+GST terminal
+  quiescence.
+- `CommittedSpecStepPreservesFinalityStack` proves that every committed
+  `[Next]_vars` step preserves the full finality/certificate/live-gate/RBC
+  evidence stack in both the pre-state and post-state.
+- `CommittedSpecStepOnlyChangesGstFlag` proves that every committed
+  `[Next]_vars` step keeps all consensus, vote, certificate, and RBC artifacts
+  stable; the only possible non-stuttering data change is the pre-GST
+  `GstElapsed` flip into committed+GST terminal quiescence.
+- `CommittedSpecStepNeverRunsProtocolActions` proves that committed
+  `[Next]_vars` steps never execute proposal, prepare, commit, NewView, RBC,
+  timeout, or Byzantine-fault actions; `Next` itself is equivalent to
+  `GstElapsed` after finality.
+- `CommittedSpecStepKeepsProgressActionsQuiescent` proves that committed
+  `[Next]_vars` steps keep all progress, timeout, Byzantine-commit, and fault
+  guards disabled in both the pre-state and post-state; any non-stuttering step
+  is still only the `GstElapsed` observation.
+- `CommittedSpecStepPreservesBudgetedRbcEvidence` proves that committed
+  `[Next]_vars` steps preserve the honest/fault roster-budgeted vote counters,
+  signed-stake accounting, latched commit evidence bounds, and delivered-RBC
+  evidence in both pre-state and post-state.
 - `CommitArtifactsOnlyInstallAtFinality` proves that the latched commit-view
   and commit-certificate witnesses can change only on the `CommitVote` to
   `Committed` finality transition, where they are installed from the live
@@ -8738,6 +8956,13 @@ Temporal properties:
   commit-view or commit-certificate witness change commits the current active
   view without advancing the view counter, installs `commitView'` as that same
   view, preserves view-quorum evidence, and excludes NewView handoff state.
+- `CommitArtifactsChangeNeverChangesGst` proves that any durable commit-view or
+  commit-certificate witness change preserves the GST observation flag while
+  still being sourced by an exact finality branch.
+- `CommitArtifactsChangeOnlyLeavesGstElapsedGate` proves that durable
+  commit-view or commit-certificate witness changes close protocol progress
+  gates and expose only `GstElapsed` when GST is still unobserved, while
+  following the exact-source committed-delivery completion chain.
 - `FinalityLatchOnlySetsCompleteStack` proves that any transition setting the
   abstract finality latch enters `Committed` with the complete finality stack:
   prepare quorum, live commit quorum, stake quorum, commit-certificate witness,
@@ -8778,6 +9003,14 @@ Temporal properties:
   proves that any latched commit-certificate vote/stake witness change also
   completes the delivered committed state through the same certified
   exact-source chain as commit-artifact installation.
+- `CommitCertificateWitnessChangeNeverChangesGst` proves that any latched
+  commit-certificate vote/stake witness change preserves the GST observation
+  flag while following the certified finality stack and commit-artifact GST
+  preservation chain.
+- `CommitCertificateWitnessChangeOnlyLeavesGstElapsedGate` proves that latched
+  commit-certificate vote/stake witness changes close protocol progress gates
+  and expose only `GstElapsed` when GST is still unobserved, while following the
+  commit-artifact GST-only remaining gate chain.
 - `CommitViewWitnessOnlyChangesOnNonzeroFinality` proves that the latched
   commit-view witness changes exactly on nonzero-view finality transitions,
   where it is installed as the active view; view-zero finality is handled
@@ -8798,6 +9031,14 @@ Temporal properties:
   proves that any nonzero commit-view witness change also completes the
   delivered committed state through the same certified exact-source chain as
   commit-certificate witness installation.
+- `CommitViewWitnessChangeNeverChangesGst` proves that any nonzero commit-view
+  witness change preserves the GST observation flag while following the
+  certified finality stack and commit-certificate witness GST preservation
+  chain.
+- `CommitViewWitnessChangeOnlyLeavesGstElapsedGate` proves that any nonzero
+  commit-view witness change closes protocol progress gates and exposes only
+  `GstElapsed` when GST is still unobserved, while following the
+  commit-certificate GST-only remaining gate chain.
 - `FinalityLatchNeverCarriesNewViewHandoff` proves that a finality-latch
   transition is not a `NewView` handoff, carries no live NewView votes, and
   preserves the existing view-quorum evidence.
@@ -8805,6 +9046,12 @@ Temporal properties:
   transition can only be sourced by an honest commit vote, a Byzantine commit
   vote, or RBC delivery, and never by timeout, NewView, RBC setup/progress,
   Byzantine fault, proposal/prepare, or GST bookkeeping steps.
+- `FinalityLatchChangeNeverChangesGst` proves that finality-latch transitions
+  preserve the GST observation flag while following the same commit-or-delivery
+  source classification.
+- `FinalityLatchChangeOnlyLeavesGstElapsedGate` proves that finality-latch
+  transitions close protocol progress gates and expose only `GstElapsed` when
+  GST is still unobserved, while preserving the exact latch source effects.
 - `FinalityLatchSourceEffectsAlwaysExact` proves that those finality-latch
   source actions are mutually exclusive on the latch-flip transition and
   install the exact source-specific vote, stake, commit-certificate, commit-view,
@@ -8859,6 +9106,12 @@ Temporal properties:
   that those exact finality-source actions also leave the post-state with every
   proposal, vote, view-change, RBC, timeout, Byzantine-fault, and post-GST
   progress gate disabled.
+- `FinalitySourceActionNeverChangesGst` proves that those exact finality-source
+  actions preserve the GST observation flag while installing finality; synchrony
+  observation remains owned by the explicit `GstElapsed` step.
+- `FinalitySourceActionOnlyLeavesGstElapsedGate` proves that those exact
+  finality-source actions leave all protocol progress gates closed and expose
+  only the `GstElapsed` gate when GST has not yet been observed.
 - `FinalitySourceActionAlwaysInstallsCommitCertificateWitnesses` proves that
   those exact finality-source actions install the latched commit-certificate
   vote and stake witnesses from the post-state live counters.
@@ -9044,6 +9297,12 @@ Temporal properties:
   `Committed` commits the current active view without advancing the view
   counter, installs `commitView'` as that same view, preserves view-quorum
   evidence, and excludes NewView handoff state from the commit.
+- `CommittedPhaseEntryNeverChangesGst` proves that first entry into
+  `Committed` preserves the GST observation flag while using the same
+  finality-source classification required for the committed-phase entry.
+- `CommittedPhaseEntryOnlyLeavesGstElapsedGate` proves that first entry into
+  `Committed` leaves all protocol progress gates closed and exposes only the
+  `GstElapsed` gate when GST has not yet been observed.
 - `CommittedPhaseEntryAlwaysDisablesProgressActions` proves that the post-state
   of first entry into `Committed` already disables proposal, vote, timeout,
   Byzantine fault, and RBC progress gates.
@@ -9241,6 +9500,9 @@ Temporal properties:
   stake after finality.
 - `StakeAccountingNeverDiverges` proves that the live signed-stake accumulator
   always equals the weighted honest and Byzantine commit-vote counters.
+- `LiveStakeNeverExceedsRosterBudget` proves that the live signed-stake
+  accumulator stays within the maximum weighted validator roster budget in every
+  reachable state.
 - `CommitEvidenceNeverExceedsRosterBudget` proves that latched commit
   certificate vote/stake evidence stays within the configured validator and
   weighted-stake budgets in every reachable state.
@@ -9267,6 +9529,13 @@ Temporal properties:
   state keeps the evidence expected for that state: initialized states keep
   validated header/digest evidence, chunk-covered states keep full chunk
   coverage, and ready/delivered states keep ready quorum.
+- `RbcPartialProgressEvidenceNeverDiverges` proves the complementary partial
+  progress evidence shape: idle and init states carry no stale chunk/READY
+  counters, chunking stays below full chunk coverage, chunk-complete states have
+  no READY votes yet, and partial READY states remain below commit quorum.
+- `RbcCorruptedDigestNeverValid` proves that once RBC enters the corrupted
+  repair path, any retained RBC evidence is paired with an invalidated digest
+  until the protocol repairs through RBC INIT.
 - `RbcStateOnlyChangesByProtocolOrFault` proves that the top-level RBC state
   changes only through proposal startup, explicit RBC INIT/CHUNK/READY/DELIVER
   protocol progress, or Byzantine fault corruption.
@@ -9407,6 +9676,9 @@ Temporal properties:
   DELIVER transition is enabled exactly when the session is in `ReadyQuorum`
   with READY quorum, full chunk coverage, header evidence, and a valid digest,
   so DELIVER cannot bypass complete RBC evidence.
+- `RbcReadyQuorumNeverLacksDeliverGate` proves the dual availability boundary:
+  every reachable `ReadyQuorum` state has the live RBC DELIVER gate enabled, so
+  READY quorum cannot be reached without exposing the delivery handoff.
 - `RbcDeliverStepAlwaysPreservesCompleteEvidence` proves that an RBC DELIVER
   step moves `ReadyQuorum` to `Delivered` while preserving the complete
   READY/chunk/header/digest evidence tuple and the live vote/view/GST context.
@@ -9436,6 +9708,108 @@ Temporal properties:
   evidence in place, keeps commit-certificate artifacts absent, disables the
   remaining RBC/fault progress gates, and still lacks the vote or stake
   evidence required to commit.
+- `RbcDeliveredWithoutFinalityNeverCarriesCommitCertificate` proves that every
+  reachable delivered-but-uncommitted RBC state keeps complete delivered
+  evidence while commit-certificate artifacts remain absent and either live
+  commit-vote quorum or signed-stake quorum is still missing.
+- `RbcDeliveredFinalityOnlyComesFromCommitVote` proves that once RBC is already
+  delivered but not yet final, any later finality latch must come from an honest
+  or Byzantine commit-vote action while the RBC DELIVER action remains disabled.
+- `RbcDeliveredFinalityAlwaysCompletesCommittedDelivery` proves that such a
+  delivered-state finality transition also installs the complete committed
+  delivery certificate stack, keeps delivered RBC evidence, and closes
+  post-finality progress gates.
+- `RbcDeliveredFinalityAlwaysCommitsCurrentView` proves that delivered-state
+  finality latches the active view as the commit-view witness, preserves active
+  view evidence, and cannot carry a NewView handoff into finality.
+- `RbcDeliveredFinalityOnlyLeavesGstElapsedGate` proves that delivered-state
+  finality preserves the GST observation flag, closes all protocol progress
+  gates, and leaves only the explicit `GstElapsed` gate while GST is still
+  unobserved.
+- `RbcDeliveredFinalityAlwaysInstallsCommitCertificateWitnesses` proves that
+  delivered-state finality installs the commit-certificate witness counters
+  from the post-transition commit votes and signed stake, with both certificate
+  witness fields meeting quorum.
+- `RbcDeliveredFinalityAlwaysMatchesCommitCertificateWitnessChange` proves that
+  delivered-state finality follows the complete commit-certificate witness
+  change stack, including committed-phase entry equivalence, certified finality
+  artifacts, commit-view witness installation, and exact-source committed
+  delivery completion.
+- `RbcDeliveredFinalityAlwaysMatchesCommitViewWitnessChange` proves that
+  delivered-state finality installs the current-view witness, leaves the witness
+  unchanged exactly at view zero, and follows the complete commit-view
+  witness-change stack whenever the committed view is nonzero.
+- `RbcDeliveredFinalityAlwaysMatchesLiveCommitGateCrossing` proves that
+  delivered-state finality is exactly a live commit-gate crossing from
+  `~CanCommit(...)` to `CanCommit(...)`, with post-state finality and RBC
+  evidence predicates consistent with the committed latch.
+- `RbcDeliveredFinalityAlwaysDisablesProgressAfterCommittedDelivery` proves
+  that delivered-state finality closes every post-state protocol progress gate:
+  proposal, prepare, commit, Byzantine commit, NewView, RBC, timeout,
+  Byzantine-fault, and post-GST progress.
+- `RbcDeliveredFinalityAlwaysMatchesCertifiedSourceStack` proves that
+  delivered-state finality satisfies the certified source-stack classifiers for
+  finality-latch change, exact source effects, and quorum gates, while ruling
+  out an RBC deliver source for this already-delivered path.
+- `RbcDeliveredFinalityAlwaysInstallsFinalityCertificateStack` proves that
+  delivered-state finality installs the complete post-state finality certificate
+  stack: finality-stack presence/completeness, committed-phase matching,
+  commit-certificate matching, commit-view matching, and live commit-gate
+  evidence matching.
+- `RbcDeliveredFinalityAlwaysMatchesCommittedPhaseEntry` proves that
+  delivered-state finality follows the complete committed-phase entry bridge,
+  including finality-latch coupling, certified finality stack entry, exact
+  source effects, current-view commitment, GST preservation, and post-entry
+  delivery completion.
+- `RbcDeliveredFinalityAlwaysMatchesCommitArtifactsChange` proves that
+  delivered-state finality installs durable commit artifacts through the
+  certified finality stack, preserves GST, commits the current view, and leaves
+  only the explicit `GstElapsed` gate after finality.
+- `RbcDeliveredFinalityAlwaysCouplesLatchAndCommitArtifacts` proves that
+  delivered-state finality changes the abstract finality latch and durable
+  commit artifacts together, with artifact installation restricted to honest or
+  Byzantine commit-vote sources rather than RBC delivery.
+- `RbcDeliveredFinalityAlwaysRecordsExactCommitVoteWitnesses` proves that
+  delivered-state finality records exact durable commit-vote witnesses: empty
+  pre-finality artifacts become post-state vote/stake counters for the current
+  view, sourced only from honest or Byzantine commit-vote finality and never
+  from RBC delivery.
+- `RbcDeliveredFinalityAlwaysPreservesDeliveredRbcEvidence` proves that
+  delivered-state finality preserves already-delivered RBC evidence while the
+  live commit gate crosses: READY quorum, complete chunks, header, and digest
+  evidence are stable before and after the commit-vote finality step.
+- `RbcDeliveredFinalityAlwaysPreservesViewPrepareHandoffEvidence` proves that
+  delivered-state finality enters `Committed` without carrying a NewView
+  handoff and without mutating prepare or view evidence for the current view.
+- `RbcDeliveredFinalityAlwaysHasExactProtocolFrame` proves the full
+  delivered-state finality frame: GST, active view, prepare/view handoff
+  evidence, and delivered RBC evidence are preserved while exact commit-vote
+  witnesses and post-commit disabled-action gates are installed.
+- `RbcDeliveredFinalityAlwaysHasExactCommitVoteActionFrame` proves that
+  delivered-state finality is exactly one commit-vote action and not proposal,
+  prepare, timeout, NewView, RBC, Byzantine-fault, or GST observation work.
+- `RbcDeliveredFinalityAlwaysInstallsCommittedPostStateInvariants` proves that
+  delivered-state finality installs the committed post-state safety bundle:
+  finality/certificate/live-gate equivalence, RBC evidence, current-view
+  binding, cleared NewView handoff, and disabled progress gates.
+- `RbcDeliveredFinalityAlwaysSplitsPostStateGate` proves the exact
+  delivered-state finality post-state gate split: pre-GST finality leaves only
+  `GstElapsed` enabled, while post-GST finality leaves the committed terminal
+  state with no enabled actions.
+- `RbcDeliveredFinalityPreGstPostStateOnlyLeavesGstElapsed` proves the
+  pre-GST branch of delivered-state finality explicitly: the post-state is
+  committed, keeps GST unobserved, disables all progress and fault gates, and
+  leaves only `GstElapsed` enabled.
+- `RbcDeliveredFinalityPostGstPostStateIsTerminal` proves the post-GST branch
+  explicitly: delivered-state finality reaches committed+GST terminal
+  quiescence with every action gate disabled.
+- `RbcDeliveredNeverEnablesRbcProgress` proves that a delivered RBC session
+  keeps INIT, CHUNK, READY, DELIVER, and Byzantine RBC-fault gates closed, so
+  delivered RBC evidence cannot be reopened by RBC-side progress.
+- `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
+  prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
+  pending branches preserve the GST observation flag; synchrony observation
+  remains owned by the explicit `GstElapsed` step.
 - `LiveHeaderDigestEvidenceNeverBypassRbcHandoff` proves that live RBC header
   and digest evidence remains confined to initialized, withheld, corrupted, or
   delivered handoff states; digest evidence always implies a seen header and an
@@ -9456,7 +9830,17 @@ Frontier recovery invariants:
 - `TypeInvariant`
 - `CommitImpliesVoteQuorum`
 - `CommitImpliesPayloadAvailability`
+- `CommittedFrontierHasNoStagedFuture`, which requires a committed frontier to
+  keep fresh recovery ownership and have no live future slot or promotion-ready
+  wrapper competing with its commit source.
 - `VoteBackedNotDroppedAsZeroEvidenceZombie`
+- `ZeroEvidenceDropHasNoConsensusEvidence`, which requires a zero-evidence
+  terminal drop to have no vote, quorum, commit-QC, retransmit, rotation, or
+  promotion-ready evidence attached to it.
+- `ZeroEvidenceDropHasNoStagedFuture`, which requires a zero-evidence terminal
+  drop to have no live future slot or promotion-ready wrapper competing with
+  the no-evidence decision; any observed future evidence must already be
+  promoted.
 - `PostGstVoteBackedFrontierHasProgress`, which rules out a terminal
   post-GST state where `pending /\ voteBacked /\ ~committed` has no recovery,
   commit, retransmit, rotation, or bounded-drop transition.
@@ -9472,9 +9856,14 @@ Frontier recovery invariants:
 - `MissingPayloadHasRecoveryProgress`, which requires a vote-backed active
   frontier with a drained vote queue and missing payload to expose a payload
   recovery transition.
+- `PayloadRecoveredHasLocalOwner`, which requires any recovered payload marker
+  to keep the active payload local and its recovery ownership local.
 - `QuorumWindowHasRetransmitProgress`, which requires an expired
   quorum-reschedule window to expose a quorum retransmit transition before
   bounded rotation/drop can follow.
+- `QuorumRetransmitClearsRescheduleWindow`, which requires a completed quorum
+  retransmit to have cleared the reschedule timer while preserving the
+  vote-backed, payload-available evidence it will follow through.
 - `RetransmitHasFollowthroughProgress`, which requires a vote-backed frontier
   that already retransmitted quorum evidence to expose the deterministic
   rotation or view-bound clear follow-through.
@@ -9491,16 +9880,36 @@ Frontier recovery invariants:
   evidence, and reset through the active-progress cleanup invariant.
 - `FuturePromotionReadyClearsCurrentWrapper`, which requires the
   promotion-ready staging state to have cleared the current pending wrapper,
-  reset the quorum-reschedule timer, marked a future-reanchor progress event,
-  and kept concrete future evidence as the only promotion source.
+  stayed separate from rotation and terminal outcomes, reset the
+  quorum-reschedule timer, marked a future-reanchor progress event, and kept
+  concrete future evidence as the only promotion source.
+- `FuturePromotionReadyClearsActiveMarkers`, which requires the
+  promotion-ready staging state to have cleared the current recovery owner,
+  validation, local-vote, commit-QC, payload-recovery, and quorum-retransmit
+  markers before promotion.
 - `TerminalFrontierOutcomesAreExclusive`, which requires committed, dropped,
   and rotated frontier terminal outcomes to stay mutually exclusive, clear
   quorum-reschedule timers, and keep drop labels exactly aligned with dropped
   states.
+- `RotatedFrontierHasRetransmitEvidence`, which requires a rotated non-dropped
+  frontier to preserve retransmit, vote, payload, owner, and non-quorum
+  evidence while aligning subject-view and recovery-rotation bookkeeping.
+- `RotatedFrontierHasNoStagedFuture`, which requires a rotated non-dropped
+  frontier to have no live future slot or promotion-ready wrapper competing
+  with its rotation source, and any observed future evidence must already be
+  promoted.
+- `ViewBoundDropHasRetransmitEvidence`, which requires a view-bound drop to
+  preserve the retransmit, vote, payload, owner, max-view, and non-quorum
+  evidence that made the view-bound terminal outcome admissible.
+- `ViewBoundDropHasNoStagedFuture`, which requires a view-bound drop to have
+  no live future slot or promotion-ready wrapper competing with the terminal
+  drop source, and any observed future evidence must already be promoted.
 - `PendingProgressEventsTouchAge`, which requires every modeled pending
   progress event to reset the abstract progress age.
 - `StaleRecoveryUnlockIsViewScoped`, which requires any stale recovery unlock
   to have rotated at least the pending block's subject view.
+- `StaleRecoveryUnlockClearsStaleOwner`, which requires a stale recovery
+  unlock to remove the stale owner label from the active frontier.
 
 Frontier recovery temporal property:
 - `PostGstVoteBackedFrontierEventuallyResolves`: after GST, every unresolved
@@ -9979,6 +10388,7 @@ implementation surfaces it abstracts:
 | `fallback_*` | `collector_indices_k_fallback(...)` starts at the proxy tail, wraps once if needed, skips the leader, preserves uniqueness, and fills the effective fanout. |
 | `perm_*`, `npos_*`, `seed_present` | `deterministic_collectors(...)` applies the same seed-routing contract for permissioned and NPoS modes: seed present selects PRF, missing seed selects fallback. |
 | `prf_*` | `collector_indices_k_prf(...)` is abstracted by its required safety contract: selected indices are distinct, in range, no longer than the effective fanout, and exclude the leader for multi-peer rosters. |
+| `CollectorSelectionExactness` | The aggregate invariant ties quorum/proxy-tail derivation, fanout floors/caps, default and fallback index selection, PRF safety, and deterministic seed routing together for every bounded case. |
 
 The topology-fanout model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -9991,6 +10401,7 @@ implementation surfaces it abstracts:
 | `single_count_positive`, `len4_count_zero` | `topology_fanout_from_tail(...)` returns no fanout for single-peer topologies or zero requested count. |
 | `len4_count_two`, `len4_count_three`, `len4_count_ten` | Four-validator fanout starts at proxy tail index 2, can wrap to index 1, skips leader index 0, and caps oversized counts to the three non-leader peers. |
 | `len7_count_two`, `len7_count_five`, `len7_count_ten` | Seven-validator fanout starts at proxy tail index 4, fills Set B first, wraps across non-leader Set A validators only as needed, and preserves uniqueness. |
+| `TopologyFanoutHelperExactness` | The aggregate invariant ties redundant-send count, view-change quorum, configured redundant floor, and tail fanout shape together for every bounded case. |
 
 The topology-role-filter model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -10001,6 +10412,7 @@ implementation surfaces it abstracts:
 | `group_len*` | `NonEmptyTopology::leader(...)` and `ConsensusTopology::{leader, proxy_tail, validating_peers, set_b_validators, voting_peers}` expose the same deterministic slices, with consensus helpers unavailable for single-peer rosters. |
 | `filter_*` | `filter_signatures_by_roles(...)` builds the allowed role-index set, rejects invalid/out-of-range indices, preserves the input signature order, preserves duplicate signatures, and keeps the single-peer proxy-tail index `0` case. |
 | `audit_*` | `audit_roles_for_prev_block_hash(...)` sorts and deduplicates peers, rotates only the commit-quorum prefix by the previous block hash offset, then labels peers according to the rotated topology order. |
+| `TopologyRoleFilterExactness` | The aggregate invariant ties role partitioning, role-slice projection, role-filtered signature selection, and audit-role canonicalization/rotation together for every bounded case. |
 
 The active-topology-selection model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -10012,6 +10424,28 @@ implementation surfaces it abstracts:
 | `commit_missing_pops_skip`, `trusted_missing_pops_drop` | Incomplete PoP maps are skipped for commit/world primary rosters but applied to trusted-derived rosters, where peers missing PoPs are dropped. |
 | `pop_filter_*`, `small_roster_*`, `large_roster_*` | Complete PoP filtering is accepted only when `guard_pop_quorum(...)` keeps quorum: all members for rosters up to three peers, otherwise `floor(2n/3) + 1`. |
 | `primary_empty_*`, `trusted_fallback_pops_filtered`, `empty_everywhere` | Empty primary results fall back through trusted validators and still apply trusted PoP rules; empty inputs everywhere return an empty roster. |
+| `ActiveTopologySelectionExactness` | The aggregate invariant ties source priority, BLS filtering, deduplication, canonical sorting, PoP filtering/quorum guards, and final fallback behavior together for every bounded case. |
+
+The trusted-peer P2P topology model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `world_only`, `local_absent_world`, `empty_world_trusted` | `p2p_topology_with_trusted(...)` includes world peers, the local trusted peer, and configured trusted peers even when one source is absent. |
+| `trusted_observer`, `trusted_dedup` | Trusted peers are part of the expected topology, duplicate world/trusted/local identities collapse through the set union, and configured trusted observers are not reported as outside peers. |
+| `online_order_duplicates` | `peer_ids_outside_topology(...)` filters only peers absent from the expected topology while preserving network-observed order and duplicate stray observations. |
+| `TrustedP2pTopologyExactness` | The aggregate invariant ties trusted topology construction, deduplicated size, outside-only filtering, trusted-observer exclusion, online order, and duplicate-stray preservation together for every bounded case. |
+
+The P2P topology refresh model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `no_peers_empty_unseen`, `unchanged_clean` | `topology_refresh_decision(...)` skips empty peer sets and unchanged clean refreshes without gossip, network update, local-removal status, or `last_advertised` mutation. |
+| `changed_topology`, `changed_with_trusted_network` | Changed world topology advertises the current world set, updates `last_advertised`, gossips only world peers, and updates the network with the trusted-peer-augmented topology. |
+| `unchanged_with_strays` | Online strays against unchanged world topology force a rebroadcast, preserve the current world advertisement, and carry the exact stray count. |
+| `first_seen_local`, `absent_before_seen`, `removed_after_seen`, `empty_after_seen`, `local_returns` | The local-seen latch gates local-removal handling: removal is emitted only after prior local observation plus a later non-empty world set without the local peer; local return clears removal through normal refresh. |
+| `P2pTopologyRefreshExactness` | The aggregate invariant ties decision/last-state updates, gossip and network side effects, local-removal status, queue clearing, idle skips, and stray-count propagation together for every bounded case. |
 
 The quorum-retransmit target model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -10026,6 +10460,7 @@ implementation surfaces it abstracts:
 | `all_remote_observed` | When every remote peer is already observed and the near-quorum branch is not active, the missing-target list is empty. |
 | `local_middle_order` | Local exclusion does not depend on the local peer being index zero, and target order remains canonical after filtering. |
 | `view_mapped_missing` | Observed commit-vote signer indices are interpreted in the view-aligned signature topology before comparing with canonical peers, so the missing canonical peer is targeted rather than the same numeric index. |
+| `QuorumRetransmitTargetExactness` | The aggregate invariant ties empty/local-only exits, missing-voter target selection, near-quorum full fanout, mapping-failure fallback, local exclusion, canonical order, distinctness, and view-mapped signer resolution together for every bounded case. |
 
 The retransmit-backpressure model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -10038,6 +10473,19 @@ implementation surfaces it abstracts:
 | `zero_targets_heavy`, `half_round_up`, `quarter_round_up` | `retransmit_target_limit(...)` returns zero only for zero targets, uses ceil division for half/quarter throttling, and keeps a one-target liveness floor at heavy pressure. |
 | `base_zero_backoff`, `consensus_backlog`, `near_backlog` | `consensus_ingress_reschedule_backoff(...)` leaves zero base backoff at zero, multiplies by 4 for consensus backlog, and lets near-quorum backlog dominate with an 8x multiplier. |
 | `timeout_low_clamp`, `timeout_mid`, `timeout_high_clamp` | `near_quorum_payload_timeout(...)` doubles the rebroadcast cooldown and clamps the result to 200ms..2000ms. |
+| `RetransmitBackpressurePacingExactness` | The aggregate invariant ties queue pressure thresholds, RBC level/byte pressure, additive scoring, target-limit liveness floors, cooldown multipliers, backlog backoff precedence, and timeout clamps together for every bounded case. |
+
+The paced-retransmit target model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `ZeroLimit`, `EmptyTargets` | `paced_retransmit_targets(...)` returns an empty target list for zero limits or empty input targets before any rotation or sorting. |
+| `UnderLimitPreservesOrder`, `EqualLimitPreservesDuplicates` | Target lists that already fit the selected limit return as-is, preserving caller order and duplicate entries. |
+| `OverLimitDedupFits`, `OverLimitSortsBeforeTruncate`, `DedupBeforeSortWouldDiffer` | Over-limit inputs are sorted and deduplicated before the second fit check or truncation, so the canonical sorted order wins over input order. |
+| `RotateByOne`, `RotateByLast`, `OffsetModulo`, `HeightOffset`, `ViewOffset` | Still-over-limit canonical targets rotate left by `(height + view) mod dedup_len`, including modulo wraparound and independent height/view contributions. |
+| `LimitOne`, `OverLimitSortsBeforeTruncate` | The selected limit is applied exactly after rotation, including the one-target limit and the normal two-target truncation case. |
+| `PacedRetransmitTargetSelectionExactness` | The aggregate invariant ties fail-closed handling, pre-cap preservation, canonical sort/dedup, deterministic rotation/offsets, and exact limit truncation together for every bounded case. |
 
 The quorum-reschedule backoff model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -10050,6 +10498,7 @@ implementation surfaces it abstracts:
 | `resend_zero_cooldown`, `resend_nonzero_cooldown`, `fast_enabled_zero_cooldown` | `contiguous_frontier_vote_backed_resend_window(...)` returns at least 1ms, including when rebroadcast cooldown is zero, and fast resend reuses that window. |
 | `fast_enabled`, `fast_not_contiguous`, `fast_zero_votes`, `fast_at_quorum`, `fast_over_quorum` | `contiguous_frontier_vote_backed_fast_resend_window(...)` returns `Some(window)` only for contiguous, vote-backed pending blocks that are still below commit quorum. |
 | `fast_relay_backpressure`, `fast_vote_queue_backlog`, `fast_rbc_unresolved` | Relay backpressure, vote-queue backlog, and unresolved RBC availability each disable the fast resend window. |
+| `QuorumRescheduleBackoffExactness` | The aggregate invariant ties zero-base no-op behavior, deficit multipliers, stall escalation, resend-window clamping, accepted fast-resend windows, and all fast-resend rejection gates together for every bounded case. |
 
 The RBC availability reschedule model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -10060,6 +10509,156 @@ implementation surfaces it abstracts:
 | `TimeoutBelowPending`, `TimeoutZeroPending`, `PendingEntry` | Before the timeout, and indefinitely for a zero timeout, a pending RBC entry keeps quorum rescheduling blocked. |
 | `NoSession`, `InvalidSession`, `DeliveredSession` | Absent, invalid, and already-delivered RBC sessions do not block quorum rescheduling. |
 | `CompleteReady`, `MissingChunks`, `ZeroTotalReady`, `NotReady`, `CompleteButNotReady` | A usable session blocks only when nonzero chunks are still missing or READY quorum is not reached; zero-total complete sessions with READY quorum do not synthesize missing chunks. |
+| `RbcAvailabilityRescheduleExactness` | The aggregate invariant ties DA-disabled, timeout, local-payload, absent/invalid/delivered/complete fail-open paths with pending-entry, missing-chunk, and missing-READY blocking paths for every bounded case. |
+
+The vote-backed reassembly stall model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `HardCap*` | `vote_backed_reassembly_hard_cap(...)` doubles the maximum of frontier recovery window, quorum timeout, resend window, and a 1ms floor. |
+| `SlotOwner*` | Exact same-height frontier slot ownership requires an active slot at the same height/view with `quorum_timeout` repair reason; finalized, passive, wrong-reason, wrong-view, wrong-height, and non-exact-height slots are rejected. |
+| `RecoveryOwner*`, `RecoveryAfterRejectedSlot` | Matching `frontier_recovery` ownership requires quorum-timeout cause and same view; rejected slot ownership falls through to valid recovery ownership instead of blocking it. |
+| `SlotOwnerUsesLatestProgress`, `RecoveryOwnerUsesLatestProgress` | Owner stall age is derived from the latest progress timestamp, not the oldest one. |
+| `NoOwnerNoExpiry`, `OwnerBelowCapNoExpiry`, `QuorumBelowCapNoExpiry`, `BothAtCapExpires` | Expiry requires an owner plus both owner stall age and quorum stall age reaching the hard cap. |
+| `VoteBackedReassemblyStallExactness` | The aggregate invariant ties hard-cap arithmetic, slot/recovery owner gating, fallback recovery ownership, latest-progress age selection, and expiry thresholds together for every bounded case. |
+
+The completed quorum view-advance model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `Exact*` | `advance_view_after_completed_quorum_reschedule(...)` routes exact contiguous-frontier heights through the exact slot event instead of the generic view-change trigger. |
+| `ExactNoSlotFallback`, `ExactStaleSlotFallback` | Exact heights still use the slot-event route when the slot is missing or stale, applying the committed frontier height and requested view while dropping stale slot state. |
+| `LowerHeightGeneric`, `FutureHeightGeneric`, `NonExactNoSlotGeneric` | Non-exact heights route through `trigger_view_change_with_cause(...)` with the original requested height/view. |
+| `ExactRequestedDominates`, `ExactActiveDominates`, `ExactCandidateDominates`, `ExactSaturatingIncrement` | Exact slot events choose `max(active_view, requested_view, candidate_view)` and increment with saturation. |
+| `ExactClearsRebroadcast`, `ExactUpdatesTimestamps`, `ExactCausePreserved` | Exact slot handling clears the quorum-timeout rebroadcast latch, updates progress timestamps, and preserves the supplied view-change cause. |
+| `GenericPreservesSlotState`, `GenericCausePreserved` | Generic view-change routing preserves existing slot state and the supplied cause. |
+| `CompletedQuorumViewAdvanceExactness` | The aggregate invariant ties exact/generic route choice, fallback behavior, max-view selection, saturated increment, timestamp updates, cause preservation, rebroadcast clearing, and generic slot-state preservation together for every bounded case. |
+
+The quorum rebroadcast dispatch model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `DropPendingNoLocalVote`, `EmptyTopologyNoLocalVote`, `LocalVoteEmitted` | `rebroadcast_pending_block_updates(...)` emits the local cached vote only for non-dropped pending state with a non-empty topology, before retransmit work is considered. |
+| `RelayBackpressureExit`, `NoTargetsExit`, `CooldownExit`, `BacklogLimitZeroExit`, `PacedTargetsEmptyExit`, `NoActionNoMark` | Relay backpressure, empty initial targets, cooldown, zero target limits, empty paced targets, and no-work inputs fail closed without votes, payload repair, block sync, missing-QC fetch, or rebroadcast markers. |
+| `ForceFanoutBypassesCooldown`, `ForceFanoutBypassesLimit` | Vote-backed under-quorum repair widens to full fanout and bypasses cooldown/target-limit throttles while still replaying votes. |
+| `VoteReplayOnly`, `CachedCommitQcSuppressesMissingFetch`, `MissingFetchWithVoteBacking`, `ContiguousNearQuorumBlockSync`, `BlockCreatedWithVoteBacking`, `AnyActionMarks` | Vote replay follows target selection and precedes optional payload repair, missing-QC fetch, block-sync, and block-created work. |
+| `DropPendingSuppressesPayload`, `CachedCommitQcSuppressesMissingFetch`, `MissingFetchWithVoteBacking`, `BlockCreatedWithVoteBacking`, `NoObservedBackingNoBlockCreated` | Payload repair, missing commit-QC fetch, and `BlockCreated` replay require non-dropped vote-backed pending state, and cached commit-QC evidence suppresses missing-QC fetch. |
+| `ContiguousNearQuorumBlockSync`, `BlockSyncFrameTooLarge`, `BlockSyncLocalOnlyTargets`, `BlockSyncNonSyncPayload`, `NonContiguousNoBlockSync`, `NotNearQuorumNoBlockSync` | `broadcast_vote_backed_block_sync_update(...)` runs only for contiguous near-quorum blocks with non-local targets, a fitting frame, and a block-sync payload. |
+| `AnyActionMarks`, `NoActionNoMark` | Actual work stamps the precommit rebroadcast marker; no-work paths leave the marker clear. |
+| `QuorumRebroadcastDispatchExactness` | The aggregate invariant ties local-vote gating, fail-closed exits, forced fanout, vote replay, payload dispatch, block-sync dispatch, and marker stamping together for every bounded case. |
+
+The isolated vote-backed handoff model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `DisabledResilience`, `ZeroVotes`, `MultipleVotes`, `AtQuorum`, `StaleHeight`, `FutureHeight`, `CachedCommitQc` | `maybe_handoff_isolated_vote_backed_frontier_to_anchor(...)` rejects disabled resilience, non-isolated vote counts, quorum-satisfied blocks, non-next-height blocks, and blocks with cached commit QC before side effects. |
+| `HappyPath`, `NoSlotAfterSeed`, `WrongSlotHeight`, `WrongSlotView`, `WrongSlotHash`, `MissingBody`, `CommitQcObserved`, `NoVoteBackedOwner`, `RangePullRejected` | Admitted attempts seed quorum-timeout recovery and replay the body-available slot event before slot validation or range-pull outcome. |
+| `NoSlotAfterSeed`, `WrongSlotHeight`, `WrongSlotView`, `WrongSlotHash`, `MissingBody`, `CommitQcObserved`, `NoVoteBackedOwner` | The resulting frontier slot must exist, match height/view/hash, carry a body, lack commit QC, and retain vote-backed owner state before the anchor request is issued. |
+| `HappyPath`, `RangePullRejected` | Valid slots request the committed-anchor range pull, but the handoff returns true only when that request succeeds. |
+| `HappyPath` | The successful request keeps the `frontier_stall_reset_fallback` reason label. |
+| `IsolatedVoteBackedHandoffExactness` | The aggregate invariant ties admission rejection, admitted recovery/body-event side effects, slot validation, anchor requests, range-pull results, and reason labeling together for every bounded case. |
+
+The preemptive vote-backed retransmit model is intentionally finite. These are
+the implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `NoWindow`, `MissingVotes`, `HasQc`, `ValidationInflight`, `MissingLocalData`, `RecoveryBlocked`, `ProgressBeforeWindow`, `ProgressAtTimeout`, `NotDue` | `preemptive_rebroadcast_vote_backed_frontier_block(...)` rejects candidates without an open resend window, observed votes, QC absence, clear validation/data/recovery gates, in-window stall age, and a due precommit rebroadcast window. |
+| `NoPending` | Missing pending state produces no rebroadcast work and cannot synthesize pending state. |
+| `VoteRosterVotes`, `CommitFallbackBlockSync`, `NoTargets` | Non-empty vote rosters are preferred, empty vote rosters fall back to the effective commit topology, and empty combined targets fail closed. |
+| `NoOutput`, `VotesOnly`, `BlockSyncOnly`, `BlockOnly`, `MultiOutput`, `AtQuorumOutput` | Returned progress is exactly downstream vote, `BlockSyncUpdate`, or `BlockCreated` output from the rebroadcast dispatcher. |
+| `NoPending`, `NoTargets`, `MultiOutput` | Pending state is preserved across no-pending, no-target, and successful multi-output paths. |
+| `VoteRosterVotes`, `AtQuorumOutput` | The downstream near-quorum flag is true below quorum and false at quorum. |
+| `PreemptiveVoteBackedRetransmitExactness` | The aggregate invariant ties candidate rejection/admission, missing-pending handling, target selection, output-based progress, pending retention, and near-quorum flag exactness together for every bounded case. |
+
+The near-quorum preemptive escalation model is intentionally finite. These are
+the implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `NoCandidates`, `BudgetExhausted`, `MissingPending` | `reschedule_stale_pending_blocks(...)` does no escalation without a candidate, marks exhausted per-tick budget, and fails closed when the pending block is missing. |
+| `FreshRequestSuppresses`, `RequestWindowZeroFresh` | Fresh matching missing-block requests suppress duplicate escalation, including the zero retry-window case through the one-millisecond floor. |
+| `RequestHeightMismatch`, `RequestViewMismatch`, `RequestNotActionable`, `RequestBoundaryStale`, `RequestStale`, `RequestCapBoundaryStale` | Height/view mismatch, non-actionable dependencies, boundary-age requests, stale requests, and fetch-cap boundary requests do not suppress escalation. |
+| `InflightSuppresses`, `InflightTtlZeroFresh` | Fresh matching in-flight recovery range pulls suppress duplicate escalation, including the zero-TTL case through the one-millisecond floor. |
+| `InflightHashMismatch`, `InflightViewMismatch`, `InflightNotInflight`, `InflightBoundaryStale`, `InflightStale` | Hash/view mismatch, not-in-flight records, boundary-age records, and stale in-flight records do not suppress escalation. |
+| `DelegateFalse`, `DelegateTrue` | `maybe_escalate_missing_block_height_recovery(...)` is the only source of escalation counts and progress. |
+| `SecondCandidateIgnored` | The per-tick cap ignores a second near-quorum candidate even when it would otherwise be processable. |
+| `NearQuorumPreemptiveEscalationExactness` | The aggregate invariant ties budget gates, missing-pending fail-closed behavior, fresh-request suppression, in-flight suppression, delegate-result authority, per-tick cap enforcement, and progress/counter consistency together for every bounded case. |
+
+The manifest-gate reschedule model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| `manifest_no_votes`, `manifest_payload`, `manifest_votes_payload`, `manifest_no_targets` | `reschedule_pending_quorum_block(...)` treats manifest-gated pending blocks as effective work, preserves them, and never classifies them as zombie drops. |
+| `manifest_no_votes`, `manifest_payload`, `manifest_votes_payload` | Manifest-gated action paths mark plain quorum-reschedule attempts unless vote evidence is present, and they do not trigger immediate authoritative rotation. |
+| `manifest_no_targets` | Empty manifest retransmit targets are no-op reschedules: no action, no marker, retained pending state, and a false return. |
+| `plain_zero` | Plain zero-work pending blocks are dropped, cleaned, and reported as handled instead of being retained. |
+| `votes_payload`, `votes_backlog`, `votes_no_slot` | Vote-backed reschedule work remains effective, retained, and marked as vote-backed. |
+| `votes_no_targets` | Empty vote-backed target sets remain no-op reschedules with no marker while still allowing authoritative rotation when the local frontier payload is ready. |
+| `votes_payload`, `votes_no_targets`, `manifest_payload`, `manifest_votes_payload`, `votes_backlog`, `votes_no_slot` | Authoritative frontier rotation is admitted only for non-manifest contiguous payloads with the matching slot and no ingress backlog. |
+| `same_slot_evidence`, `frontier_owner_vote_backed` | Same-slot vote-backed evidence and frontier owner state keep pending blocks effective without forcing the manifest action path. |
+| `ManifestGateRescheduleExactness` | The aggregate invariant ties manifest effectiveness/retention, manifest action/no-target behavior, plain zero-work cleanup, vote-backed action/no-target behavior, authoritative rotation admission/suppression, and passive vote-backed evidence preservation together for every bounded case. |
+
+The QC signer-bitmap admission model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| Bitmap length | `parse_signers_bitmap(...)` requires `signers_bitmap.len() == topology_len.div_ceil(8)` before any signer is accepted. |
+| Out-of-bounds bits | `parse_signers_bitmap(...)` rejects a set bit whose decoded index is outside the topology instead of treating it as observer or padding evidence. |
+| Voting signer count | `ParsedQcSigners::voting` includes only decoded signer indexes below `voting_len`; commit quorum checks use that voting set. |
+| Observer/padding rejection | Bits at indexes outside the voting validator set can be present in the topology but cannot make an under-quorum voting set acceptable. |
+| `QcSignerBitmapAdmissionExactness` | The aggregate invariant ties topology-width matching, parser/spec equality, voting-only quorum accounting, observer/padding rejection, out-of-bounds rejection, length-mismatch rejection, and accepted-evidence exactness together for every bounded case. |
+
+The raw QC signer-count helper model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| Empty and zero bytes | `qc_signer_count(...)` sums `count_ones()` over the bitmap bytes, so empty bitmaps and zero bytes contribute zero. |
+| Single-bit bytes | Low and high bits both count through the same byte population-count path. |
+| Full and padding bytes | Full bytes contribute eight signers and padding-looking high bits still count because this helper has no roster context. |
+| Multi-byte accumulation | Every byte contributes to the raw sum without truncating at the first byte, saturating at one byte, or counting byte values instead of set bits. |
+| `QcSignerRawCountExactness` | The aggregate invariant ties bitmap-width bounds, raw anchor counts, empty/zero-byte handling, single-bit handling, full-byte and padding-bit handling, and multi-byte accumulation together for every bounded case. |
+
+The QC signer-bitmap construction model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| Zero roster and allocation | `build_signers_bitmap(...)` returns `Vec::new()` for a zero-length roster and allocates exactly `roster_len.div_ceil(8)` bytes for non-empty rosters. |
+| Single-signer bit placement | Signer indexes map to little-endian bits within each byte, including index `0`, middle bits, the last valid signer, and the `7`/`8` byte boundary. |
+| Multi-signer OR behavior | Multiple in-range signers are ORed into the same bitmap, with second-byte and full-roster cases preserving every valid signer. |
+| Out-of-range and padding filtering | Signer indexes at or beyond `roster_len` are skipped and cannot set padding bits or extend the bitmap. |
+| Duplicate collapse | The `BTreeSet` input means repeated observations keep a bit set instead of toggling or double-counting it. |
+| `BuildSignersBitmapExactness` | The aggregate invariant ties exact bitmap length, zero-roster and non-empty allocation behavior, single-signer bit placement, multi-signer OR behavior, out-of-range/padding filtering, duplicate collapse, and full-roster coverage together for every bounded case. |
+
+The signer-index normalization model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| Canonical normalization | `normalize_signer_indices_to_canonical(...)` maps signer indexes from the signature topology into the canonical topology by peer identity, preserving rotated peers and filtering empty, out-of-range, or absent-peer inputs. |
+| View index lookup | `view_index_for_canonical_signer(...)` returns `None` for empty canonical rosters, out-of-range canonical indexes, or peers absent from the signature topology; otherwise it returns the view-specific peer position. |
+| View normalization | `normalize_signer_indices_to_view(...)` maps canonical signer sets into the signature topology by peer identity and keeps valid index `0` instead of treating it as absent. |
+| Round-trip behavior | Canonical signers whose peers remain in the signature topology round-trip through view indexes, while missing peers are filtered. |
+| `SignerIndexNormalizationExactness` | The aggregate invariant ties canonical normalization anchors, canonical-to-view index lookup, canonical-set-to-view normalization, round-trip preservation/filtering, and exact actual/spec result equality together for every bounded case. |
+
+The commit-root consistency model is intentionally finite. These are the
+implementation surfaces it abstracts:
+
+| Model concept | Implementation surface |
+| --- | --- |
+| Permissioned root selection | `select_commit_root_signers(...)` groups accepted commit votes by `(parent_state_root, post_state_root)`, selects the largest same-root signer group, and breaks ties by the lower root tuple. |
+| NPoS root selection | `select_commit_root_signers_by_stake(...)` uses the same root grouping but selects by signed stake weight, with the same deterministic low-root tie break. |
+| Mixed-root and wrong-context rejection | Commit quorum is evaluated only after root grouping and context filtering, so signers or stake from different roots or different block/height/view/epoch contexts cannot be combined to satisfy quorum. |
+| QC root validation | QC validation rejects signer vote records whose parent/post-state roots do not match the QC roots. |
+| `CommitRootConsistencyExactness` | The aggregate invariant ties root selection/evidence exactness, permissioned and NPoS quorum exactness, mixed-root rejection, wrong-context signer/stake rejection, and QC root-validation exactness together for every bounded case. |
 
 The commit-pipeline recovery-gate model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -10072,6 +10671,7 @@ implementation surfaces it abstracts:
 | `missingLocalData`, `invalidPending`, `noLocalVote`, `offTip` | Recovery requires local DA payload availability, valid pending state, local commit-vote emission, and extension of the committed tip. |
 | `nearQuorumRetransmit`, `collectorDecoyRetransmit` | `rebroadcast_block_votes(..., target_missing_only = true)` derives quorum missing-signer targets through `quorum_retransmit_targets_for_missing_votes(...)`; bridge coverage includes `commit_pipeline_rebroadcasts_cached_votes_to_quorum_retransmit_targets`. |
 | `noVotesRetransmit`, `hasCommitQcRetransmit` | Empty vote logs and already cached commit QCs skip near-quorum rebroadcast. |
+| `CommitPipelineRecoveryExactness` | The aggregate invariant ties local commit-QC formation/order, observed-QC preservation, missing-QC recovery preconditions, and quorum retransmit target exactness together for every bounded case. |
 
 The known-block commit-QC recovery-gate model is intentionally finite. These
 are the implementation surfaces it abstracts:
@@ -10164,7 +10764,8 @@ implementation surfaces it abstracts:
 
 | Model concept | Implementation surface |
 | --- | --- |
-| `preserve_no_queue`, `preserve_mode_flip`, `preserve_commit_inflight`, `preserve_deadline_not_due` | `should_preserve_idle_view_budget_for_proposal(...)` requires queued work, no pending mode flip, no commit inflight job, and a due proposal deadline or queue nudge. |
+| `preserve_no_queue*` | `should_preserve_idle_view_budget_for_proposal(...)` requires queued work before considering pacing or hard proposal backpressure, so zero queued work keeps idle-view repair available. |
+| `preserve_mode_flip`, `preserve_commit_inflight`, `preserve_deadline_not_due` | `should_preserve_idle_view_budget_for_proposal(...)` also requires no pending mode flip, no commit inflight job, and a due proposal deadline or queue nudge. |
 | `preserve_healthy_due` | A due proposal with queued work and no backpressure preserves the tick budget for proposal handling before idle-view repair. |
 | `preserve_queue_saturated_due`, `preserve_consensus_pacing_due`, `preserve_combined_pacing_due` | Pacing-only pressure from queue saturation and/or consensus ingress backlog still preserves proposal budget. Bridge coverage includes `idle_view_budget_is_preserved_for_due_proposal_under_pacing_backpressure`. |
 | `preserve_active_pending_due`, `preserve_rbc_backlog_due`, `preserve_relay_backpressure_due` | Hard proposal backpressure keeps idle-view repair available. |
@@ -10207,7 +10808,7 @@ implementation surfaces it abstracts:
 | `effective_near_fast_not_shorter` | The near-quorum path remains capped by the ordinary quorum timeout when the derived near-quorum window is longer. |
 | `effective_near_no_missing_data`, `effective_near_consensus_backlog`, `effective_near_rbc_incomplete`, `effective_near_both_backlogs` | Missing local data is required, and consensus queue or RBC backlog disables the fast retry path. |
 | `hysteresis_permissioned_mode`, `hysteresis_zero_quorum_timeout`, `hysteresis_no_previous`, `hysteresis_height_mismatch`, `hysteresis_same_view`, `hysteresis_lower_view` | `cached_slot_timeout_hysteresis_remaining(...)` returns `None` unless NPoS mode has a nonzero quorum timeout, prior same-height timeout history, and a strictly newer view. |
-| `hysteresis_streak0_before`, `hysteresis_streak1_before`, `hysteresis_streak2_before`, `hysteresis_streak3_before` | `next_cached_slot_timeout_streak(...)` increments the previous streak for same-height newer views, while the hysteresis multiplier is capped at four quorum-timeout windows. |
+| `hysteresis_streak0_before`, `hysteresis_streak1_before`, `hysteresis_streak2_before`, `hysteresis_streak3_before`, `hysteresis_streak_max_before` | `next_cached_slot_timeout_streak(...)` increments the previous streak for same-height newer views with `u8::saturating_add`, while the hysteresis multiplier is capped at four quorum-timeout windows. |
 | `hysteresis_boundary`, `hysteresis_after` | The wait is present only while elapsed time is strictly below the hysteresis window; boundary and later ticks do not delay rotation. Bridge coverage includes `npos_timeout_hysteresis_applies_after_previous_trigger`. |
 
 The proposal parent-resolution model is intentionally finite. These are the
@@ -10649,7 +11250,7 @@ implementation surfaces it abstracts:
 | `duplicateSameSlot` | `local_same_slot_vote(...)` prevents duplicate local precommit votes for the same height/view/epoch. |
 | `unsupersededConflict`, `supersededConflict` | Same-height local vote history is enforced by `local_conflicting_slot_vote(...)`, `new_view_qc_supersedes_same_height_vote_conflict(...)`, and stale-vote rotation checks; bridge coverage includes `precommit_vote_rejects_newer_view_after_conflict` and the NEW_VIEW retry regressions in `main_loop/tests.rs`. |
 | `candidateCompletesNewerQuorum`, `olderConflictCompletesQuorum` | `candidate_commit_quorum_completes_with_local_vote(...)` can unblock only newer conflicting candidates that complete quorum; bridge coverage includes `precommit_vote_allows_newer_conflict_when_local_vote_completes_quorum` and `precommit_vote_rejects_older_conflict_even_when_local_vote_would_complete_quorum`. |
-| `lockedSameHeightConflict`, `missingLockedPayloadOldView`, `missingLockedPayloadNewerView`, `nonExtendingLockedChain`, `extendsLockedChain` | Locked-QC checks in `emit_precommit_vote(...)` and `qc_satisfies_locked_with_lookup(...)` reject same-height locked conflicts, require missing locked payload recovery at the same/older view, allow newer-view override, and require chain extension; bridge coverage includes `precommit_vote_skips_when_block_conflicts_with_locked_chain`, `emit_precommit_vote_requests_missing_locked_payload_before_skipping`, `emit_precommit_vote_allows_newer_view_when_locked_payload_missing`, and `precommit_vote_allows_when_block_extends_locked_chain`. |
+| `lockedSameHeightConflict`, `missingLockedPayloadOldView`, `missingLockedPayloadSameHeightNewerView`, `nonExtendingLockedChain`, `extendsLockedChain` | Locked-QC checks in `emit_precommit_vote(...)` and `qc_satisfies_locked_with_lookup(...)` reject same-height locked conflicts, request missing locked-payload recovery before signing same-height newer-view candidates, and require chain extension before permitted lock cases can emit; bridge coverage includes `precommit_vote_skips_when_block_conflicts_with_locked_chain`, `emit_precommit_vote_requests_missing_locked_payload_before_skipping`, `emit_precommit_vote_skips_newer_view_when_same_height_locked_payload_missing`, and `precommit_vote_allows_when_block_extends_locked_chain`. |
 
 The same-height vote conflict-gate model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -12900,47 +13501,52 @@ blocking-total thresholds, individual stage maxima, validation substages, and
 recorded-timing gates for slow commit-stage diagnostics.
 `commit-inflight-timeout-fast` and `commit-inflight-timeout-bug-*`
 cross-check one-shot commit-inflight timeout reporting, diagnostic marking,
-inflight owner preservation, late-result attachability, and absence of
-recovery/view/pacemaker side effects.
+timeout-mark persistence, inflight owner preservation, late-result
+attachability, and absence of recovery/view/pacemaker side effects.
 `post-commit-pacemaker-kick-fast` and
 `post-commit-pacemaker-kick-bug-*` cross-check queued-work admission,
-pacing-only allowance, hard backpressure suppression, callback-result
-independence, and timestamp capture for post-commit pacemaker kickstarts.
+pacing-only allowance, no-queue hard-stop suppression, hard backpressure
+suppression, callback-result independence, and timestamp capture for
+post-commit pacemaker kickstarts.
 `idle-view-proposal-budget-fast` and
 `idle-view-proposal-budget-bug-*` cross-check due-proposal budget
-preservation, pacing-only allowance, hard-backpressure suppression,
-proposal-slot reservation, and retry-after-proposal gating.
+preservation, pacing-only allowance, no-queue hard-stop suppression,
+hard-backpressure suppression, proposal-slot reservation, and
+retry-after-proposal gating.
 `cached-slot-timeout-fast` and `cached-slot-timeout-bug-*` cross-check
 near-quorum fast-timeout selection, base-timeout fallback, hysteresis wait
-boundaries, invalid-input suppression, streak advancement, and capped
-hysteresis factors.
+boundaries, invalid-input suppression, streak advancement, streak saturation,
+and capped hysteresis factors.
 `pending-fast-path-timeout-fast` and `pending-fast-path-timeout-bug-*`
 cross-check saturated margin subtraction, half-timeout fallback, one
 millisecond minimums, floor boundaries, and DA inline validation floor
-application.
+application without capping larger timeouts.
 `stalled-pending-timeout-fast` and `stalled-pending-timeout-bug-*` cross-check
 base quorum timeout flooring, near-quorum payload fast timeout priority,
 active recovery backlog classification, same-block recovery suppression, and
-decision projection fields.
+commit-pipeline evidence disjuncts in decision projection fields.
 `stalled-pending-frontier-timeout-fast` and
 `stalled-pending-frontier-timeout-bug-*` cross-check recovery backlog timeout
 extension, deferred-QC multiplier selection, active block-production gap caps,
 and saturating arithmetic.
 `frontier-proposal-grace-fast` and `frontier-proposal-grace-bug-*`
-cross-check transaction-count caps, proposal assembly windows, ingress drain
-grace, full and initial frontier proposal grace, missing-QC reacquire windows,
-and saturating arithmetic.
+cross-check transaction-count caps, full-grace transaction-budget coupling,
+proposal assembly windows, ingress drain grace, full and initial frontier
+proposal grace, missing-QC reacquire windows, and saturating arithmetic.
 `frontier-slot-helpers-fast` and `frontier-slot-helpers-bug-*` cross-check
-lag-start fallback, body-state predicates, local-vote locking, timeout-view
-selection, progress/lag timer updates, catch-up markers, and compatibility
-mirror synchronization.
+lag-start fallback, body-state predicates, body-available state transitions,
+local-vote locking, timeout-view selection, progress/lag timer updates,
+catch-up markers, and nested slot-state consistency.
 `frontier-slot-tracker-fast` and `frontier-slot-tracker-bug-*` cross-check
 constructor mode/phase selection, block-created and body/vote/QC evidence
-steps, authoritative supersede, fetch retry, quorum timeout, lag-expiry,
-view-advance, finalization, and compatibility-sync behavior.
+steps, same-candidate peer/requester evidence merging, authoritative supersede,
+fetch retry, quorum timeout, lag-expiry, view-advance, finalization, and
+nested-state behavior, plus absent-slot defaults, stale non-commit slot
+eviction, same-height slot reuse, and commit retire/retain wrapper behavior.
 `slot-tracker-state-fast` and `slot-tracker-state-bug-*` cross-check
-authoritative owner/frontier replacement, retained-branch refresh and seed
-priority, clear/remove-height behavior, and committed/above-height pruning.
+authoritative owner/frontier replacement, proposal-seen insertion/exact reads,
+view-change and horizon pruning, retained-branch refresh and seed priority,
+clear/remove-height behavior, and committed/above-height pruning.
 `timeout-derivation-fast` and `timeout-derivation-bug-*` cross-check
 rebroadcast cooldown clamps, payload and targeted rescue cooldowns, quorum
 reschedule backoff, DA/non-DA commit and availability timeouts, pacemaker
@@ -12991,7 +13597,8 @@ flooring.
 `frontier-live-owner-work-fast` and `frontier-live-owner-work-bug-*`
 cross-check terminal frontier modes, pending/commit/validation live work,
 slot commit-QC evidence, competing quorum lockouts, local lock/history guards,
-and fall-through after earlier local-source misses.
+fall-through after earlier local-source misses, and exact-height/different-hash
+conflict-adapter gating.
 `keep-frontier-pending-active-fast` and
 `keep-frontier-pending-active-bug-*` cross-check exact live-frontier owner
 preservation, pending commit-QC and bridged local-vote evidence, exact-hash
@@ -13291,51 +13898,70 @@ activity helpers: payload progress evidence, ingress backlog/payload gates,
 vote-backed activity evidence, missing-block request actionability,
 missing-commit-QC repair actionability, missing-payload recovery actionability,
 old-view and wrong-height suppression, stale-window rejection, and
-bookkeeping-only refresh exclusion. Its TLC cross-check independently exhausts
-the same thirty-six expected-failure configs as Apalache.
+bookkeeping-only refresh exclusion. The fast check also includes the aggregate
+`FrontierSameSlotActivityExactness` invariant tying positive exact evidence and
+non-exact-source rejection across all helper families. Its TLC cross-check
+independently exhausts the same thirty-six expected-failure configs as Apalache.
 `frontier-reassembly-activity-fast` and
 `frontier-reassembly-activity-bug-*` cross-check frontier reassembly activity:
 fresh dependency progress with payload backlog, exact same-slot ingress,
 same-height RBC sender and deferral work, validation work, deferred block-sync
-updates, stale and wrong-height/view rejection, and no-source suppression. Its
-TLC cross-check independently exhausts the same thirty-two expected-failure
-configs as Apalache.
+updates, stale and wrong-height/view rejection, and no-source suppression. The
+fast check also includes the aggregate `FrontierReassemblyActivityExactness`
+invariant tying exact positive evidence and non-exact-source rejection across
+all reassembly sources. Its TLC cross-check independently exhausts the same
+thirty-two expected-failure configs as Apalache.
 `frontier-quorum-owner-actionable-fast` and
 `frontier-quorum-owner-actionable-bug-*` cross-check live contiguous-frontier
 cleanup preservation: owner, vote, dependency backlog, RBC sender,
 missing-block, missing-commit-QC, and vote-backed recovery sources, stale or
 wrong-view rejection, passive-work rejection, committed+1 height gating,
-current-view gating, and no-actionable-source suppression. Its TLC cross-check
-independently exhausts the same twenty expected-failure configs as Apalache.
+current-view gating, and no-actionable-source suppression. The fast check also
+includes the aggregate `FrontierQuorumOwnerCleanupExactness` invariant tying
+exact positive evidence and non-exact cleanup rejection across all preservation
+sources. Its TLC cross-check independently exhausts the same twenty
+expected-failure configs as Apalache.
 `frontier-sidecar-retarget-fast` and `frontier-sidecar-retarget-bug-*`
 cross-check contiguous-frontier sidecar retargeting: narrow override reasons,
 quarantine and stall/progress gates, confirmation by local payload, commit QC,
 or override, tracked and untracked sidecar routing, commit-certified reacquire
 with local evidence, and rejection of missing expected hashes, same-hash
-sidecars, and authoritative payloads. Its TLC cross-check independently
-exhausts the same twenty-seven expected-failure configs as Apalache.
+sidecars, and authoritative payloads. The fast check also includes the
+aggregate `FrontierSidecarRetargetExactness` invariant tying exact positive
+evidence and non-exact retarget rejection across all sidecar routes. Its TLC
+cross-check independently exhausts the same twenty-seven expected-failure
+configs as Apalache.
 `frontier-sidecar-expected-hash-fast` and
 `frontier-sidecar-expected-hash-bug-*` cross-check sidecar expected-hash
 selection: tracked request precedence, deferred-hint and observed-head source
 ordering, exact height and authoritative-payload filtering, deterministic
 phase/view/hash tie-breaks, cached Prepare/Commit QC selection, and sidecar
 Commit-QC view rejection for absent, Prepare, wrong-height, or wrong-hash QCs.
-Its TLC cross-check independently exhausts the same twenty-five
-expected-failure configs as Apalache.
+The fast check also includes the aggregate
+`FrontierSidecarExpectedHashExactness` invariant tying exact positive
+evidence, deterministic ordering, and non-exact rejection across all
+expected-hash sources. Its TLC cross-check independently exhausts the same
+twenty-five expected-failure configs as Apalache.
 `contiguous-frontier-payload-hint-fast` and
 `contiguous-frontier-payload-hint-bug-*` cross-check contiguous-frontier
 payload-hint selection: Commit/Prepare/NewView phase ranking, deferred-QC
 priority over proposal markers, exact height and actionable filtering,
 deferred view/hash tie-breaks, marker fallback view/hash tie-breaks, and empty
-fallback behavior. Its TLC cross-check independently exhausts the same thirteen
-expected-failure configs as Apalache.
+fallback behavior. The fast check also includes the aggregate
+`ContiguousFrontierPayloadHintExactness` invariant tying exact positive
+evidence, deterministic ordering, and ineligible-input rejection across
+deferred and marker sources. Its TLC cross-check independently exhausts the
+same thirteen expected-failure configs as Apalache.
 `frontier-parent-qc-hint-retarget-fast` and
 `frontier-parent-qc-hint-retarget-bug-*` cross-check contiguous-frontier
 missing-parent retargeting: exact-frontier stall bypass, canonical reanchor
 dependency-progress gating, previous-emission requirements, parent height
-matching, absent/same-hash hint rejection, and QC-hint target rewrite. Its TLC
-cross-check independently exhausts the same twelve expected-failure configs as
-Apalache.
+matching, absent/same-hash hint rejection, and QC-hint target rewrite. The fast
+check also includes the aggregate `FrontierParentQcHintRetargetExactness`
+invariant tying exact positive evidence, ineligible-input rejection, and
+expected-parent/QC-hint source-target preservation across all parent retarget
+branches. Its TLC cross-check independently exhausts the same twelve
+expected-failure configs as Apalache.
 `live-frontier-idle-missing-qc-fast` and
 `live-frontier-idle-missing-qc-bug-*` cross-check live-frontier idle missing-QC
 reacquire suppression: slot/pending-block liveness, observed head
@@ -14171,63 +14797,87 @@ zero-length rosters are treated as one, `u8::MAX` clamps apply, view-change
 quorums use `f + 1` without exceeding the roster, configured redundant floors
 are raised to commit quorum and at least one, and tail fanout skips the leader,
 wraps from the proxy tail, preserves uniqueness, and caps to the non-leader
-set. Its TLC cross-check independently exhausts the same eighteen
-expected-failure configs as Apalache.
+set. The fast check also includes the aggregate
+`TopologyFanoutHelperExactness` invariant tying redundant-send count,
+view-change quorum, redundant floor, and tail fanout shape together. Its TLC
+cross-check independently exhausts the same eighteen expected-failure configs
+as Apalache.
 `topology-role-filter-fast` and `topology-role-filter-bug-*` cross-check
 topology role classification and role-filtered signature selection: role
 partitioning keeps leader, validating peers, proxy tail, Set B, and undefined
 indices distinct; role-slice helpers expose the same partition; signature
 filters reject invalid indices while preserving input order and duplicates;
 and audit-role derivation sorts/deduplicates, rotates the commit-quorum prefix
-from the previous block hash, and labels roles after rotation. Its TLC
-cross-check independently exhausts the same thirty-two expected-failure
-configs as Apalache.
+from the previous block hash, and labels roles after rotation. The fast check
+also includes the aggregate `TopologyRoleFilterExactness` invariant tying role
+partitioning, role-slice projection, signature filtering, and audit-role
+canonicalization/rotation together. Its TLC cross-check independently exhausts
+the same thirty-two expected-failure configs as Apalache.
 `active-topology-selection-fast` and `active-topology-selection-bug-*`
 cross-check active validator topology selection: commit topology takes
 priority over world peers, world peers take priority over trusted fallback,
 BLS filtering, deduplication, and canonical sorting shape every output,
 incomplete PoP maps are skipped for primary rosters but enforced for trusted
 fallbacks, complete PoP filters must preserve quorum, and empty primary
-results fall through trusted validators without synthesizing peers. Its TLC
-cross-check independently exhausts the same fifteen expected-failure configs
-as Apalache.
+results fall through trusted validators without synthesizing peers. The fast
+check also includes the aggregate `ActiveTopologySelectionExactness` invariant
+tying source priority, output normalization, PoP filtering/quorum guards, and
+final fallback behavior together. Its TLC cross-check independently exhausts
+the same fifteen expected-failure configs as Apalache.
 `p2p-topology-trusted-fast` and `p2p-topology-trusted-bug-*` cross-check
 trusted-peer P2P topology helpers: expected topology is the deduplicated union
 of world peers, the local trusted peer, and configured trusted peers, while
 outside-peer filtering preserves observed online order, keeps duplicate stray
 observations, excludes peers already in the expected topology, and treats
-trusted observers as non-strays. Its TLC cross-check independently exhausts
-the same nine expected-failure configs as Apalache.
+trusted observers as non-strays. The fast check also includes the aggregate
+`TrustedP2pTopologyExactness` invariant tying trusted topology construction,
+deduplicated size, outside-only filtering, trusted-observer exclusion, online
+order, and duplicate-stray preservation together. Its TLC cross-check
+independently exhausts the same nine expected-failure configs as Apalache.
 `p2p-topology-refresh-fast` and `p2p-topology-refresh-bug-*` cross-check P2P
 topology refresh coordination: empty and unchanged peer sets do not
 rebroadcast, changed topology and stray peers advertise the current world set,
 network updates include trusted peers only on normal refresh, the local-seen
 latch gates local-removal handling, local removal clears queues and gossips an
 empty topology, and normal refreshes clear local-removed status and update
-`last_advertised`. Its TLC cross-check independently exhausts the same
-twenty-two expected-failure configs as Apalache.
+`last_advertised`. The fast check also includes the aggregate
+`P2pTopologyRefreshExactness` invariant tying decision/last-state updates,
+gossip and network side effects, local-removal handling, idle skips, and
+stray-count propagation together. Its TLC cross-check independently exhausts
+the same twenty-two expected-failure configs as Apalache.
 `quorum-retransmit-fast` and `quorum-retransmit-bug-*` cross-check
 commit-vote repair target selection: empty and local-only rosters produce no
 remote targets, observed below-quorum voters are not retargeted, missing
 remote voters are targeted in topology order, near-commit quorum and mapping
 failures fan out to every remote peer, local peers stay excluded, duplicate
 targets are rejected, and view-mapped signer indices resolve to the intended
-canonical peers. Its TLC cross-check independently exhausts the same twelve
-expected-failure configs as Apalache.
+canonical peers. The fast check also includes the aggregate
+`QuorumRetransmitTargetExactness` invariant tying empty/local-only exits,
+missing-voter target selection, near-quorum full fanout, mapping-failure
+fallback, local exclusion, canonical order, distinctness, and view-mapped
+signer resolution together. Its TLC cross-check independently exhausts the
+same twelve expected-failure configs as Apalache.
 `retransmit-backpressure-fast` and `retransmit-backpressure-bug-*` cross-check
 retransmit pacing helpers: transaction queue utilization and saturation, RBC
 pressure levels and byte thresholds, additive combined pressure scoring,
 target-limit floors for heavy pressure and zero targets, rebroadcast cooldown
 multipliers, consensus and near-quorum backlog backoff scaling, and
-near-quorum timeout lower/upper clamps. Its TLC cross-check independently
-exhausts the same twenty-two expected-failure configs as Apalache.
+near-quorum timeout lower/upper clamps. The fast check also includes the
+aggregate `RetransmitBackpressurePacingExactness` invariant tying queue
+thresholds, RBC pressure, additive scoring, liveness floors, cooldown scaling,
+backoff precedence, and timeout clamps together. Its TLC cross-check
+independently exhausts the same twenty-two expected-failure configs as
+Apalache.
 `paced-retransmit-targets-fast` and `paced-retransmit-targets-bug-*`
 cross-check paced retransmit target selection: zero limits and empty target
 lists fail closed, under-limit lists preserve input order and duplicates,
 over-limit lists sort and deduplicate before fitting or rotating, height/view
 offsets are applied modulo the deduplicated length, and truncation obeys the
-selected target limit exactly. Its TLC cross-check independently exhausts the
-same seventeen expected-failure configs as Apalache.
+selected target limit exactly. The fast check also includes the aggregate
+`PacedRetransmitTargetSelectionExactness` invariant tying fail-closed handling,
+pre-cap preservation, canonical sort/dedup, deterministic rotation/offsets,
+and exact limit truncation together. Its TLC cross-check independently
+exhausts the same seventeen expected-failure configs as Apalache.
 `quorum-reschedule-backoff-fast` and `quorum-reschedule-backoff-bug-*`
 cross-check quorum reschedule backoff and contiguous-frontier fast resend:
 zero base backoff remains zero, vote deficit selects 3x/2x/1x before stall
@@ -14235,22 +14885,32 @@ escalation, zero quorum timeout disables escalation, moderate and severe stall
 boundaries raise the multiplier to at least 4x and 5x, zero rebroadcast
 cooldown clamps to a one-millisecond resend window, and fast resend only opens
 for contiguous, vote-backed, below-quorum blocks without relay, vote-queue, or
-RBC backpressure. Its TLC cross-check independently exhausts the same twenty
-expected-failure configs as Apalache.
+RBC backpressure. The fast check also includes the aggregate
+`QuorumRescheduleBackoffExactness` invariant tying zero-base handling, deficit
+multiplier arithmetic, stall escalation, resend-window clamping, accepted
+fast-resend windows, and all fast-resend rejection gates together. Its TLC
+cross-check independently exhausts the same twenty expected-failure configs as
+Apalache.
 `rbc-availability-reschedule-fast` and `rbc-availability-reschedule-bug-*`
 cross-check DA/RBC availability gating for quorum rescheduling: DA-disabled,
 timed-out, local-payload, absent, invalid, delivered, complete-ready, and
 zero-total sessions fail open, while pending entries, zero-timeout pending
 entries, missing chunks, missing READY quorum, and complete-but-not-ready
-sessions block rescheduling before timeout. Its TLC cross-check independently
-exhausts the same thirteen expected-failure configs as Apalache.
+sessions block rescheduling before timeout. The fast check also includes the
+aggregate `RbcAvailabilityRescheduleExactness` invariant tying fail-open
+gates, terminal-session exits, pending-entry blocks, missing chunks, and
+missing READY quorum together. Its TLC cross-check independently exhausts the
+same thirteen expected-failure configs as Apalache.
 `vote-backed-reassembly-stall-fast` and `vote-backed-reassembly-stall-bug-*`
 cross-check vote-backed same-height frontier reassembly stall helpers:
 hard-cap arithmetic uses twice the maximum frontier recovery window, quorum
 timeout, resend window, and one-millisecond floor; same-height slots qualify
 only for exact active quorum-timeout ownership; rejected slots fall through to
 matching recovery ownership; owner ages use latest progress timestamps; and
-expiry requires both owner and quorum stall ages to reach the hard cap. Its TLC
+expiry requires both owner and quorum stall ages to reach the hard cap. The
+fast check also includes the aggregate `VoteBackedReassemblyStallExactness`
+invariant tying hard-cap arithmetic, owner gating, recovery fallback,
+latest-progress age selection, and expiry thresholds together. Its TLC
 cross-check independently exhausts the same nineteen expected-failure configs
 as Apalache.
 `completed-quorum-view-advance-fast` and
@@ -14260,8 +14920,12 @@ when the slot is missing or stale, non-exact heights use generic view-change
 routing without mutating slot state, exact slots choose the maximum of active,
 requested, and candidate views, active view increments with saturation,
 timestamps and causes are preserved, and exact slot handling clears the
-quorum-timeout rebroadcast latch. Its TLC cross-check independently exhausts
-the same fifteen expected-failure configs as Apalache.
+quorum-timeout rebroadcast latch. The fast check also includes the aggregate
+`CompletedQuorumViewAdvanceExactness` invariant tying exact/generic routing,
+fallback behavior, max-view selection, saturated increment, timestamp updates,
+cause preservation, rebroadcast clearing, and generic slot-state preservation
+together. Its TLC cross-check independently exhausts the same fifteen
+expected-failure configs as Apalache.
 `quorum-rebroadcast-dispatch-fast` and
 `quorum-rebroadcast-dispatch-bug-*` cross-check pending-block rebroadcast
 dispatch: local votes are gated before retransmit work, relay/no-target,
@@ -14270,9 +14934,12 @@ bypasses cooldown and target-limit throttles, vote replay precedes payload
 repair, missing commit-QC fetches require vote-backed blocks without cached
 commit QC, near-quorum contiguous blocks may send fitting non-local
 BlockSyncUpdates, BlockCreated replay requires observed vote backing, and any
-actual work marks the precommit rebroadcast marker. Its TLC cross-check
-independently exhausts the same twenty-four expected-failure configs as
-Apalache.
+actual work marks the precommit rebroadcast marker. The fast check also
+includes the aggregate `QuorumRebroadcastDispatchExactness` invariant tying
+local-vote gating, fail-closed exits, forced fanout, vote replay, payload
+dispatch, block-sync dispatch, and marker stamping together. Its TLC
+cross-check independently exhausts the same twenty-four expected-failure
+configs as Apalache.
 `isolated-vote-backed-handoff-fast` and
 `isolated-vote-backed-handoff-bug-*` cross-check the one-vote frontier handoff
 helper: resilience, exact one-vote under-quorum state, next-height matching,
@@ -14280,8 +14947,11 @@ and cached commit-QC suppression gate admission; recovery seeding and body
 events fire only after admission; the seeded slot must match height, view, and
 hash, carry a body, lack commit QC, and retain vote-backed owner state; and a
 true result requires a successful committed-anchor range pull with the
-`frontier_stall_reset_fallback` reason. Its TLC cross-check independently
-exhausts the same nineteen expected-failure configs as Apalache.
+`frontier_stall_reset_fallback` reason. The fast check also includes the
+aggregate `IsolatedVoteBackedHandoffExactness` invariant tying admission
+rejection, admitted recovery/body-event side effects, slot validation, anchor
+requests, range-pull results, and reason labeling together. Its TLC cross-check
+independently exhausts the same nineteen expected-failure configs as Apalache.
 `preemptive-vote-backed-retransmit-fast` and
 `preemptive-vote-backed-retransmit-bug-*` cross-check the pre-timeout
 vote-backed retransmit handoff: only admitted resend-window candidates produce
@@ -14289,8 +14959,12 @@ work, missing pending blocks cannot synthesize work or state, vote-roster
 targets are preferred before commit-topology fallback, empty combined targets
 fail closed while preserving pending state, progress requires downstream vote,
 BlockSyncUpdate, or BlockCreated output, and the downstream near-quorum flag is
-exactly `vote_count < min_votes_for_commit`. Its TLC cross-check independently
-exhausts the same twenty-two expected-failure configs as Apalache.
+exactly `vote_count < min_votes_for_commit`. The fast check also includes the
+aggregate `PreemptiveVoteBackedRetransmitExactness` invariant tying candidate
+rejection/admission, missing-pending handling, target selection, output-based
+progress, pending retention, and near-quorum flag exactness together. Its TLC
+cross-check independently exhausts the same twenty-two expected-failure configs
+as Apalache.
 `near-quorum-preemptive-escalation-fast` and
 `near-quorum-preemptive-escalation-bug-*` cross-check the pre-timeout
 near-quorum missing-payload escalation coordinator: an exhausted tick budget
@@ -14298,7 +14972,11 @@ marks `budget_exhausted` and fails closed, missing pending blocks cannot
 escalate, fresh matching missing-block requests and in-flight range pulls
 suppress duplicate escalation, stale or mismatched duplicate records do not
 suppress, delegate return values are the only source of escalation
-counts/progress, and the per-tick cap ignores a second candidate. Its TLC
+counts/progress, and the per-tick cap ignores a second candidate. The fast
+check also includes the aggregate `NearQuorumPreemptiveEscalationExactness`
+invariant tying budget gates, missing-pending fail-closed behavior,
+fresh-request suppression, in-flight suppression, delegate-result authority,
+per-tick cap enforcement, and progress/counter consistency together. Its TLC
 cross-check independently exhausts the same twenty-two expected-failure configs
 as Apalache.
 `manifest-gate-reschedule-fast` and `manifest-gate-reschedule-bug-*`
@@ -14307,38 +14985,67 @@ blocks count as effective work, are retained, avoid immediate authoritative
 frontier rotation, and use plain quorum-reschedule markers unless votes are
 present; empty target sets remain no-op reschedules; plain zero-work pending
 blocks are dropped and cleaned; vote-backed evidence and frontier ownership
-remain effective without forcing the manifest action path. Its TLC cross-check
-independently exhausts the same twenty-five expected-failure configs as
-Apalache.
+remain effective without forcing the manifest action path. The fast check also
+includes the aggregate `ManifestGateRescheduleExactness` invariant tying
+manifest effectiveness/retention, manifest action/no-target behavior, plain
+zero-work cleanup, vote-backed action/no-target behavior, authoritative
+rotation admission/suppression, and passive vote-backed evidence preservation
+together. Its TLC cross-check independently exhausts the same twenty-five
+expected-failure configs as Apalache.
 `vote-verify-worker-config-fast` and `vote-verify-worker-config-bug-*`
 cross-check vote-signature verification worker count and queue-cap derivation.
+The fast check also includes the aggregate `VoteVerifyWorkerConfigExactness`
+invariant tying exact output tuples, thread derivation, queue-cap derivation,
+explicit-cap preservation, and positive channel floors together.
 `qc-verify-worker-config-fast` and `qc-verify-worker-config-bug-*` cross-check
 QC aggregate-verification worker count and queue-cap derivation.
+The fast check also includes the aggregate `QcVerifyWorkerConfigExactness`
+invariant tying exact output tuples, thread derivation, queue-cap derivation,
+explicit-cap preservation, and positive channel floors together.
 `qc-signers-fast` and `qc-signers-bug-*` cross-check QC signer-bitmap
 admission: bitmap length must match the full topology width, bits outside the
 topology are rejected, quorum accounting counts only voting validators, observer
 and padding bits cannot satisfy quorum, and under-quorum signer sets are
-rejected. Its TLC cross-check independently exhausts the same four
-expected-failure configs as Apalache.
+rejected. The fast check also includes the aggregate
+`QcSignerBitmapAdmissionExactness` invariant tying topology-width matching,
+parser/spec equality, voting-only quorum accounting, observer/padding
+rejection, out-of-bounds rejection, length-mismatch rejection, and accepted
+evidence exactness together. Its TLC cross-check independently exhausts the
+same four expected-failure configs as Apalache.
 It also supports `qc-signer-count-fast` and the `qc-signer-count-bug-*`
 expected-failure modes, providing an exhaustive raw signer-bitmap population
-count cross-check for the small QC helper model.
+count cross-check for the small QC helper model. The fast check also includes
+the aggregate `QcSignerRawCountExactness` invariant tying bitmap-width bounds,
+raw anchor counts, empty/zero-byte handling, single-bit handling, full-byte and
+padding-bit handling, and multi-byte accumulation together.
 `build-signers-bitmap-fast` and `build-signers-bitmap-bug-*` cross-check QC
 signer-bitmap construction: zero-length rosters produce an empty bitmap,
 non-empty rosters allocate `ceil(roster_len / 8)` bytes, signer indexes map to
 little-endian bits within each byte, duplicate observations collapse, and
-out-of-roster or padding indexes never set bits or extend the bitmap. Its TLC
+out-of-roster or padding indexes never set bits or extend the bitmap. The fast
+check also includes the aggregate `BuildSignersBitmapExactness` invariant tying
+exact bitmap length, zero-roster and non-empty allocation behavior,
+single-signer bit placement, multi-signer OR behavior, out-of-range/padding
+filtering, duplicate collapse, and full-roster coverage together. Its TLC
 cross-check independently exhausts the same seventeen expected-failure configs
 as Apalache.
 `signer-index-normalization-fast` and `signer-index-normalization-bug-*`
-check canonical/view signer-index conversion across shuffled topologies.
+check canonical/view signer-index conversion across shuffled topologies. The
+fast check also includes the aggregate `SignerIndexNormalizationExactness`
+invariant tying canonical normalization anchors, canonical-to-view index
+lookup, canonical-set-to-view normalization, round-trip preservation/filtering,
+and exact actual/spec result equality together.
 `commit-roots-fast` and `commit-roots-bug-*` cross-check commit-QC
 execution-root consistency: votes are grouped by one parent/post-state root
 before quorum evaluation, wrong-context votes are ignored, permissioned mode
 uses largest same-root signer count with a low-root tie-break, NPoS uses
 heaviest same-root stake with the same tie-break, mixed roots cannot satisfy
 quorum, and validation rejects QC signers whose recorded vote roots mismatch
-the QC roots. Its TLC cross-check independently exhausts the same six
+the QC roots. The fast check also includes the aggregate
+`CommitRootConsistencyExactness` invariant tying root selection/evidence
+exactness, permissioned and NPoS quorum exactness, mixed-root rejection,
+wrong-context signer/stake rejection, and QC root-validation exactness
+together. Its TLC cross-check independently exhausts the same six
 expected-failure mutations as Apalache using smaller TLC-specific configs.
 Those TLC configs constrain the state space to representative witnesses for the
 six mutation classes; the Apalache configs retain the broader bounded search.
@@ -14348,8 +15055,11 @@ form a local commit QC before peer recovery, missing commit-QC recovery is only
 requested for stale local-vote pending blocks without local data gaps or an
 observed commit QC, commit-QC observations are preserved, and near-quorum
 cached-vote retransmit uses quorum missing-signer targets rather than collector
-targets. Its TLC cross-check independently exhausts the same fourteen
-expected-failure configs as Apalache.
+targets. The fast check also includes the aggregate
+`CommitPipelineRecoveryExactness` invariant tying local commit-QC ordering,
+missing-QC recovery gates, and quorum retransmit target exactness together. Its
+TLC cross-check independently exhausts the same fourteen expected-failure
+configs as Apalache.
 `known-block-commit-qc-recovery-fast` and
 `known-block-commit-qc-recovery-bug-*` cross-check known-block commit-QC
 recovery helpers: local payloads request commit-QC-only fetches while missing
@@ -14439,7 +15149,9 @@ history fallback admission for commit-QC lookup.
 cached-QC signer record admission for permissioned and NPoS quorum policy.
 `voting-signer-count-fast` and `voting-signer-count-bug-*` cover the bounded
 voting-roster support-count helper, including duplicate collapse and
-out-of-range signer filtering.
+out-of-range signer filtering. The fast check also includes the aggregate
+`VotingSignerSupportCountExactness` invariant tying exact support counts,
+bounds, boundary filtering, duplicate collapse, and high-index support together.
 `distinct-vote-epochs-fast` and `distinct-vote-epochs-bug-*` cross-check
 cached vote-log epoch replay: only Commit votes for the exact hash, height, and
 view contribute value epochs; duplicate epochs replay once; key-epoch mismatch
@@ -14493,7 +15205,25 @@ addition, and collected cap-violation totals include every p2p family. Its TLC
 cross-check independently exhausts the same twenty-four expected-failure
 configs as Apalache.
 `collector-plan-fast` and `collector-plan-bug-*` exercise the bounded
-collector retry/gossip plan model through the same TLC path.
+collector retry/gossip plan model through the same TLC path. The fast check
+also includes the aggregate `CollectorPlanRetryGossipExactness` invariant tying
+constructor state, cursor reads and advancement, exhaustion, and one-shot gossip
+fallback together.
+`collector-selection-fast` and `collector-selection-bug-*` exercise the bounded
+collector fanout and selection model. The fast check also includes the
+aggregate `CollectorSelectionExactness` invariant tying quorum/proxy-tail
+derivation, fanout floors/caps, default/fallback routing, PRF safety, and
+deterministic seed routing together.
+`topology-mutation-fast` and `topology-mutation-bug-*` cross-check ordered
+topology mutation helpers. The fast check also includes the aggregate
+`TopologyOrderedRosterMutationExactness` invariant tying rotate,
+`nth_rotation`, construction, membership update, block-commit reset, and
+canonicalization behavior together.
+`prf-leader-shuffle-fast` and `prf-leader-shuffle-bug-*` cross-check PRF
+leader selection and topology shuffling. The fast check also includes the
+aggregate `PrfLeaderShuffleExactness` invariant tying leader selection, cycle
+periodicity/distinctness, shuffle permutation behavior, and wrapper
+canonicalization together.
 
 ## Operating Process
 
@@ -14544,12 +15274,19 @@ Individual mutation modes are also accepted by the runner:
 
 ```bash
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-owner
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-stale-recovery-owner-cleanup
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-vote-queue
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-payload-recovery
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-payload-recovery-owner
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-retransmit-followthrough
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-quorum-window-cleanup
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-view-bound-retransmit-evidence
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-promotion
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-clear
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-active-marker
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-reanchor-rotated
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-evidence-drop
+bash scripts/formal/sumeragi_apalache.sh frontier-bug-zero-evidence-future-drop
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-promotion-reset
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-future-stale-owner
 bash scripts/formal/sumeragi_apalache.sh frontier-bug-progress-touch
@@ -14565,6 +15302,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-bug-duplicate-ready
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-under-quorum-deliver
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-wrong-commit-formula
 bash scripts/formal/sumeragi_apalache.sh rbc-bug-force-one-ignored
+bash scripts/formal/sumeragi_apalache.sh rbc-bug-inbound-force-one-acceptance
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-header-hash
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-leader-signature
 bash scripts/formal/sumeragi_apalache.sh rbc-causality-bug-init-skip-chunk-root
@@ -20240,6 +20978,7 @@ bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-above-timeo
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-already-reported-repeats
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-already-reported-clears-flag
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-non-timeout-sets-flag
+bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-without-mark
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-without-status-record
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-without-warning
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-status-without-new-report
@@ -20257,6 +20996,7 @@ bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-app
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-kickstarts-pacemaker
 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-bug-timeout-detaches-late-result
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-trigger-without-queue
+bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-trigger-no-queue-hard-stop
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-skip-healthy-queue
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-skip-queue-saturated-pacing
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-skip-consensus-pacing
@@ -20274,6 +21014,7 @@ bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-ignore-a
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-ignore-rbc-with-pacing
 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-bug-ignore-relay-with-pacing
 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-without-queue
+bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-no-queue-hard-stop
 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-during-mode-flip
 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-during-commit-inflight
 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-bug-preserve-before-deadline
@@ -20389,6 +21130,7 @@ bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-no-wait-before-
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-boundary-still-waits
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-after-still-waits
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-skip-streak-increment
+bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-streak-overflow-wraps
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-wrong-factor-streak0
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-wrong-factor-streak1
 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-bug-wrong-factor-streak2
@@ -20429,6 +21171,7 @@ bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-
 bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-without-da
 bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-uses-min
 bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-added
+bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-bug-da-floor-caps-high
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-base-timeout-no-floor
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-near-timeout-not-capped
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-near-uses-base-timeout
@@ -20447,6 +21190,8 @@ bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-skip-commit
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-invalid-commit-pipeline-backlog
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-queue-without-evidence-active
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-validation-inflight-without-pending
+bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-skip-commit-qc-observed-backlog
+bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-bug-skip-validated-artifact-backlog
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-frontier-timeout-bug-recovery-uses-consensus-queue
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-frontier-timeout-bug-skip-worker-recovery-extension
 bash scripts/formal/sumeragi_apalache.sh stalled-pending-frontier-timeout-bug-skip-residual-recovery-extension
@@ -20501,8 +21246,11 @@ bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-new-body-pres
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-higher-block-created-keeps-generation
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-higher-block-created-skips-pipeline
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-same-duplicate-clears-rebroadcast
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-same-missing-skips-peer-hints
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-same-fresh-body-skips-progress
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-mismatch-mutates-candidate
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-body-available-skips-pipeline
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-body-available-skips-sender
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-body-duplicate-clears-rebroadcast
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-passive-body-keeps-passive
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-vote-missing-waits-commit-qc
@@ -20516,6 +21264,8 @@ bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-authoritative
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-authoritative-supersede-requests-pipeline
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-future-gap-exact-skips-fetch
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-future-gap-unarmed-fetches
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-future-gap-same-skips-peer-hints
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-future-gap-same-skips-requester
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-fetch-retry-normal-skips-fetch
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-fetch-retry-deep-fetches
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-quorum-timeout-first-rotates
@@ -20530,11 +21280,25 @@ bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-lag-expired-d
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-view-advance-keeps-guard
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-commit-height-below-retires
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-commit-height-at-or-above-not-finalized
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-missing-sync-compat
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-missing-nested-slot-update
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-absent-fetch-retry-creates-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-absent-view-advance-no-request
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-absent-quorum-timeout-no-request
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-absent-block-created-no-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-stale-fetch-retry-keeps-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-stale-block-created-reuses-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-same-height-recreates-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-commit-retire-reinserts-slot
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-bug-apply-commit-below-drops-slot
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-lag-uses-progress
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-lag-missing-returns-zero
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-missing-missing-false
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-missing-available-true
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-skips-body-state
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-unknown-skips-validation
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-pending-clears-validation
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-skips-phase
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-body-available-skips-record-progress
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-local-vote-does-not-lock
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-local-vote-mutates-candidate
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-current-view-ignores-active
@@ -20556,12 +21320,12 @@ bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-mark-passive-
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-mark-passive-keeps-rebroadcast
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-mark-passive-skips-reason
 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-mark-passive-mutates-phase
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-candidate
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-body-state
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-peer-sets
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-timers
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-repair
-bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-sync-skips-requesters
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-candidate
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-body-state
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-peer-sets
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-timers
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-repair
+bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-bug-nested-skips-requesters
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-tx-count-ignores-config-cap
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-tx-count-ignores-world-limit
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-tx-count-no-floor
@@ -20572,6 +21336,8 @@ bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-ingress-act
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-omits-base-floor
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-omits-ingress-grace
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-uses-min-ingress-cooldown
+bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-ignores-config-tx-cap
+bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-full-ignores-world-tx-limit
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-initial-ignores-da-gate
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-initial-ignores-sla-gate-for-proposal
 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-bug-initial-omits-active-gap-cap
@@ -20606,6 +21372,16 @@ bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-prune-above-drop
 bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-prune-above-keeps-above
 bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-prune-committed-keeps-equal
 bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-prune-committed-drops-above
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-proposal-insert-missing
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-proposal-duplicate-drops-seen
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-proposal-read-absent-returns-seen
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-view-prune-keeps-old-view
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-view-prune-drops-next-view
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-horizon-keeps-committed-seen
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-horizon-keeps-far-future-seen
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-horizon-keeps-active-old-view
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-horizon-drops-active-current-view
+bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-bug-horizon-applies-view-cap-to-other-height
 bash scripts/formal/sumeragi_apalache.sh timeout-derivation-bug-control-zero-returns-zero
 bash scripts/formal/sumeragi_apalache.sh timeout-derivation-bug-control-skips-floor
 bash scripts/formal/sumeragi_apalache.sh timeout-derivation-bug-control-uses-block-time
@@ -24011,6 +24787,14 @@ bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-accept-loc
 bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-accept-local-history-prevote
 bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-accept-local-history-remote
 bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-accept-no-work
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-rejects-pending-live
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-rejects-slot-qc
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-rejects-competing-quorum
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-rejects-local-history
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-same-hash-blocks
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-wrong-height-blocks
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-no-work-blocks
+bash scripts/formal/sumeragi_apalache.sh frontier-live-owner-work-bug-conflict-passive-blocks
 bash scripts/formal/sumeragi_apalache.sh keep-frontier-pending-active-bug-reject-pending-commit-qc
 bash scripts/formal/sumeragi_apalache.sh keep-frontier-pending-active-bug-reject-pending-local-vote-active-bridge
 bash scripts/formal/sumeragi_apalache.sh keep-frontier-pending-active-bug-reject-pending-local-vote-lock-bridge

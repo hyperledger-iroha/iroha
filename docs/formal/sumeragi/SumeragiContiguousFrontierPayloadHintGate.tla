@@ -231,6 +231,46 @@ EmptyFallbackStable ==
   /\ ActualSource(NoEligible) = NoneSource
   /\ ActualHash(NoEligible) = 0
 
+PayloadHintHasExactPositiveEvidence ==
+  /\ ActualSource(DeferredCommitOverPrepare) = DeferredSource
+  /\ ActualSource(DeferredPrepareOverNewView) = DeferredSource
+  /\ ActualSource(DeferredViewTieBreak) = DeferredSource
+  /\ ActualSource(DeferredHashTieBreak) = DeferredSource
+  /\ ActualSource(DeferredPreemptsMarker) = DeferredSource
+  /\ ActualSource(MarkerOnly) = MarkerSource
+  /\ ActualSource(MarkerViewTieBreak) = MarkerSource
+  /\ ActualSource(MarkerHashTieBreak) = MarkerSource
+
+PayloadHintPreservesDeterministicOrdering ==
+  /\ ActualPhaseRank(Commit) = 3
+  /\ ActualPhaseRank(Prepare) = 2
+  /\ ActualPhaseRank(NewView) = 1
+  /\ ActualHash(DeferredCommitOverPrepare) = 8
+  /\ ActualHash(DeferredPrepareOverNewView) = 6
+  /\ ActualHash(DeferredViewTieBreak) = 5
+  /\ ActualHash(DeferredHashTieBreak) = 9
+  /\ ActualHash(DeferredPreemptsMarker) = 2
+  /\ ActualHash(MarkerOnly) = 5
+  /\ ActualHash(MarkerViewTieBreak) = 4
+  /\ ActualHash(MarkerHashTieBreak) = 8
+
+PayloadHintRejectsIneligibleInputs ==
+  /\ ActualSource(WrongHeightDeferredIgnored) = MarkerSource
+  /\ ActualHash(WrongHeightDeferredIgnored) = 3
+  /\ ActualSource(NonActionableDeferredIgnored) = MarkerSource
+  /\ ActualHash(NonActionableDeferredIgnored) = 4
+  /\ ActualSource(WrongHeightMarkerIgnored) = MarkerSource
+  /\ ActualHash(WrongHeightMarkerIgnored) = 2
+  /\ ActualSource(NonActionableMarkerIgnored) = MarkerSource
+  /\ ActualHash(NonActionableMarkerIgnored) = 2
+  /\ ActualSource(NoEligible) = NoneSource
+  /\ ActualHash(NoEligible) = 0
+
+ContiguousFrontierPayloadHintExactness ==
+  /\ PayloadHintHasExactPositiveEvidence
+  /\ PayloadHintPreservesDeterministicOrdering
+  /\ PayloadHintRejectsIneligibleInputs
+
 SafetyFast ==
   /\ PhaseRanksExact
   /\ SelectionExact
@@ -240,6 +280,7 @@ SafetyFast ==
   /\ MarkerFallbackStable
   /\ MarkerEligibilityStable
   /\ EmptyFallbackStable
+  /\ ContiguousFrontierPayloadHintExactness
 
 PhaseRankAnchors ==
   /\ PhaseRanksExact

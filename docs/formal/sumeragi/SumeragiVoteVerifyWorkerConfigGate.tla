@@ -166,6 +166,21 @@ QueueCapsPositive ==
     /\ output[2] >= 1
     /\ output[3] >= 1
 
+VoteVerifyWorkerThreadsExact ==
+  /\ AutoThreadsUseAvailable
+  /\ ExplicitThreadsPreserved
+
+VoteVerifyWorkerQueueCapsExact ==
+  /\ ZeroWorkCapDerivation
+  /\ ZeroResultCapDerivation
+  /\ ExplicitCapPreservation
+  /\ QueueCapsPositive
+
+VoteVerifyWorkerConfigExactness ==
+  /\ ActualOutput = SpecOutput
+  /\ VoteVerifyWorkerThreadsExact
+  /\ VoteVerifyWorkerQueueCapsExact
+
 SafetyFast ==
   ActualOutput = SpecOutput
   /\ AutoThreadsUseAvailable
@@ -174,6 +189,7 @@ SafetyFast ==
   /\ ZeroResultCapDerivation
   /\ ExplicitCapPreservation
   /\ QueueCapsPositive
+  /\ VoteVerifyWorkerConfigExactness
 
 BugAutoThreadsUseAvailable ==
   ActualAutoHigh = SpecAutoHigh

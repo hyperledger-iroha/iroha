@@ -329,9 +329,9 @@
       }
     },
     "evaluation_key_bundle": {
-      "expected_norito_bytes": 204955,
-      "expected_sha256": "7B076371CB33971EC051382E31F2B94BF06DB423C2E47A447B1097B32107CF44",
-      "expected_digest_hex": "8b552241c57e4e6ca871e0e32954fb3dadc5f530884fa2b1887fe7b3b7f7ebbb",
+      "expected_norito_bytes": 204962,
+      "expected_sha256": "13CF947583EB461AB21812E64E7B80610230D204A7278394CE7A37B1D571E4B8",
+      "expected_digest_hex": "9148a1a3efcc085473bddd0dd60a053d7c579516f5727d412134a2a655fb176f",
       "decomposition_base_log": 12,
       "decomposition_digit_count": 5,
       "relinearization_entry_count": 5,
@@ -1886,6 +1886,24 @@
           }
         }
       ]
+    },
+    "full_bootstrap_material": {
+      "circuit_id": "iroha_bfv_full_bootstrap_v1",
+      "max_bootstrap_depth": 1,
+      "parameter_digest_hex": "eca18e4232f9be0b5020b1b4e647826425ec6666f81f24c784ca5a380baef789",
+      "rns_modulus_chain_digest_hex": "eea5ef5503b1c9fedb3ce920be2d2e004ca07ad4139ef930ed7749666503a5a5",
+      "key_switch_decomposition_chain_digest_hex": "31db6356925da9d3513d2355a57d91db5109549fcc605afbd55e1f7218ea0997",
+      "coefficient_to_slot_key_digest_hex": "5c46ca5e47b0e8a05e34989586bfeabf7f4c60c8096e0e528b2a18e294eff503",
+      "slot_to_coefficient_key_digest_hex": "65b510f4ebcb09445686b1fdbc4326a5c25bfa0d4a5ee2e7964e9500bc6b263b",
+      "blind_rotation_key_digest_hex": "487d0522196b9c2f6ff4b5d5a4dbe8b8c199f2c1deb88ec17f528c34d5e39c8d",
+      "sample_extraction_key_digest_hex": "cd71c60067430e5a5361c069297d4dd284fb320996191a12bdc296693e052779",
+      "accumulator_digest_hex": "b0f8780b34bb72f204d23a86d18f345975ce6c6ac0f22b20952e8dd77c684d5d",
+      "proof_public_input_schema_digest_hex": "1ac4d2baa55297d601efb1a4330e58b80f17c76c63907bcb8de1e8b463290ae1",
+      "prover_key_digest_hex": "bac3398d3924f6fbb74ee5f8e9e3243abfd2633cc900da42fe497df19126d0fb",
+      "verifier_key_digest_hex": "596c21c5e97f4fe14324e3fea5b8d9b13c25cf853e152faa56e99e01ef86ac71",
+      "vk_commitment_hex": "596c21c5e97f4fe14324e3fea5b8d9b13c25cf853e152faa56e99e01ef86ac71",
+      "expected_material_digest_hex": "0eb716bb77b99f561f8434f7251f208746501fe2c80fd57cd7b8f2e4040f6685",
+      "expected_statement_digest_hex": "c1925513ba141f42930fc4faeb26789d22436aead443c42bec47003fd5d68fe5"
     },
     "bootstrap_refresh_vectors": [
       {

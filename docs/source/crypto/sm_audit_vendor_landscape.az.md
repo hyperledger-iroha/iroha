@@ -39,7 +39,6 @@ ardıcıl.
 ## NCC Group (APAC Kriptoqrafiya Xidmətləri)
 
 - Sənədləşdirilmiş tapşırıqlar: regional ödəniş üçün gm/T (SM) kodu imtahanları
-  şəbəkələr və HSM satıcıları; Parity Substrate, Polkadot üçün əvvəlki Rust rəyləri,
   və Tərəzi komponentləri.
 - Güclü tərəflər: ikidilli hesabatlı böyük APAC skamyası, birləşmək bacarığı
   dərin kodun nəzərdən keçirilməsi ilə uyğunluq tərzi proses yoxlamaları.
@@ -59,7 +58,7 @@ ardıcıl.
 
 ## SlowMist Təhlükəsizlik (Chengdu)
 
-- Sənədləşdirilmiş tapşırıqlar: Substrat/Polkadot Rust təhlükəsizlik rəyləri daxil olmaqla
+- Sənədləşdirilmiş tapşırıqlar: Rust təhlükəsizlik rəyləri daxil olmaqla
   Çin operatorları üçün Guomi çəngəlləri; SM2/SM3/SM4 pul kisəsinin müntəzəm qiymətləndirilməsi
   və birjalar tərəfindən istifadə edilən körpü kodu.
 - Güclü tərəflər: blokçeyn mərkəzli audit təcrübəsi, insidentlərə inteqrasiya olunmuş reaksiya,

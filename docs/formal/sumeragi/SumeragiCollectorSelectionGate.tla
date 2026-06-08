@@ -345,6 +345,60 @@ SafetyFast ==
   /\ ActualOutput("npos_no_seed") = SpecOutput("npos_no_seed")
   /\ ActualOutput("npos_seed") = SpecOutput("npos_seed")
 
+QuorumProxyTailExact ==
+  \A c \in Cases:
+    /\ ActualCommitQuorum(c) = SpecCommitQuorum(RosterLen(c))
+    /\ ActualProxyTail(c) = SpecProxyTail(c)
+
+EffectiveCollectorFanoutExact ==
+  \A c \in Cases:
+    ActualEffectiveK(c) = SpecEffectiveK(c)
+
+DefaultCollectorSelectionExact ==
+  \A c \in Cases:
+    /\ ActualDefaultLen(c) = SpecDefaultLen(c)
+    /\ ActualDefaultFirst(c) = SpecDefaultFirst(c)
+    /\ ActualDefaultSecond(c) = SpecDefaultSecond(c)
+    /\ ActualDefaultLast(c) = SpecDefaultLast(c)
+    /\ ActualDefaultHasLeaderForMulti(c) =
+       SpecDefaultHasLeaderForMulti(c)
+    /\ ActualDefaultWraps(c) = SpecDefaultWraps(c)
+
+FallbackCollectorSelectionExact ==
+  \A c \in Cases:
+    /\ ActualFallbackLen(c) = SpecFallbackLen(c)
+    /\ ActualFallbackFirst(c) = SpecFallbackFirst(c)
+    /\ ActualFallbackSecond(c) = SpecFallbackSecond(c)
+    /\ ActualFallbackLast(c) = SpecFallbackLast(c)
+    /\ ActualFallbackHasLeaderForMulti(c) =
+       SpecFallbackHasLeaderForMulti(c)
+    /\ ActualFallbackDistinct(c) = SpecFallbackDistinct(c)
+    /\ ActualFallbackWraps(c) = SpecFallbackWraps(c)
+
+PrfCollectorSelectionExact ==
+  \A c \in Cases:
+    /\ ActualPrfLen(c) = SpecPrfLen(c)
+    /\ ActualPrfHasLeaderForMulti(c) = SpecPrfHasLeaderForMulti(c)
+    /\ ActualPrfDistinct(c) = SpecPrfDistinct(c)
+    /\ ActualPrfInRange(c) = SpecPrfInRange(c)
+
+DeterministicCollectorRoutingExact ==
+  \A c \in Cases:
+    /\ ActualDeterministicSource(c) = SpecDeterministicSource(c)
+    /\ ActualDeterministicLen(c) = SpecDeterministicLen(c)
+    /\ ActualDeterministicHasLeaderForMulti(c) =
+       SpecDeterministicHasLeaderForMulti(c)
+    /\ ActualDeterministicDistinct(c) = SpecDeterministicDistinct(c)
+
+CollectorSelectionExactness ==
+  /\ SafetyFast
+  /\ QuorumProxyTailExact
+  /\ EffectiveCollectorFanoutExact
+  /\ DefaultCollectorSelectionExact
+  /\ FallbackCollectorSelectionExact
+  /\ PrfCollectorSelectionExact
+  /\ DeterministicCollectorRoutingExact
+
 BugQuorumUnderestimatesLen4 ==
   ActualCommitQuorum("len4_k1") = SpecCommitQuorum(4)
 
@@ -403,7 +457,7 @@ BugPrfOutOfRange ==
   ActualPrfInRange("perm_seed") = SpecPrfInRange("perm_seed")
 
 Safety ==
-  SafetyFast
+  CollectorSelectionExactness
 
 =============================================================================
 ====

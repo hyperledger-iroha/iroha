@@ -57,6 +57,29 @@ Candidates == {
   LargeRosterQuorumThreshold
 }
 
+SourcePriorityCases == {
+  CommitWins,
+  WorldFallback,
+  TrustedFallbackEmpty
+}
+
+OutputNormalizationCases == Candidates \ {EmptyEverywhere}
+
+PopFilterCases == {
+  CommitMissingPopsSkip,
+  TrustedMissingPopsDrop,
+  PopFilterSubquorumFallback,
+  PopFilterQuorumAccepted,
+  SmallRosterNeedsAllPops,
+  LargeRosterQuorumThreshold
+}
+
+FallbackCases == {
+  PrimaryEmptyUsesTrusted,
+  TrustedFallbackPopsFiltered,
+  EmptyEverywhere
+}
+
 UseCommitBaseline == 1
 UseWorldBaseline == 2
 UseTrustedBaseline == 3
@@ -225,5 +248,33 @@ SafetyFast ==
   /\ PopFilteringContract
   /\ FallbackContract
   /\ OutputShapeContract
+
+ActiveTopologySourcePriorityExact ==
+  /\ \A c \in SourcePriorityCases:
+       ImplementationActions(c) = SpecActions(c)
+  /\ PrimarySourcePriority
+
+ActiveTopologyOutputNormalizationExact ==
+  /\ \A c \in OutputNormalizationCases:
+       ImplementationActions(c) = SpecActions(c)
+  /\ OutputShapeContract
+
+ActiveTopologyPopFilterExact ==
+  /\ \A c \in PopFilterCases:
+       ImplementationActions(c) = SpecActions(c)
+  /\ PopFilteringContract
+
+ActiveTopologyFallbackExact ==
+  /\ \A c \in FallbackCases:
+       ImplementationActions(c) = SpecActions(c)
+  /\ FallbackContract
+
+ActiveTopologySelectionExactness ==
+  /\ SafetyFast
+  /\ AllCasesMatchSpec
+  /\ ActiveTopologySourcePriorityExact
+  /\ ActiveTopologyOutputNormalizationExact
+  /\ ActiveTopologyPopFilterExact
+  /\ ActiveTopologyFallbackExact
 
 ====

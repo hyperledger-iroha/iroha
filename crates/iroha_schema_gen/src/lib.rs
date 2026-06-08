@@ -242,7 +242,7 @@ mod tests {
 
     #[test]
     fn no_extra_or_missing_schemas() {
-        // NOTE: Skipping Box<str> until [this PR](https://github.com/paritytech/parity-scale-codec/pull/565) is merged
+        // NOTE: Skipping Box<str> until schema generation supports unsized string boxes.
         let exceptions: [core::any::TypeId; 1] = [core::any::TypeId::of::<Box<str>>()];
 
         let schemas_types = super::build_schemas()

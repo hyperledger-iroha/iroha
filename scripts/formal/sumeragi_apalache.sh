@@ -2549,6 +2549,12 @@ case "$mode" in
     apalache_length=4
     expect_failure=1
     ;;
+  frontier-bug-stale-recovery-owner-cleanup)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_stale_recovery_owner_cleanup.cfg"
+    apalache_length=3
+    expect_failure=1
+    ;;
   frontier-bug-vote-queue)
     spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
     cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_vote_queue.cfg"
@@ -2561,10 +2567,28 @@ case "$mode" in
     apalache_length=4
     expect_failure=1
     ;;
+  frontier-bug-payload-recovery-owner)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_payload_recovery_owner.cfg"
+    apalache_length=3
+    expect_failure=1
+    ;;
   frontier-bug-retransmit-followthrough)
     spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
     cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_retransmit_followthrough.cfg"
     apalache_length=6
+    expect_failure=1
+    ;;
+  frontier-bug-quorum-window-cleanup)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_quorum_window_cleanup.cfg"
+    apalache_length=3
+    expect_failure=1
+    ;;
+  frontier-bug-view-bound-retransmit-evidence)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_view_bound_retransmit_evidence.cfg"
+    apalache_length=4
     expect_failure=1
     ;;
   frontier-bug-future-promotion)
@@ -2579,10 +2603,28 @@ case "$mode" in
     apalache_length=5
     expect_failure=1
     ;;
+  frontier-bug-future-reanchor-rotated)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_future_reanchor_rotated.cfg"
+    apalache_length=2
+    expect_failure=1
+    ;;
+  frontier-bug-future-reanchor-active-marker)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_future_reanchor_active_marker.cfg"
+    apalache_length=5
+    expect_failure=1
+    ;;
   frontier-bug-future-evidence-drop)
     spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
     cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_future_evidence_drop.cfg"
     apalache_length=3
+    expect_failure=1
+    ;;
+  frontier-bug-zero-evidence-future-drop)
+    spec_file="$spec_dir/SumeragiFrontierRecovery.tla"
+    cfg_file="$spec_dir/SumeragiFrontierRecovery_bug_zero_evidence_future_drop.cfg"
+    apalache_length=2
     expect_failure=1
     ;;
   frontier-bug-promotion-reset)
@@ -3020,6 +3062,12 @@ case "$mode" in
   rbc-bug-force-one-ignored)
     spec_file="$spec_dir/SumeragiRbcDeliverQuorum.tla"
     cfg_file="$spec_dir/SumeragiRbcDeliverQuorum_bug_force_one_ignored.cfg"
+    apalache_length=2
+    expect_failure=1
+    ;;
+  rbc-bug-inbound-force-one-acceptance)
+    spec_file="$spec_dir/SumeragiRbcDeliverQuorum.tla"
+    cfg_file="$spec_dir/SumeragiRbcDeliverQuorum_bug_inbound_force_one_acceptance.cfg"
     apalache_length=2
     expect_failure=1
     ;;

@@ -46,6 +46,48 @@ Cases == {
   "fast_rbc_unresolved"
 }
 
+BaseZeroCases == {
+  "base_zero"
+}
+
+DeficitMultiplierCases == {
+  "no_votes_no_stall",
+  "one_missing_no_stall",
+  "at_quorum_no_stall",
+  "over_quorum_no_stall",
+  "min_zero_boundary"
+}
+
+StallEscalationCases == {
+  "timeout_zero_huge_stall",
+  "below_moderate_stall",
+  "moderate_boundary_no_votes",
+  "moderate_boundary_at_quorum",
+  "severe_boundary_one_missing"
+}
+
+ResendWindowCases == {
+  "resend_zero_cooldown",
+  "resend_nonzero_cooldown",
+  "fast_enabled",
+  "fast_enabled_zero_cooldown"
+}
+
+FastPresentCases == {
+  "fast_enabled",
+  "fast_enabled_zero_cooldown"
+}
+
+FastRejectCases == {
+  "fast_not_contiguous",
+  "fast_zero_votes",
+  "fast_at_quorum",
+  "fast_over_quorum",
+  "fast_relay_backpressure",
+  "fast_vote_queue_backlog",
+  "fast_rbc_unresolved"
+}
+
 Min(a, b) == IF a <= b THEN a ELSE b
 Max(a, b) == IF a >= b THEN a ELSE b
 BoolToInt(b) == IF b THEN 1 ELSE 0
@@ -269,6 +311,62 @@ SafetyFast ==
   /\ ActualOutput("fast_vote_queue_backlog") =
        SpecOutput("fast_vote_queue_backlog")
   /\ ActualOutput("fast_rbc_unresolved") = SpecOutput("fast_rbc_unresolved")
+
+QuorumBackoffBaseZeroExact ==
+  \A c \in BaseZeroCases:
+    /\ ActualBackoff(c) = 0
+    /\ ActualMultiplier(c) = 0
+    /\ ActualEscalated(c) = SpecEscalated(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumBackoffDeficitMultiplierExact ==
+  \A c \in DeficitMultiplierCases:
+    /\ ActualInitialMultiplier(c) = SpecInitialMultiplier(c)
+    /\ ActualMultiplier(c) = SpecMultiplier(c)
+    /\ ActualBackoff(c) = SpecBackoff(c)
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumBackoffStallEscalationExact ==
+  \A c \in StallEscalationCases:
+    /\ ActualEscalated(c) = SpecEscalated(c)
+    /\ ActualMultiplier(c) = SpecMultiplier(c)
+    /\ ActualBackoff(c) = SpecBackoff(c)
+    /\ IF QuorumTimeout(c) = 0 THEN ~ActualEscalated(c) ELSE TRUE
+    /\ IF QuorumTimeout(c) # 0 /\ StallAge(c) >= QuorumTimeout(c) * 4
+       THEN ActualMultiplier(c) >= 5
+       ELSE TRUE
+    /\ IF QuorumTimeout(c) # 0 /\ StallAge(c) >= QuorumTimeout(c) * 2
+       THEN ActualMultiplier(c) >= 4
+       ELSE TRUE
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumResendWindowExact ==
+  \A c \in ResendWindowCases:
+    /\ ActualResendWindow(c) = SpecResendWindow(c)
+    /\ ActualResendWindow(c) >= 1
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumFastResendPresentExact ==
+  \A c \in FastPresentCases:
+    /\ ActualFastPresent(c) = TRUE
+    /\ ActualFastWindow(c) = SpecResendWindow(c)
+    /\ ActualFastWindow(c) >= 1
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumFastResendRejectExact ==
+  \A c \in FastRejectCases:
+    /\ ActualFastPresent(c) = FALSE
+    /\ ActualFastWindow(c) = 0
+    /\ ActualOutput(c) = SpecOutput(c)
+
+QuorumRescheduleBackoffExactness ==
+  /\ SafetyFast
+  /\ QuorumBackoffBaseZeroExact
+  /\ QuorumBackoffDeficitMultiplierExact
+  /\ QuorumBackoffStallEscalationExact
+  /\ QuorumResendWindowExact
+  /\ QuorumFastResendPresentExact
+  /\ QuorumFastResendRejectExact
 
 BugBaseZeroEscalates ==
   ActualOutput("base_zero") = SpecOutput("base_zero")

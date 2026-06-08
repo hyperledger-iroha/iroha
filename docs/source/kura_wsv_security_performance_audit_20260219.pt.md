@@ -160,8 +160,8 @@ Tipo: Desempenho/Higiene de memória
 ### Produção WSV
 
 - Cobertura existente:
-  - comportamento de contenção de fallback: `state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - segurança de ordem de bloqueio em torno do back-end em camadas: `state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - comportamento de contenção de fallback: `state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - segurança de ordem de bloqueio em torno do back-end em camadas: `state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - Lacunas:
   - nenhum teste de contenção quantitativo afirmando o tempo máximo de espera de commit aceitável sob commits mundiais pesados
   - nenhum teste de regressão para manipulação sem pânico se os invariantes de avanço do cursor DA quebrarem inesperadamente
@@ -222,7 +222,7 @@ Tipo: Desempenho/Higiene de memória
 ## Adições de teste sugeridas1. `kura_writer_io_failures_do_not_panic` (unidade, injeção de falha)
 2. `kura_budget_check_scales_with_pending_depth` (regressão de desempenho)
 3. `kura_eviction_does_not_block_reads_beyond_threshold` (integração/desempenho)
-4. `state_commit_view_lock_hold_under_heavy_world_commit` (regressão de contenção)
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit` (regressão de contenção)
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic` (resiliência)
 6. `mock_wsv_admin_alias_requires_permissions` (regressão de segurança)
 7. `mock_wsv_input_publish_tlv_rejects_oversize` (proteção DoS)

@@ -8,7 +8,6 @@ import {
   TonSccpSourceStateProver,
   buildEvmSccpBridgeProofSubmitPayload,
   buildSolanaSccpFullLightClientAuditProofRequests,
-  buildSubstrateSccpSubmission,
   buildTonSccpFullLightClientAuditProofRequests,
   buildTronSccpBridgeProofSubmitPayload,
   canonicalSccpMessageProofBundleBytes,
@@ -81,6 +80,28 @@ test("published TypeScript declarations cover every SCCP runtime export", () => 
     .filter((name) => !declaredNames.has(name));
 
   assert.deepEqual(missing, []);
+});
+
+test("published SCCP package excludes the removed legacy lane", () => {
+  const removedLaneToken = ["sub", "strate"].join("");
+  const declarations = fs.readFileSync(
+    new URL("../index.d.ts", import.meta.url),
+    "utf8",
+  );
+  const exportNames = [
+    ...Object.keys(rootExports),
+    ...Object.keys(sccpExports),
+  ].sort();
+  const leakedExports = exportNames.filter((name) =>
+    name.toLowerCase().includes(removedLaneToken),
+  );
+
+  assert.deepEqual(leakedExports, []);
+  assert.equal(declarations.toLowerCase().includes(removedLaneToken), false);
+  for (const artifact of ["../dist/index.js", "../dist/sccp.js", "../dist/toriiClient.js"]) {
+    const source = fs.readFileSync(new URL(artifact, import.meta.url), "utf8");
+    assert.equal(source.toLowerCase().includes(removedLaneToken), false, artifact);
+  }
 });
 
 test("published TypeScript declarations constrain TAIRA XOR TRON settlement defaults", () => {
@@ -170,11 +191,6 @@ test("published TypeScript declarations expose SCCP domain id inputs", () => {
     declarationInterface(declarations, "BscSccpReceiptProofInput"),
     ["sourceDomain", "source_domain"],
   );
-  assertDomainInputFields(
-    declarationInterface(declarations, "SubstrateSccpProofRequestInput"),
-    ["sourceDomain", "source_domain"],
-  );
-
   const verifierVkHash = declarationFunction(declarations, "sccpSourceAdapterVerifierVkHash");
   assert.match(verifierVkHash, /input: SccpDomainIdInput \| \{/u);
   assert.match(verifierVkHash, /target_domain\?: SccpDomainIdInput/u);
@@ -216,7 +232,6 @@ test("published TypeScript declarations expose SCCP v1 version inputs", () => {
   assertVersionInputFields(declarationInterface(declarations, "TonValidatorSignatureProofInput"));
   assertVersionInputFields(declarationInterface(declarations, "EthBeaconSyncCommitteeProofInput"));
   assertVersionInputFields(declarationInterface(declarations, "BscValidatorStorageProofInput"));
-  assertVersionInputFields(declarationInterface(declarations, "SubstrateGrandpaJustificationProofInput"));
   assertVersionInputFields(declarationInterface(declarations, "TronSolidBlockMessageInput"));
   assertVersionInputFields(declarationInterface(declarations, "TronWitnessSealInput"));
   assertVersionInputFields(declarationInterface(declarations, "SccpMessageTransparentPublicInputsInput"));
@@ -299,7 +314,6 @@ test("published package root exports SCCP destination binding helpers", () => {
   assert.equal(typeof SolanaSccpSourceStateProver, "function");
   assert.equal(typeof TonSccpSourceStateProver, "function");
   assert.equal(typeof buildSolanaSccpFullLightClientAuditProofRequests, "function");
-  assert.equal(typeof buildSubstrateSccpSubmission, "function");
   assert.equal(typeof buildTonSccpFullLightClientAuditProofRequests, "function");
   assert.equal(typeof buildEvmSccpBridgeProofSubmitPayload, "function");
   assert.equal(typeof buildTronSccpBridgeProofSubmitPayload, "function");

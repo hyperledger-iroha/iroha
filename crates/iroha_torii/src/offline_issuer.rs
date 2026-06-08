@@ -78,14 +78,15 @@ impl OfflineIssuerRuntime {
         }
     }
 
-    fn sign_bytes(&self, payload: &[u8]) -> Signature {
-        Signature::new(self.key_pair.private_key(), payload)
+    fn sign_bytes(&self, payload: &[u8], context: &'static str) -> Result<Signature, Error> {
+        Signature::try_new(self.key_pair.private_key(), payload)
+            .map_err(|source| offline_signing_error(context, source))
     }
 
     fn sign_json_base64(&self, payload: &Value, context: &'static str) -> Result<String, Error> {
         let bytes = json::to_vec(payload)
             .map_err(|source| Error::SerializationFailure { context, source })?;
-        Ok(BASE64_STANDARD.encode(self.sign_bytes(&bytes).payload()))
+        Ok(BASE64_STANDARD.encode(self.sign_bytes(&bytes, context)?.payload()))
     }
 }
 
@@ -475,6 +476,12 @@ fn policy_lock_unavailable() -> Error {
         code: "OFFLINE_POLICY_UNAVAILABLE",
         message: "Offline Notes policy state is unavailable.".to_string(),
     }
+}
+
+fn offline_signing_error(context: &'static str, source: iroha_crypto::Error) -> Error {
+    Error::Query(ValidationFail::InternalError(format!(
+        "Offline Notes issuer failed to sign {context}: {source}"
+    )))
 }
 
 fn policy_state_snapshot(issuer: &OfflineIssuerRuntime) -> Result<OfflinePolicyState, Error> {
@@ -1497,7 +1504,7 @@ fn build_chain_certificate(
                 context: "offline_key_certificate_payload",
                 source: source.into(),
             })?;
-    certificate.issuer_signature = issuer.sign_bytes(&signing_bytes);
+    certificate.issuer_signature = issuer.sign_bytes(&signing_bytes, "offline_key_certificate")?;
     Ok(certificate)
 }
 

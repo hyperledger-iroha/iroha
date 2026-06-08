@@ -6,7 +6,10 @@
 use core::cmp::Ordering;
 use std::collections::BTreeMap;
 
-use iroha_crypto::{Hash, fhe_bfv::BfvEvaluationKeyBundle};
+use iroha_crypto::{
+    Hash,
+    fhe_bfv::{BfvEvaluationKeyBundle, BfvFullBootstrapCircuitArtifactBundleV1},
+};
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -25,6 +28,7 @@ use crate::{
         SoraPrivateUploadedModelExecutionReceiptV1, SoraRuntimeReceiptV1,
         SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1, SoraStateEncryptionV1,
         SoraStateMutationOperationV1, SoraUploadedModelBundleV1, SoracloudFheBootstrapKeyProofV1,
+        SoracloudFheFullBootstrapExecutionProofV1, SoracloudFheFullBootstrapMaterialProofV1,
         SoracloudFheInputAdmissionProofV1,
     },
     sorafs::pin_registry::StorageClass,
@@ -378,6 +382,15 @@ pub struct RunSoracloudFheJob {
     /// Optional verifier-backed proof for public bootstrap-key zero-refresh material.
     #[norito(default)]
     pub bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
+    /// Optional verifier-backed proof for governed full-bootstrap material.
+    #[norito(default)]
+    pub full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
+    /// Optional full-bootstrap evaluator/proof artifacts for full-bootstrap jobs.
+    #[norito(default)]
+    pub full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
+    /// Verifier-backed proof for each full-bootstrap output ciphertext slot.
+    #[norito(default)]
+    pub full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
     /// Governance transaction hash attached to the job.
     pub governance_tx_hash: Hash,
     /// Provenance attestation over the job payload.
@@ -1573,6 +1586,9 @@ impl_soracloud_decode_from_slice!(RunSoracloudFheJob {
     evaluation_keys: BfvEvaluationKeyBundle,
     evaluation_key_refresh_transcript: BfvEvaluationKeyRefreshTranscriptV1,
     bootstrap_key_zero_refresh_proof: Option<SoracloudFheBootstrapKeyProofV1>,
+    full_bootstrap_material_proof: Option<SoracloudFheFullBootstrapMaterialProofV1>,
+    full_bootstrap_circuit_artifacts: Option<BfvFullBootstrapCircuitArtifactBundleV1>,
+    full_bootstrap_execution_proofs: Vec<SoracloudFheFullBootstrapExecutionProofV1>,
     governance_tx_hash: Hash,
     provenance: ManifestProvenance,
 });

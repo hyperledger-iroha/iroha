@@ -321,6 +321,43 @@ RoundTripAnchors ==
 SafetyFast ==
   \A c \in Cases: ActualResult(c) = SpecResult(c)
 
+CanonicalNormalizationExact ==
+  /\ ActualCanonicalSet("empty_to_canonical") = {}
+  /\ ActualCanonicalSet("rotated_to_canonical_single") = {2}
+  /\ ActualCanonicalSet("rotated_to_canonical_many") = {1, 2}
+  /\ ActualCanonicalSet("to_canonical_oob") = {}
+  /\ ActualCanonicalSet("to_canonical_absent_peer") = {0}
+  /\ ActualCanonicalSet("to_canonical_duplicate_peer") = {0, 1}
+
+ViewIndexNormalizationExact ==
+  /\ ActualViewIndex("view_index_empty_canonical") = NoIndex
+  /\ ActualViewIndex("view_index_oob") = NoIndex
+  /\ ActualViewIndex("view_index_absent_peer") = NoIndex
+  /\ ActualViewIndex("view_index_rotated") = 0
+
+ViewSetNormalizationExact ==
+  /\ ActualViewSet("empty_to_view") = {}
+  /\ ActualViewSet("rotated_to_view_single") = {0}
+  /\ ActualViewSet("rotated_to_view_many") = {0, 1}
+  /\ ActualViewSet("to_view_empty_canonical") = {}
+  /\ ActualViewSet("to_view_absent_peer_filters") = {0}
+  /\ ActualViewSet("to_view_keeps_zero") = {0, 1}
+
+RoundTripNormalizationExact ==
+  /\ ActualRoundTripSet("roundtrip_rotated_common") = {0, 2}
+  /\ ActualRoundTripSet("roundtrip_missing_peer_filters") = {0, 2}
+
+SignerIndexNormalizationExactness ==
+  /\ CanonicalNormalizationAnchors
+  /\ ViewIndexAnchors
+  /\ ViewSetAnchors
+  /\ RoundTripAnchors
+  /\ SafetyFast
+  /\ CanonicalNormalizationExact
+  /\ ViewIndexNormalizationExact
+  /\ ViewSetNormalizationExact
+  /\ RoundTripNormalizationExact
+
 BugCanonicalEmptyKept ==
   ActualResult("empty_to_canonical") = SpecResult("empty_to_canonical")
 

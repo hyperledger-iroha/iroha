@@ -3638,8 +3638,10 @@ pub mod confidential {
     pub const MAX_ANCHOR_AGE_BLOCKS: u64 = 10_000;
     /// Maximum proof bytes per block.
     pub const MAX_PROOF_BYTES_BLOCK: u64 = 1_048_576;
-    /// Maximum verification calls per transaction.
-    pub const MAX_VERIFY_CALLS_PER_TX: u32 = 4;
+    /// Maximum verification calls per transaction. One Soracloud BFV full-bootstrap
+    /// execution can verify one proof per registered identifier slot, so the default
+    /// must admit at least one complete production-shaped execution proof batch.
+    pub const MAX_VERIFY_CALLS_PER_TX: u32 = 128;
     /// Maximum verification calls per block.
     pub const MAX_VERIFY_CALLS_PER_BLOCK: u32 = 128;
     /// Maximum public inputs per proof.

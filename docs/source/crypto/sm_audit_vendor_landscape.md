@@ -27,7 +27,6 @@ consistent.
 ## NCC Group (APAC Cryptography Services)
 
 - Documented engagements: gm/T (SM) code examinations for regional payment
-  networks and HSM vendors; prior Rust reviews for Parity Substrate, Polkadot,
   and Libra components.
 - Strengths: large APAC bench with bilingual reporting, ability to combine
   compliance-style process checks with deep code review.
@@ -47,7 +46,6 @@ consistent.
 
 ## SlowMist Security (Chengdu)
 
-- Documented engagements: Substrate/Polkadot Rust security reviews including
   Guomi forks for Chinese operators; routine assessments of SM2/SM3/SM4 wallet
   and bridge code used by exchanges.
 - Strengths: blockchain-focused audit practice, integrated incident response,

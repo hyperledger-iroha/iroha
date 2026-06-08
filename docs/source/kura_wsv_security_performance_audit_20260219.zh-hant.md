@@ -160,8 +160,8 @@ translator: machine-google-reviewed
 ### 生產 WSV
 
 - 現有承保範圍：
-  - 爭用回退行為：`state_view_returns_when_view_lock_held` (`crates/iroha_core/src/state.rs:18293`)
-  - 分層後端的鎖定順序安全：`state_commit_does_not_hold_tiered_backend_while_waiting_for_view_lock` (`crates/iroha_core/src/state.rs:18321`)
+  - 爭用回退行為：`state_view_waits_for_active_view_generation` (`crates/iroha_core/src/state.rs:29007`)
+  - 分層後端的鎖定順序安全：`state_commit_does_not_hold_tiered_backend_while_waiting_for_state_write_lock` (`crates/iroha_core/src/state.rs:29057`)
 - 差距：
   - 沒有定量爭用測試斷言在繁重的世界提交下最大可接受的提交保持時間
   - 如果 DA 遊標前進不變量意外中斷，則不會進行無恐慌處理的迴歸測試
@@ -222,7 +222,7 @@ translator: machine-google-reviewed
 ## 建議的測試添加1. `kura_writer_io_failures_do_not_panic`（單元，故障注入）
 2. `kura_budget_check_scales_with_pending_depth`（性能回歸）
 3. `kura_eviction_does_not_block_reads_beyond_threshold`（整合/性能）
-4. `state_commit_view_lock_hold_under_heavy_world_commit`（爭用回歸）
+4. `state_commit_state_write_lock_hold_under_heavy_world_commit`（爭用回歸）
 5. `state_apply_without_execution_handles_da_cursor_error_without_panic`（彈性）
 6. `mock_wsv_admin_alias_requires_permissions`（安全回歸）
 7. `mock_wsv_input_publish_tlv_rejects_oversize`（DoS防護）

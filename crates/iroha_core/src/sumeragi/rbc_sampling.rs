@@ -178,7 +178,7 @@ pub fn sample_from_store(
 
 #[cfg(test)]
 mod tests {
-    use std::{fmt, time::Duration};
+    use std::{fmt, path::Path, time::Duration};
 
     use iroha_crypto::Hash;
     use iroha_data_model::prelude::BlockHeader;
@@ -217,6 +217,43 @@ mod tests {
 
     impl rand::rand_core::TryCryptoRng for FailingSamplingRng {}
 
+    fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
+        let digest = Sha256::digest(bytes);
+        let mut out = [0u8; 32];
+        out.copy_from_slice(&digest);
+        out
+    }
+
+    fn chunk_root_for(chunks: &[Vec<u8>]) -> Hash {
+        let digests: Vec<[u8; 32]> = chunks.iter().map(|chunk| digest_bytes(chunk)).collect();
+        let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests);
+        Hash::from(tree.root().expect("chunk root"))
+    }
+
+    fn chunk_store_at(dir: &Path) -> ChunkStore {
+        ChunkStore::new(
+            dir.to_path_buf(),
+            Duration::from_secs(300),
+            4,
+            1 << 20,
+            8,
+            1 << 20,
+        )
+        .expect("chunk store init")
+    }
+
+    fn persist_session_for_sampling(
+        dir: &Path,
+        key: SessionKey,
+        chain_hash: &Hash,
+        manifest: &SoftwareManifest,
+        session: &RbcSession,
+    ) {
+        chunk_store_at(dir)
+            .persist_session(key, session, chain_hash, manifest, &[])
+            .expect("persist session");
+    }
+
     #[test]
     fn sampling_rng_reports_seed_failure() {
         let mut rng = FailingSamplingRng;
@@ -230,23 +267,31 @@ mod tests {
     }
 
     #[test]
+    fn sampling_returns_none_when_session_is_absent() {
+        let dir = tempdir().unwrap();
+        let chain_hash = Hash::new(b"chain");
+        let manifest = SoftwareManifest::current();
+        let key = (
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA1; 32])),
+            7,
+            0,
+        );
+
+        let sampled = sample_from_store(dir.path(), key, &chain_hash, &manifest, 1, Some(1))
+            .expect("sampling absent session should not fail");
+
+        assert!(sampled.is_none());
+    }
+
+    #[test]
     fn sampling_generates_proof_from_store() {
         let dir = tempdir().unwrap();
         let chain_hash = Hash::new(b"chain");
         let manifest = SoftwareManifest::current();
         let chunk0 = b"hello".to_vec();
         let chunk1 = b"world".to_vec();
-        let digests: Vec<[u8; 32]> = [chunk0.clone(), chunk1.clone()]
-            .iter()
-            .map(|bytes| {
-                let digest = Sha256::digest(bytes);
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&digest);
-                arr
-            })
-            .collect();
-        let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone());
-        let root_hash = Hash::from(tree.root().expect("root"));
+        let chunks = vec![chunk0.clone(), chunk1.clone()];
+        let root_hash = chunk_root_for(&chunks);
 
         let mut session = RbcSession::test_new(2, None, Some(root_hash), 0);
         session.test_note_chunk(0, chunk0.clone(), 0);
@@ -257,24 +302,18 @@ mod tests {
             5,
             0,
         );
-        let store = ChunkStore::new(
-            dir.path().to_path_buf(),
-            Duration::from_secs(300),
-            4,
-            1 << 20,
-            8,
-            1 << 20,
-        )
-        .expect("chunk store init");
-        store
-            .persist_session(key, &session, &chain_hash, &manifest, &[])
-            .expect("persist session");
+        persist_session_for_sampling(dir.path(), key, &chain_hash, &manifest, &session);
 
         let sampled = sample_from_store(dir.path(), key, &chain_hash, &manifest, 1, None)
             .expect("sampling call")
             .expect("session present");
 
+        assert_eq!(sampled.block_hash, key.0);
+        assert_eq!(sampled.height, key.1);
+        assert_eq!(sampled.view, key.2);
         assert_eq!(sampled.total_chunks, 2);
+        assert_eq!(sampled.chunk_root, root_hash);
+        assert_eq!(sampled.payload_hash, None);
         assert_eq!(sampled.samples.len(), 1);
         let sample = &sampled.samples[0];
         assert!(sample.index < 2);
@@ -290,23 +329,167 @@ mod tests {
     }
 
     #[test]
+    fn sampling_uses_seeded_unique_sorted_indices_and_exact_metadata() {
+        let dir = tempdir().unwrap();
+        let chain_hash = Hash::new(b"chain");
+        let manifest = SoftwareManifest::current();
+        let chunks = vec![
+            b"alpha".to_vec(),
+            b"bravo".to_vec(),
+            b"charlie".to_vec(),
+            b"delta".to_vec(),
+            b"echo".to_vec(),
+        ];
+        let mut payload = Vec::new();
+        for chunk in &chunks {
+            payload.extend_from_slice(chunk);
+        }
+        let payload_hash = Hash::new(&payload);
+        let root_hash = chunk_root_for(&chunks);
+        let mut session = RbcSession::test_new(
+            u32::try_from(chunks.len()).expect("chunk count fits"),
+            Some(payload_hash),
+            Some(root_hash),
+            0,
+        );
+        for (idx, chunk) in chunks.iter().enumerate() {
+            session.test_note_chunk(
+                u32::try_from(idx).expect("chunk index fits"),
+                chunk.clone(),
+                0,
+            );
+        }
+
+        let key = (
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA2; 32])),
+            8,
+            2,
+        );
+        persist_session_for_sampling(dir.path(), key, &chain_hash, &manifest, &session);
+
+        let first = sample_from_store(dir.path(), key, &chain_hash, &manifest, 3, Some(99))
+            .expect("seeded sampling call")
+            .expect("session present");
+        let second = sample_from_store(dir.path(), key, &chain_hash, &manifest, 3, Some(99))
+            .expect("second seeded sampling call")
+            .expect("session present");
+
+        assert_eq!(first.block_hash, key.0);
+        assert_eq!(first.height, key.1);
+        assert_eq!(first.view, key.2);
+        assert_eq!(first.total_chunks, chunks.len() as u32);
+        assert_eq!(first.chunk_root, root_hash);
+        assert_eq!(first.payload_hash, Some(payload_hash));
+        assert_eq!(first.samples.len(), 3);
+
+        let indices: Vec<u32> = first.samples.iter().map(|sample| sample.index).collect();
+        let second_indices: Vec<u32> = second.samples.iter().map(|sample| sample.index).collect();
+        assert_eq!(indices, second_indices);
+        assert!(
+            indices.windows(2).all(|window| window[0] < window[1]),
+            "sampled indices must be sorted and unique: {indices:?}"
+        );
+        assert!(indices.iter().all(|idx| *idx < chunks.len() as u32));
+
+        let root_typed = HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(first.chunk_root);
+        for sample in &first.samples {
+            let idx = usize::try_from(sample.index).expect("sample index fits");
+            assert_eq!(sample.bytes, chunks[idx]);
+            assert_eq!(sample.digest, digest_bytes(&chunks[idx]));
+            let leaf_hash =
+                HashOf::<[u8; 32]>::from_untyped_unchecked(Hash::prehashed(sample.digest));
+            assert!(
+                sample
+                    .proof
+                    .clone()
+                    .verify_sha256(&leaf_hash, &root_typed, 16),
+                "proof verifies for sampled chunk {}",
+                sample.index
+            );
+        }
+    }
+
+    #[test]
+    fn sampling_rejects_zero_requested_chunks() {
+        let dir = tempdir().unwrap();
+        let chain_hash = Hash::new(b"chain");
+        let manifest = SoftwareManifest::current();
+        let chunk = b"hello".to_vec();
+        let root_hash = chunk_root_for(std::slice::from_ref(&chunk));
+        let mut session = RbcSession::test_new(1, None, Some(root_hash), 0);
+        session.test_note_chunk(0, chunk, 0);
+        let key = (
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA3; 32])),
+            9,
+            0,
+        );
+        persist_session_for_sampling(dir.path(), key, &chain_hash, &manifest, &session);
+
+        let err = sample_from_store(dir.path(), key, &chain_hash, &manifest, 0, Some(1))
+            .expect_err("zero sample count should fail");
+
+        assert!(matches!(err, SamplingError::InvalidSampleCount));
+    }
+
+    #[test]
+    fn sampling_rejects_incomplete_persisted_session() {
+        let dir = tempdir().unwrap();
+        let chain_hash = Hash::new(b"chain");
+        let manifest = SoftwareManifest::current();
+        let mut session = RbcSession::test_new(3, None, None, 0);
+        session.test_note_chunk(0, b"only-one-chunk".to_vec(), 0);
+        let key = (
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA4; 32])),
+            10,
+            0,
+        );
+        persist_session_for_sampling(dir.path(), key, &chain_hash, &manifest, &session);
+
+        let err = sample_from_store(dir.path(), key, &chain_hash, &manifest, 1, Some(1))
+            .expect_err("incomplete sessions cannot provide Merkle proofs");
+
+        assert!(matches!(err, SamplingError::IncompleteSession));
+    }
+
+    #[test]
+    fn sampling_rejects_chain_mismatched_snapshot_without_accepting_later() {
+        let dir = tempdir().unwrap();
+        let chain_hash = Hash::new(b"chain");
+        let other_chain_hash = Hash::new(b"other-chain");
+        let manifest = SoftwareManifest::current();
+        let chunk = b"hello".to_vec();
+        let root_hash = chunk_root_for(std::slice::from_ref(&chunk));
+        let mut session = RbcSession::test_new(1, None, Some(root_hash), 0);
+        session.test_note_chunk(0, chunk, 0);
+        let key = (
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA5; 32])),
+            11,
+            0,
+        );
+        persist_session_for_sampling(dir.path(), key, &chain_hash, &manifest, &session);
+
+        let sampled = sample_from_store(dir.path(), key, &other_chain_hash, &manifest, 1, Some(1))
+            .expect("chain mismatch should be treated as an unusable persisted snapshot");
+        assert!(sampled.is_none());
+
+        let sampled_after_delete =
+            sample_from_store(dir.path(), key, &chain_hash, &manifest, 1, Some(1))
+                .expect("sampling after rejected snapshot");
+        assert!(
+            sampled_after_delete.is_none(),
+            "strict guard should remove the mismatched snapshot instead of accepting it later"
+        );
+    }
+
+    #[test]
     fn sampling_rejects_request_larger_than_total_chunks() {
         let dir = tempdir().unwrap();
         let chain_hash = Hash::new(b"chain");
         let manifest = SoftwareManifest::current();
         let chunk0 = b"hello".to_vec();
         let chunk1 = b"world".to_vec();
-        let digests: Vec<[u8; 32]> = [chunk0.clone(), chunk1.clone()]
-            .iter()
-            .map(|bytes| {
-                let digest = Sha256::digest(bytes);
-                let mut arr = [0u8; 32];
-                arr.copy_from_slice(&digest);
-                arr
-            })
-            .collect();
-        let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(digests.clone());
-        let root_hash = Hash::from(tree.root().expect("root"));
+        let chunks = vec![chunk0.clone(), chunk1.clone()];
+        let root_hash = chunk_root_for(&chunks);
 
         let mut session = RbcSession::test_new(2, None, Some(root_hash), 0);
         session.test_note_chunk(0, chunk0.clone(), 0);
@@ -317,18 +500,7 @@ mod tests {
             6,
             0,
         );
-        let store = ChunkStore::new(
-            dir.path().to_path_buf(),
-            Duration::from_secs(300),
-            4,
-            1 << 20,
-            8,
-            1 << 20,
-        )
-        .expect("chunk store init");
-        store
-            .persist_session(key, &session, &chain_hash, &manifest, &[])
-            .expect("persist session");
+        persist_session_for_sampling(dir.path(), key, &chain_hash, &manifest, &session);
 
         let err = sample_from_store(dir.path(), key, &chain_hash, &manifest, 3, None)
             .expect_err("oversized request should fail");

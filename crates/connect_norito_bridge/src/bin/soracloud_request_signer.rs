@@ -326,7 +326,7 @@ fn run() -> Result<(), String> {
                 payload: UploadedModelBundleInitPayload {
                     bundle: derived.bundle.clone(),
                 },
-                provenance: signer.provenance(&payload_bytes),
+                provenance: signer.provenance(&payload_bytes)?,
                 authority: Some(signer.authority),
                 private_key: Some(signer.private_key),
             };
@@ -375,7 +375,7 @@ fn run() -> Result<(), String> {
             .map_err(|err| format!("failed to encode upload finalize payload: {err}"))?;
             let finalize_request = SignedUploadedModelFinalizeRequest {
                 payload: finalize_payload,
-                provenance: signer.provenance(&finalize_bytes),
+                provenance: signer.provenance(&finalize_bytes)?,
                 authority: Some(signer.authority.clone()),
                 private_key: Some(signer.private_key.clone()),
             };
@@ -436,11 +436,12 @@ fn parse_signer(authority: &str, private_key: &str) -> Result<MutationSigner, St
 }
 
 impl MutationSigner {
-    fn provenance(&self, payload: &[u8]) -> ManifestProvenance {
-        ManifestProvenance {
+    fn provenance(&self, payload: &[u8]) -> Result<ManifestProvenance, String> {
+        Ok(ManifestProvenance {
             signer: self.public_key.clone(),
-            signature: Signature::new(&self.private_key.0, payload),
-        }
+            signature: Signature::try_new(&self.private_key.0, payload)
+                .map_err(|err| format!("failed to sign Soracloud provenance payload: {err}"))?,
+        })
     }
 }
 
@@ -798,6 +799,28 @@ fn validate_chunk_encryption_metadata(chunk: &StageChunk) -> Result<(), String> 
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn mutation_signer_provenance_signature_verifies() {
+        let private_key = ExposedPrivateKey(
+            iroha_crypto::PrivateKey::from_bytes(iroha_crypto::Algorithm::Ed25519, &[0x42; 32])
+                .expect("private key"),
+        );
+        let public_key = PublicKey::from(private_key.0.clone());
+        let signer = MutationSigner {
+            authority: AccountId::new(public_key.clone()),
+            private_key,
+            public_key,
+        };
+        let payload = b"soracloud-upload-provenance";
+
+        let provenance = signer.provenance(payload).expect("sign provenance");
+
+        provenance
+            .signature
+            .verify(&provenance.signer, payload)
+            .expect("provenance signature verifies");
+    }
 
     #[test]
     fn derive_upload_bundle_hashes_bundle_root_without_tuple_arity_regression() {

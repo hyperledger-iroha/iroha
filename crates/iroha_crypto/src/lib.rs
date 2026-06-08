@@ -270,10 +270,11 @@ impl KeyPair {
     pub fn try_from_seed(seed: Vec<u8>, algorithm: Algorithm) -> Result<Self, Error> {
         match algorithm {
             Algorithm::Ed25519 => {
-                Ok(ed25519::Ed25519Sha512::keypair(KeyGenOption::UseSeed(seed)).into())
+                ed25519::Ed25519Sha512::try_keypair(KeyGenOption::UseSeed(seed)).map(Into::into)
             }
             Algorithm::Secp256k1 => {
-                Ok(secp256k1::EcdsaSecp256k1Sha256::keypair(KeyGenOption::UseSeed(seed)).into())
+                secp256k1::EcdsaSecp256k1Sha256::try_keypair(KeyGenOption::UseSeed(seed))
+                    .map(Into::into)
             }
             Algorithm::MlDsa => {
                 let seed = Zeroizing::new(seed);
@@ -2752,28 +2753,26 @@ fn session_key_zeroization_log() -> &'static std::sync::Mutex<Vec<u8>> {
     LOG.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn record_session_key_zeroization(bytes: &[u8]) {
-    let mut guard = session_key_zeroization_log()
+fn session_key_zeroization_guard() -> std::sync::MutexGuard<'static, Vec<u8>> {
+    session_key_zeroization_log()
         .lock()
-        .expect("session key zeroization log poisoned");
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn record_session_key_zeroization(bytes: &[u8]) {
+    let mut guard = session_key_zeroization_guard();
     guard.clear();
     guard.extend_from_slice(bytes);
 }
 
 #[doc(hidden)]
 pub fn __debug_last_zeroized_session_key() -> Vec<u8> {
-    session_key_zeroization_log()
-        .lock()
-        .expect("session key zeroization log poisoned")
-        .clone()
+    session_key_zeroization_guard().clone()
 }
 
 #[doc(hidden)]
 pub fn __debug_clear_last_zeroized_session_key() {
-    session_key_zeroization_log()
-        .lock()
-        .expect("session key zeroization log poisoned")
-        .clear();
+    session_key_zeroization_guard().clear();
 }
 
 /// A session key derived from a key exchange. Will usually be used for a symmetric encryption afterwards
@@ -2944,6 +2943,14 @@ mod tests {
 
     use super::*;
 
+    static SESSION_KEY_ZEROIZATION_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn session_key_zeroization_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        SESSION_KEY_ZEROIZATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn supported_algorithms() -> Vec<Algorithm> {
         let base = [Algorithm::Ed25519, Algorithm::Secp256k1];
         #[cfg(feature = "gost")]
@@ -2980,11 +2987,34 @@ mod tests {
 
     #[test]
     fn session_key_from_zeroizing_vec_preserves_payload_and_zeroizes_on_drop() {
+        let _test_guard = session_key_zeroization_test_guard();
         __debug_clear_last_zeroized_session_key();
 
         let expected = vec![0x7B; 32];
         {
             let session_key = SessionKey::from_zeroizing_vec(Zeroizing::new(expected.clone()));
+            assert_eq!(session_key.payload(), expected.as_slice());
+        }
+
+        let recorded = __debug_last_zeroized_session_key();
+        assert_eq!(recorded.len(), expected.len());
+        assert!(recorded.iter().all(|&byte| byte == 0));
+    }
+
+    #[test]
+    fn session_key_zeroization_log_recovers_from_poisoned_debug_mutex() {
+        let _test_guard = session_key_zeroization_test_guard();
+        let result = std::panic::catch_unwind(|| {
+            let _guard = session_key_zeroization_log()
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            panic!("poison session-key zeroization debug log");
+        });
+        assert!(result.is_err());
+
+        let expected = vec![0x3C; 24];
+        {
+            let session_key = SessionKey::new(expected.clone());
             assert_eq!(session_key.payload(), expected.as_slice());
         }
 

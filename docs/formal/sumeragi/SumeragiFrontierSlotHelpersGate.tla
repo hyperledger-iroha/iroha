@@ -7,7 +7,7 @@ A bounded abstract model for the small `FrontierSlot` helper methods.
 This slice covers helper semantics in `main_loop/slot_tracker.rs` that feed the
 exact-frontier slot FSM: lag-start fallback, body-state predicates, local vote
 locking, timeout view selection, progress/lag timer updates, catch-up markers,
-and compatibility mirror synchronization. Concrete hashes, peers, instants,
+and nested slot-state source consistency. Concrete hashes, peers, instants,
 durations, and nested structs are collapsed into representative obligations.
 ***************************************************************************)
 
@@ -38,11 +38,13 @@ MarkDeepCatchupState == 13
 MarkDeepCatchupPreservesSlot == 14
 MarkPassiveCatchupState == 15
 MarkPassiveCatchupPreservesSlot == 16
-SyncCandidateMirrors == 17
-SyncTimerMirrors == 18
-SyncRepairMirrors == 19
+NestedCandidateState == 17
+NestedTimerState == 18
+NestedRepairState == 19
+MarkBodyAvailableUnknownState == 20
+MarkBodyAvailablePendingState == 21
 
-Candidates == 1..19
+Candidates == 1..21
 
 ReturnLagWindowStart == 1
 ReturnLastProgressAt == 2
@@ -69,22 +71,26 @@ SetLastReason == 22
 SetDeepEnteredNow == 23
 PreserveActiveView == 24
 PreservePhase == 25
-MirrorCandidateView == 26
-MirrorCandidateHash == 27
-MirrorBodyPresent == 28
-MirrorBlockCreatedSeen == 29
-MirrorExactFetchArmed == 30
-MirrorFrontierInfo == 31
-MirrorLeader == 32
-MirrorVoters == 33
-MirrorObservedAt == 34
-MirrorLastUpdatedAt == 35
-MirrorLastFetchAt == 36
-MirrorFetchStage == 37
-MirrorRetryWindow == 38
-MirrorPendingRequesters == 39
+NestedCandidateView == 26
+NestedCandidateHash == 27
+NestedBodyPresent == 28
+NestedBlockCreatedSeen == 29
+NestedExactFetchArmed == 30
+NestedFrontierInfo == 31
+NestedLeader == 32
+NestedVoters == 33
+NestedObservedAt == 34
+NestedLastUpdatedAt == 35
+NestedLastFetchAt == 36
+NestedFetchStage == 37
+NestedRetryWindow == 38
+NestedPendingRequesters == 39
+SetBodyAvailable == 40
+SetValidationPending == 41
+PreservePendingValidation == 42
+SetPhaseValidateBody == 43
 
-Actions == 1..39
+Actions == 1..43
 
 SpecActions(candidate) ==
   CASE candidate = LagStartedUsesExistingLag -> {ReturnLagWindowStart}
@@ -115,14 +121,22 @@ SpecActions(candidate) ==
        SetDeepEnteredNow, SetLastUpdatedNow}
     [] candidate = MarkPassiveCatchupPreservesSlot ->
       {PreserveCandidate, PreserveActiveView, PreservePhase}
-    [] candidate = SyncCandidateMirrors ->
-      {MirrorCandidateView, MirrorCandidateHash, MirrorBodyPresent,
-       MirrorBlockCreatedSeen, MirrorExactFetchArmed, MirrorFrontierInfo,
-       MirrorLeader, MirrorVoters}
-    [] candidate = SyncTimerMirrors ->
-      {MirrorObservedAt, MirrorLastUpdatedAt, MirrorLastFetchAt}
-    [] candidate = SyncRepairMirrors ->
-      {MirrorFetchStage, MirrorRetryWindow, MirrorPendingRequesters}
+    [] candidate = NestedCandidateState ->
+      {NestedCandidateView, NestedCandidateHash, NestedBodyPresent,
+       NestedBlockCreatedSeen, NestedExactFetchArmed, NestedFrontierInfo,
+       NestedLeader, NestedVoters}
+    [] candidate = NestedTimerState ->
+      {NestedObservedAt, NestedLastUpdatedAt, NestedLastFetchAt}
+    [] candidate = NestedRepairState ->
+      {NestedFetchStage, NestedRetryWindow, NestedPendingRequesters}
+    [] candidate = MarkBodyAvailableUnknownState ->
+      {SetBodyAvailable, SetValidationPending, SetPhaseValidateBody,
+       SetLastProgressNow, SetLastUpdatedNow, ClearLagWindow,
+       ClearQuorumRebroadcast}
+    [] candidate = MarkBodyAvailablePendingState ->
+      {SetBodyAvailable, PreservePendingValidation, SetPhaseValidateBody,
+       SetLastProgressNow, SetLastUpdatedNow, ClearLagWindow,
+       ClearQuorumRebroadcast}
     [] OTHER -> {}
 
 ImplementationActions(candidate) ==
@@ -191,18 +205,34 @@ ImplementationActions(candidate) ==
     [] candidate = MarkPassiveCatchupPreservesSlot /\
           Bug = "mark_passive_mutates_phase" ->
       spec \ {PreservePhase}
-    [] candidate = SyncCandidateMirrors /\ Bug = "sync_skips_candidate" ->
-      spec \ {MirrorCandidateView, MirrorCandidateHash}
-    [] candidate = SyncCandidateMirrors /\ Bug = "sync_skips_body_state" ->
-      spec \ {MirrorBodyPresent}
-    [] candidate = SyncCandidateMirrors /\ Bug = "sync_skips_peer_sets" ->
-      spec \ {MirrorLeader, MirrorVoters}
-    [] candidate = SyncTimerMirrors /\ Bug = "sync_skips_timers" ->
-      spec \ {MirrorObservedAt, MirrorLastUpdatedAt}
-    [] candidate = SyncRepairMirrors /\ Bug = "sync_skips_repair" ->
-      spec \ {MirrorFetchStage, MirrorRetryWindow}
-    [] candidate = SyncRepairMirrors /\ Bug = "sync_skips_requesters" ->
-      spec \ {MirrorPendingRequesters}
+    [] candidate = NestedCandidateState /\ Bug = "nested_skips_candidate" ->
+      spec \ {NestedCandidateView, NestedCandidateHash}
+    [] candidate = NestedCandidateState /\ Bug = "nested_skips_body_state" ->
+      spec \ {NestedBodyPresent}
+    [] candidate = NestedCandidateState /\ Bug = "nested_skips_peer_sets" ->
+      spec \ {NestedLeader, NestedVoters}
+    [] candidate = NestedTimerState /\ Bug = "nested_skips_timers" ->
+      spec \ {NestedObservedAt, NestedLastUpdatedAt}
+    [] candidate = NestedRepairState /\ Bug = "nested_skips_repair" ->
+      spec \ {NestedFetchStage, NestedRetryWindow}
+    [] candidate = NestedRepairState /\ Bug = "nested_skips_requesters" ->
+      spec \ {NestedPendingRequesters}
+    [] candidate = MarkBodyAvailableUnknownState /\
+          Bug = "body_available_skips_body_state" ->
+      spec \ {SetBodyAvailable}
+    [] candidate = MarkBodyAvailableUnknownState /\
+          Bug = "body_available_unknown_skips_validation" ->
+      spec \ {SetValidationPending}
+    [] candidate = MarkBodyAvailablePendingState /\
+          Bug = "body_available_pending_clears_validation" ->
+      spec \ {PreservePendingValidation}
+    [] candidate = MarkBodyAvailableUnknownState /\
+          Bug = "body_available_skips_phase" ->
+      spec \ {SetPhaseValidateBody}
+    [] candidate = MarkBodyAvailableUnknownState /\
+          Bug = "body_available_skips_record_progress" ->
+      spec \ {SetLastProgressNow, SetLastUpdatedNow, ClearLagWindow,
+              ClearQuorumRebroadcast}
     [] OTHER -> spec
 
 Init ==
@@ -238,12 +268,17 @@ Bugs == {
   "mark_passive_keeps_rebroadcast",
   "mark_passive_skips_reason",
   "mark_passive_mutates_phase",
-  "sync_skips_candidate",
-  "sync_skips_body_state",
-  "sync_skips_peer_sets",
-  "sync_skips_timers",
-  "sync_skips_repair",
-  "sync_skips_requesters"
+  "nested_skips_candidate",
+  "nested_skips_body_state",
+  "nested_skips_peer_sets",
+  "nested_skips_timers",
+  "nested_skips_repair",
+  "nested_skips_requesters",
+  "body_available_skips_body_state",
+  "body_available_unknown_skips_validation",
+  "body_available_pending_clears_validation",
+  "body_available_skips_phase",
+  "body_available_skips_record_progress"
 }
 
 TypeInvariant ==
@@ -299,11 +334,18 @@ CatchupMarkerMatchesSpec ==
   }:
     ImplementationActions(candidate) = SpecActions(candidate)
 
-SyncMirrorMatchesSpec ==
+NestedStateMatchesSpec ==
   \A candidate \in {
-    SyncCandidateMirrors,
-    SyncTimerMirrors,
-    SyncRepairMirrors
+    NestedCandidateState,
+    NestedTimerState,
+    NestedRepairState
+  }:
+    ImplementationActions(candidate) = SpecActions(candidate)
+
+BodyAvailableMatchesSpec ==
+  \A candidate \in {
+    MarkBodyAvailableUnknownState,
+    MarkBodyAvailablePendingState
   }:
     ImplementationActions(candidate) = SpecActions(candidate)
 
@@ -320,13 +362,13 @@ CatchupMarkersRecordReason ==
       /\ SetDeepCatchupReason \in ImplementationActions(candidate)
       /\ SetLastReason \in ImplementationActions(candidate)
 
-SyncMirrorsNestedState ==
+NestedStateCompleteness ==
   \A candidate \in Candidates:
-    MirrorCandidateView \in ImplementationActions(candidate) =>
-      /\ MirrorCandidateHash \in ImplementationActions(candidate)
-      /\ MirrorBodyPresent \in ImplementationActions(candidate)
-      /\ MirrorBlockCreatedSeen \in ImplementationActions(candidate)
-      /\ MirrorExactFetchArmed \in ImplementationActions(candidate)
+    NestedCandidateView \in ImplementationActions(candidate) =>
+      /\ NestedCandidateHash \in ImplementationActions(candidate)
+      /\ NestedBodyPresent \in ImplementationActions(candidate)
+      /\ NestedBlockCreatedSeen \in ImplementationActions(candidate)
+      /\ NestedExactFetchArmed \in ImplementationActions(candidate)
 
 LagStartAnchors ==
   /\ SpecActions(LagStartedUsesExistingLag) = {ReturnLagWindowStart}
@@ -368,15 +410,25 @@ CatchupMarkerAnchors ==
   /\ SpecActions(MarkPassiveCatchupPreservesSlot) =
        {PreserveCandidate, PreserveActiveView, PreservePhase}
 
-SyncMirrorAnchors ==
-  /\ SpecActions(SyncCandidateMirrors) =
-       {MirrorCandidateView, MirrorCandidateHash, MirrorBodyPresent,
-        MirrorBlockCreatedSeen, MirrorExactFetchArmed, MirrorFrontierInfo,
-        MirrorLeader, MirrorVoters}
-  /\ SpecActions(SyncTimerMirrors) =
-       {MirrorObservedAt, MirrorLastUpdatedAt, MirrorLastFetchAt}
-  /\ SpecActions(SyncRepairMirrors) =
-       {MirrorFetchStage, MirrorRetryWindow, MirrorPendingRequesters}
+NestedStateAnchors ==
+  /\ SpecActions(NestedCandidateState) =
+       {NestedCandidateView, NestedCandidateHash, NestedBodyPresent,
+        NestedBlockCreatedSeen, NestedExactFetchArmed, NestedFrontierInfo,
+        NestedLeader, NestedVoters}
+  /\ SpecActions(NestedTimerState) =
+       {NestedObservedAt, NestedLastUpdatedAt, NestedLastFetchAt}
+  /\ SpecActions(NestedRepairState) =
+       {NestedFetchStage, NestedRetryWindow, NestedPendingRequesters}
+
+BodyAvailableAnchors ==
+  /\ SpecActions(MarkBodyAvailableUnknownState) =
+       {SetBodyAvailable, SetValidationPending, SetPhaseValidateBody,
+        SetLastProgressNow, SetLastUpdatedNow, ClearLagWindow,
+        ClearQuorumRebroadcast}
+  /\ SpecActions(MarkBodyAvailablePendingState) =
+       {SetBodyAvailable, PreservePendingValidation, SetPhaseValidateBody,
+        SetLastProgressNow, SetLastUpdatedNow, ClearLagWindow,
+        ClearQuorumRebroadcast}
 
 Safety ==
   /\ FrontierSlotHelpersMatchSpec
@@ -386,17 +438,19 @@ Safety ==
   /\ TimeoutViewMatchesSpec
   /\ ProgressAndLagMatchesSpec
   /\ CatchupMarkerMatchesSpec
-  /\ SyncMirrorMatchesSpec
+  /\ NestedStateMatchesSpec
+  /\ BodyAvailableMatchesSpec
   /\ CatchupMarkersClearRebroadcast
   /\ CatchupMarkersRecordReason
-  /\ SyncMirrorsNestedState
+  /\ NestedStateCompleteness
   /\ LagStartAnchors
   /\ BodyStateAnchors
   /\ LocalVoteAnchors
   /\ TimeoutViewAnchors
   /\ ProgressAndLagAnchors
   /\ CatchupMarkerAnchors
-  /\ SyncMirrorAnchors
+  /\ NestedStateAnchors
+  /\ BodyAvailableAnchors
 
 =============================================================================
 ====

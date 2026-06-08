@@ -523,6 +523,26 @@ def test_sccp_production_corridor_evidence_phase_has_no_untracked_pytests() -> N
     assert missing == [], f"untracked evidence-scripts pytest paths: {missing}"
 
 
+def test_sccp_production_corridor_evidence_phase_runs_retired_network_scan() -> None:
+    """The evidence phase must keep the retired-network surface scan in the runner."""
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(SCRIPT),
+            "--dry-run",
+            "--phase",
+            "evidence-scripts",
+        ],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert "pytests/scripts/sccp_retired_network_surface_test.py" in completed.stdout
+
+
 def test_sccp_production_corridor_test_paths_are_release_inventory_tracked() -> None:
     """Path-based corridor test commands must be present in release evidence."""
 
