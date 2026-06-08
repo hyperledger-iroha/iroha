@@ -61,6 +61,30 @@ pub enum AssetEscrowStatus {
     Cancelled,
     /// Court resolved the disputed escrow.
     Resolved,
+    /// Generic asset lock is active and may support partial drawdown.
+    Locked,
+    /// Generic asset lock has been fully drawn down.
+    DrawnDown,
+    /// Generic asset lock expired and refunded remaining custody.
+    Expired,
+}
+
+/// Native asset escrow behavior family.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[repr(u8)]
+pub enum AssetEscrowKind {
+    /// Seller/buyer escrow with acceptance, payment-sent, dispute, and release lifecycle.
+    #[default]
+    Marketplace,
+    /// Generic conditional custody lock with optional release authority and expiry.
+    Lock,
 }
 
 /// Court resolution details for a disputed escrow.
@@ -104,6 +128,16 @@ pub struct AssetEscrowRecord {
     pub custody: AccountId,
     /// Current lifecycle status.
     pub status: AssetEscrowStatus,
+    /// Escrow behavior family.
+    pub kind: AssetEscrowKind,
+    /// Remaining amount still held in custody.
+    pub remaining_amount: Numeric,
+    /// Optional account required to draw down a generic lock.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub release_authority: Option<AccountId>,
+    /// Optional Unix timestamp (milliseconds) after which a generic lock may expire.
+    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    pub expires_at_ms: Option<u64>,
     /// Evidence hashes attached by the parties.
     pub evidence_hashes: Vec<Hash>,
     /// Unix timestamp (milliseconds) when the escrow was opened.
@@ -246,7 +280,7 @@ pub struct AnonymousAssetEscrowRecord {
 pub mod prelude {
     pub use super::{
         AnonymousAssetEscrowProofRecord, AnonymousAssetEscrowRecord,
-        AnonymousAssetEscrowResolution, AssetEscrowRecord, AssetEscrowResolution,
+        AnonymousAssetEscrowResolution, AssetEscrowKind, AssetEscrowRecord, AssetEscrowResolution,
         AssetEscrowStatus, EscrowId, KOTODAMA_ESCROW_ID_PREFIX,
     };
 }
@@ -273,6 +307,10 @@ mod tests {
             amount: Numeric::new(42_u32, 0),
             custody: seller,
             status: AssetEscrowStatus::PaymentSent,
+            kind: AssetEscrowKind::Marketplace,
+            remaining_amount: Numeric::new(42_u32, 0),
+            release_authority: None,
+            expires_at_ms: None,
             evidence_hashes: vec![Hash::new("evidence")],
             created_at_ms: 1,
             accepted_at_ms: Some(2),

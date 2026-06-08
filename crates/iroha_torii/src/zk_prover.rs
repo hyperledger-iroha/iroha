@@ -29,8 +29,9 @@ use axum::{extract::Path as AxumPath, http::StatusCode, response::IntoResponse};
 use iroha_core::{
     state::{State as CoreState, WorldReadOnly},
     zk::{
-        hash_proof, hash_vk, is_developer_only_backend_label, is_trusted_setup_backend_label,
-        verify_backend, verify_backend_with_timing_checked,
+        hash_proof, hash_vk, is_developer_only_backend_label, is_pending_production_backend_label,
+        is_production_claim_backend_label, is_production_verify_backend_label,
+        is_trusted_setup_backend_label, verify_backend, verify_backend_with_timing_checked,
     },
 };
 use iroha_data_model::proof::{
@@ -751,7 +752,16 @@ struct ProverContext {
 fn backend_allowed(backend: &str, allowlist: &[String]) -> bool {
     !is_trusted_setup_backend_label(backend)
         && !is_developer_only_backend_label(backend)
+        && !is_production_claim_backend_label(backend)
+        && !is_pending_production_backend_label(backend)
+        && !is_unsupported_stark_fri_backend_label(backend)
+        && is_production_verify_backend_label(backend)
         && (allowlist.is_empty() || allowlist.iter().any(|allowed| backend.starts_with(allowed)))
+}
+
+fn is_unsupported_stark_fri_backend_label(backend: &str) -> bool {
+    backend.starts_with(iroha_data_model::zk::ZK_BACKEND_STARK_FRI_V1)
+        && !iroha_data_model::zk::is_stark_fri_v1_backend_label(backend)
 }
 
 fn circuit_allowed(circuit_id: &str, allowlist: &[String]) -> bool {
@@ -1745,6 +1755,7 @@ mod tests {
             "halo2/mock",
             "halo2/ipa:mock-proof",
             "halo2/ipa:Mock-Proof",
+            "miden-stark:dev-fixture",
             "zk-trace/mock-proof",
         ] {
             assert!(
@@ -1753,6 +1764,70 @@ mod tests {
             );
         }
         assert!(backend_allowed("halo2/ipa", &[]));
+    }
+
+    #[test]
+    fn prover_backend_allowlist_rejects_pending_claimed_and_unregistered_stark_labels() {
+        let broad_backends = [
+            "halo2/ipa".to_owned(),
+            "halo2/pasta".to_owned(),
+            "stark/fri".to_owned(),
+        ];
+        for backend in [
+            "halo2/ipa/orchard",
+            "halo2-ipa-orchard",
+            "groth16/bls12-377",
+            "stark/fri/miden",
+            "stark/fri/pq-masp-stark-fri",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa/orchard:production-ready",
+            "orchard:mainnet-ready",
+            "penumbra-masp:external-security-review",
+            "jindo-lattice-pcs-zk:release-ready",
+            "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
+            "stark/fri/latest",
+            "stark/fri/random-profile",
+            "stark/fri/sha512-goldilocks",
+            "stark/fri/poseidon2-goldilocks/extra",
+            "stark/fri-v2",
+            "halo2/unknown-native-v1",
+            "halo2/ipa:tiny-add-public",
+            "halo2/pasta/tiny-add",
+            "halo2/pasta/ivm-execution-v2",
+            "halo2/pasta/unknown-native-v1",
+        ] {
+            assert!(
+                !backend_allowed(backend, &[]),
+                "unsafe backend {backend} must not pass an empty prover allowlist"
+            );
+            assert!(
+                !backend_allowed(backend, &broad_backends),
+                "unsafe backend {backend} must not pass broad prover allowlists"
+            );
+        }
+
+        for backend in [
+            "halo2/ipa",
+            "halo2/ipa:ivm-execution-v1",
+            "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/kagemusha-folded-v1",
+            "stark/fri",
+            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1",
+        ] {
+            assert!(
+                backend_allowed(backend, &[]),
+                "production backend {backend} should pass an empty prover allowlist"
+            );
+            assert!(
+                backend_allowed(backend, &broad_backends),
+                "production backend {backend} should pass matching broad prover allowlists"
+            );
+        }
     }
 
     fn fixture_attachment_bytes() -> Vec<u8> {
@@ -1828,7 +1903,12 @@ mod tests {
             !error.contains("stark verification is disabled"),
             "profile-less STARK/Fri prefix must not be classified as a STARK backend"
         );
-        assert!(error.contains("verifying key not found"));
+        assert!(error.contains("backend `stark/fri/` not allowed"));
+        assert!(
+            !error.contains("verifying key not found"),
+            "profile-less STARK/Fri prefix must stop before registry lookup: {error}"
+        );
+        assert!(report.circuit_id.is_none());
     }
 
     #[test]

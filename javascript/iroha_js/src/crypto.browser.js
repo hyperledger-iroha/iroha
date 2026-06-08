@@ -31,6 +31,13 @@ const KAGEMUSHA_ZK1_MAGIC = Buffer.from([0x5a, 0x4b, 0x31, 0x00]);
 const KAGEMUSHA_ZK1_TLV_CID1 = Buffer.from("CID1", "ascii");
 const KAGEMUSHA_ZK1_TLV_IPAK = Buffer.from("IPAK", "ascii");
 const KAGEMUSHA_ZK1_TLV_H2VK = Buffer.from("H2VK", "ascii");
+const KAGEMUSHA_NORITO_COMPACT_LEN_FLAG = 0x02;
+const KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG = 0x04;
+const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 = 1;
+const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
+  "119f4df38a98ef5848ad0aadb9715779",
+  "hex",
+);
 const PRIVACY_CRC64_TABLE = (() => {
   const table = new Array(256);
   for (let index = 0; index < 256; index += 1) {
@@ -344,6 +351,10 @@ export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 = "kagemusha-recursive-compact-v1";
+export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT =
+  "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
+export const KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT =
+  "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND = "halo2/ipa";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1 =
   "kagemusha-recursive-aggregation-v1";
@@ -374,6 +385,19 @@ export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDI
   "iroha:kagemusha:recursive-spend-lineage-append-boundary-chain-asset:v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1 =
   "iroha:kagemusha:recursive-spend-lineage-append-boundary-final-note:v1";
+
+export function isKagemushaRecursiveCompactUnavailable(error) {
+  const message =
+    typeof error === "string"
+      ? error
+      : error && typeof error.message === "string"
+        ? error.message
+        : "";
+  return (
+    message.includes(KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT) ||
+    message.includes(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT)
+  );
+}
 
 export function preferredKagemushaOfflineSpendMode(
   recursiveSpendAvailable,
@@ -588,6 +612,15 @@ function validateKagemushaRecursiveSpendLineageKeyArtifactPackageBinding(
   ) {
     throw new TypeError("lineage_proving_key_archive");
   }
+  const archive = kagemushaLineageProvingKeyArchive(lineageProvingKeyArchive);
+  if (
+    archive.version !== KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 ||
+    archive.circuitFamily !== proofCircuitId ||
+    !archive.vkCommitment.equals(verifierKeyCommitment) ||
+    archive.provingKey.length === 0
+  ) {
+    throw new TypeError("lineage_proving_key_archive");
+  }
 }
 
 function kagemushaLineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey) {
@@ -642,15 +675,152 @@ function kagemushaLineageVerifierKeyEnvelopeCircuitId(lineageVerifierKey) {
   return circuitId;
 }
 
-function kagemushaLineageProvingKeyArchivePayload(lineageProvingKeyArchive) {
+function kagemushaLineageProvingKeyArchive(lineageProvingKeyArchive) {
   try {
-    return assertKagemushaNoritoArchive(
+    const archivePayload = kagemushaLineageProvingKeyArchivePayload(
       lineageProvingKeyArchive,
-      "lineage_proving_key_archive",
     );
+    const flags = lineageProvingKeyArchive[39];
+    return kagemushaDecodeLineageProvingKeyArchivePayload(archivePayload, flags);
   } catch {
     throw new TypeError("lineage_proving_key_archive");
   }
+}
+
+function kagemushaLineageProvingKeyArchivePayload(lineageProvingKeyArchive) {
+  try {
+    const archivePayload = assertKagemushaNoritoArchive(
+      lineageProvingKeyArchive,
+      "lineage_proving_key_archive",
+    );
+    const schemaHash = lineageProvingKeyArchive.subarray(6, 22);
+    const flags = lineageProvingKeyArchive[39];
+    if (
+      !schemaHash.equals(KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH) ||
+      (flags & KAGEMUSHA_NORITO_PACKED_STRUCT_FLAG) !== 0 ||
+      (flags & PRIVACY_NORITO_FIELD_BITSET_FLAG) !== 0
+    ) {
+      throw new Error("lineage proving-key archive schema");
+    }
+    return Buffer.from(archivePayload);
+  } catch {
+    throw new TypeError("lineage_proving_key_archive");
+  }
+}
+
+function kagemushaDecodeLineageProvingKeyArchivePayload(payload, flags) {
+  let offset = 0;
+  let field = kagemushaReadNoritoField(payload, offset, flags, "version");
+  const versionPayload = field.payload;
+  offset = field.offset;
+  if (versionPayload.length !== 2) {
+    throw new Error("lineage archive version");
+  }
+  const version = versionPayload.readUInt16LE(0);
+
+  field = kagemushaReadNoritoField(payload, offset, flags, "circuit_family");
+  const circuitFamily = kagemushaDecodeNoritoString(
+    field.payload,
+    flags,
+    "circuit_family",
+  );
+  offset = field.offset;
+
+  field = kagemushaReadNoritoField(payload, offset, flags, "vk_commitment");
+  const vkCommitment = field.payload;
+  offset = field.offset;
+  if (vkCommitment.length !== 32) {
+    throw new Error("lineage archive vk_commitment");
+  }
+
+  field = kagemushaReadNoritoField(payload, offset, flags, "proving_key");
+  const provingKey = kagemushaDecodeNoritoByteVec(field.payload, "proving_key");
+  offset = field.offset;
+  if (offset !== payload.length) {
+    throw new Error("lineage archive trailing bytes");
+  }
+
+  return {
+    version,
+    circuitFamily,
+    vkCommitment: Buffer.from(vkCommitment),
+    provingKey,
+  };
+}
+
+function kagemushaReadNoritoField(buffer, offset, flags, name) {
+  const length = kagemushaReadNoritoLength(buffer, offset, flags, `${name}.length`);
+  const payloadStart = length.offset;
+  const payloadEnd = payloadStart + length.value;
+  if (payloadEnd > buffer.length) {
+    throw new Error(`${name} payload is truncated`);
+  }
+  return {
+    payload: buffer.subarray(payloadStart, payloadEnd),
+    offset: payloadEnd,
+  };
+}
+
+function kagemushaReadNoritoLength(buffer, offset, flags, name) {
+  if ((flags & KAGEMUSHA_NORITO_COMPACT_LEN_FLAG) === 0) {
+    if (offset + 8 > buffer.length) {
+      throw new Error(`${name} is truncated`);
+    }
+    const value = buffer.readBigUInt64LE(offset);
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new Error(`${name} exceeds safe length`);
+    }
+    return { value: Number(value), offset: offset + 8 };
+  }
+  let value = 0n;
+  let shift = 0n;
+  let cursor = offset;
+  for (let index = 0; index < 10; index += 1) {
+    if (cursor >= buffer.length) {
+      throw new Error(`${name} varint is truncated`);
+    }
+    const byte = BigInt(buffer[cursor]);
+    cursor += 1;
+    value |= (byte & 0x7fn) << shift;
+    if ((byte & 0x80n) === 0n) {
+      if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+        throw new Error(`${name} exceeds safe length`);
+      }
+      return { value: Number(value), offset: cursor };
+    }
+    shift += 7n;
+  }
+  throw new Error(`${name} varint is too long`);
+}
+
+function kagemushaDecodeNoritoString(payload, flags, name) {
+  const length = kagemushaReadNoritoLength(payload, 0, flags, `${name}.value.length`);
+  const start = length.offset;
+  const end = start + length.value;
+  if (end !== payload.length) {
+    throw new Error(`${name} payload length mismatch`);
+  }
+  const bytes = payload.subarray(start, end);
+  const value = bytes.toString("utf8");
+  if (!Buffer.from(value, "utf8").equals(bytes)) {
+    throw new Error(`${name} must be valid utf8`);
+  }
+  return value;
+}
+
+function kagemushaDecodeNoritoByteVec(payload, name) {
+  if (payload.length < 8) {
+    throw new Error(`${name} sequence length is truncated`);
+  }
+  const length = payload.readBigUInt64LE(0);
+  if (length > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${name} exceeds safe length`);
+  }
+  const end = 8 + Number(length);
+  if (end !== payload.length) {
+    throw new Error(`${name} payload length mismatch`);
+  }
+  return Buffer.from(payload.subarray(8));
 }
 
 function kagemushaVerifyingKeyCommitment(lineageVerifierKeyBackend, lineageVerifierKey) {
@@ -882,6 +1052,14 @@ export function isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable()
   return false;
 }
 
+export function isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable() {
+  return false;
+}
+
+export function isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable() {
+  return false;
+}
+
 export function isKagemushaCompactPaymentTokenNativeAvailable() {
   return false;
 }
@@ -908,6 +1086,14 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
 
 export function kagemushaVerifyRecursiveCompactPaymentToken() {
   return unsupported("kagemushaVerifyRecursiveCompactPaymentToken");
+}
+
+export function kagemushaRecursiveSpendCompactPaymentTokenFromBundle() {
+  return unsupported("kagemushaRecursiveSpendCompactPaymentTokenFromBundle");
+}
+
+export function kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection() {
+  return unsupported("kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection");
 }
 
 export function kagemushaRecursiveSpendInit() {

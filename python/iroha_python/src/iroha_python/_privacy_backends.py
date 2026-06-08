@@ -14,6 +14,7 @@ _PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = frozenset(
         "halo2/pasta/offline-note-recursive",
         "halo2/pasta/kagemusha-folded-v1",
         "halo2/pasta/kagemusha-recursive-aggregation-v1",
+        "halo2/pasta/kagemusha-recursive-compact-v1",
         "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
         "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
         "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
@@ -67,14 +68,29 @@ _PRODUCTION_CLAIM_BACKEND_FRAGMENTS = (
     "mainnetcomplete",
     "mainnetclaim",
     "claimedmainnet",
+    "mainnetcertified",
+    "mainnetapproved",
+    "mainnetrelease",
     "auditedproduction",
     "externallyaudited",
+    "thirdpartyaudited",
+    "boiaudited",
+    "auditedmainnet",
+    "externalaudit",
     "auditpassed",
     "auditapproved",
     "auditsignoff",
     "auditclaim",
     "claimedaudit",
     "securityreviewpassed",
+    "securityauditpassed",
+    "securityaudited",
+    "externalsecurityreview",
+    "certifiedproduction",
+    "certifiedmainnet",
+    "releaseready",
+    "releaseapproved",
+    "releasecertified",
 )
 _PENDING_PRODUCTION_BACKEND_ALIASES = frozenset(
     {
@@ -235,7 +251,15 @@ def _is_production_claim_backend_label(value: str) -> bool:
 
 
 def _is_portable_verify_backend_label(value: str) -> bool:
-    return bool(re.fullmatch(r"[A-Za-z0-9/_.:-]+", value))
+    return bool(
+        re.fullmatch(r"[a-z0-9/_.:-]+", value)
+        and re.match(r"[a-z0-9]", value)
+        and re.search(r"[a-z0-9]$", value)
+        and not any(
+            separator in value
+            for separator in ("//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:")
+        )
+    )
 
 
 def _is_stark_fri_production_backend_label(backend: str) -> bool:

@@ -853,6 +853,7 @@ const ISO_PACS008_CONTEXT: &str = "/v1/iso20022/pacs008";
 const ISO_PACS009_CONTEXT: &str = "/v1/iso20022/pacs009";
 const ISO_PERSISTED_RECORD_VERSION: u64 = 1;
 const ISO_PERSISTED_RECORD_DIGEST_FIELD: &str = "record_sha256";
+const ISO_PERSISTED_RECORD_MAX_BYTES: u64 = 1024 * 1024;
 const ISO_PERSISTED_AUDIT_INDEX_VERSION: u64 = 1;
 const ISO_PERSISTED_AUDIT_DIR: &str = "audit";
 const ISO_PERSISTED_AUDIT_INDEX_FILE: &str = "messages.index.json";
@@ -1329,6 +1330,7 @@ impl Iso20022BridgeRuntime {
         let mut records = self
             .records
             .iter()
+            .filter(|entry| persisted_record_fits_max_bytes(entry.key(), entry.value()))
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect::<Vec<_>>();
         records.sort_by(|left, right| left.0.cmp(&right.0));
@@ -2484,8 +2486,21 @@ impl Iso20022BridgeRuntime {
             return;
         };
         let messages_dir = store_dir.join("messages");
-        if let Ok(entries) = fs::read_dir(&messages_dir) {
+        let load_messages_dir = is_real_directory(&messages_dir);
+        if load_messages_dir && let Ok(entries) = fs::read_dir(&messages_dir) {
             for entry in entries.flatten() {
+                let Ok(file_type) = entry.file_type() else {
+                    continue;
+                };
+                if !file_type.is_file() {
+                    continue;
+                }
+                let Ok(metadata) = entry.metadata() else {
+                    continue;
+                };
+                if metadata.len() > ISO_PERSISTED_RECORD_MAX_BYTES {
+                    continue;
+                }
                 let path = entry.path();
                 if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                     continue;
@@ -2497,6 +2512,12 @@ impl Iso20022BridgeRuntime {
                     continue;
                 };
                 if let Some((message_id, record)) = persisted_record_from_value(&value) {
+                    let expected_filename = message_filename(&message_id);
+                    if path.file_name().and_then(|name| name.to_str())
+                        != Some(expected_filename.as_str())
+                    {
+                        continue;
+                    }
                     self.insert_metadata_indexes(&message_id, &record.metadata);
                     if let Some(tx_hash) = record.transaction_hash.as_deref() {
                         self.tx_hash_index
@@ -2517,14 +2538,18 @@ impl Iso20022BridgeRuntime {
             return;
         };
         let messages_dir = store_dir.join("messages");
-        if fs::create_dir_all(&messages_dir).is_err() {
+        if !ensure_real_directory(&messages_dir) {
             return;
         }
-        let payload = persisted_record_value(message_id, &record);
-        let Ok(json) = norito::json::to_string_pretty(&payload) else {
+        let Some(json) = persisted_record_json(message_id, &record) else {
             return;
         };
         let path = messages_dir.join(message_filename(message_id));
+        if !persisted_json_fits_record_cap(&json) {
+            let _ = fs::remove_file(path);
+            self.persist_audit_index();
+            return;
+        }
         if fs::write(path, json).is_ok() {
             self.compact_persisted_records();
         }
@@ -2534,9 +2559,12 @@ impl Iso20022BridgeRuntime {
         let Some(store_dir) = self.store_dir.as_deref() else {
             return;
         };
-        let path = store_dir
-            .join("messages")
-            .join(message_filename(message_id));
+        let messages_dir = store_dir.join("messages");
+        if !is_real_directory(&messages_dir) {
+            self.persist_audit_index();
+            return;
+        }
+        let path = messages_dir.join(message_filename(message_id));
         let _ = fs::remove_file(path);
         self.persist_audit_index();
     }
@@ -2548,7 +2576,7 @@ impl Iso20022BridgeRuntime {
         };
         if let Some(store_dir) = self.store_dir.as_deref() {
             let audit_dir = store_dir.join(ISO_PERSISTED_AUDIT_DIR);
-            if fs::create_dir_all(&audit_dir).is_ok() {
+            if ensure_real_directory(&audit_dir) {
                 let path = audit_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE);
                 let _ = fs::write(path, &json);
             }
@@ -2560,7 +2588,7 @@ impl Iso20022BridgeRuntime {
         let Some(export_dir) = self.audit_export_dir.as_deref() else {
             return;
         };
-        if fs::create_dir_all(export_dir).is_err() {
+        if !ensure_real_directory(export_dir) {
             return;
         }
         let _ = fs::write(export_dir.join(ISO_PERSISTED_AUDIT_INDEX_FILE), json);
@@ -2577,7 +2605,7 @@ impl Iso20022BridgeRuntime {
             &anchor_json,
         );
         let anchor_dir = export_dir.join(ISO_AUDIT_EXPORT_ANCHOR_DIR);
-        if fs::create_dir_all(&anchor_dir).is_err() {
+        if !ensure_real_directory(&anchor_dir) {
             return;
         }
         let _ = fs::write(
@@ -2641,9 +2669,11 @@ impl Iso20022BridgeRuntime {
         if let Some((_, record)) = self.records.remove(message_id) {
             self.remove_record_indexes(message_id, &record);
         }
-        let path = store_dir
-            .join("messages")
-            .join(message_filename(message_id));
+        let messages_dir = store_dir.join("messages");
+        if !is_real_directory(&messages_dir) {
+            return;
+        }
+        let path = messages_dir.join(message_filename(message_id));
         let _ = fs::remove_file(path);
     }
 
@@ -2933,6 +2963,20 @@ fn persisted_record_value(message_id: &str, record: &IsoMessageRecord) -> JsonVa
     JsonValue::Object(root)
 }
 
+fn persisted_record_json(message_id: &str, record: &IsoMessageRecord) -> Option<String> {
+    norito::json::to_string_pretty(&persisted_record_value(message_id, record)).ok()
+}
+
+fn persisted_json_fits_record_cap(json: &str) -> bool {
+    u64::try_from(json.len()).is_ok_and(|len| len <= ISO_PERSISTED_RECORD_MAX_BYTES)
+}
+
+fn persisted_record_fits_max_bytes(message_id: &str, record: &IsoMessageRecord) -> bool {
+    persisted_record_json(message_id, record)
+        .as_deref()
+        .is_some_and(persisted_json_fits_record_cap)
+}
+
 fn persisted_record_body_value(message_id: &str, record: &IsoMessageRecord) -> norito::json::Map {
     let mut root = norito::json::Map::new();
     root.insert(
@@ -3022,65 +3066,143 @@ fn persisted_record_digest_matches(obj: &norito::json::Map) -> bool {
     persisted_json_digest_matches(obj, ISO_PERSISTED_RECORD_DIGEST_FIELD)
 }
 
+const PERSISTED_RECORD_REQUIRED_KEYS: &[&str] = &[
+    "version",
+    "message_id",
+    "state",
+    "updated_at_ms",
+    "transaction_hash",
+    "detail",
+    "ledger_tx_queued",
+    "settled_at_ms",
+    "hold_reason_code",
+    "change_reason_codes",
+    "rejection_reason_code",
+    "context",
+    "metadata",
+    "status_history",
+    ISO_PERSISTED_RECORD_DIGEST_FIELD,
+];
+
+const PERSISTED_CONTEXT_REQUIRED_KEYS: &[&str] = &[
+    "ledger_id",
+    "source_account_id",
+    "source_account_address",
+    "target_account_id",
+    "target_account_address",
+    "asset_definition_id",
+    "asset_id",
+    "settlement_amount",
+    "settlement_currency",
+    "settlement_date",
+    "settlement_quantity",
+    "settlement_movement_type",
+    "settlement_payment_type",
+    "security_instrument_id",
+    "collateral_obligation_id",
+    "collateral_original_amount",
+    "collateral_original_currency",
+    "collateral_original_instrument_id",
+    "collateral_substitute_amount",
+    "collateral_substitute_currency",
+    "collateral_substitute_instrument_id",
+    "collateral_effective_date",
+    "collateral_substitution_type",
+    "collateral_haircut",
+    "collateral_reason_code",
+    "plan_execution_order",
+    "plan_atomicity",
+];
+
+const PERSISTED_METADATA_REQUIRED_KEYS: &[&str] = &[
+    "profile_id",
+    "message_type",
+    "business_service",
+    "business_message_id",
+    "uetr",
+    "payload_hash",
+    "reference_snapshot_id",
+    "embedded_signature_detected",
+];
+
+const PERSISTED_HISTORY_REQUIRED_KEYS: &[&str] = &[
+    "status",
+    "pacs002_code",
+    "updated_at_ms",
+    "detail",
+    "reason_code",
+];
+
+fn json_object_has_exact_keys(obj: &norito::json::Map, required: &[&str]) -> bool {
+    obj.len() == required.len() && required.iter().all(|key| obj.contains_key(*key))
+}
+
+fn clean_persisted_string(raw: &str) -> Option<String> {
+    if raw.is_empty() || raw.trim() != raw || raw.chars().any(char::is_control) {
+        return None;
+    }
+    Some(raw.to_owned())
+}
+
+fn required_clean_string(obj: &norito::json::Map, key: &str) -> Option<String> {
+    obj.get(key)?.as_str().and_then(clean_persisted_string)
+}
+
+fn required_nullable_string(obj: &norito::json::Map, key: &str) -> Option<Option<String>> {
+    match obj.get(key)? {
+        JsonValue::Null => Some(None),
+        value => value.as_str().and_then(clean_persisted_string).map(Some),
+    }
+}
+
+fn required_nullable_time_ms(obj: &norito::json::Map, key: &str) -> Option<Option<SystemTime>> {
+    match obj.get(key)? {
+        JsonValue::Null => Some(None),
+        value => value.as_u64().map(system_time_from_ms).map(Some),
+    }
+}
+
 fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageRecord)> {
     let obj = value.as_object()?;
+    if !json_object_has_exact_keys(obj, PERSISTED_RECORD_REQUIRED_KEYS) {
+        return None;
+    }
     if obj.get("version").and_then(JsonValue::as_u64)? != ISO_PERSISTED_RECORD_VERSION {
         return None;
     }
     if !persisted_record_digest_matches(obj) {
         return None;
     }
-    let message_id = obj.get("message_id")?.as_str()?.to_owned();
+    let message_id = required_clean_string(obj, "message_id")?;
     let state = state_from_label(obj.get("state")?.as_str()?)?;
     let updated_at = obj
         .get("updated_at_ms")
         .and_then(JsonValue::as_u64)
-        .map(system_time_from_ms)
-        .unwrap_or_else(SystemTime::now);
-    let transaction_hash = obj
-        .get("transaction_hash")
-        .and_then(JsonValue::as_str)
-        .map(ToOwned::to_owned);
-    let detail = obj
-        .get("detail")
-        .and_then(JsonValue::as_str)
-        .map(ToOwned::to_owned);
-    let ledger_tx_queued = obj
-        .get("ledger_tx_queued")
-        .and_then(JsonValue::as_bool)
-        .unwrap_or(false);
-    let settled_at = obj
-        .get("settled_at_ms")
-        .and_then(JsonValue::as_u64)
-        .map(system_time_from_ms);
-    let hold_reason_code = obj
-        .get("hold_reason_code")
-        .and_then(JsonValue::as_str)
-        .map(ToOwned::to_owned);
+        .map(system_time_from_ms)?;
+    let transaction_hash = required_nullable_string(obj, "transaction_hash")?;
+    let detail = required_nullable_string(obj, "detail")?;
+    let ledger_tx_queued = obj.get("ledger_tx_queued")?.as_bool()?;
+    let settled_at = required_nullable_time_ms(obj, "settled_at_ms")?;
+    let hold_reason_code = required_nullable_string(obj, "hold_reason_code")?;
     let change_reason_codes = obj
-        .get("change_reason_codes")
-        .and_then(JsonValue::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(JsonValue::as_str)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let rejection_reason_code = obj
-        .get("rejection_reason_code")
-        .and_then(JsonValue::as_str)
-        .map(ToOwned::to_owned);
-    let context = obj
-        .get("context")
-        .and_then(context_from_value)
-        .unwrap_or_default();
-    let metadata = obj
-        .get("metadata")
-        .and_then(metadata_from_value)
-        .unwrap_or_default();
-    let mut record = IsoMessageRecord {
+        .get("change_reason_codes")?
+        .as_array()?
+        .iter()
+        .map(|item| item.as_str().and_then(clean_persisted_string))
+        .collect::<Option<Vec<_>>>()?;
+    let rejection_reason_code = required_nullable_string(obj, "rejection_reason_code")?;
+    let context = context_from_value(obj.get("context")?)?;
+    let metadata = metadata_from_value(obj.get("metadata")?)?;
+    let status_history = obj
+        .get("status_history")?
+        .as_array()?
+        .iter()
+        .map(history_from_value)
+        .collect::<Option<Vec<_>>>()?;
+    if status_history.is_empty() {
+        return None;
+    }
+    let record = IsoMessageRecord {
         last_seen: Instant::now(),
         updated_at,
         state,
@@ -3093,15 +3215,8 @@ fn persisted_record_from_value(value: &JsonValue) -> Option<(String, IsoMessageR
         hold_reason_code,
         change_reason_codes,
         rejection_reason_code,
-        status_history: obj
-            .get("status_history")
-            .and_then(JsonValue::as_array)
-            .map(|items| items.iter().filter_map(history_from_value).collect())
-            .unwrap_or_default(),
+        status_history,
     };
-    if record.status_history.is_empty() {
-        record.push_history();
-    }
     Some((message_id, record))
 }
 
@@ -3241,6 +3356,14 @@ fn audit_export_anchor_digest_matches(obj: &norito::json::Map) -> bool {
     persisted_json_digest_matches(obj, ISO_AUDIT_EXPORT_ANCHOR_DIGEST_FIELD)
 }
 
+fn is_real_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
+}
+
+fn ensure_real_directory(path: &Path) -> bool {
+    fs::create_dir_all(path).is_ok() && is_real_directory(path)
+}
+
 fn context_value(context: &IsoMessageContext) -> JsonValue {
     let mut map = norito::json::Map::new();
     map.insert(
@@ -3356,40 +3479,55 @@ fn context_value(context: &IsoMessageContext) -> JsonValue {
 
 fn context_from_value(value: &JsonValue) -> Option<IsoMessageContext> {
     let obj = value.as_object()?;
+    if !json_object_has_exact_keys(obj, PERSISTED_CONTEXT_REQUIRED_KEYS) {
+        return None;
+    }
     Some(IsoMessageContext {
-        ledger_id: optional_string(obj, "ledger_id"),
-        source_account_id: optional_string(obj, "source_account_id"),
-        source_account_address: optional_string(obj, "source_account_address"),
-        target_account_id: optional_string(obj, "target_account_id"),
-        target_account_address: optional_string(obj, "target_account_address"),
-        asset_definition_id: optional_string(obj, "asset_definition_id"),
-        asset_id: optional_string(obj, "asset_id"),
-        settlement_amount: optional_string(obj, "settlement_amount"),
-        settlement_currency: optional_string(obj, "settlement_currency"),
-        settlement_date: optional_string(obj, "settlement_date"),
-        settlement_quantity: optional_string(obj, "settlement_quantity"),
-        settlement_movement_type: optional_string(obj, "settlement_movement_type"),
-        settlement_payment_type: optional_string(obj, "settlement_payment_type"),
-        security_instrument_id: optional_string(obj, "security_instrument_id"),
-        collateral_obligation_id: optional_string(obj, "collateral_obligation_id"),
-        collateral_original_amount: optional_string(obj, "collateral_original_amount"),
-        collateral_original_currency: optional_string(obj, "collateral_original_currency"),
-        collateral_original_instrument_id: optional_string(
+        ledger_id: required_nullable_string(obj, "ledger_id")?,
+        source_account_id: required_nullable_string(obj, "source_account_id")?,
+        source_account_address: required_nullable_string(obj, "source_account_address")?,
+        target_account_id: required_nullable_string(obj, "target_account_id")?,
+        target_account_address: required_nullable_string(obj, "target_account_address")?,
+        asset_definition_id: required_nullable_string(obj, "asset_definition_id")?,
+        asset_id: required_nullable_string(obj, "asset_id")?,
+        settlement_amount: required_nullable_string(obj, "settlement_amount")?,
+        settlement_currency: required_nullable_string(obj, "settlement_currency")?,
+        settlement_date: required_nullable_string(obj, "settlement_date")?,
+        settlement_quantity: required_nullable_string(obj, "settlement_quantity")?,
+        settlement_movement_type: required_nullable_string(obj, "settlement_movement_type")?,
+        settlement_payment_type: required_nullable_string(obj, "settlement_payment_type")?,
+        security_instrument_id: required_nullable_string(obj, "security_instrument_id")?,
+        collateral_obligation_id: required_nullable_string(obj, "collateral_obligation_id")?,
+        collateral_original_amount: required_nullable_string(obj, "collateral_original_amount")?,
+        collateral_original_currency: required_nullable_string(
+            obj,
+            "collateral_original_currency",
+        )?,
+        collateral_original_instrument_id: required_nullable_string(
             obj,
             "collateral_original_instrument_id",
-        ),
-        collateral_substitute_amount: optional_string(obj, "collateral_substitute_amount"),
-        collateral_substitute_currency: optional_string(obj, "collateral_substitute_currency"),
-        collateral_substitute_instrument_id: optional_string(
+        )?,
+        collateral_substitute_amount: required_nullable_string(
+            obj,
+            "collateral_substitute_amount",
+        )?,
+        collateral_substitute_currency: required_nullable_string(
+            obj,
+            "collateral_substitute_currency",
+        )?,
+        collateral_substitute_instrument_id: required_nullable_string(
             obj,
             "collateral_substitute_instrument_id",
-        ),
-        collateral_effective_date: optional_string(obj, "collateral_effective_date"),
-        collateral_substitution_type: optional_string(obj, "collateral_substitution_type"),
-        collateral_haircut: optional_string(obj, "collateral_haircut"),
-        collateral_reason_code: optional_string(obj, "collateral_reason_code"),
-        plan_execution_order: optional_string(obj, "plan_execution_order"),
-        plan_atomicity: optional_string(obj, "plan_atomicity"),
+        )?,
+        collateral_effective_date: required_nullable_string(obj, "collateral_effective_date")?,
+        collateral_substitution_type: required_nullable_string(
+            obj,
+            "collateral_substitution_type",
+        )?,
+        collateral_haircut: required_nullable_string(obj, "collateral_haircut")?,
+        collateral_reason_code: required_nullable_string(obj, "collateral_reason_code")?,
+        plan_execution_order: required_nullable_string(obj, "plan_execution_order")?,
+        plan_atomicity: required_nullable_string(obj, "plan_atomicity")?,
         source_address_observation: AddressParseObservation::default(),
         target_address_observation: AddressParseObservation::default(),
     })
@@ -3431,18 +3569,18 @@ fn metadata_value(metadata: &IsoMessageMetadata) -> JsonValue {
 
 fn metadata_from_value(value: &JsonValue) -> Option<IsoMessageMetadata> {
     let obj = value.as_object()?;
+    if !json_object_has_exact_keys(obj, PERSISTED_METADATA_REQUIRED_KEYS) {
+        return None;
+    }
     Some(IsoMessageMetadata {
-        profile_id: optional_string(obj, "profile_id"),
-        message_type: optional_string(obj, "message_type"),
-        business_service: optional_string(obj, "business_service"),
-        business_message_id: optional_string(obj, "business_message_id"),
-        uetr: optional_string(obj, "uetr"),
-        payload_hash: optional_string(obj, "payload_hash"),
-        reference_snapshot_id: optional_string(obj, "reference_snapshot_id"),
-        embedded_signature_detected: obj
-            .get("embedded_signature_detected")
-            .and_then(JsonValue::as_bool)
-            .unwrap_or(false),
+        profile_id: required_nullable_string(obj, "profile_id")?,
+        message_type: required_nullable_string(obj, "message_type")?,
+        business_service: required_nullable_string(obj, "business_service")?,
+        business_message_id: required_nullable_string(obj, "business_message_id")?,
+        uetr: required_nullable_string(obj, "uetr")?,
+        payload_hash: required_nullable_string(obj, "payload_hash")?,
+        reference_snapshot_id: required_nullable_string(obj, "reference_snapshot_id")?,
+        embedded_signature_detected: obj.get("embedded_signature_detected")?.as_bool()?,
     })
 }
 
@@ -3467,23 +3605,19 @@ fn history_value(entry: &IsoStatusHistoryEntry) -> JsonValue {
 
 fn history_from_value(value: &JsonValue) -> Option<IsoStatusHistoryEntry> {
     let obj = value.as_object()?;
+    if !json_object_has_exact_keys(obj, PERSISTED_HISTORY_REQUIRED_KEYS) {
+        return None;
+    }
     Some(IsoStatusHistoryEntry {
         status: state_from_label(obj.get("status")?.as_str()?)?,
         pacs002_code: pacs002_from_code(obj.get("pacs002_code")?.as_str()?)?,
         updated_at: obj
-            .get("updated_at_ms")
-            .and_then(JsonValue::as_u64)
-            .map(system_time_from_ms)
-            .unwrap_or_else(SystemTime::now),
-        detail: optional_string(obj, "detail"),
-        reason_code: optional_string(obj, "reason_code"),
+            .get("updated_at_ms")?
+            .as_u64()
+            .map(system_time_from_ms)?,
+        detail: required_nullable_string(obj, "detail")?,
+        reason_code: required_nullable_string(obj, "reason_code")?,
     })
-}
-
-fn optional_string(obj: &norito::json::Map, key: &str) -> Option<String> {
-    obj.get(key)
-        .and_then(JsonValue::as_str)
-        .map(ToOwned::to_owned)
 }
 
 fn string_or_null(value: Option<&str>) -> JsonValue {
@@ -19089,6 +19223,78 @@ mod tests {
         norito::json::from_json::<JsonValue>(&index).expect("audit index parses")
     }
 
+    fn rewrite_persisted_record(path: &Path, mutate: impl FnOnce(&mut norito::json::Map)) {
+        let text = fs::read_to_string(path).expect("persisted JSON");
+        let mut value = norito::json::from_json::<JsonValue>(&text).expect("persisted JSON parses");
+        {
+            let obj = value.as_object_mut().expect("persisted object");
+            mutate(obj);
+            obj.remove(ISO_PERSISTED_RECORD_DIGEST_FIELD);
+            let digest = persisted_record_digest(&JsonValue::Object(obj.clone()));
+            obj.insert(
+                ISO_PERSISTED_RECORD_DIGEST_FIELD.to_owned(),
+                JsonValue::from(digest.as_str()),
+            );
+            assert!(
+                persisted_record_digest_matches(obj),
+                "mutation must keep a valid persisted-record digest"
+            );
+        }
+        fs::write(
+            path,
+            norito::json::to_string_pretty(&value).expect("serialize mutated JSON"),
+        )
+        .expect("write mutated JSON");
+    }
+
+    fn assert_digest_correct_record_mutation_is_rejected(
+        message_id: &str,
+        mutate: impl FnOnce(&mut norito::json::Map),
+    ) {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_inbound(
+                message_id,
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some(format!("{message_id}-biz")),
+                    None,
+                    format!("{message_id}-hash"),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+            runtime.mark_accepted(message_id, &format!("tx-{message_id}"));
+        }
+        let path = store
+            .path()
+            .join("messages")
+            .join(message_filename(message_id));
+        rewrite_persisted_record(&path, mutate);
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(
+            reloaded.message_status(message_id).is_none(),
+            "digest-correct malformed records must fail closed"
+        );
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(0)
+        );
+    }
+
     fn read_external_audit_index(export: &TempDir) -> JsonValue {
         let index_path = export.path().join(ISO_PERSISTED_AUDIT_INDEX_FILE);
         let index = fs::read_to_string(index_path).expect("external audit index JSON");
@@ -19708,6 +19914,485 @@ mod tests {
             reloaded.message_status("bad-digest-msg").is_none(),
             "malformed record digests must not be accepted"
         );
+    }
+
+    #[test]
+    fn durable_store_rejects_digest_correct_malformed_record_schema() {
+        assert_digest_correct_record_mutation_is_rejected("missing-detail", |obj| {
+            assert!(obj.remove("detail").is_some());
+        });
+        assert_digest_correct_record_mutation_is_rejected("missing-updated-at", |obj| {
+            assert!(obj.remove("updated_at_ms").is_some());
+        });
+        assert_digest_correct_record_mutation_is_rejected("missing-ledger-queue-flag", |obj| {
+            assert!(obj.remove("ledger_tx_queued").is_some());
+        });
+        assert_digest_correct_record_mutation_is_rejected("extra-root-field", |obj| {
+            obj.insert("unexpected".to_owned(), JsonValue::from("drift"));
+        });
+        assert_digest_correct_record_mutation_is_rejected("missing-context-ledger", |obj| {
+            let context = obj
+                .get_mut("context")
+                .and_then(JsonValue::as_object_mut)
+                .expect("context object");
+            assert!(context.remove("ledger_id").is_some());
+        });
+        assert_digest_correct_record_mutation_is_rejected("missing-metadata-service", |obj| {
+            let metadata = obj
+                .get_mut("metadata")
+                .and_then(JsonValue::as_object_mut)
+                .expect("metadata object");
+            assert!(metadata.remove("business_service").is_some());
+        });
+        assert_digest_correct_record_mutation_is_rejected("extra-metadata-field", |obj| {
+            let metadata = obj
+                .get_mut("metadata")
+                .and_then(JsonValue::as_object_mut)
+                .expect("metadata object");
+            metadata.insert("unexpected".to_owned(), JsonValue::from("drift"));
+        });
+        assert_digest_correct_record_mutation_is_rejected("missing-history-reason", |obj| {
+            let history = obj
+                .get_mut("status_history")
+                .and_then(JsonValue::as_array_mut)
+                .expect("status history array")
+                .first_mut()
+                .and_then(JsonValue::as_object_mut)
+                .expect("status history entry");
+            assert!(history.remove("reason_code").is_some());
+        });
+        assert_digest_correct_record_mutation_is_rejected("missing-history-updated-at", |obj| {
+            let history = obj
+                .get_mut("status_history")
+                .and_then(JsonValue::as_array_mut)
+                .expect("status history array")
+                .first_mut()
+                .and_then(JsonValue::as_object_mut)
+                .expect("status history entry");
+            assert!(history.remove("updated_at_ms").is_some());
+        });
+        assert_digest_correct_record_mutation_is_rejected("empty-status-history", |obj| {
+            obj.insert("status_history".to_owned(), JsonValue::Array(Vec::new()));
+        });
+        assert_digest_correct_record_mutation_is_rejected("non-string-change-reason", |obj| {
+            obj.insert(
+                "change_reason_codes".to_owned(),
+                JsonValue::Array(vec![JsonValue::from("RJCT"), JsonValue::from(7_u64)]),
+            );
+        });
+        assert_digest_correct_record_mutation_is_rejected("control-detail", |obj| {
+            obj.insert("detail".to_owned(), JsonValue::from("bad\nvalue"));
+        });
+        assert_digest_correct_record_mutation_is_rejected("padded-transaction-hash", |obj| {
+            obj.insert("transaction_hash".to_owned(), JsonValue::from(" tx-drift"));
+        });
+        assert_digest_correct_record_mutation_is_rejected("padded-change-reason", |obj| {
+            obj.insert(
+                "change_reason_codes".to_owned(),
+                JsonValue::Array(vec![JsonValue::from(" RJCT")]),
+            );
+        });
+        assert_digest_correct_record_mutation_is_rejected("control-context-ledger", |obj| {
+            let context = obj
+                .get_mut("context")
+                .and_then(JsonValue::as_object_mut)
+                .expect("context object");
+            context.insert("ledger_id".to_owned(), JsonValue::from("ledger\nid"));
+        });
+        assert_digest_correct_record_mutation_is_rejected("padded-metadata-service", |obj| {
+            let metadata = obj
+                .get_mut("metadata")
+                .and_then(JsonValue::as_object_mut)
+                .expect("metadata object");
+            metadata.insert("business_service".to_owned(), JsonValue::from(" service"));
+        });
+        assert_digest_correct_record_mutation_is_rejected("control-history-detail", |obj| {
+            let history = obj
+                .get_mut("status_history")
+                .and_then(JsonValue::as_array_mut)
+                .expect("status history array")
+                .first_mut()
+                .and_then(JsonValue::as_object_mut)
+                .expect("status history entry");
+            history.insert("detail".to_owned(), JsonValue::from("bad\nhistory"));
+        });
+    }
+
+    #[test]
+    fn durable_store_rejects_digest_correct_message_id_filename_drift() {
+        assert_digest_correct_record_mutation_is_rejected("embedded-message-id-drift", |obj| {
+            obj.insert(
+                "message_id".to_owned(),
+                JsonValue::from("forged-embedded-message-id"),
+            );
+        });
+
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_inbound(
+                "filename-drift",
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some("filename-drift-biz".to_owned()),
+                    None,
+                    "filename-drift-hash".to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+            runtime.mark_accepted("filename-drift", "tx-filename-drift");
+        }
+        let messages_dir = store.path().join("messages");
+        let expected_path = messages_dir.join(message_filename("filename-drift"));
+        let drifted_path = messages_dir.join(message_filename("filename-drift-forged"));
+        fs::rename(&expected_path, &drifted_path).expect("rename persisted record");
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(reloaded.message_status("filename-drift").is_none());
+        assert!(reloaded.message_status("filename-drift-forged").is_none());
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(0)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_store_rejects_symlinked_record_on_reload() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_inbound(
+                "symlinked-record",
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some("symlinked-record-biz".to_owned()),
+                    None,
+                    "symlinked-record-hash".to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+            runtime.mark_accepted("symlinked-record", "tx-symlinked-record");
+        }
+        let messages_dir = store.path().join("messages");
+        let expected_path = messages_dir.join(message_filename("symlinked-record"));
+        let target_path = store.path().join("symlink-target.json");
+        fs::rename(&expected_path, &target_path).expect("move persisted record");
+        std::os::unix::fs::symlink(&target_path, &expected_path).expect("symlink persisted record");
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(reloaded.message_status("symlinked-record").is_none());
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(0)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_store_rejects_symlinked_messages_dir_on_reload() {
+        let target = TempDir::new().expect("target tempdir");
+        let mut target_config = sample_config();
+        target_config.store_dir = Some(target.path().to_path_buf());
+        {
+            let runtime = Iso20022BridgeRuntime::from_config(&target_config)
+                .expect("cfg")
+                .expect("enabled");
+            assert!(runtime.check_and_record_inbound(
+                "symlinked-messages-dir",
+                IsoMessageMetadata::inbound(
+                    "generic-iso20022",
+                    "pacs.008",
+                    None,
+                    Some("symlinked-messages-dir-biz".to_owned()),
+                    None,
+                    "symlinked-messages-dir-hash".to_owned(),
+                    "snapshot".to_owned(),
+                    false,
+                ),
+            ));
+            runtime.mark_accepted("symlinked-messages-dir", "tx-symlinked-messages-dir");
+        }
+
+        let store = TempDir::new().expect("store tempdir");
+        std::os::unix::fs::symlink(
+            target.path().join("messages"),
+            store.path().join("messages"),
+        )
+        .expect("symlink messages dir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(reloaded.message_status("symlinked-messages-dir").is_none());
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(0)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_store_refuses_symlinked_messages_dir_on_persist() {
+        let store = TempDir::new().expect("store tempdir");
+        let target = TempDir::new().expect("target tempdir");
+        std::os::unix::fs::symlink(target.path(), store.path().join("messages"))
+            .expect("symlink messages dir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "symlinked-persist-dir",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("symlinked-persist-dir-biz".to_owned()),
+                None,
+                "symlinked-persist-dir-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+
+        assert!(runtime.message_status("symlinked-persist-dir").is_some());
+        assert!(
+            !target
+                .path()
+                .join(message_filename("symlinked-persist-dir"))
+                .exists(),
+            "persist_message must not follow a symlinked messages directory"
+        );
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(0)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_store_refuses_symlinked_audit_dir_on_persist() {
+        let store = TempDir::new().expect("store tempdir");
+        let target = TempDir::new().expect("target tempdir");
+        std::os::unix::fs::symlink(target.path(), store.path().join(ISO_PERSISTED_AUDIT_DIR))
+            .expect("symlink audit dir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "symlinked-audit-dir",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("symlinked-audit-dir-biz".to_owned()),
+                None,
+                "symlinked-audit-dir-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+
+        assert!(
+            store
+                .path()
+                .join("messages")
+                .join(message_filename("symlinked-audit-dir"))
+                .exists(),
+            "record persistence should still use the real messages directory"
+        );
+        assert!(
+            !target.path().join(ISO_PERSISTED_AUDIT_INDEX_FILE).exists(),
+            "persist_audit_index must not follow a symlinked audit directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn durable_store_refuses_symlinked_external_export_dirs() {
+        let store = TempDir::new().expect("store tempdir");
+        let export_parent = TempDir::new().expect("export parent tempdir");
+        let export_target = TempDir::new().expect("export target tempdir");
+        let export_link = export_parent.path().join("export-link");
+        std::os::unix::fs::symlink(export_target.path(), &export_link).expect("symlink export dir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        config.audit_export_dir = Some(export_link);
+
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "symlinked-export-root",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("symlinked-export-root-biz".to_owned()),
+                None,
+                "symlinked-export-root-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+
+        assert!(
+            !export_target
+                .path()
+                .join(ISO_PERSISTED_AUDIT_INDEX_FILE)
+                .exists(),
+            "external export must not follow a symlinked export root"
+        );
+        assert!(
+            !export_target
+                .path()
+                .join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE)
+                .exists(),
+            "external export must not write latest anchor through a symlinked root"
+        );
+
+        let export = TempDir::new().expect("export tempdir");
+        let anchor_target = TempDir::new().expect("anchor target tempdir");
+        std::os::unix::fs::symlink(
+            anchor_target.path(),
+            export.path().join(ISO_AUDIT_EXPORT_ANCHOR_DIR),
+        )
+        .expect("symlink anchor dir");
+        let mut anchor_config = sample_config();
+        anchor_config.store_dir = Some(store.path().to_path_buf());
+        anchor_config.audit_export_dir = Some(export.path().to_path_buf());
+        let anchor_runtime = Iso20022BridgeRuntime::from_config(&anchor_config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(anchor_runtime.check_and_record_inbound(
+            "symlinked-anchor-dir",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("symlinked-anchor-dir-biz".to_owned()),
+                None,
+                "symlinked-anchor-dir-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        let external = read_external_audit_index(&export);
+        let index_digest = audit_index_digest(&external).expect("index digest");
+        assert!(
+            export
+                .path()
+                .join(ISO_AUDIT_EXPORT_LATEST_ANCHOR_FILE)
+                .exists(),
+            "latest anchor should still be written to the real export root"
+        );
+        assert!(
+            !anchor_target
+                .path()
+                .join(format!("{index_digest}.notary.json"))
+                .exists(),
+            "digest-addressed anchors must not follow a symlinked anchors directory"
+        );
+    }
+
+    #[test]
+    fn durable_store_rejects_oversized_record_on_reload() {
+        assert_digest_correct_record_mutation_is_rejected("oversized-record", |obj| {
+            let oversized_detail =
+                "x".repeat(usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES).expect("cap fits") + 1);
+            obj.insert(
+                "detail".to_owned(),
+                JsonValue::from(oversized_detail.as_str()),
+            );
+        });
+    }
+
+    #[test]
+    fn durable_store_removes_oversized_record_on_persist() {
+        let store = TempDir::new().expect("tempdir");
+        let mut config = sample_config();
+        config.store_dir = Some(store.path().to_path_buf());
+        let runtime = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(runtime.check_and_record_inbound(
+            "oversized-persist",
+            IsoMessageMetadata::inbound(
+                "generic-iso20022",
+                "pacs.008",
+                None,
+                Some("oversized-persist-biz".to_owned()),
+                None,
+                "oversized-persist-hash".to_owned(),
+                "snapshot".to_owned(),
+                false,
+            ),
+        ));
+        let path = store
+            .path()
+            .join("messages")
+            .join(message_filename("oversized-persist"));
+        assert!(path.exists(), "initial persisted record missing");
+
+        let oversized_detail =
+            "x".repeat(usize::try_from(ISO_PERSISTED_RECORD_MAX_BYTES).expect("cap fits") + 1);
+        runtime.mark_lifecycle_accepted("oversized-persist", Some(oversized_detail));
+
+        assert!(
+            !path.exists(),
+            "oversized persisted records must remove stale on-disk state"
+        );
+        assert!(runtime.message_status("oversized-persist").is_some());
+        let index_value = read_audit_index(&store);
+        let index_obj = index_value.as_object().expect("audit index object");
+        assert!(persisted_audit_index_digest_matches(index_obj));
+        assert_eq!(
+            index_obj.get("record_count").and_then(JsonValue::as_u64),
+            Some(0)
+        );
+
+        let reloaded = Iso20022BridgeRuntime::from_config(&config)
+            .expect("cfg")
+            .expect("enabled");
+        assert!(reloaded.message_status("oversized-persist").is_none());
     }
 
     #[test]

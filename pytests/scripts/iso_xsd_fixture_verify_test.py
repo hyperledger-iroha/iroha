@@ -52,7 +52,7 @@ def fixture_xml(message_id, payload_root, *, root="Document", payload_namespace=
 def source_provenance(message_id, payload_root):
     schema_text = xsd_text(message_id, payload_root)
     return {
-        "repository": "https://github.com/example/iso20022-fixtures",
+        "repository": "https://github.com/moov-io/fedwire20022",
         "commit": "0123456789abcdef0123456789abcdef01234567",
         "path": f"xsd/iso/{message_id}.xsd",
         "license": "Apache-2.0",
@@ -64,7 +64,7 @@ def blocked_schema_source(message_id="barr.001.001.01"):
     return {
         "message_def_id": message_id,
         "source": {
-            "repository": "https://github.com/example/iso20022-blocked",
+            "repository": "https://github.com/prog-nov/iso20022-messages-for-go",
             "commit": "89abcdef0123456789abcdef0123456789abcdef",
             "path": f"xsd/{message_id}.xsd",
             "sha256": "1" * 64,
@@ -161,6 +161,7 @@ def minimal_manifest():
                 "schema": "iso/fooo.001.001.01.xsd",
             }
         ],
+        "blocked_schema_sources": [],
     }
 
 
@@ -522,6 +523,13 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 "xsd-schema-secret",
             ),
             (
+                lambda body: body["schemas"][0].update(
+                    {"path": "iso/token-xsd-schema-secret/fooo.001.001.01.xsd"}
+                ),
+                "schemas[0].path must not contain secret-looking material",
+                "token-xsd-schema-secret",
+            ),
+            (
                 lambda body: body["fixtures"][0].update(
                     {"path": "../token=xsd-fixture-secret/foo_fixture.xml"}
                 ),
@@ -529,11 +537,36 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 "xsd-fixture-secret",
             ),
             (
+                lambda body: body["fixtures"][0].update(
+                    {"path": "../token-xsd-fixture-secret/foo_fixture.xml"}
+                ),
+                "fixtures[0].path must not contain secret-looking material",
+                "token-xsd-fixture-secret",
+            ),
+            (
                 lambda body: body["schemas"][0]["source"].update(
                     {"path": "xsd/token=xsd-source-secret/fooo.001.001.01.xsd"}
                 ),
                 "schemas[0].source.path must not contain secret-looking material",
                 "xsd-source-secret",
+            ),
+            (
+                lambda body: body["schemas"][0]["source"].update(
+                    {
+                        "repository": (
+                            "https://github.com/moov-io/token-xsd-source-repo-secret"
+                        )
+                    }
+                ),
+                "schemas[0].source.repository must not contain secret-looking material",
+                "token-xsd-source-repo-secret",
+            ),
+            (
+                lambda body: body["schemas"][0]["source"].update(
+                    {"path": "xsd/token-xsd-source-secret/fooo.001.001.01.xsd"}
+                ),
+                "schemas[0].source.path must not contain secret-looking material",
+                "token-xsd-source-secret",
             ),
             (
                 lambda body: body["schemas"][0].update(
@@ -578,6 +611,24 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 ),
                 "blocked_schema_sources[0].reason must not contain secret-looking material",
                 "xsd-blocked-reason-secret",
+            ),
+            (
+                lambda body: (
+                    body.update({"blocked_schema_sources": [blocked_schema_source()]}),
+                    body["blocked_schema_sources"][0]["source"].update(
+                        {
+                            "repository": (
+                                "https://github.com/prog-nov/"
+                                "token-xsd-blocked-repo-secret"
+                            )
+                        }
+                    ),
+                ),
+                (
+                    "blocked_schema_sources[0].source.repository must not contain "
+                    "secret-looking material"
+                ),
+                "token-xsd-blocked-repo-secret",
             ),
         ]
         for mutate, expected, secret in cases:
@@ -1817,31 +1868,41 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             manifest_path = write_minimal_tree(root, minimal_manifest())
-            original_which = VERIFIER.shutil.which
-            original_run = VERIFIER._run_command_bounded
-            VERIFIER.shutil.which = lambda command: "/usr/bin/xmllint"
-            VERIFIER._run_command_bounded = lambda *_args, **_kwargs: (
-                1,
-                "",
-                False,
-                "schema validator echoed token=xmllint-secret",
-                False,
-                False,
+            cases = (
+                ("schema validator echoed token=xmllint-secret", "token="),
+                (
+                    "schema validator echoed token-xmllint-identifier-secret",
+                    "token-xmllint-identifier-secret",
+                ),
             )
-            try:
-                rc, stdout, stderr = run_verify(
-                    ["--manifest", str(manifest_path), "--validate-xml-schema"]
-                )
-            finally:
-                VERIFIER.shutil.which = original_which
-                VERIFIER._run_command_bounded = original_run
+            for leaked_output, leaked_marker in cases:
+                with self.subTest(leaked_output=leaked_output):
+                    original_which = VERIFIER.shutil.which
+                    original_run = VERIFIER._run_command_bounded
+                    VERIFIER.shutil.which = lambda command: "/usr/bin/xmllint"
+                    VERIFIER._run_command_bounded = lambda *_args, **_kwargs: (
+                        1,
+                        "",
+                        False,
+                        leaked_output,
+                        False,
+                        False,
+                    )
+                    try:
+                        rc, stdout, stderr = run_verify(
+                            ["--manifest", str(manifest_path), "--validate-xml-schema"]
+                        )
+                    finally:
+                        VERIFIER.shutil.which = original_which
+                        VERIFIER._run_command_bounded = original_run
 
-            self.assertEqual(rc, 2)
-            self.assertEqual(stdout, "")
-            self.assertIn("failed XML schema validation", stderr)
-            self.assertIn("xmllint output redacted", stderr)
-            self.assertNotIn("token=", stderr)
-            self.assertNotIn("xmllint-secret", stderr)
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("failed XML schema validation", stderr)
+                    self.assertIn("xmllint output redacted", stderr)
+                    self.assertNotIn(leaked_marker, stderr)
+                    self.assertNotIn("xmllint-secret", stderr)
+                    self.assertNotIn("xmllint-identifier-secret", stderr)
 
     def test_boolean_xmllint_output_limit_is_rejected(self):
         with self.assertRaisesRegex(
@@ -2656,7 +2717,11 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         cases = []
         missing_source = minimal_manifest()
         missing_source["schemas"][0].pop("source")
-        cases.append((missing_source, "source must be a JSON object"))
+        cases.append((missing_source, "source must be recorded"))
+
+        null_source = minimal_manifest()
+        null_source["schemas"][0]["source"] = None
+        cases.append((null_source, "source must be a JSON object"))
 
         unknown_source_key = minimal_manifest()
         unknown_source_key["schemas"][0]["source"]["unexpected"] = "value"
@@ -2667,6 +2732,28 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             "https://github.com/example/iso20022-fixtures.git"
         )
         cases.append((bad_repository, "repository must be a canonical"))
+
+        placeholder_repository_owner = minimal_manifest()
+        placeholder_repository_owner["schemas"][0]["source"]["repository"] = (
+            "https://github.com/example/iso20022-fixtures"
+        )
+        cases.append(
+            (
+                placeholder_repository_owner,
+                "repository must not use placeholder repository coordinates",
+            )
+        )
+
+        placeholder_repository_name = minimal_manifest()
+        placeholder_repository_name["schemas"][0]["source"]["repository"] = (
+            "https://github.com/moov-io/iso20022-template-fixtures"
+        )
+        cases.append(
+            (
+                placeholder_repository_name,
+                "repository must not use placeholder repository coordinates",
+            )
+        )
 
         long_repository = minimal_manifest()
         long_repository["schemas"][0]["source"]["repository"] = (
@@ -2740,6 +2827,16 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
     def test_blocked_schema_source_provenance_and_markers_are_rejected(self):
         cases = []
 
+        missing_source = minimal_manifest()
+        missing_source["blocked_schema_sources"] = [blocked_schema_source()]
+        missing_source["blocked_schema_sources"][0].pop("source")
+        cases.append((missing_source, "source must be recorded"))
+
+        null_source = minimal_manifest()
+        null_source["blocked_schema_sources"] = [blocked_schema_source()]
+        null_source["blocked_schema_sources"][0]["source"] = None
+        cases.append((null_source, "source must be a JSON object"))
+
         unknown_key = minimal_manifest()
         unknown_key["blocked_schema_sources"] = [blocked_schema_source()]
         unknown_key["blocked_schema_sources"][0]["unexpected"] = True
@@ -2751,6 +2848,30 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             "https://github.com/example/iso20022-blocked.git"
         )
         cases.append((bad_repository, "repository must be a canonical"))
+
+        placeholder_repository_owner = minimal_manifest()
+        placeholder_repository_owner["blocked_schema_sources"] = [blocked_schema_source()]
+        placeholder_repository_owner["blocked_schema_sources"][0]["source"][
+            "repository"
+        ] = "https://github.com/example/iso20022-blocked"
+        cases.append(
+            (
+                placeholder_repository_owner,
+                "repository must not use placeholder repository coordinates",
+            )
+        )
+
+        placeholder_repository_name = minimal_manifest()
+        placeholder_repository_name["blocked_schema_sources"] = [blocked_schema_source()]
+        placeholder_repository_name["blocked_schema_sources"][0]["source"][
+            "repository"
+        ] = "https://github.com/prog-nov/iso20022-sample-blocked"
+        cases.append(
+            (
+                placeholder_repository_name,
+                "repository must not use placeholder repository coordinates",
+            )
+        )
 
         bad_commit = minimal_manifest()
         bad_commit["blocked_schema_sources"] = [blocked_schema_source()]
@@ -2791,6 +2912,18 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
         ]
         cases.append((duplicate_marker, "duplicates"))
 
+        copyright_only_marker = minimal_manifest()
+        copyright_only_marker["blocked_schema_sources"] = [blocked_schema_source()]
+        copyright_only_marker["blocked_schema_sources"][0]["restriction_markers"] = [
+            "swift-copyright-header"
+        ]
+        cases.append(
+            (
+                copyright_only_marker,
+                "restriction_markers must include a redistribution restriction marker",
+            )
+        )
+
         blocked_checked_in_schema = minimal_manifest()
         blocked_checked_in_schema["blocked_schema_sources"] = [
             blocked_schema_source("fooo.001.001.01")
@@ -2817,6 +2950,18 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_blocked_schema_sources_must_be_explicit(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest = minimal_manifest()
+            manifest.pop("blocked_schema_sources")
+            manifest_path = write_minimal_tree(root, manifest)
+
+            rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("blocked_schema_sources must be recorded as an array", stderr)
 
     def test_profile_catalog_rejects_blocked_source_without_current_gap(self):
         with tempfile.TemporaryDirectory() as raw_root:

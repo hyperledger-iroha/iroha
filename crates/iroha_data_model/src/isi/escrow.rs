@@ -195,6 +195,125 @@ impl ResolveEscrowDispute {
 }
 
 isi! {
+    /// Open a generic ledger-managed asset lock.
+    pub struct OpenAssetLock {
+        /// Caller-selected lock identifier.
+        pub escrow_id: crate::escrow::EscrowId,
+        /// Asset definition to lock.
+        pub asset_definition: crate::asset::AssetDefinitionId,
+        /// Account that receives drawdowns from the lock.
+        pub destination: crate::account::AccountId,
+        /// Amount to lock.
+        pub amount: iroha_primitives::numeric::Numeric,
+        /// Optional account required to draw down this lock.
+        #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+        pub release_authority: Option<crate::account::AccountId>,
+        /// Optional Unix timestamp (milliseconds) after which the lock may expire.
+        #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+        pub expires_at_ms: Option<u64>,
+        /// Evidence hashes attached when opening the lock.
+        #[cfg_attr(feature = "json", norito(default))]
+        pub evidence_hashes: Vec<iroha_crypto::Hash>,
+    }
+}
+
+impl OpenAssetLock {
+    /// Construct a generic asset lock without initial evidence.
+    #[must_use]
+    pub fn new(
+        escrow_id: crate::escrow::EscrowId,
+        asset_definition: crate::asset::AssetDefinitionId,
+        destination: crate::account::AccountId,
+        amount: iroha_primitives::numeric::Numeric,
+    ) -> Self {
+        Self {
+            escrow_id,
+            asset_definition,
+            destination,
+            amount,
+            release_authority: None,
+            expires_at_ms: None,
+            evidence_hashes: Vec::new(),
+        }
+    }
+
+    /// Construct a generic asset lock with optional authority, expiry, and evidence.
+    #[must_use]
+    pub fn with_options(
+        escrow_id: crate::escrow::EscrowId,
+        asset_definition: crate::asset::AssetDefinitionId,
+        destination: crate::account::AccountId,
+        amount: iroha_primitives::numeric::Numeric,
+        release_authority: Option<crate::account::AccountId>,
+        expires_at_ms: Option<u64>,
+        evidence_hashes: Vec<iroha_crypto::Hash>,
+    ) -> Self {
+        Self {
+            escrow_id,
+            asset_definition,
+            destination,
+            amount,
+            release_authority,
+            expires_at_ms,
+            evidence_hashes,
+        }
+    }
+}
+
+isi! {
+    /// Draw down funds from an active generic asset lock.
+    pub struct DrawdownAssetLock {
+        /// Lock to draw down.
+        pub escrow_id: crate::escrow::EscrowId,
+        /// Amount to release to the lock destination.
+        pub amount: iroha_primitives::numeric::Numeric,
+    }
+}
+
+impl DrawdownAssetLock {
+    /// Construct a generic asset lock drawdown instruction.
+    #[must_use]
+    pub const fn new(
+        escrow_id: crate::escrow::EscrowId,
+        amount: iroha_primitives::numeric::Numeric,
+    ) -> Self {
+        Self { escrow_id, amount }
+    }
+}
+
+isi! {
+    /// Cancel an active generic asset lock and refund remaining custody.
+    pub struct CancelAssetLock {
+        /// Lock to cancel.
+        pub escrow_id: crate::escrow::EscrowId,
+    }
+}
+
+impl CancelAssetLock {
+    /// Construct a generic asset lock cancellation instruction.
+    #[must_use]
+    pub const fn new(escrow_id: crate::escrow::EscrowId) -> Self {
+        Self { escrow_id }
+    }
+}
+
+isi! {
+    /// Expire a generic asset lock whose deadline has passed.
+    pub struct ExpireAssetLock {
+        /// Lock to expire.
+        pub escrow_id: crate::escrow::EscrowId,
+    }
+}
+
+impl ExpireAssetLock {
+    /// Construct a generic asset lock expiry instruction.
+    #[must_use]
+    pub const fn new(escrow_id: crate::escrow::EscrowId) -> Self {
+        Self { escrow_id }
+    }
+}
+
+isi! {
     /// Open a ledger-managed anonymous asset escrow using shielded inputs.
     pub struct OpenAnonymousAssetEscrow {
         /// Caller-selected escrow identifier.
@@ -484,6 +603,10 @@ impl crate::seal::Instruction for ReleaseAssetEscrow {}
 impl crate::seal::Instruction for CancelAssetEscrow {}
 impl crate::seal::Instruction for OpenEscrowDispute {}
 impl crate::seal::Instruction for ResolveEscrowDispute {}
+impl crate::seal::Instruction for OpenAssetLock {}
+impl crate::seal::Instruction for DrawdownAssetLock {}
+impl crate::seal::Instruction for CancelAssetLock {}
+impl crate::seal::Instruction for ExpireAssetLock {}
 impl crate::seal::Instruction for OpenAnonymousAssetEscrow {}
 impl crate::seal::Instruction for AcceptAnonymousAssetEscrow {}
 impl crate::seal::Instruction for MarkAnonymousEscrowPaymentSent {}
@@ -557,6 +680,29 @@ impl_escrow_decode_from_slice!(ResolveEscrowDispute {
     evidence_hashes: Vec<iroha_crypto::Hash>,
 });
 
+impl_escrow_decode_from_slice!(OpenAssetLock {
+    escrow_id: crate::escrow::EscrowId,
+    asset_definition: crate::asset::AssetDefinitionId,
+    destination: crate::account::AccountId,
+    amount: iroha_primitives::numeric::Numeric,
+    release_authority: Option<crate::account::AccountId>,
+    expires_at_ms: Option<u64>,
+    evidence_hashes: Vec<iroha_crypto::Hash>,
+});
+
+impl_escrow_decode_from_slice!(DrawdownAssetLock {
+    escrow_id: crate::escrow::EscrowId,
+    amount: iroha_primitives::numeric::Numeric,
+});
+
+impl_escrow_decode_from_slice!(CancelAssetLock {
+    escrow_id: crate::escrow::EscrowId,
+});
+
+impl_escrow_decode_from_slice!(ExpireAssetLock {
+    escrow_id: crate::escrow::EscrowId,
+});
+
 impl_escrow_decode_from_slice!(OpenAnonymousAssetEscrow {
     escrow_id: crate::escrow::EscrowId,
     asset_definition: crate::asset::AssetDefinitionId,
@@ -608,7 +754,7 @@ impl_escrow_decode_from_slice!(ResolveAnonymousEscrowDispute {
 
 #[cfg(test)]
 mod tests {
-    use iroha_crypto::Hash;
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::core::DecodeFromSlice;
 
@@ -637,6 +783,11 @@ mod tests {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse::<Name>().unwrap(),
         )
+    }
+
+    fn account(seed: u8) -> crate::account::AccountId {
+        let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        crate::account::AccountId::new(key_pair.public_key().clone())
     }
 
     fn evidence_hashes() -> Vec<Hash> {
@@ -681,6 +832,8 @@ mod tests {
             "xor".parse::<Name>().unwrap(),
         );
         let evidence = vec![Hash::new("evidence")];
+        let destination = account(0xA1);
+        let release_authority = account(0xA2);
 
         assert_eq!(
             OpenAssetEscrow::new(escrow_id, asset_definition.clone(), Numeric::from(10_u64)),
@@ -728,6 +881,41 @@ mod tests {
             .evidence_hashes,
             evidence
         );
+        assert_eq!(
+            OpenAssetLock::new(
+                escrow_id,
+                asset_definition.clone(),
+                destination.clone(),
+                Numeric::from(20_u64),
+            ),
+            OpenAssetLock {
+                escrow_id,
+                asset_definition: asset_definition.clone(),
+                destination: destination.clone(),
+                amount: Numeric::from(20_u64),
+                release_authority: None,
+                expires_at_ms: None,
+                evidence_hashes: Vec::new(),
+            }
+        );
+        let lock_with_options = OpenAssetLock::with_options(
+            escrow_id,
+            asset_definition.clone(),
+            destination.clone(),
+            Numeric::from(20_u64),
+            Some(release_authority.clone()),
+            Some(12_345),
+            evidence.clone(),
+        );
+        assert_eq!(lock_with_options.release_authority, Some(release_authority));
+        assert_eq!(lock_with_options.expires_at_ms, Some(12_345));
+        assert_eq!(lock_with_options.evidence_hashes, evidence.clone());
+        assert_eq!(
+            DrawdownAssetLock::new(escrow_id, Numeric::from(5_u64)).amount,
+            Numeric::from(5_u64)
+        );
+        assert_eq!(CancelAssetLock::new(escrow_id).escrow_id, escrow_id);
+        assert_eq!(ExpireAssetLock::new(escrow_id).escrow_id, escrow_id);
 
         let proof = proof_attachment();
         assert_eq!(
@@ -810,6 +998,8 @@ mod tests {
         let asset_definition = asset_definition_id();
         let proof = proof_attachment();
         let evidence = evidence_hashes();
+        let destination = account(0xB1);
+        let release_authority = account(0xB2);
 
         assert_slice_roundtrip(OpenAssetEscrow::with_evidence_hashes(
             escrow_id,
@@ -831,6 +1021,18 @@ mod tests {
             Numeric::from(3_u64),
             evidence.clone(),
         ));
+        assert_slice_roundtrip(OpenAssetLock::with_options(
+            escrow_id,
+            asset_definition.clone(),
+            destination.clone(),
+            Numeric::from(20_u64),
+            Some(release_authority.clone()),
+            Some(12_345),
+            evidence.clone(),
+        ));
+        assert_slice_roundtrip(DrawdownAssetLock::new(escrow_id, Numeric::from(5_u64)));
+        assert_slice_roundtrip(CancelAssetLock::new(escrow_id));
+        assert_slice_roundtrip(ExpireAssetLock::new(escrow_id));
         assert_slice_roundtrip(OpenAnonymousAssetEscrow::with_evidence_hashes(
             escrow_id,
             asset_definition,
@@ -879,6 +1081,8 @@ mod tests {
         let asset_definition = asset_definition_id();
         let proof = proof_attachment();
         let evidence = evidence_hashes();
+        let destination = account(0xC1);
+        let release_authority = account(0xC2);
 
         assert_registry_decodes(
             &registry,
@@ -906,6 +1110,24 @@ mod tests {
                 evidence.clone(),
             ),
         );
+        assert_registry_decodes(
+            &registry,
+            OpenAssetLock::with_options(
+                escrow_id,
+                asset_definition.clone(),
+                destination,
+                Numeric::from(20_u64),
+                Some(release_authority),
+                Some(12_345),
+                evidence.clone(),
+            ),
+        );
+        assert_registry_decodes(
+            &registry,
+            DrawdownAssetLock::new(escrow_id, Numeric::from(5_u64)),
+        );
+        assert_registry_decodes(&registry, CancelAssetLock::new(escrow_id));
+        assert_registry_decodes(&registry, ExpireAssetLock::new(escrow_id));
         assert_registry_decodes(
             &registry,
             OpenAnonymousAssetEscrow::with_evidence_hashes(

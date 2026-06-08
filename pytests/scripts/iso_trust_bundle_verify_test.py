@@ -97,9 +97,13 @@ def valid_bundle():
             "authority": "Local Bank Rail PKI",
             "version": "2026-Q2",
             "retrieved_at": "2026-06-04T00:00:00Z",
-            "url": "https://pki.local-bank.example.com/swift-cbpr-plus",
+            "url": "https://pki.local-bank.bank/swift-cbpr-plus",
         },
         "embedded_signature_policy": "require-verified",
+        "signature_public_key_sha256_pins": [],
+        "trusted_public_key_sha256": [],
+        "x509_trust_anchor_sha256_pins": [],
+        "trusted_certificate_sha256": [],
         "x509_trust_anchors": [
             {
                 "label": "root-a",
@@ -114,6 +118,7 @@ def valid_bundle():
                 "sha256": der_digest(CERT_TWO_B64),
             }
         ],
+        "revoked_certificate_sha256": [],
         "x509_required_certificate_policy_oids": ["1.3.6.1.4.1.55555.1"],
         "x509_require_crl_revocation_check": True,
         "x509_crls": [
@@ -620,6 +625,32 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(f"{flag} must be a boolean", stderr)
 
+    def test_material_arrays_must_be_explicit(self):
+        keys = (
+            "signature_public_key_sha256_pins",
+            "trusted_public_key_sha256",
+            "x509_trust_anchor_sha256_pins",
+            "trusted_certificate_sha256",
+            "x509_trust_anchors",
+            "revoked_certificate_sha256",
+            "revoked_certificates",
+            "x509_required_certificate_policy_oids",
+            "x509_crls",
+            "x509_ocsp_responses",
+        )
+        for key in keys:
+            with self.subTest(key=key):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    bundle.pop(key)
+                    path = write_bundle(root, bundle)
+
+                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"{key} must be recorded as an array", stderr)
+
     def test_duplicate_bundle_json_keys_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             path = Path(raw_root) / "trust-bundle.json"
@@ -707,24 +738,28 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("does not match der_base64", stderr)
 
-    def test_declared_der_digest_must_be_string_when_present(self):
+    def test_declared_der_digest_must_be_recorded_as_string(self):
         for key in (
             "x509_trust_anchors",
             "revoked_certificates",
             "x509_crls",
             "x509_ocsp_responses",
         ):
-            with self.subTest(key=key):
-                with tempfile.TemporaryDirectory() as raw_root:
-                    root = Path(raw_root)
-                    bundle = valid_bundle()
-                    bundle[key][0]["sha256"] = None
-                    path = write_bundle(root, bundle)
+            for value in (None, "omitted"):
+                with self.subTest(key=key, value=value):
+                    with tempfile.TemporaryDirectory() as raw_root:
+                        root = Path(raw_root)
+                        bundle = valid_bundle()
+                        if value == "omitted":
+                            bundle[key][0].pop("sha256")
+                        else:
+                            bundle[key][0]["sha256"] = value
+                        path = write_bundle(root, bundle)
 
-                    rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+                        rc, _stdout, stderr = run_verify(["--bundle", str(path)])
 
-                    self.assertEqual(rc, 2)
-                    self.assertIn(f"{key}[0].sha256 must be a string", stderr)
+                        self.assertEqual(rc, 2)
+                        self.assertIn(f"{key}[0].sha256 must be a string", stderr)
 
     def test_oversized_der_base64_is_rejected_before_decode(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1180,12 +1215,37 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
     def test_placeholder_source_summary_only_is_not_profile_emittable(self):
         cases = (
             ("authority", lambda bundle: bundle["source"].__setitem__("authority", "Rail PKI placeholder")),
+            ("dummy-authority", lambda bundle: bundle["source"].__setitem__("authority", "Dummy Rail PKI")),
+            ("fake-version", lambda bundle: bundle["source"].__setitem__("version", "fake-v1")),
+            ("sample-authority", lambda bundle: bundle["source"].__setitem__("authority", "Sample Rail PKI")),
             ("version", lambda bundle: bundle["source"].__setitem__("version", "replace-before-production")),
+            ("template-version", lambda bundle: bundle["source"].__setitem__("version", "template-v1")),
             (
                 "url",
                 lambda bundle: bundle["source"].__setitem__(
                     "url",
                     "https://pki.swift.example.invalid/iso20022",
+                ),
+            ),
+            (
+                "reserved-url",
+                lambda bundle: bundle["source"].__setitem__(
+                    "url",
+                    "https://pki.swift.example.com/iso20022",
+                ),
+            ),
+            (
+                "reserved-tld-url",
+                lambda bundle: bundle["source"].__setitem__(
+                    "url",
+                    "https://pki.swift.example/iso20022",
+                ),
+            ),
+            (
+                "template-canary-url",
+                lambda bundle: bundle["source"].__setitem__(
+                    "url",
+                    "https://pki.swift.operator-canary.bank/iso20022",
                 ),
             ),
         )
@@ -1231,10 +1291,46 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 "placeholder source metadata",
             ),
             (
+                "dummy-authority",
+                lambda bundle: bundle["source"].__setitem__(
+                    "authority",
+                    "Dummy Rail PKI",
+                ),
+                [],
+                "placeholder source metadata",
+            ),
+            (
+                "fake-version",
+                lambda bundle: bundle["source"].__setitem__(
+                    "version",
+                    "fake-v1",
+                ),
+                [],
+                "placeholder source metadata",
+            ),
+            (
+                "sample-authority",
+                lambda bundle: bundle["source"].__setitem__(
+                    "authority",
+                    "Sample Rail PKI",
+                ),
+                [],
+                "placeholder source metadata",
+            ),
+            (
                 "placeholder-version",
                 lambda bundle: bundle["source"].__setitem__(
                     "version",
                     "replace-before-production",
+                ),
+                [],
+                "placeholder source metadata",
+            ),
+            (
+                "template-version",
+                lambda bundle: bundle["source"].__setitem__(
+                    "version",
+                    "template-v1",
                 ),
                 [],
                 "placeholder source metadata",
@@ -1246,7 +1342,34 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     "https://pki.swift.example.invalid/iso20022",
                 ),
                 [],
-                "example.invalid source provenance",
+                "reserved placeholder source provenance",
+            ),
+            (
+                "reserved-url",
+                lambda bundle: bundle["source"].__setitem__(
+                    "url",
+                    "https://pki.swift.example.com/iso20022",
+                ),
+                [],
+                "reserved placeholder source provenance",
+            ),
+            (
+                "reserved-tld-url",
+                lambda bundle: bundle["source"].__setitem__(
+                    "url",
+                    "https://pki.swift.example/iso20022",
+                ),
+                [],
+                "reserved placeholder source provenance",
+            ),
+            (
+                "template-canary-url",
+                lambda bundle: bundle["source"].__setitem__(
+                    "url",
+                    "https://pki.swift.operator-canary.bank/iso20022",
+                ),
+                [],
+                "reserved placeholder source provenance",
             ),
         )
         for name, mutate, extra_args, message in cases:
@@ -1357,7 +1480,8 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
     def test_source_provenance_is_required(self):
         cases = [
-            (lambda bundle: bundle.pop("source"), ".source is required"),
+            (lambda bundle: bundle.pop("source"), ".source must be recorded"),
+            (lambda bundle: bundle.__setitem__("source", None), ".source must be a JSON object"),
             (lambda bundle: bundle.update({"source": {}}), ".source.authority"),
             (lambda bundle: bundle["source"].pop("authority"), ".source.authority"),
             (lambda bundle: bundle["source"].pop("version"), ".source.version"),
@@ -1689,6 +1813,18 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
             self.assertEqual(run_verify(["--bundle", str(path)])[0], 2)
             self.assertEqual(run_verify(["--bundle", str(path), "--allow-record-only"])[0], 0)
+
+    def test_embedded_signature_policy_must_be_explicit(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            bundle.pop("embedded_signature_policy")
+            path = write_bundle(root, bundle)
+
+            rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("embedded_signature_policy must be recorded", stderr)
 
     def test_checked_in_trust_bundle_templates_verify(self):
         template_dir = REPO_ROOT / "fixtures" / "iso20022" / "trust_bundles"

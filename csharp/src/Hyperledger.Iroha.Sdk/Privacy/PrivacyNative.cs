@@ -248,6 +248,7 @@ public static class PrivacyNative
     private const string LibraryName = "connect_norito_bridge";
     private static readonly byte[] PrivacyNoritoMagic = Encoding.ASCII.GetBytes("NRT0");
     private static readonly ulong[] PrivacyCrc64Table = BuildPrivacyCrc64Table();
+    private static readonly byte[] ZeroClearChunk = new byte[4096];
     private static readonly byte[] PrivacyNativeAvailabilityProbeArchiveBytes =
         BuildPrivacyNativeAvailabilityProbeArchive();
 
@@ -492,6 +493,7 @@ public static class PrivacyNative
         {
             if (outPtr != IntPtr.Zero)
             {
+                ClearNativeBuffer(outPtr, outLen);
                 free(outPtr);
             }
         }
@@ -530,10 +532,18 @@ public static class PrivacyNative
         }
 
         var output = new byte[(int)length];
-        Marshal.Copy(outPtr, output, 0, output.Length);
-        return IsNoritoV1Archive(output)
-            && HasNonEmptyPrivacyNoritoPayload(output)
-            && HasNoritoSchema(output, expectedSchemaBytes);
+        try
+        {
+            Marshal.Copy(outPtr, output, 0, output.Length);
+            return IsNoritoV1Archive(output)
+                && HasNonEmptyPrivacyNoritoPayload(output)
+                && HasNoritoSchema(output, expectedSchemaBytes);
+        }
+        finally
+        {
+            Array.Clear(output, 0, output.Length);
+            ClearNativeBuffer(outPtr, outLen);
+        }
     }
 
     internal static bool IsNoritoV1Archive(byte[] archive)
@@ -792,12 +802,42 @@ public static class PrivacyNative
         UIntPtr outLen,
         byte expectedSchemaByte)
     {
-        var expected = IsValidProbeResult(code, outPtr, outLen, expectedSchemaByte);
-        if (outPtr != IntPtr.Zero)
+        try
         {
-            NativeFree(outPtr);
+            return IsValidProbeResult(code, outPtr, outLen, expectedSchemaByte);
         }
-        return expected;
+        finally
+        {
+            if (outPtr != IntPtr.Zero)
+            {
+                ClearNativeBuffer(outPtr, outLen);
+                NativeFree(outPtr);
+            }
+        }
+    }
+
+    private static void ClearNativeBuffer(IntPtr ptr, UIntPtr outLen)
+    {
+        if (ptr == IntPtr.Zero)
+        {
+            return;
+        }
+
+        var length = outLen.ToUInt64();
+        if (length == 0 || length > PrivacyNativeArchiveMaxBytes)
+        {
+            return;
+        }
+
+        var remaining = (int)length;
+        var offset = 0;
+        while (remaining > 0)
+        {
+            var chunk = Math.Min(remaining, ZeroClearChunk.Length);
+            Marshal.Copy(ZeroClearChunk, 0, IntPtr.Add(ptr, offset), chunk);
+            remaining -= chunk;
+            offset += chunk;
+        }
     }
 
     private static bool TryGetAbiVersion(out uint version)

@@ -5517,7 +5517,15 @@ pub mod isi {
 
         #[test]
         fn offline_note_rejects_non_transparent_proof_backends() {
-            for backend in ["halo2/pasta", "stark/fri/"] {
+            for backend in [
+                "halo2/pasta",
+                "stark/fri/",
+                "halo2/unknown-native-v1",
+                "halo2/ipa:tiny-add-public",
+                "halo2/pasta/tiny-add",
+                "halo2/pasta/ivm-execution-v2",
+                "halo2/pasta/unknown-native-v1",
+            ] {
                 let (state, mut proof, _public_inputs_hash) =
                     offline_note_verifier_test_state(ConfidentialStatus::Active);
                 proof.verifier_key_id =
@@ -5602,9 +5610,14 @@ pub mod isi {
             for backend in [
                 "halo2/ipa:production-ready",
                 "halo2/ipa:mainnet-ready",
+                "halo2/ipa/orchard:production-ready",
+                "orchard:mainnet-ready",
+                "penumbra-masp:external-security-review",
+                "jindo-lattice-pcs-zk:release-ready",
                 "stark/fri/audit-signoff",
                 "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
                 "stark/fri/a-u-d-i-t-c-l-a-i-m",
+                "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
             ] {
                 let (state, mut proof, _public_inputs_hash) =
                     offline_note_verifier_test_state(ConfidentialStatus::Active);
@@ -5966,6 +5979,8 @@ pub mod isi {
                 "halo2/ipa: KZG",
                 "halo2/ipa:Mock-Proof",
                 "halo2/ipa:M-o-c-k-Proof",
+                "halo2/ipa:tiny-add-public",
+                "halo2/pasta/tiny-add",
                 "stark/fri/d-e-b-u-g",
             ] {
                 let err = sample_kagemusha_transfer(backend)

@@ -94,6 +94,13 @@ def _normalize_u128_quantity(quantity: NumericLike, context: str) -> str:
     return str(int(value))
 
 
+def _normalize_positive_quantity(quantity: NumericLike, context: str) -> str:
+    normalized = _normalize_quantity(quantity)
+    if Decimal(normalized) <= 0:
+        raise ValueError(f"{context} must be positive")
+    return normalized
+
+
 def _normalize_positive_u128_literal(quantity: Any, context: str) -> str:
     if isinstance(quantity, bool):
         raise ValueError(f"{context} must be a positive decimal u128 string")
@@ -565,6 +572,71 @@ class TransactionDraft:
                 asset_id,
                 normalized_quantity,
                 destination,
+            )
+        )
+        return self
+
+    def open_asset_lock(
+        self,
+        escrow_id: str,
+        asset_definition_id: str,
+        destination: str,
+        amount: NumericLike,
+        *,
+        release_authority: Optional[str] = None,
+        expires_at_ms: Optional[int] = None,
+        evidence_hashes: Optional[Sequence[FixedBytesLike]] = None,
+    ) -> TransactionDraft:
+        """Append an `OpenAssetLock` instruction."""
+
+        self.add_instruction(
+            Instruction.open_asset_lock(
+                _require_non_empty_string(escrow_id, "escrow_id"),
+                _require_non_empty_string(asset_definition_id, "asset_definition_id"),
+                _require_non_empty_string(destination, "destination"),
+                _normalize_positive_quantity(amount, "amount"),
+                release_authority=(
+                    _require_non_empty_string(release_authority, "release_authority")
+                    if release_authority is not None
+                    else None
+                ),
+                expires_at_ms=expires_at_ms,
+                evidence_hashes=list(evidence_hashes or []),
+            )
+        )
+        return self
+
+    def drawdown_asset_lock(
+        self,
+        escrow_id: str,
+        amount: NumericLike,
+    ) -> TransactionDraft:
+        """Append a `DrawdownAssetLock` instruction."""
+
+        self.add_instruction(
+            Instruction.drawdown_asset_lock(
+                _require_non_empty_string(escrow_id, "escrow_id"),
+                _normalize_positive_quantity(amount, "amount"),
+            )
+        )
+        return self
+
+    def cancel_asset_lock(self, escrow_id: str) -> TransactionDraft:
+        """Append a `CancelAssetLock` instruction."""
+
+        self.add_instruction(
+            Instruction.cancel_asset_lock(
+                _require_non_empty_string(escrow_id, "escrow_id")
+            )
+        )
+        return self
+
+    def expire_asset_lock(self, escrow_id: str) -> TransactionDraft:
+        """Append an `ExpireAssetLock` instruction."""
+
+        self.add_instruction(
+            Instruction.expire_asset_lock(
+                _require_non_empty_string(escrow_id, "escrow_id")
             )
         )
         return self

@@ -10,6 +10,10 @@
     "url": "https://pki.swift-cbpr-plus.example.invalid/iso20022"
   },
   "embedded_signature_policy": "require-verified",
+  "signature_public_key_sha256_pins": [],
+  "trusted_public_key_sha256": [],
+  "x509_trust_anchor_sha256_pins": [],
+  "trusted_certificate_sha256": [],
   "x509_trust_anchors": [
     {
       "label": "replace-with-swift-terminal-ca",
@@ -24,6 +28,7 @@
       "sha256": "714f7108ae1387dc72ec6b79a0c0f8e596205dbc8159d2c538493ba664ed26a9"
     }
   ],
+  "revoked_certificate_sha256": [],
   "x509_required_certificate_policy_oids": [
     "1.3.6.1.4.1.55555.1"
   ],

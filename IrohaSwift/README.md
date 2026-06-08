@@ -635,10 +635,23 @@ archive plus a Norito-encoded Pallas open-envelope archive to receive a
 Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
 `KagemushaRecursiveCompactPaymentTokenProver` exposes the ABI 7
 `recursive_compact_v1` compact-token surface and probes
-`kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. The
-ABI 7 symbols remain source-stable but public compact proving and receiver-side
-verification fail closed until the compact proof composes the private-hop
-verifier-slice relation in-circuit. The Swift wrapper maps the native
+`kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Use
+`proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
+and `verifyRecursiveCompactPaymentToken`; gate them with `isNativeAvailable`
+and `isVerifierNativeAvailable`. The recursive-spend compact projection
+verifier is exposed separately as
+`verifyRecursiveSpendCompactPaymentTokenProjection(compactTokenArchive:verifierRecordArchive:blockHeight:)`;
+gate it with `isProjectionVerifierNativeAvailable`. It accepts raw Norito
+compact-token and verifier-record archives, rejects empty, malformed, or
+oversized archives before bridge dispatch, and returns the native boolean
+receiver result. ABI 7 now carries the one-hop LEN=4
+compact-token proof path when the native bundle includes the packaged compact
+one-hop proving-key archive and matching verifier-slice material. Production
+defaults still stay on ABI 6 Reserved-lineage recursive spend until that
+archive is shipped and signed for release. The proof-composition reservation
+remains fail-closed for a missing packaged key, the generic compact-token
+reservation, and the multi-hop verifier-batch reservation; those cases are
+reserved ABI-7 state. The Swift wrapper maps the native
 recursive-compact-unavailable bridge code to
 `KagemushaRecursiveCompactPaymentTokenProverError.recursiveCompactUnavailable`
 so wallet code can distinguish reserved admission from malformed inputs. Swift accepts additive native bridge ABI
@@ -702,7 +715,10 @@ missing or empty request values preserve semantic compatibility append. The
 material: Swift wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
-before proving or returning output bytes. Verify request archives must pass the
+before proving or returning output bytes.
+Native append streams the previous recursive proof bytes into
+`recursive_proof_chain_digest`; SDK code must not derive or patch the
+accumulator state. Verify request archives must pass the
 same public-binding preflight before the native bridge returns a
 `KagemushaRecursiveSpendVerifyResultV1`: Reserved-lineage bundles require a
 matching active `lineage_verifier_record`, semantic bundles must omit it, and

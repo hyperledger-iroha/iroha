@@ -79,8 +79,10 @@ summary output path.
 That strict mode requires every standard Android device family in the release
 matrix to have a slot with valid hashes, StrongBox/KeyMint metadata, rollback and
 one-use key evidence, ABI-6 recursive spend probe success, and ABI-7 recursive
-compact fail-closed/unavailable probe evidence. The `minimum_os` field must match
-the release matrix for that device family. `slot.json` must also bind
+compact evidence with `abi7_recursive_compact_jni_probe = one_hop_verified` and
+`abi7_recursive_compact_prover_state = multi_hop_proof_composition_unavailable`.
+The `minimum_os` field must match the release matrix for that device family.
+`slot.json` must also bind
 `app_package_name`, `app_signing_certificate_sha256`,
 `attestation_challenge_sha256`, `offline_wallet_policy_sha256`,
 `offline_wallet_apk_path`, `offline_wallet_apk_sha256`,

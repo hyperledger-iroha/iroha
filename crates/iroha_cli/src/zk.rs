@@ -107,6 +107,19 @@ impl Run for Command {
     }
 }
 
+impl Command {
+    pub(crate) fn allows_fallback_config(&self) -> bool {
+        matches!(
+            self,
+            Self::Kagemusha(
+                KagemushaCommand::LineageKeyArtifacts(_)
+                    | KagemushaCommand::RecursiveCompactKeyArtifacts(_)
+                    | KagemushaCommand::LineageRecord(_)
+            )
+        )
+    }
+}
+
 impl Run for RootsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
@@ -1096,6 +1109,8 @@ impl Run for IvmDerivePkArgs {
 pub enum KagemushaCommand {
     /// Generate portable Reserved-lineage verifier/proving key artifacts
     LineageKeyArtifacts(KagemushaLineageKeyArtifactsArgs),
+    /// Generate ABI-7 recursive compact verifier/proving key artifacts
+    RecursiveCompactKeyArtifacts(KagemushaRecursiveCompactKeyArtifactsArgs),
     /// Build a Reserved-lineage verifier record from an existing verifier key file
     LineageRecord(KagemushaLineageRecordArgs),
 }
@@ -1104,6 +1119,7 @@ impl Run for KagemushaCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             KagemushaCommand::LineageKeyArtifacts(args) => args.run(context),
+            KagemushaCommand::RecursiveCompactKeyArtifacts(args) => args.run(context),
             KagemushaCommand::LineageRecord(args) => args.run(context),
         }
     }
@@ -1150,6 +1166,25 @@ pub struct KagemushaLineageKeyArtifactsArgs {
     /// Optional output path for the proving key archive bytes
     #[arg(long, value_name = "PATH")]
     pk_out: Option<std::path::PathBuf>,
+    /// Optional output path for a Norito `VerifyingKeyRecord`
+    #[arg(long, value_name = "PATH")]
+    record_out: Option<std::path::PathBuf>,
+    /// Namespace to embed in `--record-out`
+    #[arg(long, default_value = "offline_kagemusha")]
+    record_namespace: String,
+    /// Governance version to embed in `--record-out`
+    #[arg(long, default_value_t = 1)]
+    record_version: u32,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct KagemushaRecursiveCompactKeyArtifactsArgs {
+    /// Output path for ABI-7 recursive compact verifier key envelope bytes
+    #[arg(long, value_name = "PATH")]
+    vk_out: std::path::PathBuf,
+    /// Output path for ABI-7 recursive compact proving key archive bytes
+    #[arg(long, value_name = "PATH")]
+    pk_out: std::path::PathBuf,
     /// Optional output path for a Norito `VerifyingKeyRecord`
     #[arg(long, value_name = "PATH")]
     record_out: Option<std::path::PathBuf>,
@@ -1221,6 +1256,24 @@ fn kagemusha_lineage_vk_record_from_bytes(
     })
 }
 
+#[cfg(test)]
+fn kagemusha_recursive_compact_vk_record_from_bytes(
+    namespace: String,
+    version: u32,
+    vk_bytes: Vec<u8>,
+) -> Result<iroha::data_model::proof::VerifyingKeyRecord> {
+    let vk_box = iroha::data_model::proof::VerifyingKeyBox::new(
+        iroha_core::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+        vk_bytes,
+    );
+    iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_record_from_box(
+        namespace, version, vk_box,
+    )
+    .map_err(|err| {
+        eyre::eyre!("failed to build ABI-7 recursive compact verifier record: {err}")
+    })
+}
+
 impl Run for KagemushaLineageRecordArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let vk_bytes = std::fs::read(&self.vk)
@@ -1246,6 +1299,58 @@ impl Run for KagemushaLineageRecordArgs {
             self.out.display(),
             vk_len,
             record_bytes.len(),
+        ))?;
+        Ok(())
+    }
+}
+
+impl Run for KagemushaRecursiveCompactKeyArtifactsArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let vk_box = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
+            .map_err(|err| eyre::eyre!("failed to generate ABI-7 recursive compact verifier key: {err}"))?;
+        let proving_key =
+            iroha_core::zk::derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes(
+                &vk_box,
+            )
+            .map_err(|err| {
+                eyre::eyre!(
+                    "failed to derive ABI-7 recursive compact proving key archive: {err}"
+                )
+            })?;
+
+        write_kagemusha_lineage_key_artifact_file(&self.vk_out, &vk_box.bytes)
+            .wrap_err_with(|| format!("failed to write {}", self.vk_out.display()))?;
+        write_kagemusha_lineage_key_artifact_file(&self.pk_out, &proving_key)
+            .wrap_err_with(|| format!("failed to write {}", self.pk_out.display()))?;
+
+        let mut record_summary = String::new();
+        if let Some(path) = &self.record_out {
+            let record =
+                iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_record_from_box(
+                    self.record_namespace.clone(),
+                    self.record_version,
+                    vk_box.clone(),
+                )
+                .map_err(|err| {
+                    eyre::eyre!("failed to build ABI-7 recursive compact verifier record: {err}")
+                })?;
+            let record_bytes = norito::to_bytes(&record).map_err(|err| {
+                eyre::eyre!("failed to encode ABI-7 recursive compact verifier record: {err}")
+            })?;
+            record_summary = format!(", record={} bytes", record_bytes.len());
+            write_kagemusha_lineage_key_artifact_file(path, &record_bytes)
+                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+        }
+
+        context.println(format!(
+            "Wrote ABI-7 recursive compact key artifacts for `{}` opening_len={} to {} and {} (vk={} bytes, pk={} bytes{})",
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID,
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN,
+            self.vk_out.display(),
+            self.pk_out.display(),
+            vk_box.bytes.len(),
+            proving_key.len(),
+            record_summary
         ))?;
         Ok(())
     }
@@ -2136,6 +2241,54 @@ mod tests {
         }
     }
 
+    #[test]
+    fn fallback_config_is_limited_to_offline_kagemusha_artifact_commands() {
+        let lineage_artifacts = Command::Kagemusha(KagemushaCommand::LineageKeyArtifacts(
+            KagemushaLineageKeyArtifactsArgs {
+                profile: KagemushaLineageKeyProfile::Init,
+                opening_len: 4,
+                out: "lineage.to".into(),
+                vk_out: None,
+                pk_out: None,
+                record_out: None,
+                record_namespace: "offline_kagemusha".to_owned(),
+                record_version: 1,
+            },
+        ));
+        assert!(lineage_artifacts.allows_fallback_config());
+
+        let compact_artifacts = Command::Kagemusha(
+            KagemushaCommand::RecursiveCompactKeyArtifacts(
+                KagemushaRecursiveCompactKeyArtifactsArgs {
+                    vk_out: "recursive-compact.vk".into(),
+                    pk_out: "recursive-compact.pk".into(),
+                    record_out: Some("recursive-compact.record.norito".into()),
+                    record_namespace: "offline_kagemusha".to_owned(),
+                    record_version: 1,
+                },
+            ),
+        );
+        assert!(compact_artifacts.allows_fallback_config());
+
+        let lineage_record = Command::Kagemusha(KagemushaCommand::LineageRecord(
+            KagemushaLineageRecordArgs {
+                profile: KagemushaLineageKeyProfile::Append,
+                opening_len: 4,
+                vk: "lineage.vk".into(),
+                out: "lineage.record.norito".into(),
+                record_namespace: "offline_kagemusha".to_owned(),
+                record_version: 1,
+            },
+        ));
+        assert!(lineage_record.allows_fallback_config());
+
+        let runtime_roots = Command::Roots(RootsArgs {
+            asset_id: "asset".to_owned(),
+            max: 1,
+        });
+        assert!(!runtime_roots.allows_fallback_config());
+    }
+
     fn append_test_tlv(buf: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
         buf.extend_from_slice(tag);
         buf.extend_from_slice(
@@ -2319,6 +2472,34 @@ mod tests {
     }
 
     #[test]
+    fn kagemusha_recursive_compact_record_from_existing_vk_bytes_rejects_adversarial_inputs() {
+        let lineage_vk = lineage_vk_bytes(
+            iroha_core::zk::KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_CIRCUIT_ID,
+        );
+        let err = kagemusha_recursive_compact_vk_record_from_bytes(
+            "test_kagemusha".to_owned(),
+            1,
+            lineage_vk,
+        )
+        .expect_err("lineage vk must not be accepted as compact-token vk");
+        assert!(
+            format!("{err}").contains(iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID),
+            "unexpected compact circuit-id error: {err}"
+        );
+
+        let err = kagemusha_recursive_compact_vk_record_from_bytes(
+            "test_kagemusha".to_owned(),
+            1,
+            Vec::new(),
+        )
+        .expect_err("empty compact vk bytes must reject");
+        assert!(
+            format!("{err}").contains("invalid CID1/Halo2 IPA verifier-key envelope"),
+            "unexpected empty compact-key error: {err}"
+        );
+    }
+
+    #[test]
     fn build_proof_attachment_from_json_vk_ref() {
         // proof_b64 = "Hello" in base64
         let proof_b64 = "SGVsbG8=";
@@ -2487,11 +2668,35 @@ mod tests {
         for backend in [
             " halo2/ipa",
             "halo2/ipa ",
+            "HALO2/IPA",
+            "stark/FRI",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2//ipa",
+            "halo2/ipa:",
+            "halo2/ipa.",
+            "halo2/ipa/.ivm-execution-v1",
+            "halo2/ipa:ivm..execution-v1",
             "halo2/ipa/orchard",
             "halo2/kzg",
             "groth16/bls12-377",
             "mock/dev",
             "stark/fri/miden",
+            "stark/fri/latest",
+            "stark/fri/random-profile",
+            "stark/fri/sha512-goldilocks",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
+            "halo2/pasta/tiny-add",
+            "halo2/ipa:tiny-add",
+            "halo2/pasta/anon-transfer-2x2",
+            "halo2/ipa:anon-transfer-2x2",
+            "halo2/pasta/vote-bool-commit",
+            "halo2/ipa:vote-bool-commit",
+            "halo2/pasta/asset-hidden-transfer-public-test",
         ] {
             let json = format!(
                 r#"{{
@@ -2517,9 +2722,23 @@ mod tests {
             "halo2/ipa ",
             "\thalo2/ipa",
             "halo2/ipa\n",
+            "HALO2/IPA",
+            "stark/FRI",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2//ipa",
+            "halo2/ipa:",
+            "halo2/ipa.",
+            "halo2/ipa/.ivm-execution-v1",
+            "halo2/ipa:ivm..execution-v1",
             "halo2/ipa/orchard",
             "halo2/kzg",
             "mock/dev",
+            "stark/fri/latest",
+            "stark/fri/random-profile",
+            "stark/fri/boi-audited",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:tiny-add",
+            "halo2/pasta/asset-hidden-transfer-public-test",
         ] {
             let args = ProofFilterArgs {
                 backend: Some(backend.to_string()),
@@ -2537,7 +2756,19 @@ mod tests {
         for literal in [
             " halo2/ipa:vk_transfer",
             "halo2/ipa :vk_transfer",
+            "HALO2/IPA:vk_transfer",
+            "stark/FRI:vk_transfer",
+            "halo2/ipa::ivm-execution-v1:vk_transfer",
+            "halo2//ipa:vk_transfer",
+            "halo2/ipa.:vk_transfer",
+            "halo2/ipa:ivm..execution-v1:vk_transfer",
             "halo2/ipa/orchard:vk_transfer",
+            "stark/fri/latest:vk_transfer",
+            "stark/fri/random-profile:vk_transfer",
+            "stark/fri/boi-audited:vk_transfer",
+            "halo2/ipa:release-ready:vk_transfer",
+            "halo2/ipa:tiny-add:vk_transfer",
+            "halo2/pasta/asset-hidden-transfer-public-test:vk_transfer",
             "mock/dev:vk_transfer",
             "halo2/ipa:",
             "halo2/ipa:vk:shadow",
@@ -2552,6 +2783,19 @@ mod tests {
             parse_vk_id_pair("halo2/ipa:ivm-execution-v1:vk_ivm").expect("colon alias vk id");
         assert_eq!(parsed.backend.as_str(), "halo2/ipa:ivm-execution-v1");
         assert_eq!(parsed.name.as_str(), "vk_ivm");
+
+        let parsed =
+            parse_vk_id_pair("stark/fri/poseidon2-goldilocks:vk_stark").expect("stark vk id");
+        assert_eq!(parsed.backend.as_str(), "stark/fri/poseidon2-goldilocks");
+        assert_eq!(parsed.name.as_str(), "vk_stark");
+
+        let parsed = parse_vk_id_pair("halo2/pasta/kagemusha-recursive-compact-v1:vk_compact")
+            .expect("compact Kagemusha vk id");
+        assert_eq!(
+            parsed.backend.as_str(),
+            "halo2/pasta/kagemusha-recursive-compact-v1"
+        );
+        assert_eq!(parsed.name.as_str(), "vk_compact");
     }
 
     #[test]
@@ -2610,6 +2854,7 @@ mod tests {
             ("groth16/bls12-377", BackendTag::Groth16Bls12377),
             ("penumbra-masp", BackendTag::Groth16Bls12377),
             ("monero-fcmp++", BackendTag::FcmpPlusPlusCurveTree),
+            ("fcmp++", BackendTag::FcmpPlusPlusCurveTree),
             ("sis-with-hints", BackendTag::SisWithHints),
             ("post-quantum-masp", BackendTag::PqMaspStarkFri),
         ] {

@@ -165,7 +165,9 @@ fn zk_gas_per_commitment() -> u64 {
 
 fn halo2_public_input_count(attachment: &ProofAttachment) -> Option<u64> {
     let backend = attachment.backend.as_str();
-    if !backend.starts_with("halo2/") || !crate::zk::is_production_verify_backend_label(backend) {
+    if crate::zk::production_verify_backend_tag(backend)
+        != Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+    {
         return None;
     }
     let env: OpenVerifyEnvelope = decode_from_bytes(&attachment.proof.bytes).ok()?;

@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 from pytests.scripts import iso_operator_evidence_verify_test as evidence_test
+from pytests.scripts import iso_operator_canary_test as canary_test
 from pytests.scripts import iso_xsd_fixture_verify_test as xsd_test
 
 
@@ -67,6 +68,7 @@ def receipt_verification_summary(
                         "message_type": "pacs.002",
                         "payload_sha256": f"{offset + 301:064x}",
                         "profile": "swift-cbpr-plus",
+                        "rail_message_id": f"rail-drop-{offset}",
                     }
                 ),
             }
@@ -228,6 +230,35 @@ def write_evidence_summary(root, *, direct_receipts=True):
     return summary_path
 
 
+def write_plan_only_evidence_summary(root):
+    root.mkdir(parents=True, exist_ok=True)
+    canary_path = evidence_test.write_canary(
+        root,
+        evidence_test.plan_only_canary_summary(),
+    )
+    trust_path = evidence_test.write_trust_summary(root / "trust")
+    summary_path = root / "plan-only-evidence.summary.json"
+    rc, _stdout, stderr = evidence_test.run_evidence(
+        [
+            "--canary-summary",
+            str(canary_path),
+            "--trust-summary",
+            str(trust_path),
+            "--provider",
+            "local-bank",
+            "--environment",
+            "preprod",
+            "--allow-plan-only",
+            "--allow-canary-stage-receipts-only",
+            "--summary-out",
+            str(summary_path),
+        ]
+    )
+    if rc != 0:
+        raise AssertionError(stderr)
+    return summary_path
+
+
 def add_archive_receipt_verification(path, receipt_kind=None, *, verified_receipts=None):
     evidence = json.loads(path.read_text(encoding="utf-8"))
     receipts = None
@@ -247,6 +278,358 @@ def add_archive_receipt_verification(path, receipt_kind=None, *, verified_receip
 
 
 class IsoProductionReadinessTest(unittest.TestCase):
+    def test_replay_placeholder_predicates_match_direct_verifiers(self):
+        endpoint_modules = (
+            evidence_test.rail_test.ADAPTER,
+            evidence_test.audit_test.ADAPTER,
+            canary_test.CANARY,
+            evidence_test.receipt_test.VERIFIER,
+        )
+        reserved_endpoint_hosts = endpoint_modules[0].RESERVED_PLACEHOLDER_HOST_SUFFIXES
+        template_endpoint_hosts = endpoint_modules[0].TEMPLATE_CANARY_ENDPOINT_HOSTS
+        for module in endpoint_modules[1:]:
+            self.assertEqual(module.RESERVED_PLACEHOLDER_HOST_SUFFIXES, reserved_endpoint_hosts)
+            self.assertEqual(module.TEMPLATE_CANARY_ENDPOINT_HOSTS, template_endpoint_hosts)
+        self.assertEqual(
+            evidence_test.EVIDENCE.TEMPLATE_CANARY_ENDPOINT_HOSTS,
+            template_endpoint_hosts,
+        )
+        self.assertEqual(
+            evidence_test.EVIDENCE.PLACEHOLDER_TRUST_SOURCE_HOSTS,
+            reserved_endpoint_hosts | template_endpoint_hosts,
+        )
+        production_host = "pki.swift-bank.examplebank"
+        for module in endpoint_modules:
+            self.assertFalse(module._host_uses_reserved_placeholder_suffix(production_host))
+            self.assertFalse(module._host_uses_template_canary_suffix(production_host))
+            for host in sorted(reserved_endpoint_hosts):
+                with self.subTest(module=module.__name__, reserved_host=host):
+                    self.assertTrue(module._host_uses_reserved_placeholder_suffix(host))
+                    self.assertTrue(
+                        module._host_uses_reserved_placeholder_suffix(f"service.{host}")
+                    )
+                    self.assertFalse(module._host_uses_template_canary_suffix(host))
+            for host in sorted(template_endpoint_hosts):
+                with self.subTest(module=module.__name__, template_host=host):
+                    self.assertFalse(module._host_uses_reserved_placeholder_suffix(host))
+                    self.assertTrue(module._host_uses_template_canary_suffix(host))
+                    self.assertTrue(
+                        module._host_uses_template_canary_suffix(f"service.{host}")
+                    )
+        self.assertFalse(
+            evidence_test.EVIDENCE._host_uses_reserved_placeholder_suffix(production_host)
+        )
+        for host in sorted(reserved_endpoint_hosts | template_endpoint_hosts):
+            with self.subTest(evidence_replay_host=host):
+                self.assertTrue(
+                    evidence_test.EVIDENCE._host_uses_reserved_placeholder_suffix(host)
+                )
+                self.assertTrue(
+                    evidence_test.EVIDENCE._host_uses_reserved_placeholder_suffix(
+                        f"service.{host}"
+                    )
+                )
+
+        self.assertEqual(
+            READINESS.PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS,
+            xsd_test.VERIFIER.PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS,
+        )
+        self.assertEqual(
+            READINESS.PLACEHOLDER_TRUST_SOURCE_MARKERS,
+            evidence_test.EVIDENCE.PLACEHOLDER_TRUST_SOURCE_MARKERS,
+        )
+        self.assertEqual(
+            READINESS.PLACEHOLDER_TRUST_SOURCE_MARKERS,
+            evidence_test.trust_test.VERIFIER.PLACEHOLDER_TRUST_SOURCE_MARKERS,
+        )
+        self.assertEqual(
+            READINESS.PLACEHOLDER_TRUST_SOURCE_HOSTS,
+            evidence_test.EVIDENCE.PLACEHOLDER_TRUST_SOURCE_HOSTS,
+        )
+        self.assertEqual(
+            READINESS.PLACEHOLDER_TRUST_SOURCE_HOSTS,
+            evidence_test.trust_test.VERIFIER.PLACEHOLDER_TRUST_SOURCE_HOSTS,
+        )
+
+        valid_repository = "https://github.com/moov-io/fedwire20022"
+        self.assertFalse(READINESS._xsd_source_repository_is_invalid(valid_repository))
+        self.assertEqual(
+            xsd_test.VERIFIER._validate_source_repository(
+                valid_repository,
+                "source.repository",
+            ),
+            valid_repository,
+        )
+        for component in sorted(READINESS.PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS):
+            for repository in (
+                f"https://github.com/{component}/fedwire20022",
+                f"https://github.com/moov-io/{component}",
+            ):
+                with self.subTest(repository=repository):
+                    self.assertTrue(
+                        READINESS._xsd_source_repository_is_invalid(repository)
+                    )
+                    with self.assertRaises(xsd_test.VERIFIER.FixtureManifestError):
+                        xsd_test.VERIFIER._validate_source_repository(
+                            repository,
+                            "source.repository",
+                        )
+
+        retrieved_at = READINESS.dt.datetime.now(READINESS.dt.UTC).isoformat()
+
+        def source(**overrides):
+            base = {
+                "authority": "Swift operator PKI",
+                "version": "2026-q2",
+                "url": "https://pki.swift-bank.examplebank/source",
+                "retrieved_at": retrieved_at,
+            }
+            base.update(overrides)
+            return base
+
+        production_source = source()
+        self.assertFalse(
+            evidence_test.trust_test.VERIFIER._summary_source_has_placeholder(
+                production_source,
+            )
+        )
+        self.assertTrue(
+            evidence_test.EVIDENCE._computed_profile_json_emittable(
+                allow_synthetic_der=False,
+                allow_record_only=False,
+                allow_insecure_source_url=False,
+                max_source_age_days=365,
+                bundle_summaries=[{"source": production_source}],
+            )
+        )
+        self.assertTrue(
+            READINESS._computed_profile_json_emittable(
+                allow_synthetic_der=False,
+                allow_record_only=False,
+                allow_insecure_source_url=False,
+                max_source_age_days=365,
+                profiles=[{"source": production_source}],
+            )
+        )
+        for flag in (
+            "allow_synthetic_der",
+            "allow_record_only",
+            "allow_insecure_source_url",
+        ):
+            with self.subTest(flag=flag):
+                evidence_kwargs = {
+                    "allow_synthetic_der": False,
+                    "allow_record_only": False,
+                    "allow_insecure_source_url": False,
+                    "max_source_age_days": 365,
+                    "bundle_summaries": [{"source": production_source}],
+                }
+                evidence_kwargs[flag] = True
+                readiness_kwargs = {
+                    "allow_synthetic_der": False,
+                    "allow_record_only": False,
+                    "allow_insecure_source_url": False,
+                    "max_source_age_days": 365,
+                    "profiles": [{"source": production_source}],
+                }
+                readiness_kwargs[flag] = True
+                self.assertFalse(
+                    evidence_test.EVIDENCE._computed_profile_json_emittable(
+                        **evidence_kwargs
+                    )
+                )
+                self.assertFalse(
+                    READINESS._computed_profile_json_emittable(**readiness_kwargs)
+                )
+
+        for marker in READINESS.PLACEHOLDER_TRUST_SOURCE_MARKERS:
+            for field in ("authority", "version"):
+                trust_source = source(**{field: f"rail {marker} source"})
+                with self.subTest(marker=marker, field=field):
+                    self.assertTrue(
+                        evidence_test.trust_test.VERIFIER._summary_source_has_placeholder(
+                            trust_source,
+                        )
+                    )
+                    self.assertFalse(
+                        evidence_test.EVIDENCE._computed_profile_json_emittable(
+                            allow_synthetic_der=False,
+                            allow_record_only=False,
+                            allow_insecure_source_url=False,
+                            max_source_age_days=365,
+                            bundle_summaries=[{"source": trust_source}],
+                        )
+                    )
+                    self.assertFalse(
+                        READINESS._computed_profile_json_emittable(
+                            allow_synthetic_der=False,
+                            allow_record_only=False,
+                            allow_insecure_source_url=False,
+                            max_source_age_days=365,
+                            profiles=[{"source": trust_source}],
+                        )
+                    )
+
+        for host in sorted(READINESS.PLACEHOLDER_TRUST_SOURCE_HOSTS):
+            trust_source = source(url=f"https://pki.{host}/source")
+            with self.subTest(host=host):
+                self.assertTrue(
+                    evidence_test.trust_test.VERIFIER._summary_source_has_placeholder(
+                        trust_source,
+                    )
+                )
+                self.assertFalse(
+                    evidence_test.EVIDENCE._computed_profile_json_emittable(
+                        allow_synthetic_der=False,
+                        allow_record_only=False,
+                        allow_insecure_source_url=False,
+                        max_source_age_days=365,
+                        bundle_summaries=[{"source": trust_source}],
+                    )
+                )
+                self.assertFalse(
+                    READINESS._computed_profile_json_emittable(
+                        allow_synthetic_der=False,
+                        allow_record_only=False,
+                        allow_insecure_source_url=False,
+                        max_source_age_days=365,
+                        profiles=[{"source": trust_source}],
+                    )
+                )
+
+    def test_replay_receipt_policy_predicates_match_direct_verifiers(self):
+        receipt_verifier = evidence_test.receipt_test.VERIFIER
+        evidence_verifier = evidence_test.EVIDENCE
+        rail_adapter = evidence_test.rail_test.ADAPTER
+
+        self.assertEqual(
+            READINESS.REQUIRED_RECEIPT_KINDS,
+            evidence_verifier.REQUIRED_RECEIPT_KINDS,
+        )
+        self.assertEqual(
+            READINESS.REQUIRED_RECEIPT_KINDS,
+            receipt_verifier.SUPPORTED_KINDS,
+        )
+        self.assertEqual(
+            READINESS.LEGACY_RAIL_MESSAGE_TYPES,
+            evidence_verifier.LEGACY_RAIL_MESSAGE_TYPES,
+        )
+        self.assertEqual(
+            READINESS.LEGACY_RAIL_MESSAGE_TYPES,
+            receipt_verifier.LEGACY_RAIL_MESSAGE_TYPES,
+        )
+        self.assertEqual(
+            READINESS.LEGACY_RAIL_MESSAGE_TYPES,
+            rail_adapter.LEGACY_MESSAGE_TYPES,
+        )
+        self.assertEqual(
+            READINESS.SUPPORTED_RAIL_MESSAGE_TYPES,
+            evidence_verifier.SUPPORTED_RAIL_MESSAGE_TYPES,
+        )
+        self.assertEqual(
+            READINESS.SUPPORTED_RAIL_MESSAGE_TYPES,
+            receipt_verifier.SUPPORTED_RAIL_MESSAGE_TYPES,
+        )
+        self.assertEqual(
+            READINESS.SUPPORTED_RAIL_MESSAGE_TYPES,
+            set(rail_adapter.ENDPOINTS),
+        )
+        self.assertEqual(
+            READINESS.RECEIPT_PATH_SUFFIX,
+            evidence_verifier.RECEIPT_PATH_SUFFIX,
+        )
+        self.assertEqual(READINESS.RECEIPT_PATH_SUFFIX, ".receipt.json")
+        self.assertEqual(
+            READINESS.PROFILE_ID_RE.pattern,
+            evidence_verifier.PROFILE_ID_RE.pattern,
+        )
+        self.assertEqual(
+            READINESS.PROFILE_ID_RE.pattern,
+            receipt_verifier.PROFILE_ID_RE.pattern,
+        )
+        self.assertEqual(
+            READINESS.PROFILE_ID_RE.pattern,
+            rail_adapter.PROFILE_ID_RE.pattern,
+        )
+        self.assertEqual(
+            READINESS.MESSAGE_TYPE_RE.pattern,
+            evidence_verifier.MESSAGE_TYPE_RE.pattern,
+        )
+        self.assertEqual(
+            READINESS.MESSAGE_TYPE_RE.pattern,
+            receipt_verifier.MESSAGE_TYPE_RE.pattern,
+        )
+        self.assertIn("colr.012", rail_adapter.ENDPOINTS)
+        self.assertIn("colr.007", rail_adapter.ENDPOINTS)
+        self.assertIn("colr.012", READINESS.SUPPORTED_RAIL_MESSAGE_TYPES)
+        self.assertIn("colr.007", READINESS.SUPPORTED_RAIL_MESSAGE_TYPES)
+        self.assertTrue(READINESS.MESSAGE_TYPE_RE.fullmatch("colr.012"))
+        self.assertTrue(evidence_verifier.MESSAGE_TYPE_RE.fullmatch("colr.012"))
+        self.assertEqual(
+            "colr.007" in READINESS.LEGACY_RAIL_MESSAGE_TYPES,
+            "colr.007" in rail_adapter.LEGACY_MESSAGE_TYPES,
+        )
+        self.assertNotIn("colr.012", READINESS.LEGACY_RAIL_MESSAGE_TYPES)
+        self.assertNotIn("colr.012", rail_adapter.LEGACY_MESSAGE_TYPES)
+
+    def test_replay_profile_taxonomy_predicates_match_direct_verifiers(self):
+        trust_verifier = evidence_test.trust_test.VERIFIER
+        evidence_verifier = evidence_test.EVIDENCE
+        xsd_verifier = xsd_test.VERIFIER
+
+        self.assertEqual(READINESS.KNOWN_RAILS, evidence_verifier.KNOWN_RAILS)
+        self.assertEqual(READINESS.KNOWN_RAILS, trust_verifier.KNOWN_RAILS)
+        self.assertEqual(READINESS.KNOWN_RAILS, xsd_verifier.PROFILE_RAILS)
+        self.assertEqual(
+            READINESS.PROFILE_DIRECTIONS,
+            xsd_verifier.PROFILE_DIRECTIONS,
+        )
+        self.assertEqual(
+            trust_verifier.POLICIES,
+            xsd_verifier.PROFILE_SIGNATURE_POLICIES,
+        )
+        self.assertEqual(
+            READINESS.TRUST_SIGNATURE_POLICIES,
+            trust_verifier.POLICIES,
+        )
+        self.assertEqual(
+            READINESS.TRUST_SIGNATURE_POLICIES,
+            evidence_verifier.TRUST_SIGNATURE_POLICIES,
+        )
+        self.assertEqual(
+            READINESS.REQUIRE_VERIFIED,
+            evidence_verifier.REQUIRE_VERIFIED,
+        )
+        self.assertEqual(
+            READINESS.REQUIRE_VERIFIED,
+            trust_verifier.REQUIRE_VERIFIED,
+        )
+        self.assertIn(READINESS.REQUIRE_VERIFIED, trust_verifier.POLICIES)
+        self.assertEqual(
+            READINESS.ALLOWED_SCHEMA_SOURCE_LICENSES,
+            xsd_verifier.ALLOWED_SCHEMA_SOURCE_LICENSES,
+        )
+        self.assertEqual(
+            READINESS.PROFILE_ID_RE.pattern,
+            evidence_verifier.PROFILE_ID_RE.pattern,
+        )
+        self.assertEqual(
+            READINESS.PROFILE_ID_RE.pattern,
+            trust_verifier.PROFILE_ID_RE.pattern,
+        )
+        self.assertEqual(
+            READINESS.PROFILE_ID_RE.pattern,
+            xsd_verifier.PROFILE_ID_RE.pattern,
+        )
+        self.assertEqual(
+            READINESS.MESSAGE_TYPE_RE.pattern,
+            evidence_verifier.MESSAGE_TYPE_RE.pattern,
+        )
+        self.assertEqual(
+            READINESS.MESSAGE_TYPE_RE.pattern,
+            xsd_verifier.MESSAGE_TYPE_RE.pattern,
+        )
+
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
             ("password_readiness_unknown_secret", "readiness_unknown_secret"),
@@ -601,6 +984,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertRegex(trust_summary["verified_at"], r"^\d{4}-\d{2}-\d{2}T")
             self.assertRegex(trust_summary["summary_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(trust_summary["max_source_age_days"], 36500)
+            self.assertFalse(trust_summary["allow_synthetic_der"])
+            self.assertFalse(trust_summary["allow_record_only"])
+            self.assertFalse(trust_summary["allow_insecure_source_url"])
             self.assertTrue(trust_summary["profile_json_emitted"])
             self.assertTrue(trust_summary["profile_json_emittable"])
             self.assertRegex(trust_summary["profile_json_sha256"], r"^[0-9a-f]{64}$")
@@ -610,7 +996,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 {
                     "authority": "Local Bank Rail PKI",
                     "version": "2026-Q2",
-                    "url": "https://pki.local-bank.example.com/swift-cbpr-plus",
+                    "url": "https://pki.local-bank.bank/swift-cbpr-plus",
                     "retrieved_at": "2026-06-04T00:00:00Z",
                 },
             )
@@ -2148,7 +2534,11 @@ class IsoProductionReadinessTest(unittest.TestCase):
             malformed_cases = []
             missing_source = json.loads(xsd_summary.read_text(encoding="utf-8"))
             missing_source["schemas"][0].pop("source")
-            malformed_cases.append((missing_source, "source must be a JSON object"))
+            malformed_cases.append((missing_source, "source must be recorded"))
+
+            null_source = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            null_source["schemas"][0]["source"] = None
+            malformed_cases.append((null_source, "source must be a JSON object"))
 
             unknown_source_key = json.loads(xsd_summary.read_text(encoding="utf-8"))
             unknown_source_key["schemas"][0]["source"]["unexpected"] = "value"
@@ -2206,10 +2596,56 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+            secret_repository = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            secret_repository["schemas"][0]["source"]["repository"] = (
+                "https://github.com/moov-io/token-readiness-source-secret"
+            )
+            refresh_digest(secret_repository)
+            secret_repository_path = write_json(
+                root / "malformed-xsd-source-secret-repository.summary.json",
+                secret_repository,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(secret_repository_path),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("source.repository contains secret-looking material", stderr)
+            self.assertNotIn("token-readiness-source-secret", stderr)
+
             blocker_cases = []
             bad_repository = json.loads(xsd_summary.read_text(encoding="utf-8"))
             bad_repository["schemas"][0]["source"]["repository"] += ".git"
             blocker_cases.append((bad_repository, "xsd.schema_source_repository_invalid"))
+
+            placeholder_repository_owner = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            placeholder_repository_owner["schemas"][0]["source"]["repository"] = (
+                "https://github.com/example/iso20022-fixtures"
+            )
+            blocker_cases.append(
+                (
+                    placeholder_repository_owner,
+                    "xsd.schema_source_repository_invalid",
+                )
+            )
+
+            placeholder_repository_name = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            placeholder_repository_name["schemas"][0]["source"]["repository"] = (
+                "https://github.com/moov-io/iso20022-template-fixtures"
+            )
+            blocker_cases.append(
+                (
+                    placeholder_repository_name,
+                    "xsd.schema_source_repository_invalid",
+                )
+            )
 
             long_repository = json.loads(xsd_summary.read_text(encoding="utf-8"))
             long_repository["schemas"][0]["source"]["repository"] = (
@@ -2266,6 +2702,16 @@ class IsoProductionReadinessTest(unittest.TestCase):
             )
 
             malformed_cases = []
+            missing_source = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(missing_source, [xsd_test.blocked_schema_source()])
+            missing_source["blocked_schema_sources"][0].pop("source")
+            malformed_cases.append((missing_source, "source must be recorded", None))
+
+            null_source = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(null_source, [xsd_test.blocked_schema_source()])
+            null_source["blocked_schema_sources"][0]["source"] = None
+            malformed_cases.append((null_source, "source must be a JSON object", None))
+
             unknown_key = json.loads(xsd_summary.read_text(encoding="utf-8"))
             attach_blocked_sources(unknown_key, [xsd_test.blocked_schema_source()])
             unknown_key["blocked_schema_sources"][0]["unexpected"] = "value"
@@ -2278,6 +2724,22 @@ class IsoProductionReadinessTest(unittest.TestCase):
             ]
             malformed_cases.append((unsupported_marker, "must be one of", None))
 
+            copyright_only_marker = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(
+                copyright_only_marker,
+                [xsd_test.blocked_schema_source()],
+            )
+            copyright_only_marker["blocked_schema_sources"][0]["restriction_markers"] = [
+                "swift-copyright-header"
+            ]
+            malformed_cases.append(
+                (
+                    copyright_only_marker,
+                    "restriction_markers must include a redistribution restriction marker",
+                    None,
+                )
+            )
+
             secret_reason = json.loads(xsd_summary.read_text(encoding="utf-8"))
             attach_blocked_sources(secret_reason, [xsd_test.blocked_schema_source()])
             secret_reason["blocked_schema_sources"][0]["reason"] = (
@@ -2288,6 +2750,19 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     secret_reason,
                     "secret-looking material",
                     "readiness-blocked-source-secret",
+                )
+            )
+
+            secret_repository = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(secret_repository, [xsd_test.blocked_schema_source()])
+            secret_repository["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/prog-nov/token-readiness-blocked-secret"
+            malformed_cases.append(
+                (
+                    secret_repository,
+                    "source.repository contains secret-looking material",
+                    "token-readiness-blocked-secret",
                 )
             )
 
@@ -2326,6 +2801,36 @@ class IsoProductionReadinessTest(unittest.TestCase):
             attach_blocked_sources(bad_repository, [xsd_test.blocked_schema_source()])
             bad_repository["blocked_schema_sources"][0]["source"]["repository"] += ".git"
             blocker_cases.append((bad_repository, "xsd.blocked_source_repository_invalid"))
+
+            placeholder_repository_owner = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(
+                placeholder_repository_owner,
+                [xsd_test.blocked_schema_source()],
+            )
+            placeholder_repository_owner["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/example/iso20022-blocked"
+            blocker_cases.append(
+                (
+                    placeholder_repository_owner,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
+
+            placeholder_repository_name = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            attach_blocked_sources(
+                placeholder_repository_name,
+                [xsd_test.blocked_schema_source()],
+            )
+            placeholder_repository_name["blocked_schema_sources"][0]["source"][
+                "repository"
+            ] = "https://github.com/prog-nov/iso20022-sample-blocked"
+            blocker_cases.append(
+                (
+                    placeholder_repository_name,
+                    "xsd.blocked_source_repository_invalid",
+                )
+            )
 
             bad_commit = json.loads(xsd_summary.read_text(encoding="utf-8"))
             attach_blocked_sources(bad_commit, [xsd_test.blocked_schema_source()])
@@ -2380,6 +2885,99 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 1, stderr)
                     codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
                     self.assertIn(code, codes)
+
+    def test_xsd_profile_catalog_must_be_recorded(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+
+            omitted = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            omitted.pop("profile_catalog")
+            refresh_digest(omitted)
+            omitted_path = write_json(
+                root / "omitted-xsd-profile-catalog.summary.json",
+                omitted,
+            )
+
+            rc, _stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(omitted_path),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("profile_catalog must be recorded", stderr)
+
+            explicit_null = json.loads(xsd_summary.read_text(encoding="utf-8"))
+            explicit_null["profile_catalog"] = None
+            explicit_null["profile_checked_versions"] = 0
+            explicit_null["profile_schema_backed_versions"] = 0
+            explicit_null["missing_profile_schema_versions"] = []
+            refresh_digest(explicit_null)
+            null_path = write_json(
+                root / "null-xsd-profile-catalog.summary.json",
+                explicit_null,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(null_path),
+                    "--evidence-summary",
+                    str(evidence_summary),
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("xsd.profile_catalog_empty", codes)
+
+    def test_xsd_manifest_path_must_be_recorded_and_canonical(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "omitted",
+                    lambda body: body.pop("manifest"),
+                    "manifest must be a non-empty string",
+                ),
+                (
+                    "parent-segment",
+                    lambda body: body.__setitem__("manifest", "../fixture_manifest.json"),
+                    "manifest must not contain dot or parent segments",
+                ),
+            )
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    xsd = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    mutate(xsd)
+                    refresh_digest(xsd)
+                    mutated_path = write_json(
+                        root / f"malformed-xsd-manifest-{name}.summary.json",
+                        xsd,
+                    )
+
+                    rc, _stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
 
     def test_forged_xsd_profile_catalog_metadata_blocks_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3062,6 +3660,102 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("trust.profile_json_not_emittable", codes)
             self.assertIn("trust.profile_json_emitted_not_emittable", codes)
 
+    def test_missing_compact_trust_source_blocks_readiness_without_malformed_abort(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_root = root / "evidence"
+            evidence_root.mkdir()
+            notary_receipts, rail_receipts = evidence_test.write_https_receipt_dirs(evidence_root)
+            canary_path = evidence_test.write_canary(
+                evidence_root,
+                evidence_test.valid_canary_summary(
+                    receipt_entries=evidence_test.receipt_entries_from_dirs(
+                        notary_receipts,
+                        rail_receipts,
+                    )
+                ),
+            )
+            trust_path = evidence_test.write_trust_summary(evidence_root / "trust")
+            evidence_test.rewrite_trust_summary(
+                trust_path,
+                lambda trust: (
+                    trust.__setitem__("max_source_age_days", None),
+                    trust.__setitem__("profile_json_emitted", False),
+                    trust.__setitem__("profile_json_emittable", False),
+                    trust.__setitem__("profile_json_sha256", None),
+                    trust["bundles"][0].__setitem__("source", None),
+                ),
+            )
+            evidence_summary = evidence_root / "evidence.summary.json"
+            rc, _stdout, stderr = evidence_test.run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--provider",
+                    "local-bank",
+                    "--environment",
+                    "preprod",
+                    "--allow-missing-trust-source",
+                    "--allow-profile-json-not-emitted",
+                    "--receipt-dir",
+                    str(notary_receipts),
+                    "--receipt-dir",
+                    str(rail_receipts),
+                    "--summary-out",
+                    str(evidence_summary),
+                ]
+            )
+            self.assertEqual(rc, 0, stderr)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(evidence_summary)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            summary = json.loads(stdout)
+            codes = {blocker["code"] for blocker in summary["blockers"]}
+            self.assertIn("evidence.policy.allow_missing_trust_source", codes)
+            self.assertIn("evidence.policy.allow_profile_json_not_emitted", codes)
+            self.assertIn("trust.source_missing", codes)
+            self.assertIn("trust.profile_json_not_emitted", codes)
+            self.assertIn("trust.profile_json_not_emittable", codes)
+            trust_profile = summary["evidence_summaries"][0]["trust_summaries"][0]["profiles"][0]
+            self.assertIsNone(trust_profile["source"])
+
+    def test_compact_trust_verifier_override_flags_block_readiness(self):
+        cases = (
+            ("allow_synthetic_der", "trust.allow_synthetic_der"),
+            ("allow_record_only", "trust.allow_record_only"),
+            ("allow_insecure_source_url", "trust.allow_insecure_source_url"),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for field, blocker_code in cases:
+                with self.subTest(field=field):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    evidence["trust_summaries"][0][field] = True
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"trust-override-{field}.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertIn(blocker_code, codes)
+                    self.assertIn("trust.profile_json_emittable_drift", codes)
+
     def test_missing_evidence_policy_flag_is_malformed(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -3666,6 +4360,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 ("path", "path must be a non-empty string"),
                 ("verified_at", "verified_at must be a non-empty string"),
                 ("max_source_age_days", "max_source_age_days must be recorded"),
+                ("allow_synthetic_der", "allow_synthetic_der must be a boolean"),
+                ("allow_record_only", "allow_record_only must be a boolean"),
+                ("allow_insecure_source_url", "allow_insecure_source_url must be a boolean"),
                 ("profile_json_emitted", "profile_json_emitted must be a boolean"),
                 ("profile_json_emittable", "profile_json_emittable must be a boolean"),
                 ("profile_json_sha256", "profile_json_sha256 must be a lowercase SHA-256 digest"),
@@ -4046,6 +4743,30 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 ),
             ),
             (
+                "dummy-authority",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "authority",
+                    "Dummy Swift operator PKI",
+                ),
+            ),
+            (
+                "fake-version",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "version",
+                    "fake-v1",
+                ),
+            ),
+            (
+                "sample-authority",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "authority",
+                    "Sample Swift operator PKI",
+                ),
+            ),
+            (
                 "version",
                 lambda evidence: set_source_field(
                     evidence,
@@ -4054,11 +4775,43 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 ),
             ),
             (
+                "template-version",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "version",
+                    "template-v1",
+                ),
+            ),
+            (
                 "url",
                 lambda evidence: set_source_field(
                     evidence,
                     "url",
                     "https://pki.swift.example.invalid/iso20022",
+                ),
+            ),
+            (
+                "reserved-url",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "url",
+                    "https://pki.swift.example.com/iso20022",
+                ),
+            ),
+            (
+                "reserved-tld-url",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "url",
+                    "https://pki.swift.example/iso20022",
+                ),
+            ),
+            (
+                "template-canary-url",
+                lambda evidence: set_source_field(
+                    evidence,
+                    "url",
+                    "https://pki.swift.operator-canary.bank/iso20022",
                 ),
             ),
         )
@@ -4455,6 +5208,34 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("evidence.receipts_allow_default_profile", codes)
             self.assertIn("evidence.archive_receipts_allow_default_profile", codes)
 
+            missing_profile = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            for receipt_summary in (
+                missing_profile["canary_summaries"][0]["receipt_summary"],
+                missing_profile["receipt_verification"],
+            ):
+                receipt_summary["allow_default_profile"] = True
+                receipt_summary["receipts"][1].pop("profile")
+                refresh_digest(receipt_summary)
+            refresh_digest(missing_profile)
+            missing_profile_path = write_json(
+                root / "missing-default-profile-receipts.summary.json",
+                missing_profile,
+            )
+
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(missing_profile_path),
+                ]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.receipt_metadata_invalid", codes)
+            self.assertIn("evidence.archive_receipt_metadata_invalid", codes)
+
     def test_nonproduction_trust_policy_and_zero_pins_block_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -4479,6 +5260,22 @@ class IsoProductionReadinessTest(unittest.TestCase):
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("trust.policy_not_require_verified", codes)
             self.assertIn("trust.no_signature_or_x509_pins", codes)
+
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            evidence["trust_summaries"][0]["profiles"][0][
+                "embedded_signature_policy"
+            ] = "diagnostic-only"
+            refresh_digest(evidence)
+            mutated_path = write_json(root / "unsupported-trust-policy.summary.json", evidence)
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(mutated_path)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("trust.policy_unsupported", codes)
+            self.assertNotIn("trust.policy_not_require_verified", codes)
 
     def test_missing_trust_revocation_proof_is_malformed(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -4902,6 +5699,22 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertTrue(diagnostic["ok"])
             self.assertTrue(diagnostic["policy"]["allow_canary_stage_receipts_only"])
 
+            omitted = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            omitted.pop("receipt_verification")
+            refresh_digest(omitted)
+            omitted_path = write_json(root / "omitted-archive-receipts.summary.json", omitted)
+            rc, _stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(omitted_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("receipt_verification must be recorded", stderr)
+
             partial = add_archive_receipt_verification(
                 write_evidence_summary(root / "partial-evidence"),
                 ["iso-rail-gateway"],
@@ -4912,6 +5725,103 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertEqual(rc, 1, stderr)
             codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
             self.assertIn("evidence.archive_receipt_kinds_missing", codes)
+
+    def test_plan_only_evidence_reports_blockers_without_receipt_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = write_plan_only_evidence_summary(root / "evidence")
+
+            rc, stdout, stderr = run_readiness(
+                ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(evidence_summary)]
+            )
+
+            self.assertEqual(rc, 1, stderr)
+            summary = json.loads(stdout)
+            codes = {blocker["code"] for blocker in summary["blockers"]}
+            self.assertIn("evidence.policy.allow_plan_only", codes)
+            self.assertIn("evidence.policy.allow_canary_stage_receipts_only", codes)
+            self.assertIn("evidence.plan_only", codes)
+            self.assertIn("evidence.archive_receipts_not_reverified", codes)
+            canary = summary["evidence_summaries"][0]["canary_summaries"][0]
+            self.assertIsNone(canary["receipt_summary"])
+            self.assertEqual(canary["verified_receipts"], 0)
+            self.assertEqual(canary["receipt_kind"], [])
+
+    def test_plan_only_evidence_must_not_smuggle_receipt_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = write_plan_only_evidence_summary(root / "evidence")
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            evidence["canary_summaries"][0]["receipt_summary"] = receipt_verification_summary()
+            refresh_digest(evidence)
+            forged_path = write_json(root / "plan-only-smuggled-receipts.summary.json", evidence)
+
+            rc, _stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(forged_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("receipt_summary must be null for plan-only evidence", stderr)
+
+    def test_plan_only_evidence_must_record_null_receipt_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = write_plan_only_evidence_summary(root / "evidence")
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            evidence["canary_summaries"][0].pop("receipt_summary")
+            refresh_digest(evidence)
+            forged_path = write_json(root / "plan-only-omitted-receipts.summary.json", evidence)
+
+            rc, _stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(forged_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("receipt_summary must be recorded", stderr)
+
+    def test_plan_only_evidence_must_not_record_stage_windows(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = write_plan_only_evidence_summary(root / "evidence")
+            evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            evidence["canary_summaries"][0]["stage_windows"] = [
+                {
+                    "name": "rail",
+                    "started_at": "2026-06-04T00:00:00+00:00",
+                    "finished_at": "2026-06-04T00:00:00+00:00",
+                }
+            ]
+            refresh_digest(evidence)
+            forged_path = write_json(root / "plan-only-stage-window.summary.json", evidence)
+
+            rc, _stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(forged_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("stage_windows must be empty for plan-only evidence", stderr)
 
     def test_tampered_archive_receipt_summary_is_malformed(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -5043,6 +5953,12 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     lambda receipt: receipt.__setitem__("profile", "sepa-sct-inst"),
                 ),
                 (
+                    "canary-rail-message-id",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    1,
+                    lambda receipt: receipt.__setitem__("rail_message_id", "rail-drop-other"),
+                ),
+                (
                     "canary-status-code",
                     ("canary_summaries", 0, "receipt_summary"),
                     0,
@@ -5052,7 +5968,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "archive-notary-record-count",
                     ("receipt_verification",),
                     0,
-                    lambda receipt: receipt.__setitem__("record_count", 0),
+                    lambda receipt: receipt.__setitem__("record_count", 2),
                 ),
             )
             for name, summary_path, receipt_index, mutate in cases:
@@ -5314,10 +6230,31 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "evidence.receipt_metadata_invalid",
                 ),
                 (
+                    "canary-empty-notary-record-count",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__("record_count", 0),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
                     "canary-rail-unknown-profile",
                     ("canary_summaries", 0, "receipt_summary"),
                     1,
                     lambda receipt: receipt.__setitem__("profile", "unknown_rail"),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-rail-missing-message-id",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    1,
+                    lambda receipt: receipt.pop("rail_message_id"),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-rail-unsupported-message-type",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    1,
+                    lambda receipt: receipt.__setitem__("message_type", "zzzz.999"),
                     "evidence.receipt_metadata_invalid",
                 ),
                 (
@@ -5342,10 +6279,31 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "evidence.archive_receipt_metadata_invalid",
                 ),
                 (
+                    "archive-empty-notary-record-count",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__("record_count", 0),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
                     "archive-legacy-message-type",
                     ("receipt_verification",),
                     1,
                     lambda receipt: receipt.__setitem__("message_type", "colr.007"),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-unsupported-message-type",
+                    ("receipt_verification",),
+                    1,
+                    lambda receipt: receipt.__setitem__("message_type", "zzzz.999"),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-bad-rail-message-id",
+                    ("receipt_verification",),
+                    1,
+                    lambda receipt: receipt.__setitem__("rail_message_id", "rail/drop/1"),
                     "evidence.archive_receipt_metadata_invalid",
                 ),
             )

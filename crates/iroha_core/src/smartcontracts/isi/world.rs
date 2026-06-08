@@ -806,7 +806,7 @@ pub mod isi {
     }
 
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
-        if backend.starts_with("halo2/") {
+        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
             match (
                 normalize_halo2_circuit_id(record_id),
                 normalize_halo2_circuit_id(env_id),
@@ -858,7 +858,7 @@ pub mod isi {
     }
 
     fn voting_circuit_matches(backend: &str, record_circuit_id: &str, expected_id: &str) -> bool {
-        if backend.starts_with("halo2/") {
+        if crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta) {
             halo2_voting_circuit_matches(record_circuit_id, expected_id)
         } else if crate::zk::is_stark_fri_v1_backend(backend) {
             // Enforce canonical vote circuit roles to avoid swapping ballot/tally VKs.
@@ -883,7 +883,7 @@ pub mod isi {
     }
 
     fn is_no_trusted_setup_halo2_backend_id(backend: &str) -> bool {
-        backend.starts_with("halo2/") && !crate::zk::is_trusted_setup_backend_label(backend)
+        crate::zk::production_verify_backend_tag(backend) == Some(BackendTag::Halo2IpaPasta)
     }
 
     fn ensure_production_verifying_key_backend_id(backend: &str) -> Result<(), Error> {
@@ -7423,6 +7423,13 @@ pub mod isi {
         crate::zk::production_verify_backend_tag(backend).is_some_and(|expected| expected == tag)
     }
 
+    fn backend_requires_open_verify_envelope(backend: &str) -> bool {
+        matches!(
+            crate::zk::production_verify_backend_tag(backend),
+            Some(BackendTag::Halo2IpaPasta | BackendTag::Stark)
+        )
+    }
+
     struct ProofEventArgs<'a> {
         pid: &'a iroha_data_model::proof::ProofId,
         attachment: &'a iroha_data_model::proof::ProofAttachment,
@@ -8958,8 +8965,7 @@ pub mod isi {
             let proof = attachment.proof.clone();
             let envelope_meta = decode_open_verify_envelope(&proof);
             let backend_label = attachment.backend.as_str();
-            let expects_envelope = backend_label.starts_with("halo2/")
-                || crate::zk::is_stark_fri_v1_backend(backend_label);
+            let expects_envelope = backend_requires_open_verify_envelope(backend_label);
 
             let envelope_ref = validate_proof_attachment(
                 &attachment,
@@ -17484,6 +17490,26 @@ pub mod isi {
                 "halo2/pasta/ipa/zk-vote",
                 "halo2/ipa:other"
             ));
+            assert!(circuit_id_matches(
+                "halo2/pasta/kagemusha-recursive-compact-v1",
+                "halo2/pasta/ipa/kagemusha-recursive-compact-v1",
+                "halo2/ipa:kagemusha-recursive-compact-v1"
+            ));
+            assert!(!circuit_id_matches(
+                "halo2/pasta/tiny-add",
+                "halo2/pasta/ipa/zk-vote",
+                "halo2/ipa:zk-vote"
+            ));
+            assert!(!circuit_id_matches(
+                "halo2/ipa:production-ready",
+                "halo2/pasta/ipa/zk-vote",
+                "halo2/ipa:zk-vote"
+            ));
+            assert!(!circuit_id_matches(
+                "halo2/ipa::ivm-execution-v1",
+                "halo2/pasta/ipa/ivm-execution-v1",
+                "halo2/ipa:ivm-execution-v1"
+            ));
             assert!(circuit_id_matches("groth16", "plain", "plain"));
             assert!(!circuit_id_matches("groth16", "plain", "plain "));
             assert!(voting_circuit_matches(
@@ -17501,7 +17527,7 @@ pub mod isi {
                 "halo2/pasta/ipa/vote-bool-commit-merkle8",
                 "vote-ballot"
             ));
-            assert!(voting_circuit_matches(
+            assert!(!voting_circuit_matches(
                 "halo2/pasta/ipa/vote-bool-commit-merkle8",
                 "halo2/pasta/vote-bool-commit-merkle8",
                 "vote-tally"
@@ -17530,6 +17556,34 @@ pub mod isi {
                 "halo2/ipa",
                 "halo2/pasta/ipa/vote-bool-commit-merkle8/vote-ballot",
                 "vote-ballot"
+            ));
+            for backend in [
+                "halo2/pasta/tiny-add",
+                "halo2/ipa:tiny-add",
+                "halo2/pasta/asset-hidden-transfer-public-test",
+                "halo2/pasta/vote-bool-commit",
+                "halo2/ipa:vote-bool-commit",
+                "halo2/ipa:production-ready",
+                "halo2/ipa:release-ready",
+                "halo2/ipa:third-party-audited",
+                "halo2/ipa::ivm-execution-v1",
+            ] {
+                assert!(
+                    !voting_circuit_matches(
+                        backend,
+                        "halo2/pasta/ipa/vote-bool-commit-merkle8",
+                        "vote-ballot"
+                    ),
+                    "unsupported backend {backend} must not match legacy vote circuits"
+                );
+                assert!(
+                    !is_no_trusted_setup_halo2_backend_id(backend),
+                    "unsupported backend {backend} must not be classified as production Halo2"
+                );
+            }
+            assert!(is_no_trusted_setup_halo2_backend_id("halo2/ipa"));
+            assert!(is_no_trusted_setup_halo2_backend_id(
+                "halo2/pasta/kagemusha-recursive-compact-v1"
             ));
             assert!(voting_circuit_matches(
                 "stark/fri/sha256-goldilocks",
@@ -18024,6 +18078,10 @@ pub mod isi {
                 "halo2/ipa",
                 BackendTag::Halo2IpaPasta
             ));
+            assert!(backend_requires_open_verify_envelope("halo2/ipa"));
+            assert!(backend_requires_open_verify_envelope(
+                "halo2/pasta/kagemusha-recursive-compact-v1"
+            ));
             assert!(!open_verify_backend_tag_matches(
                 "halo2/ipa",
                 BackendTag::Halo2Bn254
@@ -18044,6 +18102,15 @@ pub mod isi {
                 "stark/fri/sha256-goldilocks",
                 BackendTag::Stark
             ));
+            assert!(backend_requires_open_verify_envelope(
+                "stark/fri/sha256-goldilocks"
+            ));
+            assert!(backend_requires_open_verify_envelope(
+                "stark/fri/poseidon2-goldilocks"
+            ));
+            assert!(backend_requires_open_verify_envelope(
+                "stark/fri/sha256_goldilocks.v1"
+            ));
             assert!(!open_verify_backend_tag_matches(
                 "stark/fri/sha256-goldilocks",
                 BackendTag::Halo2IpaPasta
@@ -18056,6 +18123,22 @@ pub mod isi {
                 "unknown/privacy/backend",
                 BackendTag::Halo2IpaPasta
             ));
+            for rejected_backend in [
+                "halo2/bn254",
+                "halo2/kzg",
+                "halo2/debug",
+                "halo2/mock",
+                "halo2/unknown-native-v1",
+                "halo2/ipa:production-ready",
+                "stark/fri/random-profile",
+                "stark/fri/security-review-passed",
+                "unknown/privacy/backend",
+            ] {
+                assert!(
+                    !backend_requires_open_verify_envelope(rejected_backend),
+                    "{rejected_backend} must not be treated as an admitted enveloped backend"
+                );
+            }
             for pending_backend in [
                 "halo2-ipa-orchard",
                 "groth16-bls12-377",
@@ -23139,10 +23222,16 @@ pub mod isi {
             "halo2/ipa:claimed-production",
             "halo2/ipa:mainnet-ready",
             "halo2/ipa:production-certified",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
             "stark/fri/audit-signoff",
             "stark/fri/externally-audited",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
             "stark/fri/security-review-passed",
             "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
             "stark/fri/a-u-d-i-t-c-l-a-i-m",
         ];
 
