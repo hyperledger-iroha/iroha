@@ -39,7 +39,7 @@ translator: machine-google-reviewed
 - PQ：`pqcrypto-mldsa`、`pqcrypto-traits` — 合法參考包。
 - TLS：`rustls`、`tokio-rustls`、`hyper-rustls` — 規範的現代 Rust TLS 堆棧。
 - 噪聲：`snow` — 規範實現。
-- 序列化：`parity-scale-codec` 是 SCALE 的規範。 Serde 已從整個工作區的生產依賴關係中刪除； Norito 派生/編寫器涵蓋每個運行時路徑。任何殘留的 Serde 引用都存在於歷史文檔、護欄腳本或僅限測試的白名單中。
+- 序列化：`retired codec` 是 retired codec 的規範。 Serde 已從整個工作區的生產依賴關係中刪除； Norito 派生/編寫器涵蓋每個運行時路徑。任何殘留的 Serde 引用都存在於歷史文檔、護欄腳本或僅限測試的白名單中。
 - FFI/庫：`libsodium-sys-stable`、`openssl` — 合法；在生產路徑中更喜歡 Rustls 而不是 OpenSSL（當前代碼已經這樣做了）。
 
 建議：

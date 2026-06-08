@@ -60,12 +60,12 @@ En este repositorio encontrarás documentación sobre las herramientas de Iroha 
 
 ## Norito (códec de serialización)
 
-Norito es el códec de serialización del workspace. No usamos `parity-scale-codec`
-(SCALE). Cuando la documentación o los benchmarks comparan con SCALE, es solo
+Norito es el códec de serialización del workspace. No usamos `retired codec`
+(retired codec). Cuando la documentación o los benchmarks comparan con retired codec, es solo
 como referencia; todos los caminos de producción usan Norito. Las APIs
 `norito::codec::{Encode, Decode}` proporcionan una carga útil Norito sin
 cabecera (“bare”) para hashing y eficiencia en la red: sigue siendo Norito, no
-SCALE.
+retired codec.
 
 Estado actual:
 
@@ -92,4 +92,4 @@ Notas sobre la codificación del endpoint de estado
 
 - El cuerpo de `/status` en Torii usa Norito por defecto con una carga útil sin cabecera (“bare”) para mayor compacidad. Los clientes deben intentar decodificar con Norito primero.
 - Los servidores pueden devolver JSON cuando se solicita; los clientes recurren a JSON si el `content-type` es `application/json`.
-- El formato de red es Norito, no SCALE. Las APIs `norito::codec::{Encode,Decode}` se usan para la variante sin cabecera.
+- El formato de red es Norito, no retired codec. Las APIs `norito::codec::{Encode,Decode}` se usan para la variante sin cabecera.

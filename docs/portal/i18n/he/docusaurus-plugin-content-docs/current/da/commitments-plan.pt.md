@@ -21,7 +21,7 @@ deterministicos que descrevem os blobs aceitos pelo DA-2. Esta not captura as
 estruturas de dados canonicas, os hooks do pipeline de blocos, as provas de
 cliente leve e as superficies Torii/RPC que precisam chegar antes que
 validadores possam confiar nos compromissos DA durante admissao ou checks de
-governanca. Todos OS מטענים sao codificados em Norito; מודעה sem SCALE או JSON
+governanca. Todos OS מטענים sao codificados em Norito; מודעה sem retired codec או JSON
 hoc.
 
 ## אובייקטיביות

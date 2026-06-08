@@ -42,6 +42,7 @@ const PRODUCTION_GATE_REQUIREMENTS = Object.freeze([
   Object.freeze(["witness_privacy_checks", "witness privacy checks are incomplete"]),
   Object.freeze(["deterministic_tests", "deterministic tests are incomplete"]),
   Object.freeze(["negative_adversarial_tests", "negative/adversarial tests are incomplete"]),
+  Object.freeze(["replay_nullifier_tests", "replay/nullifier rejection tests are incomplete"]),
   Object.freeze(["fuzzing", "fuzzing gate is incomplete"]),
   Object.freeze(["parser_fuzzing", "parser fuzzing gate is incomplete"]),
   Object.freeze(["verifier_fuzzing", "verifier fuzzing gate is incomplete"]),
@@ -65,6 +66,16 @@ const POST_QUANTUM_REQUIRED_SOURCE_URLS = Object.freeze([
 const POST_QUANTUM_REQUIRED_PLANNED_ENTRYPOINT_FRAGMENTS = Object.freeze([
   "MlDsa",
   "MlKem",
+]);
+const FORBIDDEN_ENTRYPOINT_EVIDENCE_FRAGMENT_PREFIXES = Object.freeze([
+  "Fake",
+  "Forged",
+  "Missing",
+  "No",
+  "Non",
+  "Not",
+  "Placeholder",
+  "Without",
 ]);
 const POST_QUANTUM_REQUIRED_SECURITY_NOTE_TOKENS = Object.freeze(["ML-DSA", "ML-KEM"]);
 const POST_QUANTUM_REQUIRED_FAILURE_MODE_TOKENS = Object.freeze(["ML-DSA", "ML-KEM"]);
@@ -127,6 +138,10 @@ const STATEFUL_LEDGER_PERSISTENCE_TOKEN_GROUPS = Object.freeze([
   Object.freeze(["persist", "persistence", "restart", "recovery"]),
   Object.freeze(["replay", "nullifier", "revocation", "link-tag", "link tag"]),
 ]);
+const STATEFUL_LEDGER_FAILURE_MODE_TOKEN_GROUPS = Object.freeze([
+  Object.freeze(["stale", "expired", "revoked", "unknown", "wrong"]),
+  Object.freeze(["duplicate", "replay", "replayed", "nullifier", "link-tag", "link tag"]),
+]);
 const WALLET_STATE_REQUIRED_IMPLEMENTATION_STAGES = new Set([
   "chain-executable",
   "sdk-builder",
@@ -147,13 +162,24 @@ const CREDENTIAL_STATE_REQUIRED_CATEGORIES = new Set([
   "credential",
   "identity",
 ]);
-const CREDENTIAL_STATE_METADATA_TOKENS = Object.freeze(["commitment", "accumulator"]);
+const CREDENTIAL_STATE_METADATA_TOKENS = Object.freeze([
+  "commitment",
+  "commitments",
+  "accumulator",
+  "accumulators",
+]);
 const VERIFIER_KEY_RECORD_METADATA_FIELDS = Object.freeze([
   "required_state",
   "chain_requirements",
   "setup_steps",
 ]);
 const VERIFIER_KEY_RECORD_METADATA_TOKENS = Object.freeze(["verifier key", "verifier-key"]);
+const AFFIRMED_METADATA_FORBIDDEN_EVIDENCE_PREFIXES = Object.freeze([
+  "no",
+  "non",
+  "not",
+  "without",
+]);
 const CHAIN_DOMAIN_BINDING_METADATA_FIELDS = Object.freeze([
   "public_inputs_schema",
   "security_notes",
@@ -163,26 +189,65 @@ const CHAIN_DOMAIN_BINDING_METADATA_FIELDS = Object.freeze([
 ]);
 const CHAIN_DOMAIN_BINDING_METADATA_TOKENS = Object.freeze([
   "domain_separator",
-  "domain-separat",
   "domain separat",
+  "domain separated",
+  "domain separation",
+  "domain separator",
+  "domain-separated",
+  "domain-separation",
+  "domain-separator",
+  "chain_id",
+  "chain-id",
+  "chain_tag",
+  "chain tag",
+  "tx_digest",
+  "tx digest",
+  "transaction digest",
+  "transaction-digest",
+  "reference_block",
+  "reference block",
+  "reference-block",
+  "rollup_state",
+  "rollup state",
+  "rollup-state",
+  "anchor",
+  "epoch",
+]);
+const CHAIN_DOMAIN_BINDING_FORBIDDEN_EVIDENCE_PREFIXES = Object.freeze([
+  "no",
+  "non",
+  "not",
+  "without",
+]);
+const PUBLIC_INPUT_SCHEMA_CHAIN_DOMAIN_BINDING_TOKEN_FRAGMENTS = Object.freeze([
+  "domain_separator",
   "chain_id",
   "chain_tag",
   "tx_digest",
-  "transaction",
-  "reference_block",
-  "reference block",
-  "rollup_state",
-  "rollup state",
   "anchor",
-  "epoch",
+  "reference_block",
+  "rollup_state",
+]);
+const PUBLIC_INPUT_SCHEMA_FORBIDDEN_EVIDENCE_PREFIXES = Object.freeze([
+  "no",
+  "non",
+  "not",
+  "without",
 ]);
 const SOURCE_REFERENCED_HARDENING_NOTE_TOKEN_GROUPS = Object.freeze([
   Object.freeze(["deterministic vector", "deterministic vectors"]),
   Object.freeze(["negative/adversarial", "negative test", "adversarial test"]),
+  Object.freeze(["replay/nullifier", "replay", "nullifier"]),
   Object.freeze(["parser/verifier fuzzing", "parser fuzzing"]),
   Object.freeze(["parser/verifier fuzzing", "verifier fuzzing"]),
   Object.freeze(["audit", "audited", "review"]),
   Object.freeze(["performance", "benchmark", "latency"]),
+]);
+const SOURCE_REFERENCED_HARDENING_FORBIDDEN_EVIDENCE_PREFIXES = Object.freeze([
+  "no",
+  "non",
+  "not",
+  "without",
 ]);
 const WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS = Object.freeze([
   Object.freeze(["wallet", "witness", "private input", "private inputs", "plaintext", "secret"]),
@@ -195,6 +260,17 @@ const WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS = Object.freeze([
     "must not leak",
     "never leave",
   ]),
+]);
+const WALLET_WITNESS_POSITIVE_NEGATION_PREFIXES = Object.freeze([
+  "not leak",
+  "must not leak",
+  "not expose",
+  "must not expose",
+  "not exposed",
+  "not be exposed",
+  "must not be exposed",
+  "never leave",
+  "never leave the",
 ]);
 const VERIFIER_NEGATIVE_FAILURE_MODE_TOKEN_GROUPS = Object.freeze([
   Object.freeze(["malformed proof", "invalid proof", "proof parse", "proof rejected"]),
@@ -639,7 +715,7 @@ const REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = Object.freeze({
   "zk-ams-recursive-admission-v0": Object.freeze(["duplicate credential admission", "wrong issuer root", "batch omission or account commitment substitution", "recursive proof parameter mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
   "vega-existing-credential-zk-v0": Object.freeze(["expired credential", "wrong issuer", "predicate mismatch", "wallet-binding replay", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
   "silent-threshold-anoncred-v0": Object.freeze(["insufficient issuer threshold", "issuer-set substitution", "credential showing replay", "verifier-policy mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
-  "zk-x509-onchain-identity-v0": Object.freeze(["expired certificate", "revoked certificate", "unknown CA root", "wrong wallet address binding", "stale revocation root", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["expired certificate", "revoked certificate", "unknown CA root", "wrong wallet address binding", "address-binding replay", "stale revocation root", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
   "jindo-lattice-pcs-zk-v0": Object.freeze(["parameter mismatch", "opening claim substitution", "unsupported query set", "backend misclassified as production-ready", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
   "sis-hints-anoncred-pq-v0": Object.freeze(["wrong parameter set", "issuer parameter substitution", "credential showing replay", "overclaiming production readiness from assumption research", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
   "zk-ace-pq-authorization-v0": Object.freeze(["transaction digest substitution", "chain-id or domain-separator mismatch", "replayed nullifier", "revoked identity commitment", "policy hash mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
@@ -651,22 +727,22 @@ const REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = Object.freeze({
   "pq-masp-stark-v0": Object.freeze(["stale asset-set root", "duplicate PQ nullifier", "ML-DSA or ML-KEM domain mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
 });
 const REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID = Object.freeze({
-  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "verange-transparent-range-v1": Object.freeze(["This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "zkat-policy-private-auth-v1": Object.freeze(["Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "zk-ams-recursive-admission-v0": Object.freeze(["Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "vega-existing-credential-zk-v0": Object.freeze(["Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "silent-threshold-anoncred-v0": Object.freeze(["Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "zk-x509-onchain-identity-v0": Object.freeze(["Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "jindo-lattice-pcs-zk-v0": Object.freeze(["This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "sis-hints-anoncred-pq-v0": Object.freeze(["This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "zk-ace-pq-authorization-v0": Object.freeze(["Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "orchard-halo2-actions-v1": Object.freeze(["Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "penumbra-masp-v1": Object.freeze(["Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "monero-fcmp-plus-plus-v1": Object.freeze(["Full-chain membership roots must be canonical and replay protected.", "Link tags/key images must be unique without revealing owned outputs.", "Range-proof and amount-commitment parameters require production verifier review.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "miden-stark-note-v1": Object.freeze(["Private note data and off-chain delivery metadata must stay wallet-local.", "Account-local transition proofs must bind initial and final account commitments.", "Reference blocks must prevent replay against stale account state.", "Production Miden note transactions require audited STARK parameters and account-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "aztec-private-rollup-v1": Object.freeze(["Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.", "Encrypted log delivery metadata must not leak wallet note ownership.", "Recursive verifier registration must distinguish private-kernel versions and rollup state roots.", "Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "pq-masp-stark-v0": Object.freeze(["PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.", "ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.", "Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "verange-transparent-range-v1": Object.freeze(["This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "zkat-policy-private-auth-v1": Object.freeze(["Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "vega-existing-credential-zk-v0": Object.freeze(["Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "silent-threshold-anoncred-v0": Object.freeze(["Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "orchard-halo2-actions-v1": Object.freeze(["Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "penumbra-masp-v1": Object.freeze(["Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["Full-chain membership roots must be canonical and replay protected.", "Link tags/key images must be unique without revealing owned outputs.", "Range-proof and amount-commitment parameters require production verifier review.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "miden-stark-note-v1": Object.freeze(["Private note data and off-chain delivery metadata must stay wallet-local.", "Account-local transition proofs must bind initial and final account commitments.", "Reference blocks must prevent replay against stale account state.", "Production Miden note transactions require audited STARK parameters and account-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "aztec-private-rollup-v1": Object.freeze(["Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.", "Encrypted log delivery metadata must not leak wallet note ownership.", "Recursive verifier registration must distinguish private-kernel versions and rollup state roots.", "Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "pq-masp-stark-v0": Object.freeze(["PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.", "ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.", "Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
 });
 const REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze([
@@ -1147,7 +1223,7 @@ function rawJsPrivacyDescriptor(patch = {}) {
     ],
     securityNotes: [
       "Production readiness requires audit review for shape proof constraints.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
     ],
     requiredState: ["shape verifier key registry"],
     failureModes: ["shape proof rejected"],
@@ -1197,29 +1273,26 @@ function entrypointIsDevFixture(entrypoint) {
 function entrypointIsLocalVerifier(entrypoint) {
   const segments = entrypoint.split(".");
   const name = segments[segments.length - 1];
-  const lower = name.toLowerCase();
   return (
-    lower.startsWith("verify") &&
-    (lower.endsWith("locally") ||
-      lower.endsWith("local") ||
-      lower.includes("localverifier") ||
-      lower.includes("localonly"))
+    name.startsWith("verify") &&
+    (entrypointNameHasEvidenceFragment(name, "Local") ||
+      entrypointNameHasEvidenceFragment(name, "Locally"))
   );
 }
 
 function entrypointIsInstructionBuilder(entrypoint) {
   const segments = entrypoint.split(".");
   const name = segments[segments.length - 1];
-  return name.endsWith("Instruction");
+  return entrypointNameHasTerminalEvidenceFragment(name, "Instruction");
 }
 
 function entrypointIsPlannedLedgerMutation(entrypoint) {
   const segments = entrypoint.split(".");
   const name = segments[segments.length - 1];
   return (
-    name.endsWith("Instruction") ||
-    name.endsWith("Transaction") ||
-    name.includes("Submit")
+    ["Instruction", "Transaction"].some((fragment) =>
+      entrypointNameHasTerminalEvidenceFragment(name, fragment)
+    ) || entrypointNameHasEvidenceFragment(name, "Submit")
   );
 }
 
@@ -1240,7 +1313,7 @@ function entrypointIsProductionProofBuilder(entrypoint) {
   const name = segments[segments.length - 1];
   return (
     name.startsWith("build") &&
-    name.includes("Proof") &&
+    entrypointNameHasEvidenceFragment(name, "Proof") &&
     !entrypointIsInstructionBuilder(entrypoint) &&
     !entrypointIsPlannedLedgerMutation(entrypoint) &&
     !entrypointIsProofHelper(entrypoint) &&
@@ -1248,16 +1321,247 @@ function entrypointIsProductionProofBuilder(entrypoint) {
   );
 }
 
+function publicInputsSchemaHasChainDomainBinding(value) {
+  return value.split(",").some((token) =>
+    PUBLIC_INPUT_SCHEMA_CHAIN_DOMAIN_BINDING_TOKEN_FRAGMENTS.some((fragment) =>
+      publicInputSchemaTokenHasFragment(token, fragment),
+    )
+  );
+}
+
+function entrypointNameHasEvidenceFragment(name, fragment) {
+  let index = name.indexOf(fragment);
+  while (index !== -1) {
+    const prefix = name.slice(0, index);
+    const suffix = name.slice(index + fragment.length);
+    const hasPrefixBoundary = index === 0 || /^[A-Za-z0-9]$/u.test(name[index - 1]);
+    const hasSuffixBoundary = suffix === "" || /^[A-Z0-9]$/u.test(suffix[0]);
+    const hasForbiddenPrefix = FORBIDDEN_ENTRYPOINT_EVIDENCE_FRAGMENT_PREFIXES.some(
+      (forbiddenPrefix) => prefix.endsWith(forbiddenPrefix),
+    );
+    if (hasPrefixBoundary && hasSuffixBoundary && !hasForbiddenPrefix) {
+      return true;
+    }
+    index = name.indexOf(fragment, index + 1);
+  }
+  return false;
+}
+
+function entrypointNameHasTerminalEvidenceFragment(name, fragment) {
+  let index = name.indexOf(fragment);
+  while (index !== -1) {
+    const prefix = name.slice(0, index);
+    const suffix = name.slice(index + fragment.length);
+    const hasPrefixBoundary = index === 0 || /^[A-Za-z0-9]$/u.test(name[index - 1]);
+    const hasTerminalSuffix = suffix === "" || /^V[0-9]+$/u.test(suffix);
+    const hasForbiddenPrefix = FORBIDDEN_ENTRYPOINT_EVIDENCE_FRAGMENT_PREFIXES.some(
+      (forbiddenPrefix) => prefix.endsWith(forbiddenPrefix),
+    );
+    if (hasPrefixBoundary && hasTerminalSuffix && !hasForbiddenPrefix) {
+      return true;
+    }
+    index = name.indexOf(fragment, index + 1);
+  }
+  return false;
+}
+
+function plannedEntrypointNameHasPrimitiveFragment(name, fragment) {
+  return entrypointNameHasEvidenceFragment(name, fragment);
+}
+
+function publicInputSchemaTokenHasFragment(token, fragment) {
+  const tokenSegments = token.split("_");
+  const fragmentSegments = fragment.split("_");
+  for (let index = 0; index <= tokenSegments.length - fragmentSegments.length; index += 1) {
+    const matchesFragment = fragmentSegments.every(
+      (segment, offset) => tokenSegments[index + offset] === segment,
+    );
+    if (!matchesFragment) {
+      continue;
+    }
+    const hasForbiddenPrefix = tokenSegments
+      .slice(0, index)
+      .some((prefix) => PUBLIC_INPUT_SCHEMA_FORBIDDEN_EVIDENCE_PREFIXES.includes(prefix));
+    if (!hasForbiddenPrefix) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function catalogTextContainsBoundedToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    const after = index + token.length >= value.length ? "" : value[index + token.length];
+    if (!isAsciiAlnum(before) && !isAsciiAlnum(after)) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextValuesContainBoundedToken(values, token) {
+  return values.some((value) => catalogTextContainsBoundedToken(value, token));
+}
+
+function catalogTextValuesContainAffirmedMetadataToken(values, token) {
+  return values.some((value) => catalogTextContainsAffirmedMetadataToken(value, token));
+}
+
+function catalogTextContainsMetadataToken(value, token) {
+  return token === "zk::"
+    ? catalogTextContainsNamespaceToken(value, token)
+    : catalogTextContainsBoundedToken(value, token);
+}
+
+function catalogTextContainsTypedAdmissionToken(value, token) {
+  return token === "zk::"
+    ? catalogTextContainsAffirmedNamespaceToken(value, token)
+    : catalogTextContainsAffirmedMetadataToken(value, token);
+}
+
+function catalogTextContainsAffirmedNamespaceToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    if (
+      !isAsciiAlnum(before) &&
+      before !== "_" &&
+      !catalogTextHasForbiddenEvidencePrefix(
+        value,
+        index,
+        AFFIRMED_METADATA_FORBIDDEN_EVIDENCE_PREFIXES,
+      )
+    ) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextContainsAffirmedMetadataToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    const after = index + token.length >= value.length ? "" : value[index + token.length];
+    if (
+      !isAsciiAlnum(before) &&
+      !isAsciiAlnum(after) &&
+      !catalogTextHasForbiddenEvidencePrefix(
+        value,
+        index,
+        AFFIRMED_METADATA_FORBIDDEN_EVIDENCE_PREFIXES,
+      )
+    ) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextContainsWalletWitnessPrivacyToken(value, token) {
+  if (token.startsWith("not ") || token.startsWith("must not ") || token === "never leave") {
+    return catalogTextContainsMetadataToken(value, token);
+  }
+  if (catalogTextContainsAffirmedMetadataToken(value, token)) {
+    return true;
+  }
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    const after = index + token.length >= value.length ? "" : value[index + token.length];
+    if (
+      !isAsciiAlnum(before) &&
+      !isAsciiAlnum(after) &&
+      catalogTextHasPositiveWalletWitnessPrivacyPrefix(value, index)
+    ) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextHasPositiveWalletWitnessPrivacyPrefix(value, index) {
+  const segments = value.slice(0, index).toLowerCase().match(/[a-z0-9]+/gu) ?? [];
+  const tail = segments.slice(-5).join(" ");
+  return WALLET_WITNESS_POSITIVE_NEGATION_PREFIXES.some((prefix) => tail.endsWith(prefix));
+}
+
+function catalogTextContainsChainDomainBindingToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    const after = index + token.length >= value.length ? "" : value[index + token.length];
+    if (
+      !isAsciiAlnum(before) &&
+      !isAsciiAlnum(after) &&
+      !catalogTextHasForbiddenEvidencePrefix(
+        value,
+        index,
+        CHAIN_DOMAIN_BINDING_FORBIDDEN_EVIDENCE_PREFIXES,
+      )
+    ) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextContainsSourceHardeningToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    const after = index + token.length >= value.length ? "" : value[index + token.length];
+    if (
+      !isAsciiAlnum(before) &&
+      !isAsciiAlnum(after) &&
+      !catalogTextHasForbiddenEvidencePrefix(
+        value,
+        index,
+        SOURCE_REFERENCED_HARDENING_FORBIDDEN_EVIDENCE_PREFIXES,
+      )
+    ) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextHasForbiddenEvidencePrefix(value, index, forbiddenPrefixes) {
+  const prefix = value.slice(0, index).toLowerCase();
+  const segments = prefix.match(/[a-z0-9]+/gu) ?? [];
+  return segments.slice(-3).some((segment) => forbiddenPrefixes.includes(segment));
+}
+
+function catalogTextContainsNamespaceToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    if (!isAsciiAlnum(before) && before !== "_") {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function isAsciiAlnum(value) {
+  return /^[A-Za-z0-9]$/u.test(value);
+}
+
 function entrypointIsExplicitDevFixture(entrypoint) {
-  const normalized = entrypoint.replaceAll("-", "_").toLowerCase();
-  const compact = entrypoint.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const segments = entrypoint.split(".");
+  const name = segments[segments.length - 1];
   return (
-    normalized.includes("devfixture") ||
-    normalized.includes("dev_fixture") ||
-    normalized.includes("devprooffixture") ||
-    normalized.includes("dev_proof_fixture") ||
-    compact.includes("devfixture") ||
-    compact.includes("devprooffixture")
+    entrypointNameHasTerminalEvidenceFragment(name, "DevFixture") ||
+    entrypointNameHasTerminalEvidenceFragment(name, "DevProofFixture")
   );
 }
 
@@ -2231,7 +2535,7 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
     ].map((value) => value.toLowerCase());
     assert.ok(
       LEDGER_MUTATION_PROTECTION_METADATA_TOKENS.some((token) =>
-        protectionValues.some((value) => value.includes(token)),
+        catalogTextValuesContainAffirmedMetadataToken(protectionValues, token),
       ),
       `${label} ${descriptor.id} planned ledger-mutating entrypoints missing protection metadata`,
     );
@@ -2240,22 +2544,37 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
     ).join(" ").toLowerCase();
     assert.ok(
       TYPED_CHAIN_ADMISSION_TYPE_TOKENS.some((token) =>
-        typedAdmissionText.includes(token),
+        catalogTextContainsTypedAdmissionToken(typedAdmissionText, token),
       ) &&
         TYPED_CHAIN_ADMISSION_MUTATION_TOKENS.some((token) =>
-          typedAdmissionText.includes(token),
+          catalogTextContainsTypedAdmissionToken(typedAdmissionText, token),
       ),
       `${label} ${descriptor.id} planned ledger-mutating entrypoints missing typed chain admission metadata`,
     );
     const requiredStateText = descriptor.required_state.join(" ").toLowerCase();
-    if (STATEFUL_LEDGER_STATE_TOKENS.some((token) => requiredStateText.includes(token))) {
+    if (
+      STATEFUL_LEDGER_STATE_TOKENS.some((token) =>
+        catalogTextContainsAffirmedMetadataToken(requiredStateText, token),
+      )
+    ) {
       const persistenceText = STATEFUL_LEDGER_PERSISTENCE_METADATA_FIELDS.flatMap(
         (field) => descriptor[field],
       ).join(" ").toLowerCase();
       for (const tokens of STATEFUL_LEDGER_PERSISTENCE_TOKEN_GROUPS) {
         assert.ok(
-          tokens.some((token) => persistenceText.includes(token)),
+          tokens.some((token) =>
+            catalogTextContainsAffirmedMetadataToken(persistenceText, token),
+          ),
           `${label} ${descriptor.id} planned ledger-mutating entrypoints missing restart/persistence metadata for ${tokens.join("/")}`,
+        );
+      }
+      const failureModesText = descriptor.failure_modes.join(" ").toLowerCase();
+      for (const tokens of STATEFUL_LEDGER_FAILURE_MODE_TOKEN_GROUPS) {
+        assert.ok(
+          tokens.some((token) =>
+            catalogTextContainsAffirmedMetadataToken(failureModesText, token),
+          ),
+          `${label} ${descriptor.id} planned ledger-mutating entrypoints missing stale-state or duplicate/replay failure-mode metadata for ${tokens.join("/")}`,
         );
       }
     }
@@ -2266,13 +2585,17 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
   ) {
     const requiredStateText = descriptor.required_state.join(" ").toLowerCase();
     assert.ok(
-      WALLET_STATE_METADATA_TOKENS.some((token) => requiredStateText.includes(token)),
+      WALLET_STATE_METADATA_TOKENS.some((token) =>
+        catalogTextContainsAffirmedMetadataToken(requiredStateText, token),
+      ),
       `${label} ${descriptor.id} missing wallet or witness required-state metadata`,
     );
     const securityNotesText = descriptor.security_notes.join(" ").toLowerCase();
     for (const tokens of WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS) {
       assert.ok(
-        tokens.some((token) => securityNotesText.includes(token)),
+        tokens.some((token) =>
+          catalogTextContainsWalletWitnessPrivacyToken(securityNotesText, token),
+        ),
         `${label} ${descriptor.id} missing wallet/witness privacy note for ${tokens.join("/")}`,
       );
     }
@@ -2283,7 +2606,9 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
   ) {
     const requiredStateText = descriptor.required_state.join(" ").toLowerCase();
     assert.ok(
-      CREDENTIAL_STATE_METADATA_TOKENS.some((token) => requiredStateText.includes(token)),
+      CREDENTIAL_STATE_METADATA_TOKENS.some((token) =>
+        catalogTextContainsAffirmedMetadataToken(requiredStateText, token),
+      ),
       `${label} ${descriptor.id} missing credential commitment/accumulator required-state metadata`,
     );
   }
@@ -2304,7 +2629,7 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
     const failureModesText = descriptor.failure_modes.join(" ").toLowerCase();
     for (const tokens of VERIFIER_NEGATIVE_FAILURE_MODE_TOKEN_GROUPS) {
       assert.ok(
-        tokens.some((token) => failureModesText.includes(token)),
+        tokens.some((token) => catalogTextContainsAffirmedMetadataToken(failureModesText, token)),
         `${label} ${descriptor.id} missing source-referenced verifier negative failure mode for ${tokens.join("/")}`,
       );
     }
@@ -2313,7 +2638,7 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
     ).join(" ").toLowerCase();
     assert.ok(
       VERIFIER_KEY_RECORD_METADATA_TOKENS.some((token) =>
-        verifierKeyRecordText.includes(token),
+        catalogTextContainsAffirmedMetadataToken(verifierKeyRecordText, token),
       ),
       `${label} ${descriptor.id} missing verifier-key record metadata`,
     );
@@ -2330,16 +2655,20 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
     ).join(" ").toLowerCase();
     assert.ok(
       CHAIN_DOMAIN_BINDING_METADATA_TOKENS.some((token) =>
-        chainDomainBindingText.includes(token),
+        catalogTextContainsChainDomainBindingToken(chainDomainBindingText, token),
       ),
       `${label} ${descriptor.id} missing chain/domain binding metadata`,
+    );
+    assert.ok(
+      publicInputsSchemaHasChainDomainBinding(descriptor.public_inputs_schema),
+      `${label} ${descriptor.id} missing chain/domain binding public input`,
     );
   }
   if (SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementation_stage)) {
     const securityNotesText = descriptor.security_notes.join(" ").toLowerCase();
     for (const tokens of SOURCE_REFERENCED_HARDENING_NOTE_TOKEN_GROUPS) {
       assert.ok(
-        tokens.some((token) => securityNotesText.includes(token)),
+        tokens.some((token) => catalogTextContainsSourceHardeningToken(securityNotesText, token)),
         `${label} ${descriptor.id} missing source-referenced hardening gate note for ${tokens.join("/")}`,
       );
     }
@@ -2377,13 +2706,13 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
     const securityNotesText = descriptor.security_notes.join(" ").toLowerCase();
     assert.ok(
       RESEARCH_TARGET_PRODUCTION_READINESS_TOKENS.every((token) =>
-        securityNotesText.includes(token),
+        catalogTextContainsAffirmedMetadataToken(securityNotesText, token),
       ),
       `${label} ${descriptor.id} research target missing production readiness note`,
     );
     assert.ok(
       RESEARCH_TARGET_READINESS_EVIDENCE_TOKENS.some((token) =>
-        securityNotesText.includes(token),
+        catalogTextContainsAffirmedMetadataToken(securityNotesText, token),
       ),
       `${label} ${descriptor.id} research target missing audit/review readiness note`,
     );
@@ -2404,7 +2733,9 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
     });
     for (const requiredFragment of POST_QUANTUM_REQUIRED_PLANNED_ENTRYPOINT_FRAGMENTS) {
       assert.ok(
-        plannedEntrypointNames.some((name) => name.includes(requiredFragment)),
+        plannedEntrypointNames.some((name) =>
+          plannedEntrypointNameHasPrimitiveFragment(name, requiredFragment),
+        ),
         `${label} ${descriptor.id} post_quantum row missing planned SDK entrypoint fragment ${requiredFragment}`,
       );
     }
@@ -2415,7 +2746,9 @@ function assertNoDuplicateEntrypoints(label, descriptor) {
     ]) {
       for (const requiredToken of requiredTokens) {
         assert.ok(
-          values.some((value) => value.includes(requiredToken)),
+          values.some((value) =>
+            catalogTextContainsAffirmedMetadataToken(value, requiredToken),
+          ),
           `${label} ${descriptor.id} post_quantum row missing ${fieldName} token ${requiredToken}`,
         );
       }
@@ -2529,7 +2862,7 @@ function assertRequiredPrivacyPlanRows(label, descriptors) {
       algorithmId
     ]) {
       assert.ok(
-        stateText.includes(stateToken),
+        catalogTextContainsAffirmedMetadataToken(stateText, stateToken),
         `${label} ${algorithmId} required production privacy plan state token drifted: ${stateToken}`,
       );
     }
@@ -2541,7 +2874,7 @@ function assertRequiredPrivacyPlanRows(label, descriptors) {
       ...REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID[algorithmId],
     ]) {
       assert.ok(
-        failureModeText.includes(failureToken),
+        catalogTextContainsAffirmedMetadataToken(failureModeText, failureToken),
         `${label} ${algorithmId} required production privacy plan failure-mode token drifted: ${failureToken}`,
       );
     }
@@ -2723,7 +3056,12 @@ test("privacy algorithm catalogs require proof builders on required production p
     );
     assert.match(
       text,
-      /function\s+entrypointIsProductionProofBuilder\([^)]*\)\s*\{[\s\S]*name\.startsWith\("build"\)[\s\S]*name\.includes\("Proof"\)[\s\S]*!entrypointIsInstructionBuilder\(entrypoint\)[\s\S]*!entrypointIsPlannedLedgerMutation\(entrypoint\)[\s\S]*!entrypointIsProofHelper\(entrypoint\)[\s\S]*!entrypointIsDevFixture\(entrypoint\)/,
+      /function\s+entrypointIsPlannedLedgerMutation\([^)]*\)\s*\{[\s\S]*\["Instruction",\s*"Transaction"\]\.some\(\(fragment\)\s*=>[\s\S]*entrypointNameHasTerminalEvidenceFragment\(name,\s*fragment\)[\s\S]*entrypointNameHasEvidenceFragment\(name,\s*"Submit"\)/,
+      `${label} planned ledger mutation classifier must require non-negated entrypoint evidence`,
+    );
+    assert.match(
+      text,
+      /function\s+entrypointIsProductionProofBuilder\([^)]*\)\s*\{[\s\S]*name\.startsWith\("build"\)[\s\S]*entrypointNameHasEvidenceFragment\(name,\s*"Proof"\)[\s\S]*!entrypointIsInstructionBuilder\(entrypoint\)[\s\S]*!entrypointIsPlannedLedgerMutation\(entrypoint\)[\s\S]*!entrypointIsProofHelper\(entrypoint\)[\s\S]*!entrypointIsDevFixture\(entrypoint\)/,
       `${label} production proof-builder classifier must reject ledger mutations and proof helpers`,
     );
     assert.match(
@@ -2750,6 +3088,11 @@ test("privacy algorithm catalogs require proof builders on required production p
     pythonCatalogSource,
     /def\s+_validate_required_privacy_plan_rows[\s\S]*REQUIRED_PRIVACY_PLAN_DISPLAY_TEXT_BY_ALGORITHM_ID[\s\S]*must keep display text[\s\S]*REQUIRED_PRIVACY_PLAN_CATEGORY_BY_ALGORITHM_ID/,
     "Python required production plan rows must keep exact display text",
+  );
+  assert.match(
+    pythonCatalogSource,
+    /def\s+_entrypoint_is_planned_ledger_mutation[\s\S]*_entrypoint_name_has_terminal_evidence_fragment\(name,\s*fragment\)[\s\S]*\("Instruction",\s*"Transaction"\)[\s\S]*_entrypoint_name_has_evidence_fragment\(name,\s*"Submit"\)/,
+    "Python planned ledger mutation classifier must require non-negated entrypoint evidence",
   );
   assert.match(
     pythonCatalogSource,
@@ -2845,8 +3188,28 @@ test("privacy algorithm catalogs require proof builders on required production p
   );
   assert.match(
     pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_state_token_concatenated_false_positive[\s\S]*notwallet account blinding[\s\S]*must retain required state token/,
+    "Python tests must cover required production plan state-token concatenated false positives",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_state_token_negated_bounded_false_positive[\s\S]*not wallet account blinding[\s\S]*must retain required state token/,
+    "Python tests must cover required production plan state-token bounded negation false positives",
+  );
+  assert.match(
+    pythonCatalogTests,
     /test_privacy_catalog_rejects_required_production_privacy_plan_failure_mode_drift[\s\S]*forged failure placeholder[\s\S]*must retain required[\s\S]*failure-mode token/,
     "Python tests must cover required production plan failure-mode drift",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_failure_mode_concatenated_false_positive[\s\S]*notreceiver-set substitution[\s\S]*must retain required[\s\S]*failure-mode token/,
+    "Python tests must cover required production plan failure-mode concatenated false positives",
+  );
+  assert.match(
+    pythonCatalogTests,
+    /test_privacy_catalog_rejects_required_production_privacy_plan_failure_mode_negated_bounded_false_positive[\s\S]*not receiver-set substitution[\s\S]*must retain required[\s\S]*failure-mode token/,
+    "Python tests must cover required production plan failure-mode bounded negation false positives",
   );
   assert.match(
     pythonCatalogTests,
@@ -3628,7 +3991,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         securityNotes: [
           "Orchard note semantics must remain domain-separated.",
           "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-          "Hardening gates require deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance review, and external audit.",
+          "Hardening gates require deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance review, and external audit.",
         ],
         requiredState: [
           "Orchard note commitment tree",
@@ -3639,6 +4002,80 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
           "wrong verifier key",
           "public input mismatch",
         ],
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildOrchardActionBundleProofV1"],
+      },
+      /securityNotes must include production readiness audit or review gating for research targets/,
+    ],
+    [
+      {
+        id: "orchard-halo2-actions-v1",
+        implementationStage: "research-target-as-of-2026-05",
+        sourceReferences: [
+          {
+            label: "ZIP 224 Orchard Shielded Protocol",
+            url: "https://zips.z.cash/zip-0224",
+          },
+        ],
+        securityNotes: [
+          "Orchard note semantics must remain domain-separated.",
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Hardening gates require deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance review, and external audit.",
+          "notproduction readiness planning remains gated.",
+        ],
+        requiredState: [
+          "Orchard note commitment tree",
+          "wallet Orchard witness store",
+          "Orchard action-bundle verifier key registry",
+        ],
+        failureModes: [
+          "stale anchor",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register Orchard verifier key parameters."],
+        executionSteps: ["Build Orchard proof."],
+        proofFamily: "halo2-pasta-action-bundle",
+        publicInputsSchema: "anchor,nullifiers,cmx",
+        verifierKeyId: "orchard_halo2_action_bundle_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildOrchardActionBundleProofV1"],
+      },
+      /securityNotes must include production readiness audit or review gating for research targets/,
+    ],
+    [
+      {
+        id: "orchard-halo2-actions-v1",
+        implementationStage: "research-target-as-of-2026-05",
+        sourceReferences: [
+          {
+            label: "ZIP 224 Orchard Shielded Protocol",
+            url: "https://zips.z.cash/zip-0224",
+          },
+        ],
+        securityNotes: [
+          "Orchard note semantics must remain domain-separated.",
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Hardening gates require deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance review, and external audit.",
+          "not production readiness planning remains gated.",
+        ],
+        requiredState: [
+          "Orchard note commitment tree",
+          "wallet Orchard witness store",
+          "Orchard action-bundle verifier key registry",
+        ],
+        failureModes: [
+          "stale anchor",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register Orchard verifier key parameters."],
+        executionSteps: ["Build Orchard proof."],
+        proofFamily: "halo2-pasta-action-bundle",
+        publicInputsSchema: "anchor,nullifiers,cmx",
+        verifierKeyId: "orchard_halo2_action_bundle_v1",
         sdkEntrypoints: [],
         plannedSdkEntrypoints: ["buildOrchardActionBundleProofV1"],
       },
@@ -4007,7 +4444,73 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         sdkEntrypoints: [],
         plannedSdkEntrypoints: [
           "buildPqMaspStarkTransferProofV0",
+          "generateNotMlDsaKeyPair",
+          "encapsulateMlKem",
+        ],
+      },
+      /plannedSdkEntrypoints must include planned ML-DSA authorization and ML-KEM note-encryption SDK entrypoints/,
+    ],
+    [
+      {
+        id: "pq-masp-stark-v0",
+        implementationStage: "research-target-as-of-2026-05",
+        coveredCriteria: ["post_quantum"],
+        pqLayers: {
+          proof: true,
+          authorization: true,
+          noteEncryption: true,
+        },
+        sourceReferences: [
+          {
+            label: "FIPS 203",
+            url: "https://csrc.nist.gov/pubs/fips/203/final",
+          },
+          {
+            label: "FIPS 204",
+            url: "https://csrc.nist.gov/pubs/fips/204/final",
+          },
+          {
+            label: "FIPS 205",
+            url: "https://csrc.nist.gov/pubs/fips/205/final",
+          },
+        ],
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildPqMaspStarkTransferProofV0",
           "generateMlDsaKeyPair",
+        ],
+      },
+      /plannedSdkEntrypoints must include planned ML-DSA authorization and ML-KEM note-encryption SDK entrypoints/,
+    ],
+    [
+      {
+        id: "pq-masp-stark-v0",
+        implementationStage: "research-target-as-of-2026-05",
+        coveredCriteria: ["post_quantum"],
+        pqLayers: {
+          proof: true,
+          authorization: true,
+          noteEncryption: true,
+        },
+        sourceReferences: [
+          {
+            label: "FIPS 203",
+            url: "https://csrc.nist.gov/pubs/fips/203/final",
+          },
+          {
+            label: "FIPS 204",
+            url: "https://csrc.nist.gov/pubs/fips/204/final",
+          },
+          {
+            label: "FIPS 205",
+            url: "https://csrc.nist.gov/pubs/fips/205/final",
+          },
+        ],
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildPqMaspStarkTransferProofV0",
+          "generateMlDsaKeyPair",
+          "encapsulateNotMlKem",
         ],
       },
       /plannedSdkEntrypoints must include planned ML-DSA authorization and ML-KEM note-encryption SDK entrypoints/,
@@ -4043,6 +4546,78 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
           "encapsulateMlKem",
         ],
         securityNotes: ["ML-DSA domains require audit"],
+        failureModes: ["ML-DSA or ML-KEM domain mismatch"],
+        requiredState: ["ML-KEM encrypted note payload store"],
+      },
+      /securityNotes must include post-quantum primitive risk notes/,
+    ],
+    [
+      {
+        id: "pq-masp-stark-v0",
+        implementationStage: "research-target-as-of-2026-05",
+        coveredCriteria: ["post_quantum"],
+        pqLayers: {
+          proof: true,
+          authorization: true,
+          noteEncryption: true,
+        },
+        sourceReferences: [
+          {
+            label: "FIPS 203",
+            url: "https://csrc.nist.gov/pubs/fips/203/final",
+          },
+          {
+            label: "FIPS 204",
+            url: "https://csrc.nist.gov/pubs/fips/204/final",
+          },
+          {
+            label: "FIPS 205",
+            url: "https://csrc.nist.gov/pubs/fips/205/final",
+          },
+        ],
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildPqMaspStarkTransferProofV0",
+          "generateMlDsaKeyPair",
+          "encapsulateMlKem",
+        ],
+        securityNotes: ["not ML-DSA and not ML-KEM primitive domains require audit"],
+        failureModes: ["ML-DSA or ML-KEM domain mismatch"],
+        requiredState: ["ML-KEM encrypted note payload store"],
+      },
+      /securityNotes must include post-quantum primitive risk notes/,
+    ],
+    [
+      {
+        id: "pq-masp-stark-v0",
+        implementationStage: "research-target-as-of-2026-05",
+        coveredCriteria: ["post_quantum"],
+        pqLayers: {
+          proof: true,
+          authorization: true,
+          noteEncryption: true,
+        },
+        sourceReferences: [
+          {
+            label: "FIPS 203",
+            url: "https://csrc.nist.gov/pubs/fips/203/final",
+          },
+          {
+            label: "FIPS 204",
+            url: "https://csrc.nist.gov/pubs/fips/204/final",
+          },
+          {
+            label: "FIPS 205",
+            url: "https://csrc.nist.gov/pubs/fips/205/final",
+          },
+        ],
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildPqMaspStarkTransferProofV0",
+          "generateMlDsaKeyPair",
+          "encapsulateMlKem",
+        ],
+        securityNotes: ["notML-DSA and notML-KEM primitive domains require audit"],
         failureModes: ["ML-DSA or ML-KEM domain mismatch"],
         requiredState: ["ML-KEM encrypted note payload store"],
       },
@@ -4115,8 +4690,152 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
           "encapsulateMlKem",
         ],
         securityNotes: ["ML-DSA and ML-KEM primitive domains require audit"],
+        failureModes: ["not ML-DSA or not ML-KEM domain mismatch"],
+        requiredState: ["ML-KEM encrypted note payload store"],
+      },
+      /failureModes must include post-quantum primitive failure modes/,
+    ],
+    [
+      {
+        id: "pq-masp-stark-v0",
+        implementationStage: "research-target-as-of-2026-05",
+        coveredCriteria: ["post_quantum"],
+        pqLayers: {
+          proof: true,
+          authorization: true,
+          noteEncryption: true,
+        },
+        sourceReferences: [
+          {
+            label: "FIPS 203",
+            url: "https://csrc.nist.gov/pubs/fips/203/final",
+          },
+          {
+            label: "FIPS 204",
+            url: "https://csrc.nist.gov/pubs/fips/204/final",
+          },
+          {
+            label: "FIPS 205",
+            url: "https://csrc.nist.gov/pubs/fips/205/final",
+          },
+        ],
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildPqMaspStarkTransferProofV0",
+          "generateMlDsaKeyPair",
+          "encapsulateMlKem",
+        ],
+        securityNotes: ["ML-DSA and ML-KEM primitive domains require audit"],
+        failureModes: ["notML-DSA or notML-KEM domain mismatch"],
+        requiredState: ["ML-KEM encrypted note payload store"],
+      },
+      /failureModes must include post-quantum primitive failure modes/,
+    ],
+    [
+      {
+        id: "pq-masp-stark-v0",
+        implementationStage: "research-target-as-of-2026-05",
+        coveredCriteria: ["post_quantum"],
+        pqLayers: {
+          proof: true,
+          authorization: true,
+          noteEncryption: true,
+        },
+        sourceReferences: [
+          {
+            label: "FIPS 203",
+            url: "https://csrc.nist.gov/pubs/fips/203/final",
+          },
+          {
+            label: "FIPS 204",
+            url: "https://csrc.nist.gov/pubs/fips/204/final",
+          },
+          {
+            label: "FIPS 205",
+            url: "https://csrc.nist.gov/pubs/fips/205/final",
+          },
+        ],
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildPqMaspStarkTransferProofV0",
+          "generateMlDsaKeyPair",
+          "encapsulateMlKem",
+        ],
+        securityNotes: ["ML-DSA and ML-KEM primitive domains require audit"],
         failureModes: ["ML-DSA or ML-KEM domain mismatch"],
         requiredState: ["PQ nullifier set"],
+      },
+      /requiredState must include post-quantum note-encryption state/,
+    ],
+    [
+      {
+        id: "pq-masp-stark-v0",
+        implementationStage: "research-target-as-of-2026-05",
+        coveredCriteria: ["post_quantum"],
+        pqLayers: {
+          proof: true,
+          authorization: true,
+          noteEncryption: true,
+        },
+        sourceReferences: [
+          {
+            label: "FIPS 203",
+            url: "https://csrc.nist.gov/pubs/fips/203/final",
+          },
+          {
+            label: "FIPS 204",
+            url: "https://csrc.nist.gov/pubs/fips/204/final",
+          },
+          {
+            label: "FIPS 205",
+            url: "https://csrc.nist.gov/pubs/fips/205/final",
+          },
+        ],
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildPqMaspStarkTransferProofV0",
+          "generateMlDsaKeyPair",
+          "encapsulateMlKem",
+        ],
+        securityNotes: ["ML-DSA and ML-KEM primitive domains require audit"],
+        failureModes: ["ML-DSA or ML-KEM domain mismatch"],
+        requiredState: ["notML-KEM encrypted note payload store"],
+      },
+      /requiredState must include post-quantum note-encryption state/,
+    ],
+    [
+      {
+        id: "pq-masp-stark-v0",
+        implementationStage: "research-target-as-of-2026-05",
+        coveredCriteria: ["post_quantum"],
+        pqLayers: {
+          proof: true,
+          authorization: true,
+          noteEncryption: true,
+        },
+        sourceReferences: [
+          {
+            label: "FIPS 203",
+            url: "https://csrc.nist.gov/pubs/fips/203/final",
+          },
+          {
+            label: "FIPS 204",
+            url: "https://csrc.nist.gov/pubs/fips/204/final",
+          },
+          {
+            label: "FIPS 205",
+            url: "https://csrc.nist.gov/pubs/fips/205/final",
+          },
+        ],
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildPqMaspStarkTransferProofV0",
+          "generateMlDsaKeyPair",
+          "encapsulateMlKem",
+        ],
+        securityNotes: ["ML-DSA and ML-KEM primitive domains require audit"],
+        failureModes: ["ML-DSA or ML-KEM domain mismatch"],
+        requiredState: ["not ML-KEM encrypted note payload store"],
       },
       /requiredState must include post-quantum note-encryption state/,
     ],
@@ -4253,6 +4972,94 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [
       {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: [
+          "zkAt verifier key registry",
+          "typed zk::ZkAtPolicyCommitment instruction admission",
+        ],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "authorization not replay guard",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "not nullifier replay state",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: [
+          "Submit typed zk::ZkAtPolicyCommitment instruction with tx_digest.",
+        ],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyCommitmentInstruction"],
+      },
+      /ledger-mutating entries require replay, nullifier, revocation, or link-tag protection metadata/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: [
+          "zkAt verifier key registry",
+          "typed zk::ZkAtPolicyCommitment instruction admission",
+        ],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "authorization notreplay guard",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "stale notreplay state",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: [
+          "Submit typed zk::ZkAtPolicyCommitment instruction with tx_digest.",
+        ],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyCommitmentInstruction"],
+      },
+      /ledger-mutating entries require replay, nullifier, revocation, or link-tag protection metadata/,
+    ],
+    [
+      {
         implementationStage: null,
         sdkEntrypoints: [],
         plannedSdkEntrypoints: [
@@ -4264,6 +5071,54 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         chainRequirements: ["shape verifier registry"],
         setupSteps: ["Register shape verifier."],
         executionSteps: ["Submit shape proof."],
+      },
+      /ledger-mutating entries require explicit typed chain admission metadata/,
+    ],
+    [
+      {
+        implementationStage: null,
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildShapeTransferInstruction",
+          "buildShapeAuthorizedTransaction",
+        ],
+        requiredState: ["shape replay guard"],
+        failureModes: ["shape replay"],
+        chainRequirements: ["shape verifier registry"],
+        setupSteps: ["Register shape verifier."],
+        executionSteps: ["Submit untyped shape noninstruction admission."],
+      },
+      /ledger-mutating entries require explicit typed chain admission metadata/,
+    ],
+    [
+      {
+        implementationStage: null,
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildShapeTransferInstruction",
+          "buildShapeAuthorizedTransaction",
+        ],
+        requiredState: ["shape replay guard"],
+        failureModes: ["shape replay"],
+        chainRequirements: ["shape verifier registry"],
+        setupSteps: ["Register shape verifier."],
+        executionSteps: ["Submit notzk::ShapeTransfer admission."],
+      },
+      /ledger-mutating entries require explicit typed chain admission metadata/,
+    ],
+    [
+      {
+        implementationStage: null,
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: [
+          "buildShapeTransferInstruction",
+          "buildShapeAuthorizedTransaction",
+        ],
+        requiredState: ["shape replay guard"],
+        failureModes: ["shape replay"],
+        chainRequirements: ["shape verifier registry"],
+        setupSteps: ["Register shape verifier."],
+        executionSteps: ["Submit not typed shape no instruction admission."],
       },
       /ledger-mutating entries require explicit typed chain admission metadata/,
     ],
@@ -4285,7 +5140,7 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         ],
         securityNotes: [
           "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-          "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
         ],
         requiredState: [
           "policy commitment registry",
@@ -4294,6 +5149,52 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
           "zkAt verifier key registry",
         ],
         failureModes: ["authorization replay"],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: [
+          "Submit typed zk::ZkAtPolicyCommitment instruction with tx_digest.",
+        ],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyCommitmentInstruction"],
+      },
+      /ledger-mutating entries require restart\/persistence metadata for root, nullifier, revocation, or replay state/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: [
+          "zkAt verifier key registry",
+          "typed zk::ZkAtPolicyCommitment instruction admission",
+        ],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Replay guard must not persist across restart.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "authorization replay guard",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "stale replay state",
+          "duplicate replay rejection",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
         setupSteps: ["Register zkAt verifier key."],
         executionSteps: [
           "Submit typed zk::ZkAtPolicyCommitment instruction with tx_digest.",
@@ -4339,6 +5240,72 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
     [
       {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier"],
+        securityNotes: ["Policy proof review required."],
+        requiredState: ["policy commitment registry", "notwallet policy notwitness store"],
+        failureModes: [
+          "policy-root substitution",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register policy verifier."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /requiredState must include wallet or witness state metadata for source-referenced privacy flows/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier"],
+        securityNotes: ["Policy proof review required."],
+        requiredState: [
+          "policy commitment registry",
+          "not wallet policy store",
+          "no witness state",
+        ],
+        failureModes: [
+          "policy-root substitution",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register policy verifier."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /requiredState must include wallet or witness state metadata for source-referenced privacy flows/,
+    ],
+    [
+      {
         id: "vega-existing-credential-zk-v0",
         category: "credential",
         implementationStage: "sdk-builder",
@@ -4358,6 +5325,84 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
           "credential issuer registry",
           "wallet credential witness store",
           "revocation policy",
+        ],
+        failureModes: [
+          "credential replay",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register credential verifier."],
+        executionSteps: ["Build credential proof."],
+        proofFamily: "existing-credential-zk",
+        publicInputsSchema: "issuer_commitment,credential_schema",
+        verifierKeyId: "vega_existing_credential_zk_v0",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildVegaCredentialPredicateProofV0"],
+      },
+      /requiredState must include credential, identity, or admission commitment\/accumulator state metadata/,
+    ],
+    [
+      {
+        id: "vega-existing-credential-zk-v0",
+        category: "credential",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "Vega source",
+            url: "https://www.microsoft.com/en-us/research/publication/vega-low-latency-zero-knowledge-proofs-over-existing-credentials/",
+          },
+        ],
+        recommendedFor: ["credential predicate proofs"],
+        chainRequirements: ["credential predicate verifier"],
+        securityNotes: [
+          "Credential proof review required.",
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+        ],
+        requiredState: [
+          "credential issuer registry",
+          "wallet credential witness store",
+          "notcommitment predicate store",
+          "notaccumulator admission state",
+        ],
+        failureModes: [
+          "credential replay",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register credential verifier."],
+        executionSteps: ["Build credential proof."],
+        proofFamily: "existing-credential-zk",
+        publicInputsSchema: "issuer_commitment,credential_schema",
+        verifierKeyId: "vega_existing_credential_zk_v0",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildVegaCredentialPredicateProofV0"],
+      },
+      /requiredState must include credential, identity, or admission commitment\/accumulator state metadata/,
+    ],
+    [
+      {
+        id: "vega-existing-credential-zk-v0",
+        category: "credential",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "Vega source",
+            url: "https://www.microsoft.com/en-us/research/publication/vega-low-latency-zero-knowledge-proofs-over-existing-credentials/",
+          },
+        ],
+        recommendedFor: ["credential predicate proofs"],
+        chainRequirements: ["credential predicate verifier"],
+        securityNotes: [
+          "Credential proof review required.",
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+        ],
+        requiredState: [
+          "credential issuer registry",
+          "wallet credential witness store",
+          "not commitment predicate store",
+          "without accumulator admission state",
         ],
         failureModes: [
           "credential replay",
@@ -4421,6 +5466,82 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
           },
         ],
         recommendedFor: ["policy privacy"],
+        chainRequirements: ["not verifier key registry"],
+        securityNotes: [
+          "Policy proof review required.",
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "wallet policy witness store",
+          "without verifier-key registry",
+        ],
+        failureModes: [
+          "policy-root substitution",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register no verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /must include verifier-key record metadata for source-referenced verifier entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["notverifier key registry"],
+        securityNotes: [
+          "Policy proof review required.",
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "wallet policy witness store",
+          "notverifier-key registry",
+        ],
+        failureModes: [
+          "policy-root substitution",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register notverifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /must include verifier-key record metadata for source-referenced verifier entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
         chainRequirements: ["zkAt verifier key registry"],
         securityNotes: [
           "Policy proof review required.",
@@ -4461,8 +5582,186 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         recommendedFor: ["policy privacy"],
         chainRequirements: ["zkAt verifier key registry"],
         securityNotes: [
+          "Policy proof is not domain separation evidence.",
           "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-          "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "without tx_digest binding",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key without anchor evidence."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,not_tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /must include chain\/domain binding metadata for source-referenced verifier entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "notdomain-separation planning remains under review.",
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "policy-root substitution",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,notanchor",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /must include chain\/domain binding metadata for source-referenced verifier entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: ["policy commitment registry", "wallet policy witness store"],
+        failureModes: [
+          "domain separator mismatch",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,policy_hash",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /publicInputsSchema must include chain\/domain binding public input for source-referenced verifier entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: ["policy commitment registry", "wallet policy witness store"],
+        failureModes: [
+          "domain separator mismatch",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,not_tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /publicInputsSchema must include chain\/domain binding public input for source-referenced verifier entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: ["policy commitment registry", "wallet policy witness store"],
+        failureModes: [
+          "domain separator mismatch",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,notanchor",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /publicInputsSchema must include chain\/domain binding public input for source-referenced verifier entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
         ],
         requiredState: [
           "policy commitment registry",
@@ -4495,9 +5794,159 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         recommendedFor: ["policy privacy"],
         chainRequirements: ["zkAt verifier key registry"],
         securityNotes: [
-          "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "authorization replay guard",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "not malformed proof bytes",
+          "not wrong verifier key",
+          "no public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /failureModes must include malformed-proof, wrong-verifier-key, and wrong-public-input rejection for source-referenced verifier entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "authorization replay guard",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "notmalformed proof bytes",
+          "notwrong verifier key",
+          "notpublic input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /failureModes must include malformed-proof, wrong-verifier-key, and wrong-public-input rejection for source-referenced verifier entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
         ],
         requiredState: ["policy commitment registry", "wallet policy witness store"],
+        failureModes: [
+          "policy-root substitution",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /securityNotes must include wallet\/witness privacy notes for source-referenced privacy flows/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "Wallet witness material and private inputs are not local and no private input remains protected.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "policy-root substitution",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /securityNotes must include wallet\/witness privacy notes for source-referenced privacy flows/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "Wallet witness material and private inputs stay notlocal and notexposed through SDK APIs.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
         failureModes: [
           "policy-root substitution",
           "malformed proof bytes",
@@ -4546,7 +5995,170 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         sdkEntrypoints: [],
         plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
       },
-      /securityNotes must include deterministic vectors, negative\/adversarial cases, parser\/verifier fuzzing, performance, and audit\/review hardening gates for source-referenced entries/,
+      /securityNotes must include deterministic vectors, negative\/adversarial cases, replay\/nullifier rejection tests, parser\/verifier fuzzing, performance, and audit\/review hardening gates for source-referenced entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires not deterministic vectors, no negative/adversarial test cases, without replay/nullifier rejection tests, not parser/verifier fuzzing, no verifier fuzzing, not performance gates, and without audit review.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "policy-root substitution",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /securityNotes must include deterministic vectors, negative\/adversarial cases, replay\/nullifier rejection tests, parser\/verifier fuzzing, performance, and audit\/review hardening gates for source-referenced entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: ["zkAt verifier key registry"],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires notdeterministic vectors, notnegative/adversarial test cases, notreplay/nullifier rejection tests, notparser/verifier fuzzing, notperformance gates, and notaudit queue.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "policy-root substitution",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: ["Build policy proof."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1"],
+      },
+      /securityNotes must include deterministic vectors, negative\/adversarial cases, replay\/nullifier rejection tests, parser\/verifier fuzzing, performance, and audit\/review hardening gates for source-referenced entries/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: [
+          "zkAt verifier key registry",
+          "typed zk::ZkAtPolicyCommitment instruction admission",
+        ],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "authorization replay guard",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key and persist replay state."],
+        executionSteps: ["Build policy proof and update replay guard."],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyProofV1", "buildZkAtPolicyInstruction"],
+      },
+      /failureModes must include stale-state and duplicate\/replay rejection for ledger-mutating root, nullifier, revocation, or replay state/,
+    ],
+    [
+      {
+        id: "zkat-policy-private-auth-v1",
+        category: "authorization",
+        implementationStage: "sdk-builder",
+        sourceReferences: [
+          {
+            label: "zkAt source",
+            url: "https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.AFT.2025.2",
+          },
+        ],
+        recommendedFor: ["policy privacy"],
+        chainRequirements: [
+          "zkAt verifier key registry",
+          "typed zk::ZkAtPolicyCommitment instruction admission",
+        ],
+        securityNotes: [
+          "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
+          "Replay guard must persist across restart.",
+          "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+        ],
+        requiredState: [
+          "policy commitment registry",
+          "authorization replay guard",
+          "wallet policy witness store",
+          "zkAt verifier key registry",
+        ],
+        failureModes: [
+          "not stale replay state",
+          "no duplicate replay rejection",
+          "malformed proof bytes",
+          "wrong verifier key",
+          "public input mismatch",
+        ],
+        setupSteps: ["Register zkAt verifier key."],
+        executionSteps: [
+          "Submit typed zk::ZkAtPolicyCommitment instruction with tx_digest.",
+        ],
+        proofFamily: "zkat-policy-private-authenticator",
+        publicInputsSchema: "policy_commitment,tx_digest",
+        verifierKeyId: "zkat_policy_private_auth_v1",
+        sdkEntrypoints: [],
+        plannedSdkEntrypoints: ["buildZkAtPolicyCommitmentInstruction"],
+      },
+      /failureModes must include stale-state and duplicate\/replay rejection for ledger-mutating root, nullifier, revocation, or replay state/,
     ],
     [
       {
@@ -4689,6 +6301,28 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     [
       {
         implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeNotDevFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeProductionProof"],
+      },
+      /fixture\/mock SDK entrypoints must use explicit DevFixture names/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeNoDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeProductionProof"],
+      },
+      /fixture\/mock SDK entrypoints must use explicit DevFixture names/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
         sdkEntrypoints: ["buildProofFixture"],
       },
       /fixture\/mock SDK entrypoints must use explicit DevFixture names/,
@@ -4731,8 +6365,46 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     [
       {
         implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: [
+          "buildShapeDevProofFixture",
+          "verifyShapeProofNotLocalVerifier",
+        ],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeProductionProof"],
+      },
+      /executable DevFixture SDK entrypoints must be paired with a local verifier entrypoint/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: [
+          "buildShapeDevProofFixture",
+          "verifyShapeProofNonLocalOnly",
+        ],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeProductionProof"],
+      },
+      /executable DevFixture SDK entrypoints must be paired with a local verifier entrypoint/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
         sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
         securityNotes: [],
+      },
+      /executable DevFixture SDK entrypoints must include a security note that marks dev fixtures as non-production/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK not dev fixture is deterministic only; not production Shape proofs remain not unavailable.",
+        ],
       },
       /executable DevFixture SDK entrypoints must include a security note that marks dev fixtures as non-production/,
     ],
@@ -4749,6 +6421,26 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
         implementationStage: "validator-scaffold-as-of-2026-05",
         sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
         securityNotes: ["Production Shape proofs remain unavailable."],
+      },
+      /executable DevFixture SDK entrypoints must include a security note that marks dev fixtures as non-production/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK notdev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+      },
+      /executable DevFixture SDK entrypoints must include a security note that marks dev fixtures as non-production/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; notproduction Shape proofs remain notunavailable.",
+        ],
       },
       /executable DevFixture SDK entrypoints must include a security note that marks dev fixtures as non-production/,
     ],
@@ -4774,6 +6466,28 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
           "buildShapeProductionInstruction",
           "buildShapeProofInstruction",
         ],
+      },
+      /executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeNoProofBuilder"],
+      },
+      /executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass/,
+    ],
+    [
+      {
+        implementationStage: "validator-scaffold-as-of-2026-05",
+        sdkEntrypoints: ["buildShapeDevProofFixture", "verifyShapeProofLocally"],
+        securityNotes: [
+          "The SDK dev fixture is deterministic only; production Shape proofs remain unavailable.",
+        ],
+        plannedSdkEntrypoints: ["buildShapeNotProofBuilder"],
       },
       /executable DevFixture SDK entrypoints must retain a planned production proof builder until production gates pass/,
     ],
@@ -4877,6 +6591,228 @@ test("privacy algorithm JS validators reject hostile catalog descriptor shapes",
     ],
   ]) {
     assertJsValidatorsReject(patch, pattern);
+  }
+});
+
+test("explicit DevFixture classifier requires non-negated terminal fixture evidence", () => {
+  for (const [entrypoint, expected] of [
+    ["buildShapeDevFixture", true],
+    ["buildShapeDevFixtureV1", true],
+    ["buildShapeDevProofFixture", true],
+    ["buildShapeDevProofFixtureV1", true],
+    ["Iroha.Privacy.buildShapeDevProofFixture", true],
+    ["buildShapeNotDevFixture", false],
+    ["buildShapeNoDevFixture", false],
+    ["buildShapeNonDevFixture", false],
+    ["buildShapeWithoutDevFixture", false],
+    ["buildShapeNotDevProofFixture", false],
+    ["buildShapeNoDevProofFixture", false],
+    ["buildShapeNonDevProofFixture", false],
+    ["buildShapeWithoutDevProofFixture", false],
+    ["buildShapeDevFixtureFactory", false],
+    ["buildShapeDevelopmentFixture", false],
+  ]) {
+    assert.equal(
+      entrypointIsExplicitDevFixture(entrypoint),
+      expected,
+      `${entrypoint} explicit DevFixture classification`,
+    );
+  }
+});
+
+test("public input schema chain/domain binding matcher rejects negated fragments", () => {
+  for (const [publicInputsSchema, expected] of [
+    ["policy_commitment,tx_digest", true],
+    ["policy_commitment,policy_tx_digest", true],
+    ["policy_commitment,tx_digest_v1", true],
+    ["policy_commitment,domain_separator", true],
+    ["policy_commitment,policy_domain_separator_hash", true],
+    ["policy_commitment,anchor", true],
+    ["policy_commitment,reference_block_height", true],
+    ["policy_commitment,rollup_state_root", true],
+    ["policy_commitment,not_tx_digest", false],
+    ["policy_commitment,no_chain_id", false],
+    ["policy_commitment,non_chain_tag", false],
+    ["policy_commitment,without_reference_block", false],
+    ["policy_commitment,not_anchor", false],
+    ["policy_commitment,policy_not_tx_digest", false],
+    ["policy_commitment,not_policy_tx_digest", false],
+    ["policy_commitment,no_policy_domain_separator", false],
+    ["policy_commitment,policy_without_reference_block", false],
+    ["policy_commitment,non_policy_rollup_state", false],
+    ["policy_commitment,anchorless", false],
+  ]) {
+    assert.equal(
+      publicInputsSchemaHasChainDomainBinding(publicInputsSchema),
+      expected,
+      `${publicInputsSchema} chain/domain binding classification`,
+    );
+  }
+});
+
+test("chain/domain binding metadata matcher rejects negated bounded tokens", () => {
+  for (const [value, token, expected] of [
+    ["domain separation binds the verifier inputs", "domain separation", true],
+    ["policy tx_digest binding is explicit", "tx_digest", true],
+    ["reference-block finality is pinned", "reference-block", true],
+    ["not domain separation evidence", "domain separation", false],
+    ["without tx_digest binding", "tx_digest", false],
+    ["no policy domain separator", "domain separator", false],
+    ["non-domain-separated placeholder", "domain-separated", false],
+    ["not_anchor placeholder", "anchor", false],
+    ["not a domain separator", "domain separator", false],
+  ]) {
+    assert.equal(
+      catalogTextContainsChainDomainBindingToken(value, token),
+      expected,
+      `${value} / ${token} chain-domain metadata classification`,
+    );
+  }
+});
+
+test("typed chain admission matcher rejects negated bounded tokens", () => {
+  for (const [value, token, expected] of [
+    ["typed zk::SubmitShapeTransfer instruction", "typed", true],
+    ["typed zk::SubmitShapeTransfer instruction", "instruction", true],
+    ["zk::SubmitShapeTransfer", "zk::", true],
+    ["not typed shape instruction", "typed", false],
+    ["typed shape no instruction admission", "instruction", false],
+    ["not transaction admission", "transaction", false],
+    ["not zk::SubmitShapeTransfer", "zk::", false],
+    ["without zk::SubmitShapeTransfer", "zk::", false],
+    ["typed notzk::SubmitShapeTransfer instruction", "zk::", false],
+    ["typed not_zk::SubmitShapeTransfer instruction", "zk::", false],
+  ]) {
+    assert.equal(
+      catalogTextContainsTypedAdmissionToken(value, token),
+      expected,
+      `${value} / ${token} typed admission metadata classification`,
+    );
+  }
+});
+
+test("source hardening metadata matcher rejects negated bounded tokens", () => {
+  for (const [value, token, expected] of [
+    ["deterministic vectors are required", "deterministic vectors", true],
+    ["negative/adversarial test cases are required", "negative/adversarial", true],
+    ["replay/nullifier rejection tests are required", "replay/nullifier", true],
+    ["parser/verifier fuzzing is required", "parser/verifier fuzzing", true],
+    ["performance gates are required", "performance", true],
+    ["external audit review is required", "audit", true],
+    ["not deterministic vectors", "deterministic vectors", false],
+    ["no negative/adversarial test cases", "negative/adversarial", false],
+    ["without replay/nullifier rejection tests", "replay/nullifier", false],
+    ["not parser/verifier fuzzing", "parser/verifier fuzzing", false],
+    ["no verifier fuzzing", "verifier fuzzing", false],
+    ["not performance gates", "performance", false],
+    ["without audit review", "audit", false],
+  ]) {
+    assert.equal(
+      catalogTextContainsSourceHardeningToken(value, token),
+      expected,
+      `${value} / ${token} source hardening metadata classification`,
+    );
+  }
+});
+
+test("affirmed metadata matcher rejects negated bounded state tokens", () => {
+  for (const [value, token, expected] of [
+    ["wallet witness store", "wallet", true],
+    ["credential commitment registry", "commitment", true],
+    ["accumulator state registry", "accumulator", true],
+    ["verifier key registry", "verifier key", true],
+    ["malformed proof bytes", "malformed proof", true],
+    ["wrong verifier key", "wrong verifier key", true],
+    ["public input mismatch", "public input mismatch", true],
+    ["authorization replay guard", "replay", true],
+    ["nullifier set must persist across restart", "nullifier", true],
+    ["nullifier set must persist across restart", "persist", true],
+    ["stale replay state", "stale", true],
+    ["duplicate nullifier rejection", "duplicate", true],
+    ["production readiness audit", "production", true],
+    ["production readiness audit", "audit", true],
+    ["ML-DSA and ML-KEM domains", "ML-DSA", true],
+    ["ML-DSA and ML-KEM domains", "ML-KEM", true],
+    ["not wallet state", "wallet", false],
+    ["no witness store", "witness", false],
+    ["non-wallet placeholder", "wallet", false],
+    ["without commitment registry", "commitment", false],
+    ["not accumulator state", "accumulator", false],
+    ["not verifier key registry", "verifier key", false],
+    ["without verifier-key registration", "verifier-key", false],
+    ["not malformed proof bytes", "malformed proof", false],
+    ["not wrong verifier key", "wrong verifier key", false],
+    ["no public input mismatch", "public input mismatch", false],
+    ["not replay guard", "replay", false],
+    ["without nullifier persistence", "nullifier", false],
+    ["not persist across restart", "persist", false],
+    ["not stale replay state", "stale", false],
+    ["no duplicate nullifier rejection", "duplicate", false],
+    ["not production readiness audit", "production", false],
+    ["no audit review", "audit", false],
+    ["not ML-DSA domain", "ML-DSA", false],
+    ["without ML-KEM state", "ML-KEM", false],
+  ]) {
+    assert.equal(
+      catalogTextContainsAffirmedMetadataToken(value, token),
+      expected,
+      `${value} / ${token} affirmed metadata classification`,
+    );
+  }
+});
+
+test("wallet witness privacy matcher preserves exposure negation and rejects state negation", () => {
+  for (const [value, token, expected] of [
+    ["wallet witness material stays local", "wallet", true],
+    ["wallet witness material stays local", "local", true],
+    ["private inputs must not be exposed", "not be exposed", true],
+    ["plaintext must not leak", "must not leak", true],
+    ["secrets never leave the wallet", "never leave", true],
+    ["must not leak wallet note ownership", "wallet", true],
+    ["must not expose wallet witness data", "wallet", true],
+    ["never leave the wallet", "wallet", true],
+    ["wallet witness material is not local", "local", false],
+    ["no private input remains protected", "private input", false],
+    ["without wallet witness custody", "wallet", false],
+    ["not secret material", "secret", false],
+  ]) {
+    assert.equal(
+      catalogTextContainsWalletWitnessPrivacyToken(value, token),
+      expected,
+      `${value} / ${token} wallet witness privacy classification`,
+    );
+  }
+});
+
+test("planned ledger mutation classifier requires non-negated entrypoint evidence", () => {
+  for (const [entrypoint, expected] of [
+    ["buildShapeTransferInstruction", true],
+    ["Iroha.Privacy.buildShapeTransferInstruction", true],
+    ["buildShapeInstructionV1", true],
+    ["buildShapeAuthorizedTransaction", true],
+    ["buildShapeTransactionV1", true],
+    ["buildSubmitShapeProof", true],
+    ["buildSubmitShapeProofV1", true],
+    ["buildShapeNoInstruction", false],
+    ["buildShapeNotInstruction", false],
+    ["buildShapeNonInstruction", false],
+    ["buildShapeWithoutInstruction", false],
+    ["buildShapeNoTransaction", false],
+    ["buildShapeNotTransaction", false],
+    ["buildMidenStarkTransactionProofV1", false],
+    ["buildNoSubmitShapeProof", false],
+    ["buildNotSubmitShapeProof", false],
+    ["buildNonSubmitShapeProof", false],
+    ["buildWithoutSubmitShapeProof", false],
+    ["buildShapeInstructionalProof", false],
+    ["buildShapeTransactionalProof", false],
+    ["buildShapeSubmitterProof", false],
+  ]) {
+    assert.equal(
+      entrypointIsPlannedLedgerMutation(entrypoint),
+      expected,
+      `${entrypoint} planned ledger mutation classification`,
+    );
   }
 });
 

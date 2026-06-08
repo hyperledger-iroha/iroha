@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { AccountAddress } from "../src/address.js";
 import { noritoEncodeInstruction } from "../src/norito.js";
@@ -11,6 +12,7 @@ import {
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_BSC,
   SCCP_ETH_MAINNET_NETWORK_ID,
+  SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
   SCCP_CODEC_TEXT_UTF8,
   SCCP_CODEC_EVM_HEX,
   SCCP_CODEC_SOLANA_BASE58,
@@ -18,6 +20,8 @@ import {
   SCCP_CODEC_TRON_BASE58CHECK,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
+  SCCP_BSC_TESTNET_EVM_CHAIN_ID,
+  SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_STARK_FRI_PROOF_FAMILY_V1,
   SCCP_SOURCE_STATE_MAX_PROOF_BYTES,
   SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES,
@@ -64,6 +68,8 @@ import {
   TAIRA_XOR_BURN_TO_TAIRA_SELECTOR_V1,
   SCCP_ZERO_HASH_V1,
   SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD,
+  BscMainnetSccp,
+  BscTestnetSccp,
   BscMainnetSccpProver,
   EvmSccpProver,
   SolanaSccpSourceStateProver,
@@ -171,6 +177,7 @@ import {
   canonicalSccpMerkleProofBytes,
   canonicalSccpMessageProofBundleBytes,
   canonicalSccpPayloadEnvelopeBytes,
+  sccpMerkleRootFromCommitment,
   canonicalTonSccpShardProofBytes,
   canonicalTonSccpFullLightClientAuditStatementBytes,
   canonicalTonShardStateProofPublicInputsBytes,
@@ -201,6 +208,8 @@ import {
   ethSyncCommitteeTransitionSignatureHash,
   bscMainnetSccpDestinationBinding,
   bscMainnetSccpDestinationBindingHash,
+  bscTestnetSccpDestinationBinding,
+  bscTestnetSccpDestinationBindingHash,
   evmSccpDestinationBinding,
   evmSccpDestinationBindingHash,
   evmSccpReceiptProofHash,
@@ -475,6 +484,25 @@ const sampleEvmDestinationBindingInput = (overrides = {}) => ({
 
 const sampleEvmDestinationBinding = (overrides = {}) =>
   evmSccpDestinationBinding(sampleEvmDestinationBindingInput(overrides));
+
+const sampleBscDestinationBindingInput = (overrides = {}) => ({
+  targetDomain: SCCP_DOMAIN_BSC,
+  verifierAddress: `0x${"11".repeat(20)}`,
+  bridgeAddress: `0x${"22".repeat(20)}`,
+  verifierCodeHash: `0x${"bb".repeat(32)}`,
+  verifierKeyHash: `0x${"cc".repeat(32)}`,
+  ...overrides,
+});
+
+const sampleBscMainnetDestinationBinding = (overrides = {}) =>
+  bscMainnetSccpDestinationBinding(
+    sampleBscDestinationBindingInput(overrides),
+  );
+
+const sampleBscTestnetDestinationBinding = (overrides = {}) =>
+  bscTestnetSccpDestinationBinding(
+    sampleBscDestinationBindingInput(overrides),
+  );
 
 const sampleTronDestinationBindingInput = (overrides = {}) => ({
   networkId: `0x${"33".repeat(32)}`,
@@ -830,6 +858,13 @@ const groth16ProofBytes = (words = []) => {
   return out;
 };
 const GROTH16_PROOF_BYTES = groth16ProofBytes();
+const groth16ProofBytesForPublicInputs = (publicInputs) =>
+  groth16ProofBytes([
+    abiWord(1),
+    testHexToBytes(publicInputs.messageId, 32),
+    abiWord(SCCP_DOMAIN_SORA),
+    testHexToBytes(publicInputs.commitmentRoot, 32),
+  ]);
 const SOLANA_SIGNATURE_55 =
   "2hxGyn4y9Mjkii76BqmxVoNYbTs3tw97bmtZRXnDoZPAw7VZTWhhk1aV11DtFgYGVibPaty4PQLHVLaKrT24NxGU";
 const SOLANA_ZERO_SIGNATURE = "1".repeat(64);
@@ -1271,14 +1306,135 @@ function sampleEthExecutionHeaderRlp(
   ]);
 }
 
-const sampleTonPublicInputs = {
-  version: 1,
-  messageId: HEX32_D,
-  payloadHash: HEX32_E,
-  targetDomain: SCCP_DOMAIN_TON,
-  commitmentRoot: HEX32_F,
-  finalityHeight: 19n,
-  finalityBlockHash: HEX32_A,
+const buildSampleTonProofBundleFixture = ({
+  sourceDomain = SCCP_DOMAIN_SORA,
+  senderCodec = SCCP_CODEC_TEXT_UTF8,
+  sender = "alice@sora",
+  nonce = 327n,
+  amount = 42n,
+  routeId = "sccp-ton-proof-request",
+  merkleProof = { steps: [] },
+} = {}) => {
+  const payload = {
+    version: 1,
+    source_domain: sourceDomain,
+    dest_domain: SCCP_DOMAIN_TON,
+    nonce,
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: "xor#ton",
+    amount,
+    sender_codec: senderCodec,
+    sender,
+    recipient_codec: SCCP_CODEC_TON_RAW,
+    recipient: `0:${"12".repeat(32)}`,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: routeId,
+  };
+  const payloadEnvelope = { kind: "Transfer", value: payload };
+  const payloadBytes = canonicalSccpPayloadEnvelopeBytes(payloadEnvelope);
+  const messageId = sccpTransferMessageId(payload);
+  const payloadHash = sccpPayloadHash(payloadBytes);
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    target_domain: SCCP_DOMAIN_TON,
+    message_id: messageId,
+    payload_hash: payloadHash,
+  };
+  const commitmentRoot = sccpMerkleRootFromCommitment(commitment, merkleProof);
+  return Object.freeze({
+    publicInputs: Object.freeze({
+      version: 1,
+      messageId,
+      payloadHash,
+      targetDomain: SCCP_DOMAIN_TON,
+      commitmentRoot,
+      finalityHeight: 19n,
+      finalityBlockHash: HEX32_A,
+    }),
+    bundleBytes: canonicalSccpMessageProofBundleBytes({
+      version: 1,
+      commitment_root: commitmentRoot,
+      commitment,
+      merkle_proof: merkleProof,
+      payload: payloadEnvelope,
+      finality_proof: [0x71, 0x72],
+    }),
+  });
+};
+
+const sampleTonProofBundleFixture = buildSampleTonProofBundleFixture();
+
+const sampleTonPublicInputs = sampleTonProofBundleFixture.publicInputs;
+const sampleTonBundleBytes = sampleTonProofBundleFixture.bundleBytes;
+
+const readU32LeFromBytes = (bytes, offset, label) => {
+  if (offset + 4 > bytes.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  return (
+    bytes[offset] |
+    (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) |
+    (bytes[offset + 3] << 24)
+  ) >>> 0;
+};
+
+const u32LeBytes = (value) =>
+  Uint8Array.from([
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 24) & 0xff,
+  ]);
+
+const readCanonicalVecRange = (bytes, offset, label) => {
+  const length = readU32LeFromBytes(bytes, offset, label);
+  const bytesStart = offset + 4;
+  const bytesEnd = bytesStart + length;
+  if (bytesEnd > bytes.length) {
+    throw new TypeError(`${label} exceeds bundle length`);
+  }
+  return {
+    lengthOffset: offset,
+    bytesStart,
+    bytesEnd,
+    bytes: bytes.subarray(bytesStart, bytesEnd),
+    nextOffset: bytesEnd,
+  };
+};
+
+const splitCanonicalSccpMessageProofBundleBytes = (bundleBytes) => {
+  const bytes = Uint8Array.from(bundleBytes);
+  let offset = 33;
+  const commitment = readCanonicalVecRange(bytes, offset, "commitment");
+  offset = commitment.nextOffset;
+  const merkleProof = readCanonicalVecRange(bytes, offset, "merkle_proof");
+  offset = merkleProof.nextOffset;
+  const payload = readCanonicalVecRange(bytes, offset, "payload");
+  offset = payload.nextOffset;
+  const finalityProof = readCanonicalVecRange(bytes, offset, "finality_proof");
+  return { commitment, merkleProof, payload, finalityProof };
+};
+
+const replaceCanonicalSccpMessageProofBundleVec = (
+  bundleBytes,
+  range,
+  replacementBytes,
+) => {
+  const bytes = Uint8Array.from(bundleBytes);
+  const replacement = Uint8Array.from(replacementBytes);
+  const prefix = bytes.subarray(0, range.lengthOffset);
+  const suffix = bytes.subarray(range.bytesEnd);
+  const out = new Uint8Array(
+    prefix.length + 4 + replacement.length + suffix.length,
+  );
+  out.set(prefix, 0);
+  out.set(u32LeBytes(replacement.length), prefix.length);
+  out.set(replacement, prefix.length + 4);
+  out.set(suffix, prefix.length + 4 + replacement.length);
+  return out;
 };
 
 const sampleTronPublicInputs = {
@@ -1299,6 +1455,236 @@ const sampleEvmPublicInputs = {
   commitmentRoot: `0x${"33".repeat(32)}`,
   finalityHeight: 19n,
   finalityBlockHash: `0x${"44".repeat(32)}`,
+};
+
+const sampleBridgeSubmitMessageBundle = ({ publicInputs, targetDomain }) => {
+  const recipientCodec =
+    targetDomain === SCCP_DOMAIN_TRON
+      ? SCCP_CODEC_TRON_BASE58CHECK
+      : SCCP_CODEC_EVM_HEX;
+  const recipient =
+    targetDomain === SCCP_DOMAIN_TRON
+      ? "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+      : `0x${"11".repeat(20)}`;
+  const transferPayload = {
+    version: 1,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: targetDomain,
+    nonce: "1",
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: "1000",
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender: TAIRA_ACCOUNT_ID,
+    recipient_codec: recipientCodec,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id:
+      targetDomain === SCCP_DOMAIN_TRON
+        ? SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1
+        : SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  };
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    target_domain: targetDomain,
+    message_id: publicInputs.messageId,
+    payload_hash: publicInputs.payloadHash,
+  };
+  const merkleProof = { steps: [] };
+  return {
+    version: 1,
+    commitment_root: sccpMerkleRootFromCommitment(commitment, merkleProof),
+    commitment,
+    merkle_proof: merkleProof,
+    payload: { kind: "Transfer", value: transferPayload },
+    finality_proof: "0x010203",
+  };
+};
+
+const NATIVE_EVM_TEST_SDKS = Object.freeze([
+  ["javascript", "pure-typescript"],
+  ["swift", "native-swift"],
+  ["kotlin", "native-kotlin"],
+  ["java-android", "native-java"],
+  ["dotnet", "native-csharp"],
+]);
+
+const testSha256Hex = (bytes) =>
+  `0x${createHash("sha256").update(bytes).digest("hex")}`;
+
+const nativeEvmFixtureBytes = (length, seed) => {
+  const out = new Uint8Array(length);
+  for (let index = 0; index < out.length; index += 1) {
+    out[index] = 0x80 + ((seed + index * 17 + (index >>> 3)) % 0x40);
+  }
+  return out;
+};
+
+const nativeEvmFixtureJsonBytes = (value) =>
+  testTextEncoder.encode(JSON.stringify(value));
+
+const nativeEvmFixtureHex32 = (seed) =>
+  `0x${Array.from({ length: 32 }, (_, index) =>
+    (1 + ((seed + index * 29) % 255)).toString(16).padStart(2, "0"),
+  ).join("")}`;
+
+const nativeEvmFixturePublicSignalWords = (seed) =>
+  Array.from({ length: 9 }, (_, index) =>
+    nativeEvmFixtureHex32(seed + index * 11),
+  );
+
+const bscNativeEvmProfile = (network) => {
+  if (network === "mainnet") {
+    return {
+      chain: "bsc-mainnet",
+      chainId: SCCP_BSC_MAINNET_EVM_CHAIN_ID,
+      networkId: SCCP_BSC_MAINNET_NETWORK_ID,
+      bundleId: "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1",
+      parityFixtureSchema:
+        "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1",
+      selfTestFixtureSchema:
+        "sccp-bsc-mainnet-native-evm-prover-self-test-v1",
+      SccpClass: BscMainnetSccp,
+      destinationBinding: sampleBscMainnetDestinationBinding,
+      destinationBindingHash: bscMainnetSccpDestinationBindingHash,
+    };
+  }
+  return {
+    chain: "bsc-testnet",
+    chainId: SCCP_BSC_TESTNET_EVM_CHAIN_ID,
+    networkId: SCCP_BSC_TESTNET_NETWORK_ID,
+    bundleId: "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1",
+    parityFixtureSchema:
+      "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1",
+    selfTestFixtureSchema:
+      "sccp-bsc-testnet-native-evm-prover-self-test-v1",
+    SccpClass: BscTestnetSccp,
+    destinationBinding: sampleBscTestnetDestinationBinding,
+    destinationBindingHash: bscTestnetSccpDestinationBindingHash,
+  };
+};
+
+const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
+  const profile = bscNativeEvmProfile(network);
+  const proofArtifactBytes = nativeEvmFixtureBytes(64 * 1024 + 17, 3);
+  const provingKeyBytes = nativeEvmFixtureBytes(64 * 1024 + 29, 7);
+  const verifierKeyBytes = nativeEvmFixtureBytes(257, 11);
+  const implementationBytesBySdk = Object.fromEntries(
+    NATIVE_EVM_TEST_SDKS.map(([sdk], index) => [
+      sdk,
+      nativeEvmFixtureBytes(1024 + index * 37, 19 + index * 23),
+    ]),
+  );
+  const proofArtifactHash = testSha256Hex(proofArtifactBytes);
+  const provingKeyHash = testSha256Hex(provingKeyBytes);
+  const verifierKeyHash = testSha256Hex(verifierKeyBytes);
+  const destinationBinding = profile.destinationBinding({ verifierKeyHash });
+  assert.equal(
+    profile.destinationBindingHash(destinationBinding),
+    destinationBinding.bindingHash,
+  );
+  const sdkArtifacts = NATIVE_EVM_TEST_SDKS.map(
+    ([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      proofArtifactHash,
+      provingKeyHash,
+      implementationArtifact: `artifacts/${profile.chain}/${sdk}.native`,
+      implementationHash: testSha256Hex(implementationBytesBySdk[sdk]),
+      index,
+    }),
+  ).map(({ index, ...artifact }) => artifact);
+  const paritySdkResult = {
+    receiptProofHash: nativeEvmFixtureHex32(41),
+    sourceProofHash: nativeEvmFixtureHex32(42),
+    destinationBindingHash: destinationBinding.bindingHash,
+    publicSignalWords: nativeEvmFixturePublicSignalWords(43),
+    calldataHash: nativeEvmFixtureHex32(53),
+    toriiSubmitPayloadHash: nativeEvmFixtureHex32(54),
+  };
+  const selfTestSdkResult = {
+    requestHash: nativeEvmFixtureHex32(61),
+    witnessHash: nativeEvmFixtureHex32(62),
+    sourceProofHash: nativeEvmFixtureHex32(63),
+    proofHash: nativeEvmFixtureHex32(64),
+    publicSignalWords: nativeEvmFixturePublicSignalWords(65),
+    calldataHash: nativeEvmFixtureHex32(75),
+    toriiSubmitPayloadHash: nativeEvmFixtureHex32(76),
+  };
+  const sdkResults = (value) =>
+    Object.fromEntries(
+      NATIVE_EVM_TEST_SDKS.map(([sdk]) => [sdk, structuredClone(value)]),
+    );
+  const parityFixture = {
+    schema: profile.parityFixtureSchema,
+    domain: SCCP_DOMAIN_BSC,
+    chain: profile.chain,
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proofArtifactHash,
+    provingKeyHash,
+    verifierKeyHash,
+    destinationBindingHash: destinationBinding.bindingHash,
+    ...paritySdkResult,
+    sdkResults: sdkResults(paritySdkResult),
+  };
+  const selfTestFixture = {
+    schema: profile.selfTestFixtureSchema,
+    domain: SCCP_DOMAIN_BSC,
+    chain: profile.chain,
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proofArtifactHash,
+    provingKeyHash,
+    verifierKeyHash,
+    destinationBindingHash: destinationBinding.bindingHash,
+    ...selfTestSdkResult,
+    sdkResults: sdkResults(selfTestSdkResult),
+  };
+  const crossSdkFixtureParityBytes =
+    nativeEvmFixtureJsonBytes(parityFixture);
+  const nativeProverSelfTestBytes =
+    nativeEvmFixtureJsonBytes(selfTestFixture);
+  const nativeProverBundle = {
+    schema: SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+    bundleId: profile.bundleId,
+    domain: SCCP_DOMAIN_BSC,
+    chain: profile.chain,
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    noWasm: true,
+    remoteProverRequired: false,
+    browserImplementation: "pure-typescript",
+    proofArtifactHash,
+    proofArtifact: `artifacts/${profile.chain}/proof-artifact.bin`,
+    provingKeyHash,
+    provingKey: `artifacts/${profile.chain}/proving-key.bin`,
+    verifierKeyHash,
+    verifierKey: `artifacts/${profile.chain}/verifier-key.bin`,
+    destinationBindingHash: destinationBinding.bindingHash,
+    crossSdkFixtureParityArtifact: `artifacts/${profile.chain}/cross-sdk-parity.json`,
+    nativeProverSelfTestArtifact: `artifacts/${profile.chain}/self-test.json`,
+    auditHashes: {
+      circuit_security_audit: nativeEvmFixtureHex32(81),
+      native_implementation_audit: nativeEvmFixtureHex32(82),
+      reproducible_build_attestation: nativeEvmFixtureHex32(83),
+      cross_sdk_fixture_parity: testSha256Hex(crossSdkFixtureParityBytes),
+      native_prover_self_test: testSha256Hex(nativeProverSelfTestBytes),
+      no_wasm_no_remote_scan: nativeEvmFixtureHex32(84),
+    },
+    nativeSdkArtifacts: sdkArtifacts,
+  };
+  return {
+    profile,
+    destinationBinding,
+    nativeProverBundle,
+    proofArtifactBytes,
+    provingKeyBytes,
+    verifierKeyBytes,
+    crossSdkFixtureParityBytes,
+    nativeProverSelfTestBytes,
+    implementationBytes: implementationBytesBySdk.javascript,
+    sdk: "javascript",
+  };
 };
 
 test("rejects boolean SCCP domains in web portal payload helpers", () => {
@@ -6441,6 +6827,121 @@ test("BSC mainnet SDK facade pins EVM-family proofs to chain id 56", async () =>
   );
 });
 
+test("BSC high-level facades require route-bound native prover artifacts", async () => {
+  for (const network of ["mainnet", "testnet"]) {
+    const fixture = createBscNativeEvmFixture({ network });
+    const { SccpClass } = fixture.profile;
+    const input = {
+      publicInputs: {
+        ...sampleEvmPublicInputs,
+        targetDomain: SCCP_DOMAIN_BSC,
+      },
+      bundleBytes: [5, 6, 7],
+      sourceProofBytes: [9, 10],
+      sourceDomain: SCCP_DOMAIN_SORA,
+      statementHash: HEX32_G,
+      destinationBinding: fixture.destinationBinding,
+    };
+    const constructorOptions = {
+      destinationBinding: fixture.destinationBinding,
+      nativeProverBundle: fixture.nativeProverBundle,
+      proofArtifactBytes: fixture.proofArtifactBytes,
+      provingKeyBytes: fixture.provingKeyBytes,
+      verifierKeyBytes: fixture.verifierKeyBytes,
+      crossSdkFixtureParityBytes: fixture.crossSdkFixtureParityBytes,
+      nativeProverSelfTestBytes: fixture.nativeProverSelfTestBytes,
+      implementationBytes: fixture.implementationBytes,
+      sdk: fixture.sdk,
+    };
+    let selfTestCalls = 0;
+    let proofCalls = 0;
+    const outboundProver = {
+      async prove(request) {
+        proofCalls += 1;
+        assert.equal(request.targetDomain, SCCP_DOMAIN_BSC);
+        assert.equal(request.destinationBinding.networkId, fixture.profile.networkId);
+        assert.equal(
+          request.destinationBindingHash,
+          fixture.nativeProverBundle.destinationBindingHash,
+        );
+        assert.equal(
+          request.proofArtifactHash,
+          fixture.nativeProverBundle.proofArtifactHash,
+        );
+        assert.equal(
+          request.provingKeyHash,
+          fixture.nativeProverBundle.provingKeyHash,
+        );
+        return {
+          proofBytes: groth16ProofBytesForPublicInputs(request.publicInputs),
+        };
+      },
+    };
+    const bridge = new SccpClass({
+      ...constructorOptions,
+      nativeProverSelfTest({ expectedResult, nativeProverArtifacts }) {
+        selfTestCalls += 1;
+        assert.equal(nativeProverArtifacts.nativeProverBundle.chain, fixture.profile.chain);
+        assert.equal(
+          nativeProverArtifacts.nativeProverBundle.destinationBindingHash,
+          fixture.destinationBinding.bindingHash,
+        );
+        return expectedResult;
+      },
+      outboundProver,
+    });
+
+    const proofResult = await bridge.proveOutboundToBsc(input);
+    assert.equal(selfTestCalls, 1);
+    assert.equal(proofCalls, 1);
+    assert.equal(
+      proofResult.proofArtifactHash,
+      fixture.nativeProverBundle.proofArtifactHash,
+    );
+    assert.equal(
+      proofResult.provingKeyHash,
+      fixture.nativeProverBundle.provingKeyHash,
+    );
+    const submission = bridge.buildBscCalldata({ proofResult });
+    assert.equal(submission.targetDomain, SCCP_DOMAIN_BSC);
+    assert.equal(submission.destinationBindingHash, fixture.destinationBinding.bindingHash);
+    assert.equal(submission.callData.length, 676);
+
+    const originalNativeProverArtifacts = bridge.nativeProverArtifacts;
+    bridge.nativeProverArtifacts = {
+      ...originalNativeProverArtifacts,
+      proofArtifactHash: HEX32_A,
+    };
+    assert.throws(
+      () => bridge.buildBscCalldata({ proofResult }),
+      /nativeProverArtifacts artifact hashes must match proofResult/,
+    );
+    bridge.nativeProverArtifacts = originalNativeProverArtifacts;
+
+    const withoutArtifacts = new SccpClass({
+      destinationBinding: fixture.destinationBinding,
+      outboundProver,
+    });
+    await assert.rejects(
+      () => withoutArtifacts.proveOutboundToBsc(input),
+      /requires verified native EVM prover artifacts/,
+    );
+    assert.throws(
+      () => withoutArtifacts.buildBscCalldata({ proofResult }),
+      /submission requires verified native EVM prover artifacts/,
+    );
+
+    const withoutSelfTest = new SccpClass({
+      ...constructorOptions,
+      outboundProver,
+    });
+    await assert.rejects(
+      () => withoutSelfTest.proveOutboundToBsc(input),
+      /native prover self-test|self-test hook/,
+    );
+  }
+});
+
 test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   const evmBinding = sampleEvmDestinationBinding();
   const request = buildEvmSccpProofRequest({
@@ -6612,8 +7113,18 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   assert.notEqual(submission.callData[0], 0);
 
   const tronBinding = sampleTronDestinationBinding();
-  const tronRequest = buildTronSccpProofRequest({
+  const tronMessageBundle = sampleBridgeSubmitMessageBundle({
     publicInputs: sampleTronPublicInputs,
+    targetDomain: SCCP_DOMAIN_TRON,
+  });
+  const tronSubmitPublicInputs = {
+    ...sampleTronPublicInputs,
+    commitmentRoot: tronMessageBundle.commitment_root,
+  };
+  const tronSubmitProofBytes =
+    groth16ProofBytesForPublicInputs(tronSubmitPublicInputs);
+  const tronRequest = buildTronSccpProofRequest({
+    publicInputs: tronSubmitPublicInputs,
     bundleBytes: [5, 6, 7],
     sourceProofBytes: [9, 10],
     sourceDomain: SCCP_DOMAIN_SORA,
@@ -6621,7 +7132,7 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     destinationBinding: tronBinding,
   });
   const tronProofResult = wrapTronSccpProofResult(
-    GROTH16_PROOF_BYTES,
+    tronSubmitProofBytes,
     tronRequest,
   );
   const tronSubmission = buildTronSccpSubmission({
@@ -6671,8 +7182,8 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   assert.deepEqual(
     tronSubmission.callData,
     sccpSubmitMessageProofCallData(
-      GROTH16_PROOF_BYTES,
-      sampleTronPublicInputs,
+      tronSubmitProofBytes,
+      tronSubmitPublicInputs,
       tronProofResult.statementHash,
     ),
   );
@@ -7078,8 +7589,18 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
     "0x3ad95ac3e5bc2892f768aae40a3b7ba673d561858b7d1318fbb9f6eba83207bf",
   );
   assert.equal(evmSccpDestinationBindingHash(evmInput), evmBinding.bindingHash);
-  const evmRequest = buildEvmSccpProofRequest({
+  const evmMessageBundle = sampleBridgeSubmitMessageBundle({
     publicInputs: sampleEvmPublicInputs,
+    targetDomain: SCCP_DOMAIN_ETH,
+  });
+  const evmSubmitPublicInputs = {
+    ...sampleEvmPublicInputs,
+    commitmentRoot: evmMessageBundle.commitment_root,
+  };
+  const evmSubmitProofBytes =
+    groth16ProofBytesForPublicInputs(evmSubmitPublicInputs);
+  const evmRequest = buildEvmSccpProofRequest({
+    publicInputs: evmSubmitPublicInputs,
     bundleBytes: [5, 6, 7],
     sourceProofBytes: [9, 10],
     sourceDomain: SCCP_DOMAIN_SORA,
@@ -7088,12 +7609,8 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   });
   assert.equal(evmRequest.destinationBindingHash, evmBinding.bindingHash);
   const evmSubmissionForSubmit = buildEvmSccpSubmission({
-    proofResult: wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, evmRequest),
+    proofResult: wrapEvmSccpProofResult(evmSubmitProofBytes, evmRequest),
   });
-  const evmMessageBundle = {
-    commitment: { message_id: sampleEvmPublicInputs.messageId },
-    commitment_root: sampleEvmPublicInputs.commitmentRoot,
-  };
   const evmSubmitPayload = buildEvmSccpBridgeProofSubmitPayload({
     authority: "alice@sora",
     publicKeyHex: "ed0123",
@@ -7128,16 +7645,21 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   assert.equal(evmSubmitPayload.creation_time_ms, 123);
   assert.equal(
     evmSubmitPayload.proof_bytes_hex,
-    `0x${Array.from(GROTH16_PROOF_BYTES, (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
+    `0x${Array.from(evmSubmitProofBytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
   );
   assert.throws(
     () =>
       buildEvmSccpBridgeProofSubmitPayload({
         authority: "alice@sora",
-        messageBundle: {
-          ...evmMessageBundle,
-          commitment: { message_id: HEX32_D },
-        },
+        messageBundle: (() => {
+          const bundle = structuredClone(evmMessageBundle);
+          bundle.commitment.message_id = HEX32_D;
+          bundle.commitment_root = sccpMerkleRootFromCommitment(
+            bundle.commitment,
+            bundle.merkle_proof,
+          );
+          return bundle;
+        })(),
         submission: evmSubmissionForSubmit,
         destinationBinding: evmBinding,
       }),
@@ -7151,6 +7673,26 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
           ...evmMessageBundle,
           commitment_root: HEX32_D,
         },
+        submission: evmSubmissionForSubmit,
+        destinationBinding: evmBinding,
+      }),
+    /messageBundle\.commitmentRoot must match the commitment Merkle proof/,
+  );
+  assert.throws(
+    () =>
+      buildEvmSccpBridgeProofSubmitPayload({
+        authority: "alice@sora",
+        messageBundle: (() => {
+          const bundle = structuredClone(evmMessageBundle);
+          bundle.merkle_proof.steps = [
+            { sibling_hash: HEX32_D, sibling_is_left: false },
+          ];
+          bundle.commitment_root = sccpMerkleRootFromCommitment(
+            bundle.commitment,
+            bundle.merkle_proof,
+          );
+          return bundle;
+        })(),
         submission: evmSubmissionForSubmit,
         destinationBinding: evmBinding,
       }),
@@ -7271,8 +7813,18 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
     tronSccpDestinationBindingHash(tronInput),
     tronBinding.bindingHash,
   );
-  const tronRequest = buildTronSccpProofRequest({
+  const tronMessageBundle = sampleBridgeSubmitMessageBundle({
     publicInputs: sampleTronPublicInputs,
+    targetDomain: SCCP_DOMAIN_TRON,
+  });
+  const tronSubmitPublicInputs = {
+    ...sampleTronPublicInputs,
+    commitmentRoot: tronMessageBundle.commitment_root,
+  };
+  const tronSubmitProofBytes =
+    groth16ProofBytesForPublicInputs(tronSubmitPublicInputs);
+  const tronRequest = buildTronSccpProofRequest({
+    publicInputs: tronSubmitPublicInputs,
     bundleBytes: [5, 6, 7],
     sourceProofBytes: [9, 10],
     sourceDomain: SCCP_DOMAIN_SORA,
@@ -7281,12 +7833,8 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   });
   assert.equal(tronRequest.destinationBindingHash, tronBinding.bindingHash);
   const tronSubmissionForSubmit = buildTronSccpSubmission({
-    proofResult: wrapTronSccpProofResult(GROTH16_PROOF_BYTES, tronRequest),
+    proofResult: wrapTronSccpProofResult(tronSubmitProofBytes, tronRequest),
   });
-  const tronMessageBundle = {
-    commitment: { message_id: sampleTronPublicInputs.messageId },
-    commitment_root: sampleTronPublicInputs.commitmentRoot,
-  };
   const tronSubmitPayload = buildTronSccpBridgeProofSubmitPayload({
     authority: "alice@sora",
     messageBundle: tronMessageBundle,
@@ -7315,7 +7863,7 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   );
   assert.equal(
     tronSubmitPayload.proof_bytes_hex,
-    `0x${Array.from(GROTH16_PROOF_BYTES, (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
+    `0x${Array.from(tronSubmitProofBytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
   );
   assert.throws(
     () =>
@@ -7325,6 +7873,26 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
           ...tronMessageBundle,
           commitment_root: HEX32_D,
         },
+        submission: tronSubmissionForSubmit,
+        destinationBinding: tronBinding,
+      }),
+    /messageBundle\.commitmentRoot must match the commitment Merkle proof/,
+  );
+  assert.throws(
+    () =>
+      buildTronSccpBridgeProofSubmitPayload({
+        authority: "alice@sora",
+        messageBundle: (() => {
+          const bundle = structuredClone(tronMessageBundle);
+          bundle.merkle_proof.steps = [
+            { sibling_hash: HEX32_D, sibling_is_left: false },
+          ];
+          bundle.commitment_root = sccpMerkleRootFromCommitment(
+            bundle.commitment,
+            bundle.merkle_proof,
+          );
+          return bundle;
+        })(),
         submission: tronSubmissionForSubmit,
         destinationBinding: tronBinding,
       }),
@@ -9394,7 +9962,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
   const rawMessageInput = {
     publicInputs: sampleTonPublicInputs,
     proofBytes: Uint8Array.from([1, 2, 3, 4]),
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     statementHash: HEX32_B,
     destinationBindingHash: HEX32_G,
     metadataBytes: Uint8Array.from([8, 9]),
@@ -9410,7 +9978,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
 
   const request = buildTonSccpProofRequest({
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: Uint8Array.from([9, 10]),
     statementHash: HEX32_B,
     destinationBindingHash: HEX32_G,
@@ -9424,7 +9992,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
   );
   const messageBodyBoc = buildSccpTonMessageBodyBoc({
     proofResult,
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     metadataBytes: Uint8Array.from([8, 9]),
   });
 
@@ -9440,7 +10008,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
 
   const submission = buildTonSccpSubmission({
     proofResult,
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     metadataBytes: Uint8Array.from([8, 9]),
   });
   assert.equal(submission.envelopeEncoding, SCCP_TON_MESSAGE_BODY_BOC_V1);
@@ -9460,18 +10028,21 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
 
   const proofResultSubmission = buildTonSccpSubmission({
     proofResult,
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     metadataBytes: Uint8Array.from([8, 9]),
   });
   assert.equal(proofResultSubmission.envelopeHex, submission.envelopeHex);
-  assert.deepEqual(Array.from(proofResult.bundleBytes), [5, 6, 7]);
+  assert.deepEqual(
+    Array.from(proofResult.bundleBytes),
+    Array.from(sampleTonBundleBytes),
+  );
   assert.deepEqual(Array.from(proofResult.sourceProofBytes), [9, 10]);
   assert.throws(
     () =>
       buildTonSccpSubmission({
         proofResult,
         proof_result: proofResult,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult must not use multiple aliases/,
   );
@@ -9479,7 +10050,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: { ...proofResult, proof_bytes: proofResult.proofBytes },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.proofBytes must not use multiple aliases/,
   );
@@ -9487,7 +10058,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: { ...proofResult, request_hash: proofResult.requestHash },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.requestHash must not use multiple aliases/,
   );
@@ -9498,7 +10069,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
           ...proofResult,
           proof_context: proofResult.proofContext,
         },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.proofContext must not use multiple aliases/,
   );
@@ -9506,8 +10077,8 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
-        bundle_bytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
+        bundle_bytes: sampleTonBundleBytes,
       }),
     /bundleBytes must not use multiple aliases/,
   );
@@ -9516,7 +10087,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         publicInputs: null,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /publicInputs must be an object/,
   );
@@ -9525,7 +10096,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         proofBytes: null,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofBytes must be bytes or hex/,
   );
@@ -9534,7 +10105,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         statementHash: null,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /statementHash/,
   );
@@ -9543,7 +10114,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         destinationBindingHash: null,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /destinationBindingHash/,
   );
@@ -9551,7 +10122,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     Uint8Array.from([1, 2, 3, 4]),
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: Uint8Array.from([5, 6, 7]),
+      bundleBytes: sampleTonBundleBytes,
       statementHash: HEX32_B,
       destinationBindingHash: HEX32_G,
       sourceStateVerifierHash: HEX32_C,
@@ -9561,7 +10132,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
   );
   const omittedSourceProofSubmission = buildTonSccpSubmission({
     proofResult: omittedSourceProofResult,
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     metadataBytes: Uint8Array.from([8, 9]),
   });
   assert.equal(omittedSourceProofResult.sourceProofBytes.length, 0);
@@ -9574,7 +10145,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       () =>
         buildTonSccpSubmission({
           proofResult,
-          bundleBytes: Uint8Array.from([5, 6, 7]),
+          bundleBytes: sampleTonBundleBytes,
           metadataBytes: badMetadataBytes,
         }),
       /metadataBytes must be bytes or hex|metadataBytes must be canonical hex/,
@@ -9584,7 +10155,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: { ...proofResult, proofContext: false },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.proofContext must be an object/,
   );
@@ -9592,7 +10163,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: { ...proofResult, proofContext: null },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.proofContext must be an object/,
   );
@@ -9613,14 +10184,14 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
         },
         bundleBytes: Uint8Array.from([5, 6, 8]),
       }),
-    /proofResult\.requestHash must match bundleBytes and sourceProofBytes/,
+    /bundleBytes\.version must be 1/,
   );
   assert.throws(
     () =>
       buildTonSccpSubmission({
         proofResult,
         proofBytes: Uint8Array.from([4, 3, 2, 1]),
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofBytes must match proofResult\.proofBytes/,
   );
@@ -9629,7 +10200,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         publicInputs: { ...sampleTonPublicInputs, messageId: HEX32_A },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /publicInputs must match proofResult\.publicInputs/,
   );
@@ -9637,7 +10208,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: { ...proofResult, envelopeHash: HEX32_A },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.envelopeHash must match wrapped proof bytes/,
   );
@@ -9648,7 +10219,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
           ...proofResult,
           sourceStateVerifierHash: SCCP_ZERO_HASH_V1,
         },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.sourceStateVerifierHash must not be zero/,
   );
@@ -9662,7 +10233,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
             targetDomain: SCCP_DOMAIN_TON,
           },
         },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.sourceAdapterDeploymentBinding\.targetDomain must be SORA/,
   );
@@ -9675,7 +10246,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
           targetDomain: SCCP_DOMAIN_SOL,
         },
         proofBytes: Uint8Array.from([1, 2, 3, 4]),
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_B,
         destinationBindingHash: HEX32_G,
       }),
@@ -9712,7 +10283,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         proofBytes: Uint8Array.from([0, 0]),
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofBytes must not be all zero/,
   );
@@ -9725,7 +10296,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: oversizedTonMessageResult,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
         metadataBytes: Uint8Array.from([8, 9]),
       }),
     /TON BOC contains too many cells/,
@@ -9750,7 +10321,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
         destinationBindingHash: HEX32_G,
         manifest,
       }),
@@ -9761,7 +10332,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
 test("binds TON proof requests to relay context and source adapter deployment", () => {
   const request = buildTonSccpProofRequest({
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: [5, 6, 7],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [9, 10],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -9813,7 +10384,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     request.requestHash,
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       sourceProofBytes: [9, 10],
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
@@ -9826,7 +10397,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     request.requestHash,
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       sourceProofBytes: [9, 10],
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
@@ -9838,7 +10409,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
   assert.notEqual(
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       sourceProofBytes: [9, 10],
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
@@ -9848,7 +10419,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     }).requestHash,
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7, 9],
+      bundleBytes: sampleTonBundleBytes,
       sourceProofBytes: [10],
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
@@ -9859,7 +10430,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
   );
   const validTonProofRequestInput = () => ({
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: [5, 6, 7],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [9, 10],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -9903,7 +10474,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -9930,7 +10501,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierId: "debug-ton-state-verifier",
@@ -9944,7 +10515,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: SCCP_ZERO_HASH_V1,
@@ -9957,7 +10528,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH,
@@ -9970,7 +10541,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -9983,7 +10554,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -9994,7 +10565,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10011,7 +10582,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10066,7 +10637,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: new Uint8Array(
           SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1,
         ).fill(1),
@@ -10082,7 +10653,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10097,7 +10668,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
           ...sampleTonPublicInputs,
           targetDomain: SCCP_DOMAIN_SOL,
         },
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10110,7 +10681,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         backend: "debug-ton-backend",
@@ -10124,7 +10695,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: { ...sampleTonPublicInputs, payloadHash: `${HEX32_E} ` },
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10137,7 +10708,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: { ...sampleTonPublicInputs, finalityHeight: "019" },
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10150,7 +10721,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: ` ${HEX32_G}`,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10163,7 +10734,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10176,7 +10747,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10193,23 +10764,174 @@ test("binds TON proof requests to relay context and source adapter deployment", 
   exposedBundle[0] = 99;
   exposedSourceProof[0] = 99;
   assert.notEqual(request.publicInputsBytes[0], 99);
-  assert.deepEqual(Array.from(request.bundleBytes), [5, 6, 7]);
+  assert.deepEqual(
+    Array.from(request.bundleBytes),
+    Array.from(sampleTonBundleBytes),
+  );
   assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
 });
 
+test("rejects TON proof requests with non-canonical or mismatched SCCP bundle bytes", () => {
+  const validTonProofRequestInput = (overrides = {}) => ({
+    publicInputs: sampleTonPublicInputs,
+    bundleBytes: sampleTonBundleBytes,
+    statementHash: HEX32_G,
+    destinationBindingHash: HEX32_H,
+    sourceStateVerifierHash: HEX32_C,
+    sourceAdapterDeploymentHash: HEX32_A,
+    sourceAdapterDeploymentReceiptHash: HEX32_B,
+    ...overrides,
+  });
+
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({ bundleBytes: [5, 6, 7] }),
+      ),
+    /bundleBytes\.version must be 1/,
+  );
+
+  const swappedBundle = buildSampleTonProofBundleFixture({ nonce: 328n });
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({ bundleBytes: swappedBundle.bundleBytes }),
+      ),
+    /bundleBytes must match publicInputs/,
+  );
+
+  const tamperedCommitment = Uint8Array.from(sampleTonBundleBytes);
+  tamperedCommitment[1 + 32 + 4 + 6] ^= 0x01;
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({ bundleBytes: tamperedCommitment }),
+      ),
+    /bundleBytes\.commitment must match payload|bundleBytes\.commitment_root must match merkle proof/,
+  );
+
+  const ranges = splitCanonicalSccpMessageProofBundleBytes(sampleTonBundleBytes);
+  const payloadWithTrailingByte = Uint8Array.from([
+    ...ranges.payload.bytes,
+    0,
+  ]);
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          bundleBytes: replaceCanonicalSccpMessageProofBundleVec(
+            sampleTonBundleBytes,
+            ranges.payload,
+            payloadWithTrailingByte,
+          ),
+        }),
+      ),
+    /bundleBytes\.payload must not contain trailing bytes/,
+  );
+
+  const unsupportedPayloadKind = Uint8Array.from(ranges.payload.bytes);
+  unsupportedPayloadKind[0] = 0xff;
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          bundleBytes: replaceCanonicalSccpMessageProofBundleVec(
+            sampleTonBundleBytes,
+            ranges.payload,
+            unsupportedPayloadKind,
+          ),
+        }),
+      ),
+    /bundleBytes\.payload contains unsupported SCCP payload kind/,
+  );
+
+  const merkleProofWithTrailingByte = Uint8Array.from([
+    ...ranges.merkleProof.bytes,
+    0,
+  ]);
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          bundleBytes: replaceCanonicalSccpMessageProofBundleVec(
+            sampleTonBundleBytes,
+            ranges.merkleProof,
+            merkleProofWithTrailingByte,
+          ),
+        }),
+      ),
+    /bundleBytes\.merkle_proof must not contain trailing bytes/,
+  );
+
+  const oneStepBundle = buildSampleTonProofBundleFixture({
+    merkleProof: {
+      steps: [{ sibling_hash: HEX32_C, sibling_is_left: true }],
+    },
+  });
+  const oneStepRanges = splitCanonicalSccpMessageProofBundleBytes(
+    oneStepBundle.bundleBytes,
+  );
+  const merkleProofWithInvalidDirection = Uint8Array.from(
+    oneStepRanges.merkleProof.bytes,
+  );
+  merkleProofWithInvalidDirection[4 + 32] = 2;
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          publicInputs: oneStepBundle.publicInputs,
+          bundleBytes: replaceCanonicalSccpMessageProofBundleVec(
+            oneStepBundle.bundleBytes,
+            oneStepRanges.merkleProof,
+            merkleProofWithInvalidDirection,
+          ),
+        }),
+      ),
+    /bundleBytes\.merkle_proof\.steps\[0\]\.sibling_is_left must be 0 or 1/,
+  );
+
+  const ethToTonBundle = buildSampleTonProofBundleFixture({
+    sourceDomain: SCCP_DOMAIN_ETH,
+    senderCodec: SCCP_CODEC_EVM_HEX,
+    sender: "0x1111111111111111111111111111111111111111",
+    routeId: "sccp-eth-ton-proof-request",
+  });
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          publicInputs: ethToTonBundle.publicInputs,
+          bundleBytes: ethToTonBundle.bundleBytes,
+        }),
+      ),
+    /sourceProofBytes required for non-SORA source bundle/,
+  );
+
+  const nonSoraRequest = buildTonSccpProofRequest(
+    validTonProofRequestInput({
+      publicInputs: ethToTonBundle.publicInputs,
+      bundleBytes: ethToTonBundle.bundleBytes,
+      sourceProofBytes: [0x51, 0x52, 0x53],
+    }),
+  );
+  assert.deepEqual(Array.from(nonSoraRequest.sourceProofBytes), [
+    0x51, 0x52, 0x53,
+  ]);
+  assert.throws(
+    () =>
+      wrapTonSccpProofResult([1, 2, 3, 4], {
+        ...nonSoraRequest,
+        sourceProofBytes: new Uint8Array(),
+      }),
+    /TON SCCP proof request must be canonical/,
+  );
+});
+
 test("matches TON proof request hash golden vector across SDKs", () => {
-  const publicInputs = {
-    version: 1,
-    messageId: `0x${"11".repeat(32)}`,
-    payloadHash: `0x${"22".repeat(32)}`,
-    targetDomain: SCCP_DOMAIN_TON,
-    commitmentRoot: `0x${"33".repeat(32)}`,
-    finalityHeight: 123456789n,
-    finalityBlockHash: `0x${"44".repeat(32)}`,
-  };
+  const publicInputs = sampleTonPublicInputs;
   const request = buildTonSccpProofRequest({
     publicInputs,
-    bundleBytes: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [0x51, 0x52, 0x53],
     statementHash: `0x${"55".repeat(32)}`,
     destinationBindingHash: `0x${"66".repeat(32)}`,
@@ -10224,7 +10946,7 @@ test("matches TON proof request hash golden vector across SDKs", () => {
 
   assert.equal(
     `0x${Buffer.from(canonicalSccpMessageTransparentPublicInputsBytes(publicInputs)).toString("hex")}`,
-    "0x011111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222204000000333333333333333333333333333333333333333333333333333333333333333315cd5b07000000004444444444444444444444444444444444444444444444444444444444444444",
+    "0x01806384e356636c10ee3bbbb90674a80410a86be034616abb811586b21ac81fc4367a4f9061f46a282eeeda95bc68c727888bde665bd89d0ebbc6dae266e3a26404000000377eb92928595d90759d66529f96acf34afd4ef64cd2327ab6f65876fb3cf93e1300000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   );
   assert.equal(
     request.sourceAdapterDeploymentBindingHash,
@@ -10232,7 +10954,7 @@ test("matches TON proof request hash golden vector across SDKs", () => {
   );
   assert.equal(
     request.requestHash,
-    "0xb3a61f09923efd639a0263de6b45eec6ddd5de679bfaab1b6ec1c591fd1b1d1b",
+    "0x2a292741b8e8d8454699eda954592904e8260e6b8a41cc840f5d9c48732c3bbe",
   );
 
   const proofResult = wrapTonSccpProofResult(
@@ -10241,7 +10963,7 @@ test("matches TON proof request hash golden vector across SDKs", () => {
   );
   assert.equal(
     proofResult.envelopeHash,
-    "0xa2bc6697b237fd4b2dd3f60f187a184793104a99372dcdf60c7ec585ef32f5ab",
+    "0x9ed8e54d81c13a61939dedffb36c487f33d32a128ba95a0d29b33c5d25be6489",
   );
 });
 
@@ -10274,7 +10996,7 @@ test("rejects non-empty all-zero source proof bytes in SCCP proof requests", () 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: zeroSourceProofBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -10306,7 +11028,7 @@ test("rejects non-empty all-zero source proof bytes in SCCP proof requests", () 
   assert.equal(
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
       sourceStateVerifierHash: HEX32_C,
@@ -10321,7 +11043,7 @@ test("rejects non-empty all-zero source proof bytes in SCCP proof requests", () 
       () =>
         buildTonSccpProofRequest({
           publicInputs: sampleTonPublicInputs,
-          bundleBytes: [5, 6, 7],
+          bundleBytes: sampleTonBundleBytes,
           sourceProofBytes: badSourceProofBytes,
           statementHash: HEX32_G,
           destinationBindingHash: HEX32_H,
@@ -12389,7 +13111,7 @@ test("does not generate TON SCCP proofs without a linked local prover", async ()
     () =>
       prover.prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -12413,7 +13135,7 @@ test("rejects non-production TON SCCP input before invoking the linked prover", 
     () =>
       prover.prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: [9, 10],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -12477,7 +13199,7 @@ test("accepts callable and snake_case SCCP witness providers for UI proof genera
   const tonResult = await tonProver.prove(
     {
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
       sourceStateVerifierHash: HEX32_C,
@@ -12624,7 +13346,7 @@ test("resolves SCCP UI witness providers before web local prover callbacks", asy
   }).prove(
     {
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
       sourceStateVerifierHash: HEX32_C,
@@ -12849,7 +13571,10 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
       );
       request.bundleBytes[0] = 99;
       request.sourceProofBytes[0] = 99;
-      assert.deepEqual(Array.from(request.bundleBytes), [5, 6, 7]);
+      assert.deepEqual(
+        Array.from(request.bundleBytes),
+        Array.from(sampleTonBundleBytes),
+      );
       assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
       return {
         proofBytes: [1, 2, 3, 4],
@@ -12863,7 +13588,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
 
   const result = await prover.prove({
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: [5, 6, 7],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [9, 10],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -12873,7 +13598,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
   });
   const request = buildTonSccpProofRequest({
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: [5, 6, 7],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [9, 10],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -12905,7 +13630,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
         },
       }).prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: [9, 10],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -12924,7 +13649,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
         }),
       }).prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: [9, 10],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -12948,7 +13673,10 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
   const exposedSourceProof = result.sourceProofBytes;
   exposedBundle[0] = 99;
   exposedSourceProof[0] = 99;
-  assert.deepEqual(Array.from(result.bundleBytes), [5, 6, 7]);
+  assert.deepEqual(
+    Array.from(result.bundleBytes),
+    Array.from(sampleTonBundleBytes),
+  );
   assert.deepEqual(Array.from(result.sourceProofBytes), [9, 10]);
   assert.match(result.requestHash, /^0x[0-9a-f]{64}$/);
   assert.match(result.envelopeHash, /^0x[0-9a-f]{64}$/);
@@ -13183,7 +13911,7 @@ test("accepts submit-ready SCCP prover requests with omitted source proof materi
       TonSccpProver,
       {
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -13240,7 +13968,7 @@ test("rejects all-zero proof bytes across SCCP local prover wrappers", async () 
         prove: async () => ({ proofBytes: [0, 0] }),
       }).prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: [9, 10],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -13257,7 +13985,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
   const tronBinding = sampleTronDestinationBinding();
   const tonRequestInput = {
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: [5, 6, 7],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [9, 10],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -13535,7 +14263,7 @@ test("rejects SCCP prover results bound to a different request context", async (
         }),
       }).prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: [9, 10],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -13952,17 +14680,29 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
   const payloadHash = sccpPayloadHash(
     canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
   );
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    targetDomain: SCCP_DOMAIN_SORA,
+    messageId,
+    payloadHash,
+  };
+  const merkleProof = { steps: [] };
+  const commitmentRoot = sccpMerkleRootFromCommitment(
+    {
+      version: commitment.version,
+      kind: commitment.kind,
+      target_domain: commitment.targetDomain,
+      message_id: commitment.messageId,
+      payload_hash: commitment.payloadHash,
+    },
+    merkleProof,
+  );
   const messageBundle = {
     version: 1,
-    commitmentRoot: HEX32_D,
-    commitment: {
-      version: 1,
-      kind: "Transfer",
-      targetDomain: SCCP_DOMAIN_SORA,
-      messageId,
-      payloadHash,
-    },
-    merkleProof: { steps: [] },
+    commitmentRoot,
+    commitment,
+    merkleProof,
     payload: { kind: "Transfer", value: payload },
     finalityProof: "0x010203",
   };
@@ -13978,7 +14718,7 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
     sourceEventDigest,
     txId: "11".repeat(32),
     messageId,
-    commitmentRoot: HEX32_D,
+    commitmentRoot,
   };
 
   const bound = bindTairaXorTronToTairaSourceProofPackage({
@@ -13993,7 +14733,7 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
 
   assert.equal(bound.txId, "11".repeat(32));
   assert.equal(bound.messageId, messageId);
-  assert.equal(bound.commitmentRoot, HEX32_D);
+  assert.equal(bound.commitmentRoot, commitmentRoot);
   assert.equal(bound.sourceEventDigest, sourceEventDigest);
   assert.equal(bound.amount, amount.toString());
   assert.deepEqual(bound.settlement, {
@@ -14051,17 +14791,29 @@ test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
   const payloadHash = sccpPayloadHash(
     canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
   );
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    targetDomain: SCCP_DOMAIN_SORA,
+    messageId,
+    payloadHash,
+  };
+  const merkleProof = { steps: [] };
+  const commitmentRoot = sccpMerkleRootFromCommitment(
+    {
+      version: commitment.version,
+      kind: commitment.kind,
+      target_domain: commitment.targetDomain,
+      message_id: commitment.messageId,
+      payload_hash: commitment.payloadHash,
+    },
+    merkleProof,
+  );
   const messageBundle = {
     version: 1,
-    commitmentRoot: HEX32_D,
-    commitment: {
-      version: 1,
-      kind: "Transfer",
-      targetDomain: SCCP_DOMAIN_SORA,
-      messageId,
-      payloadHash,
-    },
-    merkleProof: { steps: [] },
+    commitmentRoot,
+    commitment,
+    merkleProof,
     payload: { kind: "Transfer", value: payload },
     finalityProof: "0x010203",
   };
@@ -14081,7 +14833,7 @@ test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
     sourceEventDigest,
     txId: `0x${"11".repeat(32)}`,
     messageId,
-    commitmentRoot: HEX32_D,
+    commitmentRoot,
   };
 
   const bound = bindTairaXorBscToTairaSourceProofPackage({
@@ -14096,7 +14848,7 @@ test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
 
   assert.equal(bound.txId, `0x${"11".repeat(32)}`);
   assert.equal(bound.messageId, messageId);
-  assert.equal(bound.commitmentRoot, HEX32_D);
+  assert.equal(bound.commitmentRoot, commitmentRoot);
   assert.equal(bound.sourceEventDigest, sourceEventDigest);
   assert.equal(bound.amount, amount.toString());
   assert.deepEqual(bound.settlement, {
@@ -14167,6 +14919,22 @@ test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
         pkg.commitmentRoot = HEX32_A;
       }),
     /commitmentRoot/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.commitmentRoot = HEX32_A;
+      }),
+    /commitmentRoot.*Merkle proof/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.merkleProof.steps = [
+          { sibling_hash: HEX32_A, sibling_is_left: false },
+        ];
+      }),
+    /commitmentRoot.*Merkle proof/u,
   );
   assert.throws(
     () =>

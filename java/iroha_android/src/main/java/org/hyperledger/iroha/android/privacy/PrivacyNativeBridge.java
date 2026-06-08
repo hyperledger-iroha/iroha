@@ -43,6 +43,7 @@ public final class PrivacyNativeBridge {
               "witness privacy checks are incomplete",
               "deterministic tests are incomplete",
               "negative/adversarial tests are incomplete",
+              "replay/nullifier rejection tests are incomplete",
               "fuzzing gate is incomplete",
               "parser fuzzing gate is incomplete",
               "verifier fuzzing gate is incomplete",
@@ -419,6 +420,7 @@ public final class PrivacyNativeBridge {
     private final boolean witnessPrivacyChecks;
     private final boolean deterministicTests;
     private final boolean negativeAdversarialTests;
+    private final boolean replayNullifierTests;
     private final boolean fuzzing;
     private final boolean parserFuzzing;
     private final boolean verifierFuzzing;
@@ -442,6 +444,7 @@ public final class PrivacyNativeBridge {
       this.witnessPrivacyChecks = false;
       this.deterministicTests = false;
       this.negativeAdversarialTests = false;
+      this.replayNullifierTests = false;
       this.fuzzing = false;
       this.parserFuzzing = false;
       this.verifierFuzzing = false;
@@ -497,6 +500,10 @@ public final class PrivacyNativeBridge {
 
     public boolean hasNegativeAdversarialTests() {
       return negativeAdversarialTests;
+    }
+
+    public boolean hasReplayNullifierTests() {
+      return replayNullifierTests;
     }
 
     public boolean hasFuzzing() {

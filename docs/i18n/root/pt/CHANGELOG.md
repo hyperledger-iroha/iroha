@@ -20,10 +20,10 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 ## [Não lançado]
 
 - Soltar o calço ESCALA; `norito::codec` agora é implementado com serialização Norito nativa.
-- Substitua os usos de `parity_scale_codec` por `norito::codec` nas caixas.
+- Substitua os usos de `retired_codec` por `norito::codec` nas caixas.
 - Comece a migrar ferramentas para serialização Norito nativa.
-- Remova a dependência `parity-scale-codec` restante do espaço de trabalho em favor da serialização Norito nativa.
-- Substitua as derivações residuais de características SCALE por implementações nativas Norito e renomeie o módulo de codec versionado.
+- Remova a dependência `retired codec` restante do espaço de trabalho em favor da serialização Norito nativa.
+- Substitua as derivações residuais de características retired codec por implementações nativas Norito e renomeie o módulo de codec versionado.
 - Mesclar `iroha_config_base_derive` e `iroha_futures_derive` em `iroha_derive` com macros controladas por recursos.
 - *(multisig)* Rejeitar assinaturas diretas de autoridades multisig com um código/motivo de erro estável, aplicar limites TTL multisig em retransmissores aninhados e exibir limites TTL na CLI antes do envio (paridade do SDK pendente).
 - Mova as macros procedimentais FFI para `iroha_ffi` e remova a caixa `iroha_ffi_derive`.
@@ -247,7 +247,7 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 - renomeie TransactionValue para CommittedTransaction (#4610)
 - autenticar contas pessoais por ID (#4411)
 - use o formato multihash para chaves privadas (#4541)
- - renomear `parity_scale_decoder` para `norito_cli`
+ - renomear `legacy_codec_decoder` para `norito_cli`
 - enviar blocos para validadores do Conjunto B
 - tornar `Role` transparente (#4886)
 - derivar hash de bloco do cabeçalho (#4890)
@@ -1171,7 +1171,7 @@ Todas as alterações notáveis neste projeto serão documentadas neste arquivo.
 - hyperledger#2309: Reative os testes de documentos no CI.
 - hyperledger#2165 Remover instalação do codecov.
 - Mude para um novo contêiner para evitar conflitos com os usuários atuais.
- - atualização do hyperledger#2158 `parity_scale_codec` e outras dependências. (Codec Norito)
+ - atualização do hyperledger#2158 `retired_codec` e outras dependências. (Codec Norito)
 - Corrigir compilação.
 - hyperledger#2461 Melhore o CI iroha2.
 - Atualização `syn`.

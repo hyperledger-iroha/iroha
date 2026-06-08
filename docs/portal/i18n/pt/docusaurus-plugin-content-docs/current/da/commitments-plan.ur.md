@@ -21,7 +21,7 @@ registros شامل ہوں جو DA-2 کے ذریعے قبول شدہ blobs کو �
 estruturas de dados canônicas, bloquear ganchos de pipeline, provas de cliente leve, etc.
 Superfícies Torii/RPC کو بیان کرتی ہے جو validadores کے admissão یا governança
 verifica میں compromissos DA پر بھروسہ کرنے سے پہلے لازمی ہیں۔ Cargas úteis
-ہیں؛ codificado em Norito SCALE e JSON ad-hoc
+ہیں؛ codificado em Norito retired codec e JSON ad-hoc
 
 ## مقاصد
 

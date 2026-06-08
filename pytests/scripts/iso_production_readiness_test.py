@@ -44,6 +44,7 @@ def receipt_verification_summary(
     allow_legacy_colr007=False,
     allow_default_profile=False,
     require_source_files=True,
+    endpoint_requires_insecure_http=False,
     receipts=None,
 ):
     kinds = receipt_kind or ["iso-audit-notary", "iso-rail-gateway"]
@@ -57,6 +58,8 @@ def receipt_verification_summary(
                 "receipt_sha256": f"{offset + 1:064x}",
                 "ok": True,
                 "status_code": 202,
+                "response_body_sha256": f"{offset + 401:064x}",
+                "endpoint_requires_insecure_http": endpoint_requires_insecure_http,
                 **(
                     {
                         "anchor_sha256": f"{offset + 101:064x}",
@@ -635,6 +638,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             ("password_readiness_unknown_secret", "readiness_unknown_secret"),
             ("%70assword_readiness_unknown_leak", "readiness_unknown_leak"),
             ("private-key_readiness_unknown_leak", "readiness_unknown_leak"),
+            ("unexpected\x1breadiness_key", "\x1b"),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -843,6 +847,24 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
         with self.assertRaises(READINESS.ReadinessError) as caught:
             READINESS._check_no_secret_material(
+                {"unexpected\x1breadiness_key": "redacted"}
+            )
+
+        message = str(caught.exception)
+        self.assertIn("forbidden control-bearing field", message)
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("unexpected", message)
+
+        with self.assertRaises(READINESS.ReadinessError) as caught:
+            READINESS._check_no_secret_material({"metadata": "warning \x1b[31mred"})
+
+        message = str(caught.exception)
+        self.assertIn("unsafe control characters", message)
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("[31mred", message)
+
+        with self.assertRaises(READINESS.ReadinessError) as caught:
+            READINESS._check_no_secret_material(
                 {"metadata": "%70assword%253Dreadiness-field-leak"}
             )
 
@@ -925,6 +947,9 @@ class IsoProductionReadinessTest(unittest.TestCase):
                 "Apache-2.0",
             )
             self.assertIn("verified_at", summary["evidence_summaries"][0])
+            self.assertFalse(
+                any(key.startswith("_") for key in summary["evidence_summaries"][0])
+            )
             self.assertEqual(
                 summary["evidence_summaries"][0]["policy"],
                 {
@@ -1026,6 +1051,44 @@ class IsoProductionReadinessTest(unittest.TestCase):
             body = dict(summary)
             digest = body.pop("summary_sha256")
             self.assertEqual(digest, READINESS.sha256_hex(READINESS._canonical_json_bytes(body)))
+
+    def test_unused_local_readiness_overrides_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "--allow-reviewed-xsd-gaps",
+                    "requires at least one reviewed XSD gap warning",
+                ),
+                (
+                    "--allow-canary-stage-receipts-only",
+                    "requires at least one evidence summary with canary-stage-only "
+                    "receipt policy or missing direct receipt archive verification",
+                ),
+            )
+            for flag, message in cases:
+                with self.subTest(flag=flag):
+                    summary_out = root / f"unused-{flag.removeprefix('--')}.summary.json"
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                            flag,
+                            "--summary-out",
+                            str(summary_out),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertFalse(summary_out.exists())
 
     def test_summary_versions_are_rechecked_before_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3811,9 +3874,17 @@ class IsoProductionReadinessTest(unittest.TestCase):
 
     def test_compact_trust_verifier_override_flags_block_readiness(self):
         cases = (
-            ("allow_synthetic_der", "trust.allow_synthetic_der"),
-            ("allow_record_only", "trust.allow_record_only"),
-            ("allow_insecure_source_url", "trust.allow_insecure_source_url"),
+            ("allow_synthetic_der", "trust.allow_synthetic_der", None),
+            (
+                "allow_record_only",
+                "trust.allow_record_only",
+                "no non-production embedded_signature_policy was recorded",
+            ),
+            (
+                "allow_insecure_source_url",
+                "trust.allow_insecure_source_url",
+                "no http:// or local/private source URL was recorded",
+            ),
         )
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -3821,7 +3892,7 @@ class IsoProductionReadinessTest(unittest.TestCase):
             evidence_summary = add_archive_receipt_verification(
                 write_evidence_summary(root / "evidence")
             )
-            for field, blocker_code in cases:
+            for field, blocker_code, message in cases:
                 with self.subTest(field=field):
                     evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
                     evidence["trust_summaries"][0][field] = True
@@ -3836,9 +3907,17 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     )
 
                     self.assertEqual(rc, 1, stderr)
-                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    blockers = json.loads(stdout)["blockers"]
+                    codes = {blocker["code"] for blocker in blockers}
                     self.assertIn(blocker_code, codes)
                     self.assertIn("trust.profile_json_emittable_drift", codes)
+                    if message is not None:
+                        matching = [
+                            blocker for blocker in blockers if blocker["code"] == blocker_code
+                        ]
+                        self.assertTrue(
+                            any(message in blocker["message"] for blocker in matching)
+                        )
 
     def test_missing_evidence_policy_flag_is_malformed(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -4552,6 +4631,10 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "/ops/iso/token=readiness-compact-summary-secret.summary.json",
                     "secret-looking material",
                 ),
+                (
+                    "/ops/iso/canary.summary.txt",
+                    "must point to a .json file",
+                ),
             )
             locations = (
                 ("canary", ("canary_summaries", 0)),
@@ -5264,6 +5347,56 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("evidence.missing_canary_stages", codes)
             self.assertIn("evidence.missing_receipt_kinds", codes)
             self.assertIn("evidence.receipts_allow_legacy_colr007", codes)
+
+    def test_canary_stage_receipt_kinds_must_match_stage_names(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = write_evidence_summary(
+                root / "evidence",
+                direct_receipts=False,
+            )
+            cases = (
+                (
+                    "missing-rail-receipt",
+                    ["rail", "verify"],
+                    receipt_verification_summary(["iso-audit-notary"]),
+                    "evidence.stage_receipt_kind_missing",
+                ),
+                (
+                    "extra-notary-receipt",
+                    ["rail", "verify"],
+                    receipt_verification_summary(),
+                    "evidence.stage_receipt_kind_unexecuted",
+                ),
+            )
+            for name, stage_names, receipt_summary, code in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    canary = evidence["canary_summaries"][0]
+                    canary["stage_names"] = stage_names
+                    canary["stage_windows"] = [
+                        window
+                        for window in canary["stage_windows"]
+                        if window["name"] in set(stage_names)
+                    ]
+                    canary["receipt_summary"] = receipt_summary
+                    refresh_digest(evidence)
+                    mutated_path = write_json(root / f"{name}.summary.json", evidence)
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                            "--allow-canary-stage-receipts-only",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+                    self.assertIn(code, codes)
 
     def test_default_profile_receipt_policy_blocks_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -6096,6 +6229,21 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     lambda receipt: receipt.__setitem__("status_code", 201),
                 ),
                 (
+                    "canary-response-body-digest",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    0,
+                    lambda receipt: receipt.__setitem__("response_body_sha256", "f" * 64),
+                ),
+                (
+                    "archive-endpoint-policy-evidence",
+                    ("receipt_verification",),
+                    0,
+                    lambda receipt: receipt.__setitem__(
+                        "endpoint_requires_insecure_http",
+                        True,
+                    ),
+                ),
+                (
                     "archive-notary-record-count",
                     ("receipt_verification",),
                     0,
@@ -6247,6 +6395,97 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("evidence.archive_receipts_allow_default_profile", codes)
             self.assertIn("evidence.archive_receipts_source_files_not_required", codes)
 
+    def test_receipt_policy_flags_must_bind_receipt_entries(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            cases = (
+                (
+                    "canary-failed",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda summary: summary.__setitem__("allow_failed", True),
+                    "evidence.receipts_allow_failed",
+                    "no failed receipt entry was recorded",
+                ),
+                (
+                    "archive-failed",
+                    ("receipt_verification",),
+                    lambda summary: summary.__setitem__("allow_failed", True),
+                    "evidence.archive_receipts_allow_failed",
+                    "no failed receipt entry was recorded",
+                ),
+                (
+                    "canary-insecure-http",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda summary: summary.__setitem__("allow_insecure_http", True),
+                    "evidence.receipts_allow_insecure_http",
+                    "no http:// or local/private receipt endpoint was recorded",
+                ),
+                (
+                    "archive-insecure-http",
+                    ("receipt_verification",),
+                    lambda summary: summary.__setitem__("allow_insecure_http", True),
+                    "evidence.archive_receipts_insecure_http",
+                    "no http:// or local/private receipt endpoint was recorded",
+                ),
+                (
+                    "canary-legacy",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda summary: summary.__setitem__("allow_legacy_colr007", True),
+                    "evidence.receipts_allow_legacy_colr007",
+                    "no legacy colr.007 receipt entry was recorded",
+                ),
+                (
+                    "archive-legacy",
+                    ("receipt_verification",),
+                    lambda summary: summary.__setitem__("allow_legacy_colr007", True),
+                    "evidence.archive_receipts_allow_legacy_colr007",
+                    "no legacy colr.007 receipt entry was recorded",
+                ),
+                (
+                    "canary-default-profile",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda summary: summary.__setitem__("allow_default_profile", True),
+                    "evidence.receipts_allow_default_profile",
+                    "no default-profile receipt entry was recorded",
+                ),
+                (
+                    "archive-default-profile",
+                    ("receipt_verification",),
+                    lambda summary: summary.__setitem__("allow_default_profile", True),
+                    "evidence.archive_receipts_allow_default_profile",
+                    "no default-profile receipt entry was recorded",
+                ),
+            )
+            for name, path_parts, mutate, code, message in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    receipt_summary = evidence
+                    for part in path_parts:
+                        receipt_summary = receipt_summary[part]
+                    mutate(receipt_summary)
+                    refresh_digest(receipt_summary)
+                    refresh_digest(evidence)
+                    weak_path = write_json(
+                        root / f"forged-{name}-failed-policy.summary.json",
+                        evidence,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_summary), "--evidence-summary", str(weak_path)]
+                    )
+
+                    self.assertEqual(rc, 1, stderr)
+                    blockers = json.loads(stdout)["blockers"]
+                    matching = [blocker for blocker in blockers if blocker["code"] == code]
+                    self.assertTrue(matching)
+                    self.assertTrue(
+                        any(message in blocker["message"] for blocker in matching)
+                    )
+
     def test_archive_receipt_entries_must_bind_each_receipt_digest(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -6302,6 +6541,42 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     "evidence.receipt_not_successful",
                 ),
                 (
+                    "canary-missing-response-body-digest",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda receipt: receipt.pop("response_body_sha256"),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-malformed-response-body-digest",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda receipt: receipt.__setitem__("response_body_sha256", "not-a-digest"),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-missing-endpoint-policy-evidence",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda receipt: receipt.pop("endpoint_requires_insecure_http"),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-malformed-endpoint-policy-evidence",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda receipt: receipt.__setitem__(
+                        "endpoint_requires_insecure_http",
+                        "false",
+                    ),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
+                    "canary-hidden-endpoint-policy-evidence",
+                    ("canary_summaries", 0, "receipt_summary"),
+                    lambda receipt: receipt.__setitem__(
+                        "endpoint_requires_insecure_http",
+                        True,
+                    ),
+                    "evidence.receipt_metadata_invalid",
+                ),
+                (
                     "archive-missing-ok",
                     ("receipt_verification",),
                     lambda receipt: receipt.pop("ok"),
@@ -6324,6 +6599,42 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     ("receipt_verification",),
                     lambda receipt: receipt.update({"ok": False, "status_code": 302}),
                     "evidence.archive_receipt_not_successful",
+                ),
+                (
+                    "archive-missing-endpoint-policy-evidence",
+                    ("receipt_verification",),
+                    lambda receipt: receipt.pop("endpoint_requires_insecure_http"),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-malformed-endpoint-policy-evidence",
+                    ("receipt_verification",),
+                    lambda receipt: receipt.__setitem__(
+                        "endpoint_requires_insecure_http",
+                        "false",
+                    ),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-hidden-endpoint-policy-evidence",
+                    ("receipt_verification",),
+                    lambda receipt: receipt.__setitem__(
+                        "endpoint_requires_insecure_http",
+                        True,
+                    ),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-missing-response-body-digest",
+                    ("receipt_verification",),
+                    lambda receipt: receipt.pop("response_body_sha256"),
+                    "evidence.archive_receipt_metadata_invalid",
+                ),
+                (
+                    "archive-malformed-response-body-digest",
+                    ("receipt_verification",),
+                    lambda receipt: receipt.__setitem__("response_body_sha256", "not-a-digest"),
+                    "evidence.archive_receipt_metadata_invalid",
                 ),
             )
             for name, summary_path, mutate, code in cases:

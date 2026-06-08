@@ -59,11 +59,11 @@ Bu depoda siz Iroha 2 alətləri üçün sənədləri tapa bilərsiniz:
 
 ## Norito (Seriallaşdırma kodek)
 
-Norito iş sahəsinin serializasiya kodekidir. Biz `parity-scale-codec` istifadə etmirik
-(ÖLÇƏ). Sənədlər və ya müqayisələr SCALE ilə müqayisə edildikdə, bu, yalnız üçündür
+Norito iş sahəsinin serializasiya kodekidir. Biz `retired codec` istifadə etmirik
+(ÖLÇƏ). Sənədlər və ya müqayisələr retired codec ilə müqayisə edildikdə, bu, yalnız üçündür
 kontekst; bütün istehsal yolları Norito istifadə edir. `norito::codec::{Encode, Decode}`
 API-lər hashing və tel üçün başlıqsız (“çılpaq”) Norito faydalı yükü təmin edir.
-səmərəlilik — Norito, SCALE deyil.
+səmərəlilik — Norito, retired codec deyil.
 
 Ən son vəziyyət:
 
@@ -87,4 +87,4 @@ Qeyd: Bəzi alt sistem sənədləri (məsələn, IVM sürətləndirilməsi və Z
 Statusun son nöqtəsi kodlaşdırma qeydləri
 - Torii `/status` gövdəsi kompaktlıq üçün başlıqsız (“çılpaq”) faydalı yüklə standart olaraq Norito-dən istifadə edir. Müştərilər əvvəlcə Norito kodunu deşifrə etməyə cəhd etməlidirlər.
 - İstənilən halda serverlər JSON-u qaytara bilər; `content-type` `application/json` olarsa, müştərilər JSON-a qayıdırlar.
-- Tel formatı SCALE deyil, Norito-dir. `norito::codec::{Encode,Decode}` API-ləri çılpaq variant üçün istifadə olunur.
+- Tel formatı retired codec deyil, Norito-dir. `norito::codec::{Encode,Decode}` API-ləri çılpaq variant üçün istifadə olunur.

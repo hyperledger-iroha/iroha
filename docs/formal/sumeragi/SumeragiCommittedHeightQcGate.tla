@@ -397,6 +397,26 @@ NoBugInvariant ==
   /\ EvidenceMatchesSpec
   /\ RecordOnlySideEffectsMatch
 
+CommittedHeightDecisionExact ==
+  /\ DecisionMatchesSpec
+  /\ DropReasonMatchesSpec
+
+CommittedHeightRecordOnlyEffectsExact ==
+  RecordOnlySideEffectsMatch
+
+CommittedHeightValidationExact ==
+  /\ ValidationMatchesSpec
+  /\ ValidationContextMatchesSpec
+
+CommittedHeightEvidenceExact ==
+  EvidenceMatchesSpec
+
+CommittedHeightQcAdmissionExactness ==
+  /\ CommittedHeightDecisionExact
+  /\ CommittedHeightRecordOnlyEffectsExact
+  /\ CommittedHeightValidationExact
+  /\ CommittedHeightEvidenceExact
+
 SafetyFast == NoBugInvariant
 
 BugFutureDropped == NoBugInvariant

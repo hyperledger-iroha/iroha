@@ -5,9 +5,9 @@ import java.security.MessageDigest
 /** Native recursive Kagemusha spend ABI-6 bridge. */
 class KagemushaRecursiveSpendProver private constructor() {
     enum class Mode(val wireName: String) {
+        CHECKED_PREFOLD_V1("checked_prefold_v1"),
         RECURSIVE_COMPACT_V1("recursive_compact_v1"),
         RECURSIVE_SPEND_V1("recursive_spend_v1"),
-        CHECKED_PREFOLD_V1("checked_prefold_v1"),
     }
 
     companion object {
@@ -76,12 +76,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun preferredMode(
             recursiveCompactAvailable: Boolean,
             recursiveSpendAvailable: Boolean,
-        ): Mode =
-            if (recursiveSpendAvailable) {
+        ): Mode {
+            // ABI-7 compact mode is not a production default yet.
+            return if (recursiveSpendAvailable) {
                 Mode.RECURSIVE_SPEND_V1
             } else {
                 Mode.CHECKED_PREFOLD_V1
             }
+        }
 
         @JvmStatic
         fun canRedeemWitnessless(circuitId: String?, hopCount: Int): Boolean {

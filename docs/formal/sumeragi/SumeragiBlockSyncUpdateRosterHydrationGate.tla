@@ -58,6 +58,54 @@ PermissionedNoStakeFill == 24
 
 Candidates == 1..24
 
+ConstructionCases == {
+  BuildUpdateFromBlock,
+  ResolveConsensusMode
+}
+
+PersistedLookupCases == {
+  PersistedFirst,
+  PersistedIdentityArgs,
+  PersistedAllowsSidecar
+}
+
+HistoryLookupCases == {
+  HistorySecond,
+  HistoryIdentityArgs
+}
+
+ShortCircuitCases == {
+  PersistedShortCircuitsHistory,
+  PersistedShortCircuitsFallback,
+  HistoryShortCircuitsFallback
+}
+
+FallbackGateCases == {
+  CertifiedDisablesFallback
+}
+
+FallbackSelectionCases == {
+  FallbackUsesCommitTopology,
+  FallbackUsesWorldPeersWhenCommitEmpty,
+  FallbackFiltersNextHeight,
+  FallbackUsesSaturatingNextHeight,
+  FallbackCanonicalizesByMode,
+  FallbackSourceCommitTopologySnapshot,
+  FallbackEmptyNoSelection
+}
+
+UpdateApplicationCases == {
+  SelectionAppliedToUpdate,
+  NoSelectionLeavesUpdateUnrostered
+}
+
+StakeFillCases == {
+  NposMissingStakeFilled,
+  NposExistingStakePreserved,
+  NposNoSelectionNoStakeFill,
+  PermissionedNoStakeFill
+}
+
 BuildUpdateAction == 1
 ResolveModeByHeight == 2
 LookupPersisted == 3
@@ -257,6 +305,48 @@ TypeInvariant ==
 Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+BlockSyncUpdateRosterConstructionExact ==
+  \A c \in ConstructionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncUpdateRosterPersistedLookupExact ==
+  \A c \in PersistedLookupCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncUpdateRosterHistoryLookupExact ==
+  \A c \in HistoryLookupCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncUpdateRosterShortCircuitExact ==
+  \A c \in ShortCircuitCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncUpdateRosterFallbackGateExact ==
+  \A c \in FallbackGateCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncUpdateRosterFallbackSelectionExact ==
+  \A c \in FallbackSelectionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncUpdateRosterApplicationExact ==
+  \A c \in UpdateApplicationCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncUpdateRosterStakeFillExact ==
+  \A c \in StakeFillCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncUpdateRosterHydrationExactness ==
+  /\ BlockSyncUpdateRosterConstructionExact
+  /\ BlockSyncUpdateRosterPersistedLookupExact
+  /\ BlockSyncUpdateRosterHistoryLookupExact
+  /\ BlockSyncUpdateRosterShortCircuitExact
+  /\ BlockSyncUpdateRosterFallbackGateExact
+  /\ BlockSyncUpdateRosterFallbackSelectionExact
+  /\ BlockSyncUpdateRosterApplicationExact
+  /\ BlockSyncUpdateRosterStakeFillExact
 
 BugBuildsEmptyUpdate ==
   ImplementationActions(BuildUpdateFromBlock) = SpecActions(BuildUpdateFromBlock)

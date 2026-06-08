@@ -980,6 +980,7 @@ public sealed class PrivacyNativeTests
         Assert.False(capabilities.ProductionGate.WitnessPrivacyChecks);
         Assert.False(capabilities.ProductionGate.DeterministicTests);
         Assert.False(capabilities.ProductionGate.NegativeAdversarialTests);
+        Assert.False(capabilities.ProductionGate.ReplayNullifierTests);
         Assert.False(capabilities.ProductionGate.Fuzzing);
         Assert.False(capabilities.ProductionGate.ParserFuzzing);
         Assert.False(capabilities.ProductionGate.VerifierFuzzing);
@@ -998,6 +999,9 @@ public sealed class PrivacyNativeTests
             capabilities.ProductionGate.Missing);
         Assert.Contains(
             "negative/adversarial tests are incomplete",
+            capabilities.ProductionGate.Missing);
+        Assert.Contains(
+            "replay/nullifier rejection tests are incomplete",
             capabilities.ProductionGate.Missing);
         Assert.Contains(
             "parser fuzzing gate is incomplete",

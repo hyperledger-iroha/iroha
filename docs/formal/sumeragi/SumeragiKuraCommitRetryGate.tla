@@ -242,8 +242,72 @@ TypeInvariant ==
   /\ tried \subseteq Candidates
   /\ \A candidate \in tried: ImplementationActions(candidate) \subseteq Actions
 
-Safety ==
+KuraAlignmentCases == {
+  AlignNoKura, AlignMissingStateTip, AlignLowerStateHeight,
+  AlignWrongStateHash, AlignKuraStateTip
+}
+
+KuraRetryDurabilityCases == {
+  KuraBackoffDefers, KuraAbortedCleans, AlreadyDurableMarksPending,
+  AlreadyCommittedSkips, StoreFailureRetry, StoreFailureExhausted
+}
+
+KuraStateCommitCases == {
+  StateHeightMismatchAligned, StateHeightMismatchConflict,
+  StateCommitOtherFailure
+}
+
+KuraCommitEligibilityCases == {
+  CommitMissingQcDefers, CommitBeforeTipDefers, AbortedWithoutQcDefers,
+  AbortedWithQcRevives, RetiredWithoutQcDefers, RetiredWithQcProceed
+}
+
+KuraPersistenceQcCases == {
+  MarkPersistedResetsRetry, ResetQcWithFallback, ResetQcWithoutFallback
+}
+
+KuraCommitGroupedCases ==
+  KuraAlignmentCases \cup KuraRetryDurabilityCases \cup
+  KuraStateCommitCases \cup KuraCommitEligibilityCases \cup
+  KuraPersistenceQcCases
+
+KuraCommitCaseGroupsComplete ==
+  KuraCommitGroupedCases = Candidates
+
+KuraAlignmentExact ==
   \A candidate \in tried:
-    ImplementationActions(candidate) = SpecActions(candidate)
+    candidate \in KuraAlignmentCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+KuraRetryDurabilityExact ==
+  \A candidate \in tried:
+    candidate \in KuraRetryDurabilityCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+KuraStateCommitExact ==
+  \A candidate \in tried:
+    candidate \in KuraStateCommitCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+KuraCommitEligibilityExact ==
+  \A candidate \in tried:
+    candidate \in KuraCommitEligibilityCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+KuraPersistenceQcExact ==
+  \A candidate \in tried:
+    candidate \in KuraPersistenceQcCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+KuraCommitRetryExactness ==
+  /\ KuraCommitCaseGroupsComplete
+  /\ KuraAlignmentExact
+  /\ KuraRetryDurabilityExact
+  /\ KuraStateCommitExact
+  /\ KuraCommitEligibilityExact
+  /\ KuraPersistenceQcExact
+
+Safety ==
+  KuraCommitRetryExactness
 
 ====

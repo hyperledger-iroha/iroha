@@ -223,6 +223,7 @@ const EXPECTED_SDK_PRIVACY_PRODUCTION_GATE_MISSING_REASONS = Object.freeze([
   "witness privacy checks are incomplete",
   "deterministic tests are incomplete",
   "negative/adversarial tests are incomplete",
+  "replay/nullifier rejection tests are incomplete",
   "fuzzing gate is incomplete",
   "parser fuzzing gate is incomplete",
   "verifier fuzzing gate is incomplete",
@@ -359,6 +360,7 @@ const EXPECTED_JAVA_PRIVACY_CAPABILITY_FIELDS = Object.freeze([
   "witnessPrivacyChecks",
   "deterministicTests",
   "negativeAdversarialTests",
+  "replayNullifierTests",
   "fuzzing",
   "parserFuzzing",
   "verifierFuzzing",
@@ -632,7 +634,7 @@ function extractJsCatalogProductionGateMissingReasons(text, label) {
   const requirements = [...requirementsBlock.matchAll(/Object\.freeze\(\["[^"]+",\s*"([^"]+)"\]\)/gu)].map(
     (match) => match[1],
   );
-  assert.equal(requirements.length, 13, `${label} production gate requirement count drifted`);
+  assert.equal(requirements.length, 14, `${label} production gate requirement count drifted`);
   const supplemental = [
     "PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE",
     "PRODUCTION_GATE_MISSING_PLANNED_SDK",
@@ -657,7 +659,7 @@ function extractPythonCatalogProductionGateMissingReasons(text, label) {
   const requirements = [...requirementsBlock.matchAll(/\("[^"]+",\s*"([^"]+)"\)/gu)].map(
     (match) => match[1],
   );
-  assert.equal(requirements.length, 13, `${label} production gate requirement count drifted`);
+  assert.equal(requirements.length, 14, `${label} production gate requirement count drifted`);
   const supplemental = [
     "PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE",
     "PRODUCTION_GATE_MISSING_PLANNED_SDK",
@@ -671,6 +673,31 @@ function extractPythonCatalogProductionGateMissingReasons(text, label) {
     )[1],
   );
   return [...requirements, ...supplemental];
+}
+
+function extractNativePrivacyProductionGateRequirements(text, label) {
+  const requirementsBlock = requireMatch(
+    text,
+    /const\s+PRIVACY_PRODUCTION_GATE_REQUIREMENTS:[^=]+=\s*&\[(?<body>[\s\S]*?)\];/u,
+    `${label} native production gate requirements`,
+  ).groups.body;
+  const tupleLikeLines = requirementsBlock
+    .split("\n")
+    .filter((line) => line.trim().startsWith("("));
+  const requirements = [
+    ...requirementsBlock.matchAll(/^\s*\("([^"]+)",\s*"([^"]+)"\),\s*$/gmu),
+  ].map((match) => [match[1], match[2]]);
+  assert.equal(
+    requirements.length,
+    tupleLikeLines.length,
+    `${label} native production gate tuples must stay one-line for parity extraction`,
+  );
+  assert.equal(
+    requirements.length,
+    14,
+    `${label} native production gate requirement count drifted`,
+  );
+  return requirements;
 }
 
 function escapeRegExp(text) {
@@ -2193,6 +2220,20 @@ test("native privacy FFI capabilities keep production gates fail-closed", () => 
     ["JS NAPI privacy FFI", source("crates/iroha_js_host/src/lib.rs")],
     ["Python PyO3 privacy FFI", source("python/iroha_python/iroha_python_rs/src/lib.rs")],
   ]) {
+    const nativeGateRequirements = extractNativePrivacyProductionGateRequirements(text, label);
+    assert.equal(
+      new Set(nativeGateRequirements.map(([key]) => key)).size,
+      nativeGateRequirements.length,
+      `${label} native production gate requirement keys must be unique`,
+    );
+    assert.deepEqual(
+      nativeGateRequirements.map(([, reason]) => reason),
+      EXPECTED_SDK_PRIVACY_PRODUCTION_GATE_MISSING_REASONS.slice(
+        0,
+        nativeGateRequirements.length,
+      ),
+      `${label} native production gate missing reasons drifted`,
+    );
     assert.match(
       text,
       /const\s+PRIVACY_PRODUCTION_GATE_MISSING_ENGINE[\s\S]*real protocol engine is not production-enabled[\s\S]*const\s+PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST[\s\S]*Iroha production allowlist is not enabled for this audited row/,
@@ -2314,7 +2355,7 @@ test("native privacy FFI production-disabled responses enumerate all gates", () 
   ]) {
     assert.match(
       text,
-      /const\s+PRIVACY_PRODUCTION_DISABLED_MESSAGE:\s*&str\s*=\s*"[^"]*exact protocol implementation[^"]*real proving[^"]*real verification[^"]*chain admission[^"]*cross-SDK parity[^"]*wallet\/state support[^"]*witness privacy checks[^"]*deterministic tests[^"]*negative\/adversarial tests[^"]*fuzzing[^"]*parser fuzzing[^"]*verifier fuzzing[^"]*performance gates[^"]*external audit[^"]*real protocol engine[^"]*Iroha production allowlist[^"]*"/,
+      /const\s+PRIVACY_PRODUCTION_DISABLED_MESSAGE:\s*&str\s*=\s*"[^"]*exact protocol implementation[^"]*real proving[^"]*real verification[^"]*chain admission[^"]*cross-SDK parity[^"]*wallet\/state support[^"]*witness privacy checks[^"]*deterministic tests[^"]*negative\/adversarial tests[^"]*replay\/nullifier rejection tests[^"]*fuzzing[^"]*parser fuzzing[^"]*verifier fuzzing[^"]*performance gates[^"]*external audit[^"]*real protocol engine[^"]*Iroha production allowlist[^"]*"/,
       `${label} must enumerate every production-disabled gate in the public result message`,
     );
     for (const snippet of [
@@ -2334,7 +2375,7 @@ test("native privacy FFI production-disabled responses enumerate all gates", () 
     );
     assert.match(
       text,
-      /privacy_build_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*(?:iroha_privacy_build_proof_v1|PrivacyProofOperationV1::Build)[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*for fragment in \[[\s\S]*"exact protocol implementation"[\s\S]*"real proving"[\s\S]*"real verification"[\s\S]*"chain admission"[\s\S]*"cross-SDK parity"[\s\S]*"wallet\/state support"[\s\S]*"witness privacy checks"[\s\S]*"deterministic tests"[\s\S]*"negative\/adversarial tests"[\s\S]*"fuzzing"[\s\S]*"parser fuzzing"[\s\S]*"verifier fuzzing"[\s\S]*"performance gates"[\s\S]*"external audit"[\s\S]*"real protocol engine"[\s\S]*"Iroha production allowlist"[\s\S]*result\.message\.contains\(fragment\)[\s\S]*!result\.message\.contains\("secret"\)/,
+      /privacy_build_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*(?:iroha_privacy_build_proof_v1|PrivacyProofOperationV1::Build)[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*for fragment in \[[\s\S]*"exact protocol implementation"[\s\S]*"real proving"[\s\S]*"real verification"[\s\S]*"chain admission"[\s\S]*"cross-SDK parity"[\s\S]*"wallet\/state support"[\s\S]*"witness privacy checks"[\s\S]*"deterministic tests"[\s\S]*"negative\/adversarial tests"[\s\S]*"replay\/nullifier rejection tests"[\s\S]*"fuzzing"[\s\S]*"parser fuzzing"[\s\S]*"verifier fuzzing"[\s\S]*"performance gates"[\s\S]*"external audit"[\s\S]*"real protocol engine"[\s\S]*"Iroha production allowlist"[\s\S]*result\.message\.contains\(fragment\)[\s\S]*!result\.message\.contains\("secret"\)/,
       `${label} must test that production-disabled build results name every gate without witness leakage`,
     );
     assert.match(
@@ -2344,7 +2385,7 @@ test("native privacy FFI production-disabled responses enumerate all gates", () 
     );
     assert.match(
       text,
-      /privacy_verify_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*(?:iroha_privacy_verify_proof_v1|PrivacyProofOperationV1::Verify)[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*for fragment in \[[\s\S]*"exact protocol implementation"[\s\S]*"real proving"[\s\S]*"real verification"[\s\S]*"chain admission"[\s\S]*"cross-SDK parity"[\s\S]*"wallet\/state support"[\s\S]*"witness privacy checks"[\s\S]*"deterministic tests"[\s\S]*"negative\/adversarial tests"[\s\S]*"fuzzing"[\s\S]*"parser fuzzing"[\s\S]*"verifier fuzzing"[\s\S]*"performance gates"[\s\S]*"external audit"[\s\S]*"real protocol engine"[\s\S]*"Iroha production allowlist"[\s\S]*result\.message\.contains\(fragment\)[\s\S]*!result\.message\.contains\("secret"\)/,
+      /privacy_verify_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*(?:iroha_privacy_verify_proof_v1|PrivacyProofOperationV1::Verify)[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*for fragment in \[[\s\S]*"exact protocol implementation"[\s\S]*"real proving"[\s\S]*"real verification"[\s\S]*"chain admission"[\s\S]*"cross-SDK parity"[\s\S]*"wallet\/state support"[\s\S]*"witness privacy checks"[\s\S]*"deterministic tests"[\s\S]*"negative\/adversarial tests"[\s\S]*"replay\/nullifier rejection tests"[\s\S]*"fuzzing"[\s\S]*"parser fuzzing"[\s\S]*"verifier fuzzing"[\s\S]*"performance gates"[\s\S]*"external audit"[\s\S]*"real protocol engine"[\s\S]*"Iroha production allowlist"[\s\S]*result\.message\.contains\(fragment\)[\s\S]*!result\.message\.contains\("secret"\)/,
       `${label} must test that production-disabled verify results name every gate without proof leakage`,
     );
     assert.match(

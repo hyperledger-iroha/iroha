@@ -282,8 +282,8 @@ Reserved-lineage and ABI-7 compact key artifacts. The rollup recomputes each dig
 and artifact size from the adjacent local artifact bytes, requires those
 artifacts and the proof log to be regular non-symlink, non-hardlinked files
 with readable leaf metadata, requires lineage and compact key artifacts to be
-non-empty, rejects obvious plain-text placeholder compact key artifacts before
-digest-only acceptance, and
+non-empty, rejects all-zero Reserved-lineage artifacts and obvious plain-text or
+all-zero placeholder compact key artifacts before digest-only acceptance, and
 classifies artifact/log missing-vs-unreadable state from the lstat-backed
 local-file validators rather than `Path.is_file()`,
 and treats the checked-in ABI-6 manifest plus ABI-7 fail-closed and
@@ -309,12 +309,14 @@ canonical key-generation command. The rollup hash-binds that generator log,
 requires it to contain exactly the canonical CLI summary line, and checks the
 reported `.vk`, `.pk`, and `.record.norito` byte sizes against the adjacent
 artifact bytes.
-Plain-text placeholder compact key artifacts are rejected as non-production
-fixtures even when their SHA-256 digest and byte size match the evidence JSON.
+All-zero Reserved-lineage artifacts and plain-text or all-zero placeholder
+compact key artifacts are rejected as non-production fixtures even when their
+SHA-256 digest and byte size match the evidence JSON.
 Marker-stuffed proof logs with extra passing tests are rejected
 even when their digest matches the evidence JSON. The evidence JSON and its nested `circuit_ids`,
 `artifacts`, and `tests` objects are closed schemas, so extra release claims are
 rejected instead of ignored; duplicate JSON object keys are also invalid, so
+non-standard `NaN`/`Infinity` JSON constants are rejected before schema checks, and
 auditors never have to interpret last-key-wins evidence packets. Unreadable or
 non-UTF-8 ABI-6 manifest and proof-evidence JSON files fail closed as structured
 read blockers instead of tracebacks. Proof evidence
@@ -339,7 +341,8 @@ log, not the local artifact directory path, so release reviewers can compare
 evidence packets without capturing workstation paths. Android freshness checks consume the
 scanner-validated signed-evidence timestamp already present in each accepted slot
 report instead of re-opening slot metadata or signed-evidence JSON during the
-rollup. The rollup rejects symlinked `--repo-root` directories, symlinked
+rollup, but still revalidate that it is canonical UTC before comparing
+freshness windows. The rollup rejects symlinked `--repo-root` directories, symlinked
 repo-root ancestors, unreadable repo-root metadata, and direct secret-looking
 repo-root validator inputs before resolving checked-in ABI/source trust roots.
 The ABI-6 manifest, ABI-7 marker, and Reserved-lineage release-tooling section
@@ -552,19 +555,26 @@ certificate-chain file with
 bundle-relative path, SHA-256 digest, and byte size, and revalidates each slot
 name, signed-evidence summary field set, signed-evidence timestamp, summary
 digest, and slot-relative artifact path before
-constructing manifest paths. The verifier rejects summary drift, duplicate JSON keys,
+constructing manifest paths. The verifier rejects summary drift,
+release-manifest drift, duplicate JSON keys,
 unexpected top-level, section-level, or per-slot Android signed-evidence summary
 fields, missing Android signed-evidence summary fields, malformed summary
-digests or timestamps, per-section blockers in a ready summary,
+digests, malformed or noncanonical summary/manifest timestamps, non-standard `NaN`/`Infinity` JSON constants in
+summaries or manifests,
+per-section blockers in a ready summary,
 secret-looking paths, evidence outside
 `--bundle-root`, secret-looking strings anywhere inside the readiness summary,
-plain-text placeholder compact key artifacts in the compact-key artifact
-inventory, missing or digest-drifted Android release APK, D2D handoff,
-wallet-integrity, and attestation-chain artifacts, symlinked bundle roots, and
+all-zero lineage artifacts in the lineage inventory, plain-text or all-zero
+placeholder compact key artifacts in the compact-key artifact inventory,
+missing or digest-drifted Android release APK, D2D handoff,
+wallet-integrity, and attestation-chain artifacts, symlinked bundle roots or
+bundle-root ancestors, and
 symlinked or hardlinked manifest outputs, and
 records only bundle-relative evidence paths. If any release input path escapes
-`--bundle-root`, the verifier stops before loading any readiness JSON, proof
-evidence, compact-key evidence, Android device-lab tree, or artifact inventory.
+`--bundle-root`, or `--bundle-root` itself is a symlink or has a symlink
+ancestor, the verifier stops before loading any readiness JSON, existing release
+manifest, proof evidence, compact-key evidence, Android device-lab tree, or
+artifact inventory.
 Secret-looking trusted signer key paths are rejected before key loading.
 Newly-created release-bundle output parents are revalidated before writing so a
 symlinked parent cannot be introduced during output creation. The manifest is
@@ -575,10 +585,11 @@ Android signed-evidence file already hash-bound into the manifest.
 
 The helper rejects a symlinked or unreadable-metadata `--artifact-dir` and
 refuses to write `lineage-proof-evidence.json` through symlinked, hardlinked,
-non-regular, dangling-symlink, unreadable-metadata, or symlink-ancestor output aliases;
+non-regular, dangling-symlink, unreadable-metadata, or symlink-ancestor output aliases
+and rejects all-zero Reserved-lineage artifacts before emitting evidence JSON;
 the compact key evidence helper applies the same output checks for
 `recursive-compact-key-evidence.json` before reading compact key artifacts, and
-rejects obvious plain-text placeholder compact key artifacts before emitting
+rejects obvious plain-text or all-zero placeholder compact key artifacts before emitting
 evidence JSON. It also requires `recursive-compact-key-artifacts.log` beside the
 key artifacts and verifies that the canonical generator summary sizes match the
 local `.vk`, `.pk`, and `.record.norito` files.
@@ -1355,7 +1366,13 @@ root freshness, and nullifier set. A tampered final spendable-note binding
 therefore fails at the final-proof gate instead of being masked by lineage-key
 metadata.
 Appenders must provide the previous recursive proof to the native append
-builder; SDKs should not derive the accumulator state themselves. The CI benchmark
+builder. Native append streams the previous recursive proof bytes and per-hop
+accumulator material into native-owned accumulator digests
+(`recursive_proof_chain_digest`, lineage/aggregation transcript, fixed-window
+schedule/shared-manifest/table-base, verifier-witness batch, transition-profile,
+append-opening-preflight, append-boundary, scalar-projection, and
+previous/resulting accumulator digests); SDKs must not derive, supply, or patch
+accumulator state themselves. The CI benchmark
 `kagemusha_recursive_spend_payload_bytes` records constant fixture archives for
 1, 2, 3, 5, 8, 13, 21, 34, 55, and 64 hops when the proof payload is fixed at
 256 bytes; production proof bytes can change the absolute number, but the
@@ -2089,6 +2106,7 @@ folded public-input projection preverification, folded-public-input hash limbs
 in the recursive proof schema, height-aware record checks, full backend
 verification wrappers, and a transparent Halo2 IPA semantic proof for that
 evidence are present. ABI 7 keeps recursive compact entry points and mode `2`
-source-stable, but public compact-token admission fails closed until the proof
-uses a composed private-hop verifier-slice circuit. The legacy checked-folded
-entry points remain mode `1` only.
+source-stable with package-aware one-hop and append proof wiring; production
+compact-token selection remains reserved until the compact key package, evidence
+JSON, generator log, and signed release/device evidence are all present. The
+legacy checked-folded entry points remain mode `1` only.

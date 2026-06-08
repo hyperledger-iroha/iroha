@@ -1233,13 +1233,21 @@ def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[st
             )
         )
     else:
-        _, parse_blocker = readiness.parse_utc_timestamp(
-            generated_at,
-            "Kagemusha release bundle generated_at_utc",
-        )
-        if parse_blocker is not None:
-            parse_blocker["code"] = "kagemusha_release_bundle_manifest_timestamp"
-            blockers.append(parse_blocker)
+        if not device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_timestamp",
+                    "Kagemusha release bundle generated_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+                )
+            )
+        else:
+            _, parse_blocker = readiness.parse_utc_timestamp(
+                generated_at,
+                "Kagemusha release bundle generated_at_utc",
+            )
+            if parse_blocker is not None:
+                parse_blocker["code"] = "kagemusha_release_bundle_manifest_timestamp"
+                blockers.append(parse_blocker)
     if bundle.get("ready") is not True:
         blockers.append(
             _blocker(
@@ -1412,6 +1420,7 @@ def build_release_bundle(
             artifact_size_bytes=lineage.get("artifact_size_bytes"),
             label_prefix="Reserved-lineage proof evidence",
             code_prefix="kagemusha_release_lineage_artifact",
+            artifact_content_validator=readiness.validate_lineage_artifact_content,
         )
         blockers.extend(lineage_artifact_blockers)
         if lineage_artifact_entries:
@@ -1550,11 +1559,16 @@ def verify_release_bundle(
     """Verify an existing release bundle manifest against local evidence."""
 
     blockers: list[dict[str, Any]] = []
-    path_ok, path_blockers = _preflight_bundle_input_path(
-        existing_bundle_path,
-        bundle_root,
-        "Kagemusha release bundle manifest",
-    )
+    root_blockers = _validate_bundle_root(bundle_root)
+    blockers.extend(root_blockers)
+    path_ok = False
+    path_blockers: list[dict[str, Any]] = []
+    if not root_blockers:
+        path_ok, path_blockers = _preflight_bundle_input_path(
+            existing_bundle_path,
+            bundle_root,
+            "Kagemusha release bundle manifest",
+        )
     blockers.extend(path_blockers)
     existing = None
     load_blockers: list[dict[str, Any]] = []

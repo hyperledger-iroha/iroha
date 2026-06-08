@@ -66,7 +66,7 @@ translator: machine-google-reviewed
   - 對於 IVM/Kotodama v1，始終強制執行嚴格的指針 ABI 類型策略。沒有 ABI 策略切換；合約和主機必須無條件遵守 ABI 政策。
 - 不要對 IVM 系統調用或操作碼中使用的任何內容進行門控；每個 Iroha 構建都必須提供這些代碼路徑，以保持跨節點的確定性行為。
 - 序列化：到處使用 Norito 而不是 serde。對於二進制編解碼器，請使用 `norito::{Encode, Decode}`；對於 JSON，請使用 `norito::json` 幫助程序/宏（`norito::json::from_*`、`to_*`、`json!`、`Value`），並且永遠不要回退到 `serde_json`。不要將直接 `serde`/`serde_json` 依賴項添加到 crate 中；如果內部需要 serde，請依賴 Norito 的包裝器。
-- CI 防護：`scripts/check_no_scale.sh` 確保 SCALE (`parity-scale-codec`) 僅出現在 Norito 基準線束中。如果您接觸序列化代碼，則在本地運行它。
+- CI guard: `scripts/check_no_legacy_codec.sh` ensures retired non-Norito codec dependencies do not re-enter workspace manifests. Run it locally if you touch serialization code.
 - Norito 有效負載必須通告其佈局：版本號映射到固定標誌集，或者 Norito 標頭聲明解碼標誌。不要通過啟發法猜測打包序列位；創世數據遵循相同的規則。- 塊必須使用規範的 `SignedBlockWire` 格式 (`SignedBlock::encode_wire`/`canonical_wire`) 進行持久化和分發，該格式在版本字節前添加 Norito 標頭。不支持裸負載。
 - 添加 `TODO:` 註釋，解釋任何臨時或不完整的實施。
 - 在提交之前使用 `cargo fmt --all`（2024 版）格式化所有 Rust 源。

@@ -186,15 +186,24 @@ DaInlineFallbackAnchors ==
   /\ ActualCommitValidationInlineFallback("large_quorum", TRUE) = 4750
   /\ ActualCommitValidationInlineFallback("large_quorum", FALSE) = 4750
 
-SafetyFast ==
+PendingFastPathTimeoutDerivationExact ==
   /\ PendingFastTimeoutMatchesSpec
-  /\ InlineFallbackMatchesSpec
   /\ MinimumOneAnchor
   /\ SaturatingMarginAnchors
   /\ HalfFallbackAnchors
   /\ FloorBoundaryAnchors
   /\ LargeQuorumMarginAnchor
+
+PendingFastPathInlineFallbackExact ==
+  /\ InlineFallbackMatchesSpec
   /\ DaInlineFallbackAnchors
+
+PendingFastPathTimeoutExactness ==
+  /\ PendingFastPathTimeoutDerivationExact
+  /\ PendingFastPathInlineFallbackExact
+
+SafetyFast ==
+  PendingFastPathTimeoutExactness
 
 BugNoMinimumOne ==
   ActualPendingFastTimeout("zero_quorum") = SpecPendingFastTimeout("zero_quorum")

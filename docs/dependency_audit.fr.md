@@ -59,7 +59,7 @@ Avis restants : aucun. Avertissements restants : `backoff` (non maintenu),
 - TLS : `rustls`, `tokio-rustls`, `hyper-rustls` — stack TLS moderne et
   canonique en Rust.
 - Noise : `snow` — implémentation canonique.
-- Sérialisation : `parity-scale-codec` est le codec canonique pour SCALE.
+- Sérialisation : `retired codec` est le codec canonique pour retired codec.
   Serde a été retiré des dépendances de production à l’échelle du workspace ;
   les derives et writers Norito couvrent tous les chemins d’exécution. Toute
   référence résiduelle à Serde se trouve dans la documentation historique, les

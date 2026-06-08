@@ -10135,7 +10135,7 @@ const PRIVACY_PRODUCTION_GATE_MISSING_ENGINE: &str =
     "real protocol engine is not production-enabled";
 const PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST: &str =
     "Iroha production allowlist is not enabled for this audited row";
-const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, witness privacy checks, deterministic tests, negative/adversarial tests, fuzzing, parser fuzzing, verifier fuzzing, performance gates, external audit, real protocol engine enablement, and Iroha production allowlist evidence all pass";
+const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, witness privacy checks, deterministic tests, negative/adversarial tests, replay/nullifier rejection tests, fuzzing, parser fuzzing, verifier fuzzing, performance gates, external audit, real protocol engine enablement, and Iroha production allowlist evidence all pass";
 #[cfg(test)]
 const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE: &[u8] =
     b"iroha-privacy-native-availability-probe-v1";
@@ -10187,6 +10187,10 @@ const PRIVACY_PRODUCTION_GATE_REQUIREMENTS: &[(&str, &str)] = &[
     (
         "negative_adversarial_tests",
         "negative/adversarial tests are incomplete",
+    ),
+    (
+        "replay_nullifier_tests",
+        "replay/nullifier rejection tests are incomplete",
     ),
     ("fuzzing", "fuzzing gate is incomplete"),
     ("parser_fuzzing", "parser fuzzing gate is incomplete"),
@@ -15520,6 +15524,7 @@ mod tests {
             "witness privacy checks",
             "deterministic tests",
             "negative/adversarial tests",
+            "replay/nullifier rejection tests",
             "fuzzing",
             "parser fuzzing",
             "verifier fuzzing",
@@ -15588,6 +15593,7 @@ mod tests {
             "witness privacy checks",
             "deterministic tests",
             "negative/adversarial tests",
+            "replay/nullifier rejection tests",
             "fuzzing",
             "parser fuzzing",
             "verifier fuzzing",

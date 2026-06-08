@@ -21,7 +21,7 @@ deterministas que describen los blobs aceptados por DA-2. Esta not captura las
 estructuras de datas canonicas, los hooks del pipeline de bloques, las pruebas de
 cliente ligero y las superficies Torii/RPC que deben aterrizar antes de que los
 validadores puedan confiar en compromisos DA משך הקבלה או chequeos de
-גוברננסה. Todos los payloads estan codificados en Norito; sin SCALE ni ad JSON
+גוברננסה. Todos los payloads estan codificados en Norito; sin retired codec ni ad JSON
 hoc.
 
 ## אובייקטיביות

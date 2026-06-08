@@ -71,6 +71,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("password_receipt_unknown_secret", "receipt_unknown_secret"),
             ("%70assword_receipt_unknown_leak", "receipt_unknown_leak"),
             ("private-key_receipt_unknown_leak", "receipt_unknown_leak"),
+            ("unexpected\x1breceipt_key", "\x1b"),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -83,6 +84,29 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertIn("contains unknown keys", message)
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_nested_control_material_in_receipt_is_rejected_without_echo(self):
+        cases = (
+            (
+                {"metadata": {"unexpected\x1breceipt_key": "redacted"}},
+                "forbidden control-bearing field",
+                "receipt_key",
+            ),
+            (
+                {"receipt_kind": "warning \x1b[31mred"},
+                "unsafe control characters",
+                "[31mred",
+            ),
+        )
+        for body, expected, hidden in cases:
+            with self.subTest(body=body):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    VERIFIER._check_no_secret_material(body, Path("receipt.json"))
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn("\x1b", message)
                 self.assertNotIn(hidden, message)
 
     def test_cli_path_flags_reject_flag_like_values(self):
@@ -233,12 +257,86 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             for receipt in summary["receipts"]:
                 self.assertIn(receipt["receipt_kind"], VERIFIER.SUPPORTED_KINDS)
                 self.assertTrue(VERIFIER._is_lower_hex_sha256(receipt["receipt_sha256"]))
+                raw_receipt = json.loads(Path(receipt["path"]).read_text(encoding="utf-8"))
+                self.assertEqual(
+                    receipt["response_body_sha256"],
+                    raw_receipt["response_body_sha256"],
+                )
+                self.assertEqual(
+                    receipt["endpoint_requires_insecure_http"],
+                    VERIFIER._url_requires_insecure_http_override(
+                        VERIFIER.urllib.parse.urlparse(
+                            raw_receipt["endpoint"]
+                            if raw_receipt["receipt_kind"] == "iso-audit-notary"
+                            else raw_receipt["endpoint_url"]
+                        )
+                    ),
+                )
             body = dict(summary)
             digest = body.pop("summary_sha256")
             self.assertEqual(
                 digest,
                 VERIFIER.sha256_hex(VERIFIER._canonical_summary_json_bytes(body)),
             )
+
+    def test_unused_local_overrides_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            export_dir.mkdir()
+            audit_test.write_export(export_dir)
+            with audit_test.capture_server() as (endpoint, _requests):
+                self.assertEqual(
+                    audit_test.run_main(
+                        [
+                            "--export-dir",
+                            str(export_dir),
+                            "--endpoint",
+                            endpoint,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((export_dir / "receipts").glob("*.receipt.json"))
+            https_endpoint = "https://notary.bank.internal/archive"
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "endpoint": https_endpoint,
+                        "endpoint_sha256": VERIFIER.sha256_hex(
+                            https_endpoint.encode("utf-8")
+                        ),
+                    }
+                ),
+            )
+
+            cases = (
+                (
+                    ["--allow-failed"],
+                    "--allow-failed requires at least one failed receipt",
+                ),
+                (
+                    ["--allow-insecure-http"],
+                    "--allow-insecure-http requires at least one http:// or local/private receipt endpoint",
+                ),
+                (
+                    ["--allow-legacy-colr007"],
+                    "--allow-legacy-colr007 requires at least one rail receipt with legacy colr.007 message_type",
+                ),
+                (
+                    ["--allow-default-profile"],
+                    "--allow-default-profile requires at least one rail receipt without an explicit profile",
+                ),
+            )
+            for flags, expected in cases:
+                with self.subTest(flags=flags):
+                    rc, stdout, stderr = run_verify(["--receipt", str(receipt), *flags])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(expected, stderr)
 
     def test_zero_record_notary_receipt_is_rejected_when_source_files_required(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -306,7 +404,11 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             )
 
             self.assertEqual(rc, 0, stderr)
-            self.assertEqual(json.loads(stdout)["receipts"][0]["record_count"], 0)
+            summary = json.loads(stdout)
+            self.assertEqual(summary["receipts"][0]["record_count"], 0)
+            self.assertTrue(
+                summary["receipts"][0]["endpoint_requires_insecure_http"]
+            )
 
     def test_duplicate_receipt_paths_and_digests_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -940,6 +1042,11 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "response_body_preview exceeds 4096 characters",
             ),
             (
+                "control_preview",
+                lambda body: body.update({"response_body_preview": "upstream \x1b[31m"}),
+                "contains unsafe control characters",
+            ),
+            (
                 "bearer_preview",
                 lambda body: body.update(
                     {"response_body_preview": "Authorization: Bearer abc"}
@@ -980,6 +1087,13 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     {"response_body_preview": "upstream %70assword%253Dabc"}
                 ),
                 "response_body_preview contains secret-looking material",
+            ),
+            (
+                "redacted_success_preview",
+                lambda body: body.update(
+                    {"response_body_preview": VERIFIER.REDACTED_RESPONSE_PREVIEW}
+                ),
+                "successful receipt must not carry redacted response_body_preview",
             ),
             (
                 "secret_error",

@@ -4534,6 +4534,19 @@ mod tests {
         }
     }
 
+    fn sample_qc_ref(
+        block_hash: HashOf<BlockHeader>,
+        view: u64,
+    ) -> crate::sumeragi::consensus::QcHeaderRef {
+        crate::sumeragi::consensus::QcHeaderRef {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            height: 2,
+            view,
+            epoch: 0,
+        }
+    }
+
     fn sample_block(height: u64) -> SignedBlock {
         let header = BlockHeader {
             height: NonZeroU64::new(height).expect("non-zero height"),
@@ -4571,6 +4584,170 @@ mod tests {
             pops,
         };
         (trusted, peer_id)
+    }
+
+    #[test]
+    fn vote_duplicate_key_formal_gate_raw_and_identity_projection() {
+        let hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xA0; Hash::LENGTH]));
+        let vote = sample_vote(hash);
+        let raw_key = vote_key(&vote);
+        assert_eq!(
+            raw_key,
+            (
+                vote.phase,
+                vote.height,
+                vote.view,
+                vote.epoch,
+                vote.signer,
+                vote.chain_order_hash,
+                vote.rechain_seq,
+            ),
+            "raw vote key must contain exactly the consensus slot and chain-order fields"
+        );
+
+        let public_a = KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            .public_key()
+            .clone();
+        let public_b = KeyPair::random_with_algorithm(Algorithm::BlsNormal)
+            .public_key()
+            .clone();
+        assert_ne!(
+            public_a, public_b,
+            "test requires distinct public keys for identity binding"
+        );
+        let identity_a = vote_identity_key(&vote, &public_a);
+        let identity_b = vote_identity_key(&vote, &public_b);
+        assert_ne!(
+            identity_a, identity_b,
+            "identity key must bind the signer public key"
+        );
+        assert_eq!(
+            raw_vote_key_from_identity_key(&identity_a),
+            raw_key,
+            "raw projection must strip the signer public key"
+        );
+        assert_eq!(
+            raw_vote_key_from_identity_key(&identity_b),
+            raw_key,
+            "raw projection must be stable for any public key bound to the same vote"
+        );
+    }
+
+    #[test]
+    fn vote_duplicate_key_formal_gate_key_context_matrix() {
+        let hash = HashOf::from_untyped_unchecked(Hash::prehashed([0xA1; Hash::LENGTH]));
+        let vote = sample_vote(hash);
+        let mut vote_log = BTreeMap::new();
+        vote_log.insert(vote_key(&vote), vote.clone());
+
+        assert!(
+            !vote_duplicate(&BTreeMap::new(), &vote),
+            "missing log entry must not be treated as a duplicate"
+        );
+
+        let mut phase_mismatch = vote.clone();
+        phase_mismatch.phase = crate::sumeragi::consensus::Phase::Prepare;
+        let mut height_mismatch = vote.clone();
+        height_mismatch.height = vote.height.saturating_add(1);
+        let mut view_mismatch = vote.clone();
+        view_mismatch.view = vote.view.saturating_add(1);
+        let mut epoch_mismatch = vote.clone();
+        epoch_mismatch.epoch = vote.epoch.saturating_add(1);
+        let mut signer_mismatch = vote.clone();
+        signer_mismatch.signer = vote.signer.saturating_add(1);
+        let mut chain_mismatch = vote.clone();
+        chain_mismatch.chain_order_hash = Hash::prehashed([0xA2; Hash::LENGTH]);
+        let mut rechain_mismatch = vote.clone();
+        rechain_mismatch.rechain_seq = vote.rechain_seq.saturating_add(1);
+
+        for (case, incoming) in [
+            ("phase", phase_mismatch),
+            ("height", height_mismatch),
+            ("view", view_mismatch),
+            ("epoch", epoch_mismatch),
+            ("signer", signer_mismatch),
+            ("chain-order", chain_mismatch),
+            ("rechain", rechain_mismatch),
+        ] {
+            assert_ne!(
+                vote_key(&vote),
+                vote_key(&incoming),
+                "{case} mutation must change the raw duplicate key"
+            );
+            assert!(
+                !vote_duplicate(&vote_log, &incoming),
+                "{case} mutation must not be classified as a duplicate"
+            );
+        }
+    }
+
+    #[test]
+    fn vote_duplicate_key_formal_gate_block_and_highest_qc_semantics() {
+        let hash_a = HashOf::from_untyped_unchecked(Hash::prehashed([0xA3; Hash::LENGTH]));
+        let hash_b = HashOf::from_untyped_unchecked(Hash::prehashed([0xA4; Hash::LENGTH]));
+        let highest_a = sample_qc_ref(hash_a, 0);
+        let highest_b = sample_qc_ref(hash_a, 1);
+
+        let mut prepare_existing = sample_vote(hash_a);
+        prepare_existing.phase = crate::sumeragi::consensus::Phase::Prepare;
+        prepare_existing.highest_qc = Some(highest_a);
+        let mut prepare_incoming = prepare_existing.clone();
+        prepare_incoming.highest_qc = Some(highest_b);
+        assert!(
+            same_recorded_vote_is_duplicate(&prepare_existing, &prepare_incoming),
+            "non-NEW_VIEW duplicates should ignore highest-QC references"
+        );
+
+        let mut vote_log = BTreeMap::new();
+        vote_log.insert(vote_key(&prepare_existing), prepare_existing.clone());
+        assert!(
+            vote_duplicate(&vote_log, &prepare_incoming),
+            "non-NEW_VIEW duplicate lookup should ignore highest-QC references after key match"
+        );
+        let mut different_block = prepare_incoming.clone();
+        different_block.block_hash = hash_b;
+        assert!(
+            !vote_duplicate(&vote_log, &different_block),
+            "same raw key with a different block hash must not be a duplicate"
+        );
+
+        let mut new_view_existing = sample_vote(hash_a);
+        new_view_existing.phase = crate::sumeragi::consensus::Phase::NewView;
+        new_view_existing.highest_qc = Some(highest_a);
+        let new_view_same_highest = new_view_existing.clone();
+        let mut new_view_different_highest = new_view_existing.clone();
+        new_view_different_highest.highest_qc = Some(highest_b);
+        assert!(same_recorded_vote_is_duplicate(
+            &new_view_existing,
+            &new_view_same_highest
+        ));
+        assert!(
+            !same_recorded_vote_is_duplicate(&new_view_existing, &new_view_different_highest),
+            "NEW_VIEW duplicates must bind the exact highest-QC reference"
+        );
+
+        let mut new_view_none_existing = new_view_existing.clone();
+        new_view_none_existing.highest_qc = None;
+        let new_view_none_incoming = new_view_none_existing.clone();
+        assert!(
+            same_recorded_vote_is_duplicate(&new_view_none_existing, &new_view_none_incoming),
+            "matching absent highest-QC references are duplicates"
+        );
+        assert!(
+            !same_recorded_vote_is_duplicate(&new_view_none_existing, &new_view_existing),
+            "absent highest-QC must not wildcard an incoming highest-QC reference"
+        );
+        assert!(
+            !same_recorded_vote_is_duplicate(&new_view_existing, &new_view_none_existing),
+            "incoming absent highest-QC must not wildcard an existing highest-QC reference"
+        );
+
+        let mut new_view_different_block = new_view_same_highest.clone();
+        new_view_different_block.block_hash = hash_b;
+        assert!(
+            !same_recorded_vote_is_duplicate(&new_view_existing, &new_view_different_block),
+            "NEW_VIEW duplicate detection still requires the same block hash"
+        );
     }
 
     #[test]

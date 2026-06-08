@@ -62,6 +62,58 @@ GenesisStubDeniedByHeightOrView == 28
 
 Candidates == 1..28
 
+ViewSelectionCases == {
+  ViewCommitPriority,
+  ViewCheckpointFallback,
+  ViewBlockFallback,
+  ViewNoneWhenNoInputs
+}
+
+ArtifactAttachmentCases == {
+  NoValidatedArtifactsNone,
+  CertOnlySelection,
+  CheckpointOnlySelection,
+  BothMatchingKeepsBoth
+}
+
+CheckpointCompatibilityCases == {
+  BothViewMismatchDropsCheckpoint,
+  BothRootsMismatchDropsCheckpoint,
+  RosterMismatchUsesCertRoster,
+  RosterMismatchKeepsCheckpointWhenConsistent
+}
+
+StakePriorityCases == {
+  StakeDirectPreferred,
+  StakeCertInputsFallback,
+  StakeCheckpointInputsFallback,
+  StakeNoMatchNone
+}
+
+StakeRosterCases == {
+  StakeResolvedAgainstCertRoster,
+  StakeResolvedAgainstCheckpointRoster
+}
+
+CheckpointValidationInputCases == {
+  CheckpointReusesCertInputsSameSet,
+  CheckpointUsesOwnInputsDifferentSet,
+  CheckpointRootsPreferCert,
+  CheckpointRootsFallbackHistory
+}
+
+EpochSelectionCases == {
+  NposEpochFromCert,
+  NposEpochExpectedWithoutCert,
+  PermissionedEpochZero
+}
+
+GenesisStubCases == {
+  GenesisStubAllowed,
+  GenesisStubDeniedBySource,
+  GenesisStubDeniedByHeightOrView
+}
+
 ViewCommit == 1
 ViewCheckpoint == 2
 ViewBlock == 3
@@ -286,6 +338,48 @@ TypeInvariant ==
 Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+RosterArtifactSelectionViewExact ==
+  \A c \in ViewSelectionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterArtifactSelectionAttachmentExact ==
+  \A c \in ArtifactAttachmentCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterArtifactSelectionCheckpointCompatibilityExact ==
+  \A c \in CheckpointCompatibilityCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterArtifactSelectionStakePriorityExact ==
+  \A c \in StakePriorityCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterArtifactSelectionStakeRosterExact ==
+  \A c \in StakeRosterCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterArtifactSelectionCheckpointInputExact ==
+  \A c \in CheckpointValidationInputCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterArtifactSelectionEpochExact ==
+  \A c \in EpochSelectionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterArtifactSelectionGenesisStubExact ==
+  \A c \in GenesisStubCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterArtifactSelectionExactness ==
+  /\ RosterArtifactSelectionViewExact
+  /\ RosterArtifactSelectionAttachmentExact
+  /\ RosterArtifactSelectionCheckpointCompatibilityExact
+  /\ RosterArtifactSelectionStakePriorityExact
+  /\ RosterArtifactSelectionStakeRosterExact
+  /\ RosterArtifactSelectionCheckpointInputExact
+  /\ RosterArtifactSelectionEpochExact
+  /\ RosterArtifactSelectionGenesisStubExact
 
 BugViewCommitUsesCheckpoint ==
   ImplementationActions(ViewCommitPriority) = SpecActions(ViewCommitPriority)

@@ -73,9 +73,12 @@ print("offline notes", readiness.offline_note)
 The `iroha_python.kagemusha` module exposes ABI-6 recursive Kagemusha
 spend-again-offline helpers when the compiled `_crypto` extension is present.
 ABI 7 exposes source-stable `recursive_compact_v1` compact-token symbols for
-`kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Use
-`kagemusha_prove_verified_recursive_compact_payment_token` and
-`kagemusha_verify_recursive_compact_payment_token`; gate them with
+`kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Import
+the helpers from `iroha_python` or `iroha_python.kagemusha`, and use
+`kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(record_bundle_archive, pallas_open_envelopes_archive, recursive_compact_key_artifacts_archive)`
+and
+`kagemusha_verify_recursive_compact_payment_token(compact_token_archive, recursive_compact_verifier_keys_archive)`;
+gate them with
 `is_kagemusha_recursive_compact_payment_token_prover_available()` and
 `is_kagemusha_recursive_compact_payment_token_verifier_available()`. The
 recursive-spend compact projection verifier is exposed separately as
@@ -124,9 +127,12 @@ material: Python wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The PyO3 host validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
-Native append streams the previous recursive proof bytes into
-`recursive_proof_chain_digest`; SDK code must not derive or patch the
-accumulator state.
+Native append streams the previous recursive proof bytes and per-hop accumulator
+material into native-owned accumulator digests (`recursive_proof_chain_digest`,
+lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
+verifier-witness batch, transition-profile, append-opening-preflight,
+append-boundary, scalar-projection, and previous/resulting accumulator digests);
+SDK code must not derive, supply, or patch accumulator state.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -174,8 +180,9 @@ operation-specific result schema before returning bytes to callers.
 `privacy_capabilities()` reports `privacy-production-gate-v1`, keeps
 `production_ready = False`, and remains fail-closed with missing production
 gates and no audit references until real proving, verification, chain
-admission, deterministic testing, fuzzing, performance gates, and external
-audit signoff are complete.
+admission, witness privacy checks, deterministic testing, negative/adversarial
+testing, replay/nullifier rejection testing, parser/verifier fuzzing,
+performance gates, and external audit signoff are complete.
 
 Python also exposes the deterministic privacy FFI status/error-code contract
 for diagnostics and cross-language parity: `PRIVACY_FFI_STATUS_ERROR`,

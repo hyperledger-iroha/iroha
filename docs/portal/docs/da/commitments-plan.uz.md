@@ -26,7 +26,7 @@ DA-3 Nexus blok formatini kengaytiradi, shuning uchun har bir qator deterministi
 DA-2 tomonidan qabul qilingan bloblarni tavsiflash. Ushbu eslatma kanonik ma'lumotlarni qamrab oladi
 tuzilmalar, blok quvur liniyasi ilgaklari, yorug'lik-klient isbotlari va Torii/RPC sirtlari
 validatorlar qabul paytida DA majburiyatlariga tayanishidan oldin qo'nishi kerak yoki
-boshqaruv tekshiruvlari. Barcha foydali yuklar Norito kodlangan; SCALE yoki ad-hoc JSON yo'q.
+boshqaruv tekshiruvlari. Barcha foydali yuklar Norito kodlangan; retired codec yoki ad-hoc JSON yo'q.
 
 ## Maqsadlar
 

@@ -34,28 +34,74 @@ QueueNudgeMin == 100
 SkewGraceFloor == 500
 ActiveGapLimit == 5000
 
-Cases == {
+TxCountCases == {
   "tx_no_config_world_limit",
   "tx_config_caps_world_limit",
   "tx_world_caps_config_limit",
   "tx_zero_floor",
+  "full_config_cap_reduces_assembly",
+  "full_world_cap_reduces_assembly"
+}
+
+AssemblyCases == {
   "assembly_one_batch",
   "assembly_full_batch_grace",
   "assembly_two_batches",
   "assembly_capped_large",
-  "ingress_idle_floor",
-  "ingress_active_ceiling",
+  "full_config_cap_reduces_assembly",
+  "full_world_cap_reduces_assembly"
+}
+
+FullBaseCases == {
+  "assembly_one_batch",
+  "assembly_full_batch_grace",
+  "assembly_two_batches",
+  "assembly_capped_large",
   "full_zero_quorum_floor",
   "full_uses_ingress",
   "full_active_uses_cooldown",
+  "full_config_cap_reduces_assembly",
+  "full_world_cap_reduces_assembly",
+  "saturating_add_full"
+}
+
+IngressCases == {
+  "ingress_idle_floor",
+  "ingress_active_ceiling",
+  "full_uses_ingress",
+  "full_active_uses_cooldown",
+  "saturating_add_full",
+  "saturating_mul_skew"
+}
+
+FullProposalGraceCases == {
+  "full_zero_quorum_floor",
+  "full_uses_ingress",
+  "full_active_uses_cooldown",
+  "full_config_cap_reduces_assembly",
+  "full_world_cap_reduces_assembly",
+  "missing_qc_uses_full",
+  "saturating_add_full"
+}
+
+InitialFrontierGraceCases == {
+  "initial_da_sla_uses_proposal",
+  "initial_no_da_uses_active_gap",
+  "initial_da_no_sla_uses_skew",
+  "initial_active_gap_dominates"
+}
+
+SkewGraceCases == {
   "initial_da_sla_uses_proposal",
   "initial_no_da_uses_active_gap",
   "initial_da_no_sla_uses_skew",
   "initial_active_gap_dominates",
-  "missing_qc_uses_recovery",
-  "missing_qc_uses_full",
-  "saturating_add_full",
   "saturating_mul_skew"
+}
+
+MissingQcCases == {
+  "missing_qc_uses_recovery",
+  "missing_qc_uses_full"
 }
 
 Min(a, b) == IF a <= b THEN a ELSE b
@@ -408,53 +454,53 @@ TypeInvariant ==
   /\ checked = 0
 
 TxCountMatchesSpec ==
-  \A c \in Cases:
+  \A c \in TxCountCases:
     ActualTxCount(c) = SpecTxCount(c)
 
 FullBaseMatchesSpec ==
-  \A c \in Cases:
+  \A c \in FullBaseCases:
     ActualFullBase(c) = SpecFullBase(c)
 
 AssemblyMultiplierMatchesSpec ==
-  \A c \in Cases:
+  \A c \in AssemblyCases:
     ActualAssemblyMultiplier(c) = SpecAssemblyMultiplier(c)
 
 AssemblyWindowMatchesSpec ==
-  \A c \in Cases:
+  \A c \in AssemblyCases:
     ActualAssemblyWindow(c) = SpecAssemblyWindow(c)
 
 IngressIdleGraceMatchesSpec ==
-  \A c \in Cases:
+  \A c \in IngressCases:
     ActualIngressIdleGrace(c) = SpecIngressIdleGrace(c)
 
 IngressDrainGraceMatchesSpec ==
-  \A c \in Cases:
+  \A c \in IngressCases:
     ActualIngressDrainGrace(c) = SpecIngressDrainGrace(c)
 
 FullProposalGraceMatchesSpec ==
-  \A c \in Cases:
+  \A c \in FullProposalGraceCases:
     ActualFullProposalGrace(c) = SpecFullProposalGrace(c)
 
 BoundedSkewGraceMatchesSpec ==
-  \A c \in Cases:
+  \A c \in SkewGraceCases:
     ActualBoundedSkewGrace(c) = SpecBoundedSkewGrace(c)
 
 InitialProposalTermMatchesSpec ==
-  \A c \in Cases:
+  \A c \in InitialFrontierGraceCases:
     ActualInitialProposalGraceTerm(c) = SpecInitialProposalGraceTerm(c)
 
 InitialFrontierUncappedMatchesSpec ==
-  \A c \in Cases:
+  \A c \in InitialFrontierGraceCases:
     ActualInitialFrontierGraceUncapped(c) =
       SpecInitialFrontierGraceUncapped(c)
 
 InitialFrontierGraceMatchesSpec ==
-  \A c \in Cases:
+  \A c \in InitialFrontierGraceCases:
     ActualInitialFrontierProposalGrace(c) =
       SpecInitialFrontierProposalGrace(c)
 
 MissingQcReacquireMatchesSpec ==
-  \A c \in Cases:
+  \A c \in MissingQcCases:
     ActualMissingQcReacquireWindow(c) = SpecMissingQcReacquireWindow(c)
 
 TxCountAnchors ==
@@ -508,7 +554,41 @@ SaturatingArithmeticAnchors ==
   /\ SpecFullProposalGrace("saturating_add_full") = MaxMillis
   /\ SpecBoundedSkewGrace("saturating_mul_skew") = MaxMillis
 
-SafetyFast ==
+FrontierProposalTxBudgetExact ==
+  /\ TxCountMatchesSpec
+  /\ TxCountAnchors
+
+FrontierProposalAssemblyExact ==
+  /\ FullBaseMatchesSpec
+  /\ AssemblyMultiplierMatchesSpec
+  /\ AssemblyWindowMatchesSpec
+  /\ AssemblyAnchors
+
+FrontierProposalIngressExact ==
+  /\ IngressIdleGraceMatchesSpec
+  /\ IngressDrainGraceMatchesSpec
+  /\ IngressAnchors
+
+FrontierFullProposalGraceExact ==
+  /\ FullProposalGraceMatchesSpec
+  /\ FullProposalGraceAnchors
+  /\ FullProposalTxBudgetMatchesSpec
+
+FrontierInitialProposalGraceExact ==
+  /\ BoundedSkewGraceMatchesSpec
+  /\ InitialProposalTermMatchesSpec
+  /\ InitialFrontierUncappedMatchesSpec
+  /\ InitialFrontierGraceMatchesSpec
+  /\ InitialFrontierGraceAnchors
+
+FrontierMissingQcReacquireExact ==
+  /\ MissingQcReacquireMatchesSpec
+  /\ MissingQcAnchors
+
+FrontierProposalSaturatingArithmeticExact ==
+  /\ SaturatingArithmeticAnchors
+
+FrontierProposalGraceExactness ==
   /\ TxCountMatchesSpec
   /\ FullBaseMatchesSpec
   /\ AssemblyMultiplierMatchesSpec
@@ -529,6 +609,9 @@ SafetyFast ==
   /\ InitialFrontierGraceAnchors
   /\ MissingQcAnchors
   /\ SaturatingArithmeticAnchors
+
+SafetyFast ==
+  FrontierProposalGraceExactness
 
 BugTxCountIgnoresConfigCap ==
   ActualTxCount("tx_config_caps_world_limit") =

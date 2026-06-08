@@ -75,6 +75,21 @@ def _path_control_character(path: str) -> str | None:
 
 
 MARKDOWN_UNSAFE_PATH_CHARACTERS = frozenset("|`<>")
+NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (
+    "webassembly",
+    "wasm",
+    "snarkjs",
+    "remoteprover",
+    "remote-prover",
+    "remote_prover",
+    "remote prover",
+    "prover-url",
+    "prover_url",
+    "proverendpoint",
+    "prover-endpoint",
+    "prover_endpoint",
+    "prover endpoint",
+)
 
 
 def _path_markdown_unsafe_character(path: str) -> str | None:
@@ -241,10 +256,20 @@ def _native_evm_manifest_relative_path(value: Any, label: str) -> PurePosixPath:
             f"{label} path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {value!r}"
         )
+    if ":" in value:
+        raise ValueError(
+            f"native EVM Groth16 prover bundle {label} path must not contain URI schemes or drive prefixes"
+        )
     if "\\" in value:
         raise ValueError(
             f"native EVM Groth16 prover bundle {label} path must use POSIX separators"
         )
+    normalized_value = value.lower()
+    for marker in NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS:
+        if marker in normalized_value:
+            raise ValueError(
+                f"native EVM Groth16 prover bundle {label} path contains forbidden prover dependency marker: {marker}"
+            )
     path = PurePosixPath(value)
     if (
         path.is_absolute()

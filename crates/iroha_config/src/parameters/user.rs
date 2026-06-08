@@ -4485,9 +4485,7 @@ impl SccpRouteManifest {
             "SCCP route manifest {field} must be a 0x-prefixed 32-byte hex value"
         );
         assert!(
-            value.as_bytes()[2..]
-                .iter()
-                .all(|byte| byte.is_ascii_hexdigit()),
+            value.as_bytes()[2..].iter().all(u8::is_ascii_hexdigit),
             "SCCP route manifest {field} must be a 0x-prefixed 32-byte hex value"
         );
         assert!(
@@ -4515,9 +4513,7 @@ impl SccpRouteManifest {
             "SCCP BSC route manifest {field} must be a 0x-prefixed 20-byte EVM address"
         );
         assert!(
-            value.as_bytes()[2..]
-                .iter()
-                .all(|byte| byte.is_ascii_hexdigit()),
+            value.as_bytes()[2..].iter().all(u8::is_ascii_hexdigit),
             "SCCP BSC route manifest {field} must be a 0x-prefixed 20-byte EVM address"
         );
         assert!(
@@ -4559,50 +4555,12 @@ impl SccpRouteManifest {
         Some(format!("{prefix}{expected_hash}"))
     }
 
-    fn validate_bsc_post_deploy_evidence(
-        &self,
-        source_bridge_config_hash: Option<&str>,
-        source_event_transaction_id: Option<&str>,
-        source_event_explorer_url: Option<&str>,
-        route_canary_evidence_hash: Option<&str>,
-        route_canary_transaction_id: Option<&str>,
-        route_canary_explorer_url: Option<&str>,
-        offline_full_toml_sha256: Option<&str>,
-    ) {
+    fn validate_bsc_post_deploy_evidence(&self, fields: [(&str, Option<&str>); 7]) {
         assert!(
             self.post_deploy_full_toml_ready == Some(true),
             "SCCP BSC route manifest production_ready requires post_deploy_full_toml_ready = true"
         );
-        for (field, value) in [
-            (
-                "post_deploy_source_bridge_config_hash",
-                source_bridge_config_hash,
-            ),
-            (
-                "post_deploy_source_event_transaction_id",
-                source_event_transaction_id,
-            ),
-            (
-                "post_deploy_source_event_explorer_url",
-                source_event_explorer_url,
-            ),
-            (
-                "post_deploy_route_canary_evidence_hash",
-                route_canary_evidence_hash,
-            ),
-            (
-                "post_deploy_route_canary_transaction_id",
-                route_canary_transaction_id,
-            ),
-            (
-                "post_deploy_route_canary_explorer_url",
-                route_canary_explorer_url,
-            ),
-            (
-                "post_deploy_offline_full_toml_sha256",
-                offline_full_toml_sha256,
-            ),
-        ] {
+        for (field, value) in fields {
             assert!(
                 value.is_some(),
                 "SCCP BSC route manifest production_ready requires {field}"
@@ -4947,15 +4905,36 @@ impl SccpRouteManifest {
             );
         }
         if self.production_ready && is_bsc_route {
-            self.validate_bsc_post_deploy_evidence(
-                post_deploy_source_bridge_config_hash.as_deref(),
-                post_deploy_source_event_transaction_id.as_deref(),
-                post_deploy_source_event_explorer_url.as_deref(),
-                post_deploy_route_canary_evidence_hash.as_deref(),
-                post_deploy_route_canary_transaction_id.as_deref(),
-                post_deploy_route_canary_explorer_url.as_deref(),
-                post_deploy_offline_full_toml_sha256.as_deref(),
-            );
+            self.validate_bsc_post_deploy_evidence([
+                (
+                    "post_deploy_source_bridge_config_hash",
+                    post_deploy_source_bridge_config_hash.as_deref(),
+                ),
+                (
+                    "post_deploy_source_event_transaction_id",
+                    post_deploy_source_event_transaction_id.as_deref(),
+                ),
+                (
+                    "post_deploy_source_event_explorer_url",
+                    post_deploy_source_event_explorer_url.as_deref(),
+                ),
+                (
+                    "post_deploy_route_canary_evidence_hash",
+                    post_deploy_route_canary_evidence_hash.as_deref(),
+                ),
+                (
+                    "post_deploy_route_canary_transaction_id",
+                    post_deploy_route_canary_transaction_id.as_deref(),
+                ),
+                (
+                    "post_deploy_route_canary_explorer_url",
+                    post_deploy_route_canary_explorer_url.as_deref(),
+                ),
+                (
+                    "post_deploy_offline_full_toml_sha256",
+                    post_deploy_offline_full_toml_sha256.as_deref(),
+                ),
+            ]);
         }
         let disabled_reason = if !self.production_ready
             && uses_diagnostic_verifier_key_hash

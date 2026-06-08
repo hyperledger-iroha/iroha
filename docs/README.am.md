@@ -59,11 +59,11 @@ Kotodama የመሳሪያ ሰንሰለት፣ ስለዚህ ኮንትራቶች እ�
 
 ## Norito (ተከታታይ ኮድ)
 
-Norito የስራ ቦታ ተከታታይ ኮዴክ ነው። `parity-scale-codec` አንጠቀምም።
-(ስኬል) ሰነዶች ወይም መመዘኛዎች ከ SCALE ጋር ሲወዳደሩ፣ ለ ብቻ ነው።
+Norito የስራ ቦታ ተከታታይ ኮዴክ ነው። `retired codec` አንጠቀምም።
+(ስኬል) ሰነዶች ወይም መመዘኛዎች ከ retired codec ጋር ሲወዳደሩ፣ ለ ብቻ ነው።
 አውድ; ሁሉም የምርት መንገዶች I18NT0000005X ይጠቀማሉ። `norito::codec::{Encode, Decode}`
 ኤፒአይዎች የራስጌ የሌለው ("ባሬ") Norito ክፍያ ለሃሺንግ እና ለሽቦ ይሰጣሉ
-ቅልጥፍና - እሱ I18NT0000007X እንጂ SCALE አይደለም።
+ቅልጥፍና - እሱ I18NT0000007X እንጂ retired codec አይደለም።
 
 የቅርብ ጊዜ ሁኔታ፡
 
@@ -87,4 +87,4 @@ Norito የስራ ቦታ ተከታታይ ኮዴክ ነው። `parity-scale-codec`
 የኹናቴ የመጨረሻ ነጥብ ኢንኮዲንግ ማስታወሻዎች
 - Torii I18NI0000067X አካል Norito በነባሪነት የራስጌ የሌለው ("ባዶ") ጭነትን ይጠቀማል። ደንበኞች መጀመሪያ I18NT0000009X መፍታት መሞከር አለባቸው።
 - አገልጋዮች ሲጠየቁ JSON መመለስ ይችላሉ; I18NI0000068X `application/json` ከሆነ ደንበኞች ወደ JSON ይመለሳሉ።
-- የሽቦ ቅርፀቱ Norito እንጂ SCALE አይደለም። የ `norito::codec::{Encode,Decode}` ኤፒአይዎች ለባዶ ልዩነት ጥቅም ላይ ይውላሉ።
+- የሽቦ ቅርፀቱ Norito እንጂ retired codec አይደለም። የ `norito::codec::{Encode,Decode}` ኤፒአይዎች ለባዶ ልዩነት ጥቅም ላይ ይውላሉ።

@@ -59,7 +59,7 @@ Avaliação de legitimidade e “crate principal” (destaques):
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — stack TLS moderna e
   canônica em Rust.
 - Noise: `snow` — implementação canônica.
-- Serialização: `parity-scale-codec` é o codec canônico para SCALE. Serde foi
+- Serialização: `retired codec` é o codec canônico para retired codec. Serde foi
   removido das dependências de produção em todo o workspace; derives/writers
   de Norito cobrem todos os caminhos de runtime. Qualquer referência residual
   a Serde está confinada a documentação histórica, scripts de proteção ou

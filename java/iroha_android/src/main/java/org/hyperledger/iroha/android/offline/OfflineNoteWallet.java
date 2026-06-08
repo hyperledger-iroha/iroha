@@ -41,16 +41,18 @@ public final class OfflineNoteWallet {
   private final OfflineNoteProofProvider proofProvider;
   private final OfflineNoteProofVerifier proofVerifier;
   private final OfflineNoteCertificateVerifier certificateVerifier;
+  private final OfflineNoteOwnerCertificateSigner ownerCertificateSigner;
   private final OfflineNoteRandomSource randomSource;
   private final OfflineNoteIdGenerator idGenerator;
   private final LongSupplier clock;
   private final OfflineBearerCashPolicyV1 bearerCashPolicy;
 
-  public OfflineNoteWallet(
+  public static OfflineNoteWallet kagemusha(
       final String chainId,
       final String accountId,
-      final OfflineNoteAttestationProvider attestationProvider) {
-    this(
+      final OfflineNoteAttestationProvider attestationProvider,
+      final byte[] vkBoxNorito) {
+    return kagemusha(
         chainId,
         accountId,
         attestationProvider,
@@ -58,12 +60,101 @@ public final class OfflineNoteWallet {
         null,
         null,
         null,
-        new NativeOfflineNoteProofProvider(),
-        new Halo2OfflineNoteProofVerifier(),
+        vkBoxNorito,
         new RejectingOfflineNoteCertificateVerifier(),
         new SecureOfflineNoteRandomSource(),
         new UuidOfflineNoteIdGenerator(),
-        System::currentTimeMillis);
+        System::currentTimeMillis,
+        OfflineBearerCashPolicyV1.DEFAULT,
+        null);
+  }
+
+  public static OfflineNoteWallet kagemusha(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteAttestationProvider attestationProvider,
+      final OfflineNoteStore store,
+      final OfflineNoteIssuerClient issuerClient,
+      final OfflineNoteTransactionSubmitter transactionSubmitter,
+      final OfflineNoteSyncResolver syncResolver,
+      final byte[] vkBoxNorito,
+      final OfflineNoteCertificateVerifier certificateVerifier,
+      final OfflineNoteRandomSource randomSource,
+      final OfflineNoteIdGenerator idGenerator,
+      final LongSupplier clock,
+      final OfflineBearerCashPolicyV1 bearerCashPolicy,
+      final OfflineNoteOwnerCertificateSigner ownerCertificateSigner) {
+    Objects.requireNonNull(vkBoxNorito, "vkBoxNorito");
+    if (vkBoxNorito.length == 0) {
+      throw new IllegalArgumentException("vkBoxNorito must not be empty");
+    }
+    if (!NativeOfflineNoteProver.isNativeAvailable()) {
+      throw new IllegalStateException(
+          "connect_norito_bridge is required for Kagemusha Offline Note proofs");
+    }
+    final byte[] vkBox = Arrays.copyOf(vkBoxNorito, vkBoxNorito.length);
+    return new OfflineNoteWallet(
+        chainId,
+        accountId,
+        attestationProvider,
+        store,
+        issuerClient,
+        transactionSubmitter,
+        syncResolver,
+        new ChainVkOfflineNoteProofProvider(vkBox),
+        new ChainVkOfflineNoteProofVerifier(vkBox),
+        certificateVerifier,
+        randomSource,
+        idGenerator,
+        clock,
+        bearerCashPolicy,
+        ownerCertificateSigner);
+  }
+
+  public static OfflineNoteWallet kagemushaWithVerifyingKey(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteAttestationProvider attestationProvider,
+      final String verifierKeyBackend,
+      final byte[] verifierKeyBytes) {
+    return kagemusha(
+        chainId,
+        accountId,
+        attestationProvider,
+        VerifyingKeyBoxCodec.encodeNorito(verifierKeyBackend, verifierKeyBytes));
+  }
+
+  public static OfflineNoteWallet kagemushaWithVerifyingKey(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteAttestationProvider attestationProvider,
+      final OfflineNoteStore store,
+      final OfflineNoteIssuerClient issuerClient,
+      final OfflineNoteTransactionSubmitter transactionSubmitter,
+      final OfflineNoteSyncResolver syncResolver,
+      final String verifierKeyBackend,
+      final byte[] verifierKeyBytes,
+      final OfflineNoteCertificateVerifier certificateVerifier,
+      final OfflineNoteRandomSource randomSource,
+      final OfflineNoteIdGenerator idGenerator,
+      final LongSupplier clock,
+      final OfflineBearerCashPolicyV1 bearerCashPolicy,
+      final OfflineNoteOwnerCertificateSigner ownerCertificateSigner) {
+    return kagemusha(
+        chainId,
+        accountId,
+        attestationProvider,
+        store,
+        issuerClient,
+        transactionSubmitter,
+        syncResolver,
+        VerifyingKeyBoxCodec.encodeNorito(verifierKeyBackend, verifierKeyBytes),
+        certificateVerifier,
+        randomSource,
+        idGenerator,
+        clock,
+        bearerCashPolicy,
+        ownerCertificateSigner);
   }
 
   public OfflineNoteWallet(
@@ -74,9 +165,12 @@ public final class OfflineNoteWallet {
       final OfflineNoteIssuerClient issuerClient,
       final OfflineNoteTransactionSubmitter transactionSubmitter,
       final OfflineNoteProofProvider proofProvider,
+      final OfflineNoteProofVerifier proofVerifier,
+      final OfflineNoteCertificateVerifier certificateVerifier,
       final OfflineNoteRandomSource randomSource,
       final OfflineNoteIdGenerator idGenerator,
-      final LongSupplier clock) {
+      final LongSupplier clock,
+      final OfflineNoteOwnerCertificateSigner ownerCertificateSigner) {
     this(
         chainId,
         accountId,
@@ -86,11 +180,12 @@ public final class OfflineNoteWallet {
         transactionSubmitter,
         null,
         proofProvider,
-        new Halo2OfflineNoteProofVerifier(),
-        new RejectingOfflineNoteCertificateVerifier(),
+        proofVerifier,
+        certificateVerifier,
         randomSource,
         idGenerator,
-        clock);
+        clock,
+        ownerCertificateSigner);
   }
 
   public OfflineNoteWallet(
@@ -144,34 +239,6 @@ public final class OfflineNoteWallet {
         null,
         proofProvider,
         proofVerifier,
-        new RejectingOfflineNoteCertificateVerifier(),
-        randomSource,
-        idGenerator,
-        clock);
-  }
-
-  public OfflineNoteWallet(
-      final String chainId,
-      final String accountId,
-      final OfflineNoteAttestationProvider attestationProvider,
-      final OfflineNoteStore store,
-      final OfflineNoteIssuerClient issuerClient,
-      final OfflineNoteTransactionSubmitter transactionSubmitter,
-      final OfflineNoteSyncResolver syncResolver,
-      final OfflineNoteProofProvider proofProvider,
-      final OfflineNoteRandomSource randomSource,
-      final OfflineNoteIdGenerator idGenerator,
-      final LongSupplier clock) {
-    this(
-        chainId,
-        accountId,
-        attestationProvider,
-        store,
-        issuerClient,
-        transactionSubmitter,
-        syncResolver,
-        proofProvider,
-        new Halo2OfflineNoteProofVerifier(),
         new RejectingOfflineNoteCertificateVerifier(),
         randomSource,
         idGenerator,
@@ -252,7 +319,74 @@ public final class OfflineNoteWallet {
       final OfflineNoteRandomSource randomSource,
       final OfflineNoteIdGenerator idGenerator,
       final LongSupplier clock,
+      final OfflineNoteOwnerCertificateSigner ownerCertificateSigner) {
+    this(
+        chainId,
+        accountId,
+        attestationProvider,
+        store,
+        issuerClient,
+        transactionSubmitter,
+        syncResolver,
+        proofProvider,
+        proofVerifier,
+        certificateVerifier,
+        randomSource,
+        idGenerator,
+        clock,
+        OfflineBearerCashPolicyV1.DEFAULT,
+        ownerCertificateSigner);
+  }
+
+  public OfflineNoteWallet(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteAttestationProvider attestationProvider,
+      final OfflineNoteStore store,
+      final OfflineNoteIssuerClient issuerClient,
+      final OfflineNoteTransactionSubmitter transactionSubmitter,
+      final OfflineNoteSyncResolver syncResolver,
+      final OfflineNoteProofProvider proofProvider,
+      final OfflineNoteProofVerifier proofVerifier,
+      final OfflineNoteCertificateVerifier certificateVerifier,
+      final OfflineNoteRandomSource randomSource,
+      final OfflineNoteIdGenerator idGenerator,
+      final LongSupplier clock,
       final OfflineBearerCashPolicyV1 bearerCashPolicy) {
+    this(
+        chainId,
+        accountId,
+        attestationProvider,
+        store,
+        issuerClient,
+        transactionSubmitter,
+        syncResolver,
+        proofProvider,
+        proofVerifier,
+        certificateVerifier,
+        randomSource,
+        idGenerator,
+        clock,
+        bearerCashPolicy,
+        null);
+  }
+
+  public OfflineNoteWallet(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteAttestationProvider attestationProvider,
+      final OfflineNoteStore store,
+      final OfflineNoteIssuerClient issuerClient,
+      final OfflineNoteTransactionSubmitter transactionSubmitter,
+      final OfflineNoteSyncResolver syncResolver,
+      final OfflineNoteProofProvider proofProvider,
+      final OfflineNoteProofVerifier proofVerifier,
+      final OfflineNoteCertificateVerifier certificateVerifier,
+      final OfflineNoteRandomSource randomSource,
+      final OfflineNoteIdGenerator idGenerator,
+      final LongSupplier clock,
+      final OfflineBearerCashPolicyV1 bearerCashPolicy,
+      final OfflineNoteOwnerCertificateSigner ownerCertificateSigner) {
     this.chainId = requireNonBlank(chainId, "chainId");
     this.accountId = requireNonBlank(accountId, "accountId");
     this.attestationProvider = Objects.requireNonNull(attestationProvider, "attestationProvider");
@@ -263,6 +397,7 @@ public final class OfflineNoteWallet {
     this.proofProvider = Objects.requireNonNull(proofProvider, "proofProvider");
     this.proofVerifier = Objects.requireNonNull(proofVerifier, "proofVerifier");
     this.certificateVerifier = Objects.requireNonNull(certificateVerifier, "certificateVerifier");
+    this.ownerCertificateSigner = ownerCertificateSigner;
     this.randomSource = Objects.requireNonNull(randomSource, "randomSource");
     this.idGenerator = Objects.requireNonNull(idGenerator, "idGenerator");
     this.clock = Objects.requireNonNull(clock, "clock");
@@ -300,7 +435,7 @@ public final class OfflineNoteWallet {
                       final byte[] noteCommitment;
                       final OfflineNoteIssueRequest request;
                       try {
-                        requireTrustedCertificate(context.keyCertificate(), accountId);
+                        requireTrustedIssuerCertificate(context.keyCertificate(), accountId);
                         noteSecret = random32();
                         origin =
                             new OfflineNote.CommitmentOrigin.IssuerLoad(
@@ -356,7 +491,7 @@ public final class OfflineNoteWallet {
                                               response.keyCertificate() == null
                                                   ? context.keyCertificate()
                                                   : response.keyCertificate();
-                                          requireTrustedCertificate(certificate, accountId);
+                                          requireTrustedIssuerCertificate(certificate, accountId);
                                           final long now = clock.getAsLong();
                                           final OfflineNoteWalletNote note =
                                               new OfflineNoteWalletNote(
@@ -385,8 +520,8 @@ public final class OfflineNoteWallet {
       final String assetDefinitionId, final String amount) {
     final String paymentRequestId = idGenerator.nextId("payment-request");
     final OfflineNote.KeyCertificate keyCertificate =
-        attestationProvider.currentKeyCertificate();
-    requireTrustedCertificate(keyCertificate, accountId);
+        requireOwnerCertificateSigner().freshOwnerCertificate(accountId);
+    requireTrustedOwnerCertificate(keyCertificate, accountId);
     final String assetId = walletAssetId(assetDefinitionId, accountId);
     final byte[] noteSecret = random32();
     final OfflineNote.CommitmentOrigin.P2pOutput origin =
@@ -424,7 +559,7 @@ public final class OfflineNoteWallet {
     if (!chainId.equals(receiveRequest.chainId())) {
       throw new IllegalArgumentException("receive request chainId does not match wallet chainId");
     }
-    requireTrustedCertificate(receiveRequest.keyCertificate(), receiveRequest.accountId());
+    requireTrustedOwnerCertificate(receiveRequest.keyCertificate(), receiveRequest.accountId());
     rejectReusedReceiveRequest(receiveRequest.paymentRequestId());
     final long createdAtMs = clock.getAsLong();
     final BigDecimal requestedAmount = decimal(receiveRequest.canonicalAmount());
@@ -439,12 +574,13 @@ public final class OfflineNoteWallet {
       throw new IllegalArgumentException("selected input amount is below requested amount");
     }
 
-    final OfflineNote.KeyCertificate senderCertificate = selected.get(0).keyCertificate();
-    requireTrustedCertificate(senderCertificate, accountId);
+    final OfflineNoteWalletNote senderNote = selected.get(0);
+    final OfflineNote.KeyCertificate senderCertificate = senderNote.keyCertificate();
+    requireTrustedCertificateForOrigin(senderCertificate, senderNote.origin(), accountId);
     final byte[] senderCertificateHash = senderCertificate.payloadHash();
     for (final OfflineNoteWalletNote note : selected) {
       bearerAuditTrail(note);
-      requireTrustedCertificate(note.keyCertificate(), accountId);
+      requireTrustedCertificateForOrigin(note.keyCertificate(), note.origin(), accountId);
       if (!Arrays.equals(note.keyCertificate().payloadHash(), senderCertificateHash)) {
         throw new IllegalArgumentException("selected input notes must use the same key certificate");
       }
@@ -469,18 +605,21 @@ public final class OfflineNoteWallet {
       final byte[] changeSecret = random32();
       final String changeAmountString = canonicalDecimal(changeAmount);
       final String changeAssetId = walletAssetId(receiveRequest.assetDefinitionId(), accountId);
+      final OfflineNote.KeyCertificate changeCertificate =
+          requireOwnerCertificateSigner().freshOwnerCertificate(accountId);
+      requireTrustedOwnerCertificate(changeCertificate, accountId);
       final OfflineNote.CommitmentOrigin.P2pOutput changeOrigin =
           new OfflineNote.CommitmentOrigin.P2pOutput(receiveRequest.paymentRequestId(), 1);
       final byte[] changeCommitment =
           deriveNoteCommitment(
-              senderCertificate, changeAssetId, changeAmountString, changeSecret, changeOrigin);
+              changeCertificate, changeAssetId, changeAmountString, changeSecret, changeOrigin);
       changeNote =
           new OfflineNoteWalletNote(
               chainId,
               accountId,
               changeAssetId,
               changeAmountString,
-              senderCertificate,
+              changeCertificate,
               changeCommitment,
               changeSecret,
               changeOrigin,
@@ -489,7 +628,7 @@ public final class OfflineNoteWallet {
               createdAtMs);
       outputClaims.add(
           new OfflineNote.AuditOutputClaim(
-              changeCommitment, senderCertificate, changeAssetId, changeNote.canonicalAmount()));
+              changeCommitment, changeCertificate, changeAssetId, changeNote.canonicalAmount()));
     }
     final List<byte[]> outputCommitments = new ArrayList<>();
     for (final OfflineNote.AuditOutputClaim claim : outputClaims) {
@@ -690,7 +829,7 @@ public final class OfflineNoteWallet {
       throw new IllegalArgumentException("only spendable Offline Note notes can be redeemed");
     }
     final List<OfflineNote.AuditBundle> bearerAuditTrail = bearerAuditTrail(current);
-    requireTrustedCertificate(current.keyCertificate(), current.accountId());
+    requireTrustedCertificateForOrigin(current.keyCertificate(), current.origin(), current.accountId());
     final byte[] inputNullifier = deriveInputNullifier(current);
     final OfflineNote.RedeemPublicInputs redeemPublicInputs =
         new OfflineNote.RedeemPublicInputs(
@@ -712,7 +851,8 @@ public final class OfflineNoteWallet {
     final OfflineNote.Redeem redemption =
         draft.replacingRecursiveProof(proofProvider.proveRedeem(draft));
     redemption.validateProofBinding();
-    requireTrustedCertificate(redemption.senderKeyCertificate(), current.accountId());
+    requireTrustedCertificateForOrigin(
+        redemption.senderKeyCertificate(), current.origin(), current.accountId());
     if (!proofVerifier.verifyRedeem(redemption)) {
       throw new IllegalArgumentException("Offline Note recursive redeem proof verification failed");
     }
@@ -916,28 +1056,71 @@ public final class OfflineNoteWallet {
   }
 
   private void requireTrustedAuditCertificates(final OfflineNote.AuditBundle audit) {
-    requireTrustedCertificate(audit.senderKeyCertificate(), null);
+    requireTrustedEitherCertificate(audit.senderKeyCertificate(), null);
     final byte[] senderCertificateHash = audit.senderKeyCertificate().payloadHash();
     for (final OfflineNote.IssuedClaim input : audit.inputClaims()) {
       if (!Arrays.equals(input.keyCertificatePayloadHash(), senderCertificateHash)) {
         throw new IllegalArgumentException(
             "Offline Note input claim is not bound to the sender certificate");
       }
-      requireTrustedCertificate(audit.senderKeyCertificate(), assetAccount(input.assetId()));
+      requireTrustedEitherCertificate(audit.senderKeyCertificate(), assetAccount(input.assetId()));
     }
     for (final OfflineNote.AuditOutputClaim output : audit.outputClaims()) {
-      requireTrustedCertificate(output.keyCertificate(), assetAccount(output.assetId()));
+      requireTrustedOwnerCertificate(output.keyCertificate(), assetAccount(output.assetId()));
     }
   }
 
-  private void requireTrustedCertificate(
+  private void requireTrustedCertificateForOrigin(
+      final OfflineNote.KeyCertificate certificate,
+      final OfflineNote.CommitmentOrigin origin,
+      final String expectedAccountId) {
+    if (origin instanceof OfflineNote.CommitmentOrigin.IssuerLoad) {
+      requireTrustedIssuerCertificate(certificate, expectedAccountId);
+    } else if (origin instanceof OfflineNote.CommitmentOrigin.P2pOutput) {
+      requireTrustedOwnerCertificate(certificate, expectedAccountId);
+    } else {
+      throw new IllegalArgumentException("unknown Offline Note commitment origin");
+    }
+  }
+
+  private void requireTrustedIssuerCertificate(
+      final OfflineNote.KeyCertificate certificate, final String expectedAccountId) {
+    requireMatchingAccount(certificate, expectedAccountId);
+    if (!certificateVerifier.verifyIssuerCertificate(certificate)) {
+      throw new IllegalArgumentException("Offline Note key certificate verification failed");
+    }
+  }
+
+  private void requireTrustedOwnerCertificate(
+      final OfflineNote.KeyCertificate certificate, final String expectedAccountId) {
+    requireMatchingAccount(certificate, expectedAccountId);
+    if (!certificateVerifier.verifyOwnerCertificate(certificate)) {
+      throw new IllegalArgumentException("Offline Note key certificate verification failed");
+    }
+  }
+
+  private void requireTrustedEitherCertificate(
+      final OfflineNote.KeyCertificate certificate, final String expectedAccountId) {
+    requireMatchingAccount(certificate, expectedAccountId);
+    if (!certificateVerifier.verifyIssuerCertificate(certificate)
+        && !certificateVerifier.verifyOwnerCertificate(certificate)) {
+      throw new IllegalArgumentException("Offline Note key certificate verification failed");
+    }
+  }
+
+  private void requireMatchingAccount(
       final OfflineNote.KeyCertificate certificate, final String expectedAccountId) {
     if (expectedAccountId != null && !expectedAccountId.equals(certificate.accountId())) {
       throw new IllegalArgumentException("Offline Note key certificate account mismatch");
     }
-    if (!certificateVerifier.verifyCertificate(certificate)) {
-      throw new IllegalArgumentException("Offline Note key certificate verification failed");
+  }
+
+  private OfflineNoteOwnerCertificateSigner requireOwnerCertificateSigner() {
+    if (ownerCertificateSigner == null) {
+      throw new IllegalStateException(
+          "Offline Note owner certificate signer is required for P2P outputs");
     }
+    return ownerCertificateSigner;
   }
 
   private static String assetAccount(final String assetId) {

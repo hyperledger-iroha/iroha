@@ -433,6 +433,43 @@ IdleBudgetRequiresWakeupAndCandidate ==
     /\ HasCommitWakeup(candidate)
     /\ HasActiveCandidate(candidate)
 
+CommitPipelineEntryExact ==
+  \A c \in Cases:
+    ActualPipelineEntered(c) = SpecPipelineEntered(c)
+
+CommitPipelineRecoveryScopeExact ==
+  \A c \in Cases:
+    ActualRecoveryIncluded(c) = SpecRecoveryIncluded(c)
+
+CommitPipelineDeadlineBudgetExact ==
+  \A c \in Cases:
+    /\ ActualDeadlineBypassed(c) = SpecDeadlineBypassed(c)
+    /\ ActualBudgetSetsWakeup(c) = SpecBudgetSetsWakeup(c)
+
+CommitPipelineWakeupEventExact ==
+  \A c \in Cases:
+    /\ ActualWakeupCleared(c) = SpecWakeupCleared(c)
+    /\ ActualEventRescheduled(c) = SpecEventRescheduled(c)
+    /\ ActualRescheduleBeforeCandidate(c) = SpecRescheduleBeforeCandidate(c)
+    /\ ActualBacklogObserved(c) = SpecBacklogObserved(c)
+
+CommitPipelineCandidateProgressExact ==
+  \A c \in Cases:
+    /\ ActualCandidateProcessed(c) = SpecCandidateProcessed(c)
+    /\ ActualLastRunUpdated(c) = SpecLastRunUpdated(c)
+
+CommitPipelineIdleBudgetExact ==
+  \A c \in Cases:
+    ActualIdleBudgetPreserved(c) = SpecIdleBudgetPreserved(c)
+
+CommitPipelineSchedulingExactness ==
+  /\ CommitPipelineEntryExact
+  /\ CommitPipelineRecoveryScopeExact
+  /\ CommitPipelineDeadlineBudgetExact
+  /\ CommitPipelineWakeupEventExact
+  /\ CommitPipelineCandidateProgressExact
+  /\ CommitPipelineIdleBudgetExact
+
 Safety ==
   /\ PipelineEntryMatchesSpec
   /\ TickQueueSaturationAloneDoesNotEnterPipeline
@@ -455,6 +492,10 @@ Safety ==
   /\ LastRunUpdatesOnlyForCandidatePasses
   /\ IdleBudgetPreservationMatchesSpec
   /\ IdleBudgetRequiresWakeupAndCandidate
+
+SafetyFast ==
+  /\ Safety
+  /\ CommitPipelineSchedulingExactness
 
 =============================================================================
 ====

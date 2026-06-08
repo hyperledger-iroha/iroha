@@ -216,12 +216,18 @@ def write_abi7_fail_closed_marker_files(repo: Path) -> None:
                 ") -> Result<(), String> {",
                 "    kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs();",
                 "    validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding();",
+                "    kagemusha_recursive_spend_lineage_runtime_keygen_enabled();",
+                "    KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED;",
+                "    \"missing compact one-hop proving key archive\";",
                 "    prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope_dispatch();",
                 "}",
                 "fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
                 ") -> Result<(), String> {",
                 "    prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes();",
                 "    for hop_index in 1..hop_count {",
+                "        kagemusha_recursive_spend_lineage_runtime_keygen_enabled();",
+                "        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED;",
+                "        \"missing compact append proving key archive\";",
                 "        prove_halo2_ipa_kagemusha_recursive_compact_payment_token_append_envelope_dispatch();",
                 "    }",
                 "}",
@@ -959,6 +965,39 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("kagemusha_release_android_slot_artifact_digest_drift", rendered)
         self.assertIn("kagemusha_release_android_slot_artifact_inventory", rendered)
 
+    def test_kagemusha_release_bundle_rejects_all_zero_lineage_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            lineage_proof_evidence = fixture["lineage_evidence"]
+            summary_path = fixture["summary_path"]
+            assert isinstance(bundle_root, Path)
+            assert isinstance(lineage_proof_evidence, Path)
+            assert isinstance(summary_path, Path)
+            artifact = bundle_root / "artifacts" / "kagemusha" / "lineage-init-len128.pk"
+            zero_artifact = b"\x00" * 64
+            artifact.write_bytes(zero_artifact)
+            zero_sha256 = hashlib.sha256(zero_artifact).hexdigest()
+            lineage_evidence = json.loads(lineage_proof_evidence.read_text(encoding="utf-8"))
+            lineage_evidence["artifacts"][artifact.name] = zero_sha256
+            lineage_evidence["artifact_size_bytes"][artifact.name] = len(zero_artifact)
+            write_json(lineage_proof_evidence, lineage_evidence)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["lineage_proof_evidence"]["artifact_sha256"][artifact.name] = zero_sha256
+            summary["lineage_proof_evidence"]["artifact_size_bytes"][artifact.name] = len(
+                zero_artifact
+            )
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        rendered = stderr.getvalue()
+        self.assertIn("lineage_proof_evidence_artifact_placeholder", rendered)
+        self.assertIn("kagemusha_release_lineage_artifact_placeholder", rendered)
+
     def test_kagemusha_release_bundle_rejects_placeholder_compact_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             fixture = create_ready_release_bundle_fixture(Path(temp))
@@ -982,6 +1021,85 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             ] = placeholder_sha256
             summary["compact_key_evidence"]["artifact_size_bytes"][artifact.name] = len(
                 placeholder
+            )
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        rendered = stderr.getvalue()
+        self.assertIn("compact_key_evidence_artifact_placeholder", rendered)
+        self.assertIn("kagemusha_release_compact_artifact_placeholder", rendered)
+
+    def test_kagemusha_release_bundle_rejects_all_placeholder_compact_prefixes(self) -> None:
+        for marker in readiness.COMPACT_KEY_PLACEHOLDER_PREFIXES:
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory() as temp:
+                    fixture = create_ready_release_bundle_fixture(Path(temp))
+                    bundle_root = fixture["bundle_root"]
+                    compact_key_evidence = fixture["compact_key_evidence"]
+                    summary_path = fixture["summary_path"]
+                    assert isinstance(bundle_root, Path)
+                    assert isinstance(compact_key_evidence, Path)
+                    assert isinstance(summary_path, Path)
+                    artifact = (
+                        bundle_root
+                        / "artifacts"
+                        / "kagemusha"
+                        / "recursive-compact-len4.pk"
+                    )
+                    placeholder = marker + b"recursive-compact-len4.pk\n"
+                    artifact.write_bytes(placeholder)
+                    placeholder_sha256 = hashlib.sha256(placeholder).hexdigest()
+                    compact_evidence = json.loads(
+                        compact_key_evidence.read_text(encoding="utf-8")
+                    )
+                    compact_evidence["artifacts"][artifact.name] = placeholder_sha256
+                    compact_evidence["artifact_size_bytes"][artifact.name] = len(
+                        placeholder
+                    )
+                    write_json(compact_key_evidence, compact_evidence)
+                    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                    summary["compact_key_evidence"]["artifact_sha256"][
+                        artifact.name
+                    ] = placeholder_sha256
+                    summary["compact_key_evidence"]["artifact_size_bytes"][
+                        artifact.name
+                    ] = len(placeholder)
+                    write_json(summary_path, summary)
+                    stderr = io.StringIO()
+
+                    with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                        status = release_bundle.main(release_bundle_args(fixture))
+
+                self.assertEqual(status, 1)
+                rendered = stderr.getvalue()
+                self.assertIn("compact_key_evidence_artifact_placeholder", rendered)
+                self.assertIn("kagemusha_release_compact_artifact_placeholder", rendered)
+
+    def test_kagemusha_release_bundle_rejects_all_zero_compact_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            compact_key_evidence = fixture["compact_key_evidence"]
+            summary_path = fixture["summary_path"]
+            assert isinstance(bundle_root, Path)
+            assert isinstance(compact_key_evidence, Path)
+            assert isinstance(summary_path, Path)
+            artifact = bundle_root / "artifacts" / "kagemusha" / "recursive-compact-len4.pk"
+            zero_artifact = b"\x00" * 64
+            artifact.write_bytes(zero_artifact)
+            zero_sha256 = hashlib.sha256(zero_artifact).hexdigest()
+            compact_evidence = json.loads(compact_key_evidence.read_text(encoding="utf-8"))
+            compact_evidence["artifacts"][artifact.name] = zero_sha256
+            compact_evidence["artifact_size_bytes"][artifact.name] = len(zero_artifact)
+            write_json(compact_key_evidence, compact_evidence)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["compact_key_evidence"]["artifact_sha256"][artifact.name] = zero_sha256
+            summary["compact_key_evidence"]["artifact_size_bytes"][artifact.name] = len(
+                zero_artifact
             )
             write_json(summary_path, summary)
             stderr = io.StringIO()
@@ -1169,6 +1287,102 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "kagemusha_release_bundle_manifest_secret_material",
             stderr.getvalue(),
         )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_duplicate_manifest_json_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest_text = out.read_text(encoding="utf-8")
+            out.write_text(
+                manifest_text.replace(
+                    '"schema": "iroha.kagemusha.production_release_bundle.v1"',
+                    (
+                        '"schema": "iroha.kagemusha.production_release_bundle.v1", '
+                        '"schema": "shadow"'
+                    ),
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn("kagemusha_release_bundle_manifest_invalid_json", stderr.getvalue())
+        self.assertIn("duplicate JSON object key schema", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_nonfinite_manifest_json_constant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["generated_at_utc"] = float("nan")
+            out.write_text(
+                json.dumps(manifest, indent=2, sort_keys=True, allow_nan=True) + "\n",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn("kagemusha_release_bundle_manifest_invalid_json", stderr.getvalue())
+        self.assertIn("non-finite constant NaN is not allowed", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_noncanonical_manifest_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["generated_at_utc"] = "2026-01-08T00:00:00+00:00"
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn("kagemusha_release_bundle_manifest_timestamp", stderr.getvalue())
+        self.assertIn("must be canonical UTC YYYY-MM-DDTHH:MM:SSZ", stderr.getvalue())
 
     def test_kagemusha_release_bundle_verify_existing_rejects_outside_manifest_before_scanners(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1873,6 +2087,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("kagemusha_release_summary_invalid_json", stderr.getvalue())
         self.assertIn("duplicate JSON object key schema", stderr.getvalue())
 
+    def test_kagemusha_release_bundle_rejects_nonfinite_summary_json_constant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["generated_at"] = float("nan")
+            summary_path.write_text(
+                json.dumps(summary, indent=2, sort_keys=True, allow_nan=True) + "\n",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_invalid_json", stderr.getvalue())
+        self.assertIn("non-finite constant NaN is not allowed", stderr.getvalue())
+
     def test_kagemusha_release_bundle_rejects_evidence_outside_bundle_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             fixture = create_ready_release_bundle_fixture(Path(temp))
@@ -1939,6 +2173,54 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("kagemusha_release_bundle_path_outside_root", rendered)
         self.assertNotIn("kagemusha_release_summary_secret_material", rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_bundle_root_symlink_before_manifest_load(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            linked_root = Path(temp) / "linked-bundle"
+            slot_helpers.create_dir_symlink(self, linked_root, bundle_root)
+            args = release_bundle_args(fixture)
+            args[args.index("--bundle-root") + 1] = str(linked_root)
+            args.extend(["--verify-existing", "dist/kagemusha-production-release-bundle.json"])
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.object(
+                    release_bundle,
+                    "_load_local_json",
+                    side_effect=AssertionError("release manifest must not be loaded"),
+                ) as load_json,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_lineage_proof_evidence",
+                    side_effect=AssertionError("lineage evidence must not be scanned"),
+                ) as lineage_scan,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_compact_key_evidence",
+                    side_effect=AssertionError("compact evidence must not be scanned"),
+                ) as compact_scan,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_android_device_lab",
+                    side_effect=AssertionError("device lab must not be scanned"),
+                ) as android_scan,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        load_json.assert_not_called()
+        lineage_scan.assert_not_called()
+        compact_scan.assert_not_called()
+        android_scan.assert_not_called()
+        self.assertIn("kagemusha_release_bundle_root_invalid", rendered)
+        self.assertIn("--bundle-root must not be a symlink", rendered)
 
     def test_kagemusha_release_bundle_rejects_outside_evidence_before_scanners(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2142,6 +2424,33 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("kagemusha_release_bundle_root_invalid", stderr.getvalue())
         self.assertIn("--bundle-root must not be a symlink", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_bundle_root_symlink_ancestor_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            real_parent = bundle_root.parent
+            linked_parent = Path(temp) / "linked-parent"
+            slot_helpers.create_dir_symlink(self, linked_parent, real_parent)
+            linked_root = linked_parent / bundle_root.name
+            args = release_bundle_args(fixture)
+            args[args.index("--bundle-root") + 1] = str(linked_root)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_bundle_root_invalid", rendered)
+        self.assertIn(
+            "--bundle-root ancestor directory must not be a symlink",
+            rendered,
+        )
+        self.assertNotIn(str(linked_parent), rendered)
 
     def test_kagemusha_release_bundle_rejects_secret_summary_path_without_leak(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2643,6 +2952,42 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in blockers},
         )
 
+    def test_signed_evidence_freshness_rejects_noncanonical_report_timestamp(self) -> None:
+        blockers = readiness._check_android_signed_evidence_freshness(
+            [
+                {
+                    "status": "ok",
+                    "slot": "slot-0",
+                    "kagemusha": {"signed_at_utc": "2026-06-06T00:00:00+00:00"},
+                }
+            ],
+            None,
+            None,
+        )
+
+        self.assertIn(
+            "android_signed_evidence_timestamp_noncanonical",
+            {item["code"] for item in blockers},
+        )
+
+    def test_signed_evidence_freshness_redacts_noncanonical_secret_timestamp(self) -> None:
+        blockers = readiness._check_android_signed_evidence_freshness(
+            [
+                {
+                    "status": "ok",
+                    "slot": "slot-0",
+                    "kagemusha": {"signed_at_utc": "token=secret-time"},
+                }
+            ],
+            None,
+            None,
+        )
+        rendered = json.dumps(blockers)
+
+        self.assertIn("android_signed_evidence_timestamp_noncanonical", rendered)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=secret-time", rendered)
+
     def test_duplicate_signed_evidence_json_key_blocks_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
@@ -2993,6 +3338,24 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "ABI-6 manifest could not be read",
             {item["message"] for item in result["blockers"]},
         )
+        self.assertNotIn(str(manifest_path), rendered)
+
+    def test_abi6_manifest_rejects_nonfinite_json_constant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            manifest_path = repo / readiness.ABI6_MANIFEST_PATH
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_text('{"schema": Infinity}\n', encoding="utf-8")
+
+            result = readiness.check_abi6_reserved_lineage(repo)
+            rendered = json.dumps(result["blockers"])
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi6_manifest_invalid_json",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn("non-finite constant Infinity is not allowed", rendered)
         self.assertNotIn(str(manifest_path), rendered)
 
     def test_release_local_json_validator_rejects_secret_path_directly_without_parse(
@@ -3384,6 +3747,60 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             result["blockers"],
         )
 
+    def test_abi7_fail_closed_rejects_one_hop_runtime_keygen_fallback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fail_closed_marker_files(repo)
+            core_path = repo / "crates/iroha_core/src/zk.rs"
+            core_path.write_text(
+                core_path.read_text(encoding="utf-8").replace(
+                    '    "missing compact one-hop proving key archive";\n',
+                    "",
+                ),
+                encoding="utf-8",
+            )
+
+            result = readiness.check_abi7_fail_closed(repo)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            {
+                "code": "abi7_fail_closed_contract_missing",
+                "function": "fn prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes(",
+                "marker": "missing compact one-hop proving key archive",
+                "message": "ABI-7 recursive compact launch-boundary function contract is missing",
+            },
+            result["blockers"],
+        )
+
+    def test_abi7_fail_closed_rejects_append_runtime_keygen_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fail_closed_marker_files(repo)
+            core_path = repo / "crates/iroha_core/src/zk.rs"
+            core_path.write_text(
+                core_path.read_text(encoding="utf-8").replace(
+                    '        "missing compact append proving key archive";\n',
+                    "",
+                ),
+                encoding="utf-8",
+            )
+
+            result = readiness.check_abi7_fail_closed(repo)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            {
+                "code": "abi7_fail_closed_contract_missing",
+                "function": "fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
+                "marker": "missing compact append proving key archive",
+                "message": "ABI-7 recursive compact launch-boundary function contract is missing",
+            },
+            result["blockers"],
+        )
+
     def test_abi7_fail_closed_rejects_preverify_contract_without_unavailable_error(
         self,
     ) -> None:
@@ -3679,6 +4096,18 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_compact_key_evidence_rejects_nonfinite_json_constant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence_path.write_text('{"schema": NaN}\n', encoding="utf-8")
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        rendered = json.dumps(result["blockers"])
+        self.assertIn("compact_key_evidence_invalid_json", rendered)
+        self.assertIn("non-finite constant NaN is not allowed", rendered)
+
     def test_stale_compact_key_evidence_blocks_rollup_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_compact_key_evidence(Path(temp) / "compact")
@@ -3871,6 +4300,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in result["blockers"]},
         )
 
+    def test_compact_key_evidence_rejects_empty_generator_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            log_path = evidence_path.parent / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+            log_path.write_text("", encoding="utf-8")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["generator_log_sha256"] = hashlib.sha256(b"").hexdigest()
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_generator_log_format",
+            {item["code"] for item in result["blockers"]},
+        )
+
     def test_compact_key_evidence_rejects_noncanonical_generator_log_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_compact_key_evidence(Path(temp) / "compact")
@@ -3968,6 +4414,24 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("compact_key_evidence_unexpected_field", rendered)
         self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_compact_key_evidence_redacts_secret_required_scalars_in_full_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["schema"] = "token=secret-schema"
+            evidence["generated_at_utc"] = "token=secret-time"
+            evidence["verifier_backend"] = "token=secret-backend"
+            evidence["circuit_id"] = "token=secret-circuit"
+            evidence["record_namespace"] = "token=secret-namespace"
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        rendered = json.dumps(result)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=secret", rendered)
 
     def test_compact_key_evidence_rejects_missing_local_artifact_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -4096,6 +4560,54 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(artifact.name, result["artifact_sha256"])
         self.assertNotIn(artifact.name, result["artifact_size_bytes"])
 
+    def test_compact_key_evidence_rejects_all_placeholder_prefixes(self) -> None:
+        for marker in readiness.COMPACT_KEY_PLACEHOLDER_PREFIXES:
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory() as temp:
+                    evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+                    artifact = evidence_path.parent / "recursive-compact-len4.pk"
+                    placeholder = marker + b"recursive-compact-len4.pk\n"
+                    artifact.write_bytes(placeholder)
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    evidence["artifacts"][artifact.name] = hashlib.sha256(
+                        placeholder
+                    ).hexdigest()
+                    evidence["artifact_size_bytes"][artifact.name] = len(placeholder)
+                    write_json(evidence_path, evidence)
+
+                    result = readiness.check_compact_key_evidence(evidence_path)
+
+                self.assertFalse(result["ok"])
+                self.assertIn(
+                    "compact_key_evidence_artifact_placeholder",
+                    {item["code"] for item in result["blockers"]},
+                )
+                self.assertNotIn(artifact.name, result["artifact_sha256"])
+                self.assertNotIn(artifact.name, result["artifact_size_bytes"])
+
+    def test_compact_key_evidence_rejects_all_zero_local_artifact_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            artifact = evidence_path.parent / "recursive-compact-len4.pk"
+            zero_artifact = b"\x00" * 64
+            artifact.write_bytes(zero_artifact)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifacts"][artifact.name] = hashlib.sha256(
+                zero_artifact
+            ).hexdigest()
+            evidence["artifact_size_bytes"][artifact.name] = len(zero_artifact)
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_artifact_placeholder",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn(artifact.name, result["artifact_sha256"])
+        self.assertNotIn(artifact.name, result["artifact_size_bytes"])
+
     def test_compact_key_evidence_helper_generates_validator_accepted_json(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "compact"
@@ -4178,6 +4690,52 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             errors,
         )
 
+    def test_compact_key_evidence_helper_rejects_all_placeholder_prefixes(self) -> None:
+        for marker in readiness.COMPACT_KEY_PLACEHOLDER_PREFIXES:
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory() as temp:
+                    artifact_dir = Path(temp) / "compact"
+                    create_compact_key_artifact_files(artifact_dir)
+                    (artifact_dir / "recursive-compact-len4.pk").write_bytes(
+                        marker + b"recursive-compact-len4.pk\n"
+                    )
+
+                    evidence, errors = compact_key_helper.build_evidence(
+                        artifact_dir=artifact_dir,
+                        command=readiness.expected_compact_key_command(),
+                        generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    )
+
+                self.assertIsNone(evidence)
+                self.assertIn(
+                    (
+                        "recursive compact key artifact recursive-compact-len4.pk must be "
+                        "generated key material, not a placeholder fixture"
+                    ),
+                    errors,
+                )
+
+    def test_compact_key_evidence_helper_rejects_all_zero_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            (artifact_dir / "recursive-compact-len4.pk").write_bytes(b"\x00" * 64)
+
+            evidence, errors = compact_key_helper.build_evidence(
+                artifact_dir=artifact_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+
+        self.assertIsNone(evidence)
+        self.assertIn(
+            (
+                "recursive compact key artifact recursive-compact-len4.pk must be "
+                "generated key material, not all-zero placeholder bytes"
+            ),
+            errors,
+        )
+
     def test_compact_key_evidence_helper_rejects_missing_generator_log(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "compact"
@@ -4215,6 +4773,25 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "recursive compact key generator log size does not match local artifact "
                 "recursive-compact-len4.record.norito"
             ),
+            errors,
+        )
+
+    def test_compact_key_evidence_helper_rejects_empty_generator_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            log_path = artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+            log_path.write_text("", encoding="utf-8")
+
+            evidence, errors = compact_key_helper.build_evidence(
+                artifact_dir=artifact_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+
+        self.assertIsNone(evidence)
+        self.assertIn(
+            "compact key generator log must contain exactly one summary line",
             errors,
         )
 
@@ -4771,6 +5348,19 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_lineage_proof_evidence_rejects_nonfinite_json_constant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = Path(temp) / "lineage" / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+            evidence_path.parent.mkdir(parents=True, exist_ok=True)
+            evidence_path.write_text('{"schema": Infinity}\n', encoding="utf-8")
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        rendered = json.dumps(result["blockers"])
+        self.assertIn("lineage_proof_evidence_invalid_json", rendered)
+        self.assertIn("non-finite constant Infinity is not allowed", rendered)
+
     def test_stale_lineage_proof_evidence_blocks_rollup_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
@@ -5126,6 +5716,28 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "lineage_proof_evidence_artifact_empty",
             {item["code"] for item in result["blockers"]},
         )
+
+    def test_lineage_proof_evidence_rejects_all_zero_local_artifact_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            artifact = evidence_path.parent / "lineage-init-len128.pk"
+            zero_artifact = b"\x00" * 64
+            artifact.write_bytes(zero_artifact)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifacts"][artifact.name] = hashlib.sha256(zero_artifact).hexdigest()
+            evidence["artifact_size_bytes"][artifact.name] = len(zero_artifact)
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "lineage_proof_evidence_artifact_placeholder",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(readiness.LINEAGE_ARTIFACT_ALL_ZERO_ERROR, json.dumps(result))
+        self.assertNotIn(artifact.name, result["artifact_sha256"])
+        self.assertNotIn(artifact.name, result["artifact_size_bytes"])
 
     def test_lineage_proof_evidence_uses_local_file_validation_before_artifact_is_file_preflight(
         self,
@@ -5669,8 +6281,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in boolean_result["blockers"]},
         )
         self.assertIn(
-            "lineage_proof_evidence_test_elapsed",
+            "lineage_proof_evidence_invalid_json",
             {item["code"] for item in nonfinite_result["blockers"]},
+        )
+        self.assertIn(
+            "non-finite constant NaN is not allowed",
+            json.dumps(nonfinite_result["blockers"]),
         )
 
     def test_lineage_proof_evidence_rejects_unexpected_top_level_field_with_redaction(self) -> None:
@@ -5707,6 +6323,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("lineage_proof_evidence_tests_unexpected_field", codes)
         self.assertIn("lineage_proof_evidence_test_unexpected_field", codes)
         rendered = json.dumps(result["blockers"])
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=secret", rendered)
+        rendered_result = json.dumps(result)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered_result)
+        self.assertNotIn("token=secret", rendered_result)
+
+    def test_lineage_proof_evidence_redacts_secret_required_scalars_in_full_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["schema"] = "token=secret-schema"
+            evidence["generated_at_utc"] = "token=secret-time"
+            evidence["record_archive_proof_runtime_keygen_env"] = "token=secret-env"
+            evidence["circuit_ids"]["one_hop"] = "token=secret-circuit"
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        rendered = json.dumps(result)
         self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
         self.assertNotIn("token=secret", rendered)
 
@@ -6056,6 +6692,38 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "lineage artifact lineage-append-len128.pk must be non-empty",
             stderr.getvalue(),
         )
+
+    def test_lineage_proof_evidence_helper_rejects_all_zero_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            create_lineage_artifact_files(artifact_dir)
+            (artifact_dir / "lineage-append-len128.pk").write_bytes(b"\x00" * 64)
+            proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                "record_archive_proof"
+            ]
+            write_passing_lineage_proof_log(proof_log)
+            out = artifact_dir / "lineage-proof-evidence.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--proof-log",
+                        str(proof_log),
+                        "--elapsed-seconds",
+                        "14400.5",
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(readiness.LINEAGE_ARTIFACT_ALL_ZERO_ERROR, stderr.getvalue())
 
     def test_lineage_proof_evidence_helper_rejects_symlinked_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

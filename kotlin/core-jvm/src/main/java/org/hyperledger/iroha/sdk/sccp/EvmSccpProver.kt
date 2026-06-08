@@ -2287,8 +2287,31 @@ object SccpEvm {
         require(value.none { it.code < 0x20 || it.code == 0x7f }) {
             "$field must not contain control characters"
         }
+        require(!value.contains(':')) { "$field must not contain URI schemes or drive prefixes" }
         require(!value.startsWith("/") && !value.contains('\\')) {
             "$field must be a relative POSIX path"
+        }
+        val normalizedValue = value.lowercase()
+        fun forbiddenPathMarker(vararg parts: String): String = parts.joinToString("")
+        val forbiddenPathMarkers = listOf(
+            forbiddenPathMarker("web", "assem", "bly"),
+            forbiddenPathMarker("wa", "sm"),
+            forbiddenPathMarker("sn", "ark", "js"),
+            forbiddenPathMarker("remote", "pro", "ver"),
+            forbiddenPathMarker("remote", "-", "pro", "ver"),
+            forbiddenPathMarker("remote", "_", "pro", "ver"),
+            forbiddenPathMarker("remote", " ", "pro", "ver"),
+            forbiddenPathMarker("pro", "ver", "-", "url"),
+            forbiddenPathMarker("pro", "ver", "_", "url"),
+            forbiddenPathMarker("pro", "ver", "end", "point"),
+            forbiddenPathMarker("pro", "ver", "-", "end", "point"),
+            forbiddenPathMarker("pro", "ver", "_", "end", "point"),
+            forbiddenPathMarker("pro", "ver", " ", "end", "point"),
+        )
+        forbiddenPathMarkers.forEach { marker ->
+            require(!normalizedValue.contains(marker)) {
+                "$field path contains forbidden prover dependency marker: $marker"
+            }
         }
         val segments = value.split('/')
         require(segments.isNotEmpty() && segments.all { it.isNotEmpty() && it != "." && it != ".." }) {

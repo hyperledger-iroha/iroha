@@ -320,7 +320,44 @@ MaxStreakSaturatesAndCapsFactor ==
     /\ next_streak = 255
     /\ hysteresis_factor = 4
 
+CachedSlotTimeoutFastEligibilityExact ==
+  /\ CasePartitionExact
+  /\ FastTimeoutMatchesSpec
+  /\ FastTimeoutRequiresNearQuorumMissingDataAndNoBacklog
+
+CachedSlotTimeoutSelectionExact ==
+  /\ BaseTimeoutMatchesSpec
+  /\ ShorterNearTimeoutMatchesSpec
+  /\ ShorterNearTimeoutRequiresFastMinPath
+  /\ NearFastShorterUsesMinAndReturnsShorter
+  /\ NearFastNotShorterUsesMinButReturnsBase
+  /\ NonFastEffectiveCasesReturnBase
+
+CachedSlotTimeoutHysteresisWaitExact ==
+  /\ HysteresisWaitMatchesSpec
+  /\ HysteresisWaitOnlyBeforeBoundary
+  /\ HysteresisWaitRequiresPositiveFactor
+  /\ BoundaryAndAfterDoNotWait
+  /\ InvalidHysteresisInputsDoNotWaitOrAdvanceStreak
+
+CachedSlotTimeoutStreakExact ==
+  /\ NextStreakMatchesSpec
+  /\ HysteresisFactorMatchesSpec
+  /\ StreakZeroUsesTwoTimeoutFactor
+  /\ StreakOneUsesThreeTimeoutFactor
+  /\ StreakTwoAndAboveUseCappedFourTimeoutFactor
+  /\ MaxStreakSaturatesAndCapsFactor
+
+CachedSlotTimeoutExactness ==
+  /\ CachedSlotTimeoutFastEligibilityExact
+  /\ CachedSlotTimeoutSelectionExact
+  /\ CachedSlotTimeoutHysteresisWaitExact
+  /\ CachedSlotTimeoutStreakExact
+
 Safety ==
+  CachedSlotTimeoutExactness
+
+SafetyBreakdown ==
   /\ CasePartitionExact
   /\ FastTimeoutMatchesSpec
   /\ BaseTimeoutMatchesSpec

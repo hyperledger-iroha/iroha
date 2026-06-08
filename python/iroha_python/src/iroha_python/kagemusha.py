@@ -542,10 +542,12 @@ def is_kagemusha_recursive_compact_payment_token_prover_available() -> bool:
             _RECURSIVE_COMPACT_TOKEN_METHOD,
             _MALFORMED_NATIVE_PROBE_ARCHIVE,
             _MALFORMED_NATIVE_PROBE_ARCHIVE,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
         )
         and _probe_native_archive_method(
             module,
             _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
             _MALFORMED_NATIVE_PROBE_ARCHIVE,
         )
     )
@@ -561,6 +563,7 @@ def is_kagemusha_recursive_compact_payment_token_verifier_available() -> bool:
         and _probe_native_archive_method(
             module,
             _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
             _MALFORMED_NATIVE_PROBE_ARCHIVE,
         )
     )

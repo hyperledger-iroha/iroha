@@ -217,15 +217,60 @@ DistinctVoteBodiesRemainSeparate ==
     candidate \in {RetriedBodySameSigner, DifferentParticipantSameSigner} =>
       ImplementationCachedVotes(candidate) = 2
 
-Safety ==
+NativeAmxIngressRequestCases == {
+  ValidPrepareRequest,
+  ValidCommitRequest,
+  WrongPreparePhaseRequest,
+  WrongCommitPhaseRequest,
+  LocalNonBlsRequest,
+  LocalMissingPopRequest
+}
+
+NativeAmxIngressVoteAdmissionCases == {
+  ValidPrepareVote,
+  ValidCommitVote,
+  VoteSignerNonBls,
+  VoteSignerMissingPop,
+  VoteSignerInvalidPop,
+  VoteInvalidSignature
+}
+
+NativeAmxIngressVoteCacheCases == {
+  DuplicateSignerSameBody,
+  RetriedBodySameSigner,
+  DifferentParticipantSameSigner
+}
+
+NativeAmxIngressGroupedCases ==
+  NativeAmxIngressRequestCases \cup
+  NativeAmxIngressVoteAdmissionCases \cup
+  NativeAmxIngressVoteCacheCases
+
+NativeAmxIngressCaseGroupsComplete ==
+  NativeAmxIngressGroupedCases = Candidates
+
+NativeAmxIngressRequestExactness ==
   /\ RepliesMatchSpec
-  /\ CachedVotesMatchSpec
   /\ InvalidRequestsFailClosed
   /\ ValidRequestsReply
   /\ RepliesAreWellFormed
+
+NativeAmxIngressVoteAdmissionExactness ==
+  /\ CachedVotesMatchSpec
   /\ InvalidVotesFailClosed
   /\ ValidVotesAreCached
+
+NativeAmxIngressVoteCacheExactness ==
   /\ DuplicateSignerDoesNotDuplicateBody
   /\ DistinctVoteBodiesRemainSeparate
+
+NativeAmxIngressExactness ==
+  /\ NativeAmxIngressCaseGroupsComplete
+  /\ NativeAmxIngressRequestExactness
+  /\ NativeAmxIngressVoteAdmissionExactness
+  /\ NativeAmxIngressVoteCacheExactness
+
+Safety ==
+  NativeAmxIngressExactness
 
 ====

@@ -98,7 +98,7 @@ fn enum_packed_bench(c: &mut Criterion) {
         )
     });
 
-    // Encode (bare SCALE-like)
+    // Encode using the bare Norito codec.
     group.bench_function("encode_bare_codec", |b| {
         b.iter_batched(
             || data.clone(),

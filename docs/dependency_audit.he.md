@@ -39,7 +39,7 @@ translator: manual
 - PQ: ‏`pqcrypto-mldsa`, ‏`pqcrypto-traits` — קרייטים אמינים כייחוס.
 - TLS: ‏`rustls`, ‏`tokio-rustls`, ‏`hyper-rustls` — מחסנית TLS מודרנית ונפוצה ב-Rust.
 - Noise: ‏`snow` — מימוש תקני.
-- סריאליזציה: ‏`parity-scale-codec` הוא הסטנדרט ל-SCALE. Serde הוסרה מתלותי הייצור ברחבי המרחב; מחוללי/כותבי Norito מכסים את כל מסלולי הריצה. שאר ההפניות ל-Serde נשארות בתיעוד היסטורי, תסריטי הגנה או רשימות-הלבן של בדיקות בלבד.
+- סריאליזציה: ‏`retired codec` הוא הסטנדרט ל-retired codec. Serde הוסרה מתלותי הייצור ברחבי המרחב; מחוללי/כותבי Norito מכסים את כל מסלולי הריצה. שאר ההפניות ל-Serde נשארות בתיעוד היסטורי, תסריטי הגנה או רשימות-הלבן של בדיקות בלבד.
 - FFI/ספריות: ‏`libsodium-sys-stable`, ‏`openssl` — קרייטים לגיטימיים; בהפקה מעדיפים Rustls על פני OpenSSL (והקוד הנוכחי כבר עומד בכך).
 - ‏`pprof` 0.13.0 (crates.io) — משתמשים בגרסה הרשמית עם `prost-codec` ו-frame-pointer לאחר שהתקלה תוקנה.
 

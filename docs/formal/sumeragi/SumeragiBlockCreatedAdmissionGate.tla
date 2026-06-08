@@ -607,28 +607,36 @@ InlineProposalContextIsCachedAndObserved ==
     /\ proposal_cached
     /\ proposal_observed
 
-Safety ==
+BlockCreatedAdmissionOutcomeExactness ==
   /\ PayloadAcceptanceMatchesSpec
   /\ DeferredMatchesSpec
   /\ DroppedMatchesSpec
+
+BlockCreatedAdmissionStateExactness ==
   /\ PendingUpdateMatchesSpec
   /\ PassiveRetainedMatchesSpec
   /\ AuthoritativeOwnerMatchesSpec
   /\ DuplicateHandlingMatchesSpec
+
+BlockCreatedAdmissionReplayRepairExactness ==
   /\ ReplayPreserveMatchesSpec
   /\ DependencyRequestMatchesSpec
   /\ DeferMarkerMatchesSpec
   /\ ParentRequestMatchesSpec
   /\ GapRequestMatchesSpec
   /\ StaleCleanupMatchesSpec
+
+BlockCreatedAdmissionEvidenceExactness ==
   /\ InvalidEvidenceMatchesSpec
   /\ LockRejectMatchesSpec
   /\ ProposalCacheMatchesSpec
   /\ ProposalObservedMatchesSpec
+  /\ PayloadMismatchRecoveryMatchesSpec
+
+BlockCreatedAdmissionCommitExactness ==
   /\ PhaseSampleMatchesSpec
   /\ CommitPipelineMatchesSpec
   /\ MissingRequestClearMatchesSpec
-  /\ PayloadMismatchRecoveryMatchesSpec
   /\ AcceptedPayloadsUpdatePendingAndWakeCommit
   /\ PassiveBranchesDoNotBecomeAuthoritative
   /\ AuthoritativePayloadsOwnSlot
@@ -641,5 +649,14 @@ Safety ==
   /\ LockRejectedBlocksRecordLockRejection
   /\ InvalidPayloadsEmitEvidenceWhenProposalContextExists
   /\ InlineProposalContextIsCachedAndObserved
+
+BlockCreatedAdmissionExactness ==
+  /\ BlockCreatedAdmissionOutcomeExactness
+  /\ BlockCreatedAdmissionStateExactness
+  /\ BlockCreatedAdmissionReplayRepairExactness
+  /\ BlockCreatedAdmissionEvidenceExactness
+  /\ BlockCreatedAdmissionCommitExactness
+
+Safety == BlockCreatedAdmissionExactness
 
 ====

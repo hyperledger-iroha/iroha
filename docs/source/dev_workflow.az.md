@@ -88,10 +88,10 @@ yeni yamalar eyni standart qapıları izləyir.
   istehsal `serde`/`serde_json`, `AGENTS_BASE_REF`-ə nisbətdə vurur. Set
   `SERDE_GUARD_ALLOW=1` yalnız miqrasiya planını təqdim etdikdən sonra CI təcrübələri üçün.
 - `make guards` Norito seriallaşdırma siyasətini tətbiq edir: yenisini rədd edir
-  `serde`/`serde_json` istifadəsi, ad-hoc AoS köməkçiləri və xaricində SCALE asılılıqları
+  `serde`/`serde_json` istifadəsi, ad-hoc AoS köməkçiləri və xaricində retired codec asılılıqları
   Norito skamyalar (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **Proc-makro UI siyasəti:** hər bir proc-makro qutusu `trybuild` göndərməlidir
   `trybuild-tests` arxasında qoşqu (keçmə/uğursuz qlobus ilə `tests/ui.rs`)
   xüsusiyyət. Xoşbəxt yol nümunələrini `tests/ui/pass` altına, rədd hallarını isə altına qoyun

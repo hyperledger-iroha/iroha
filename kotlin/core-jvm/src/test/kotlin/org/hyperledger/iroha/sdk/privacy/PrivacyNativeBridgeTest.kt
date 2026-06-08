@@ -728,6 +728,7 @@ class PrivacyNativeBridgeTest {
         assertFalse(capabilities.productionGate.witnessPrivacyChecks)
         assertFalse(capabilities.productionGate.deterministicTests)
         assertFalse(capabilities.productionGate.negativeAdversarialTests)
+        assertFalse(capabilities.productionGate.replayNullifierTests)
         assertFalse(capabilities.productionGate.fuzzing)
         assertFalse(capabilities.productionGate.parserFuzzing)
         assertFalse(capabilities.productionGate.verifierFuzzing)
@@ -756,6 +757,11 @@ class PrivacyNativeBridgeTest {
         assertTrue(
             capabilities.productionGate.missing.contains(
                 "negative/adversarial tests are incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "replay/nullifier rejection tests are incomplete",
             ),
         )
         assertTrue(

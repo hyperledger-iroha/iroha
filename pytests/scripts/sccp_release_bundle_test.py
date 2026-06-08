@@ -533,13 +533,44 @@ def test_release_bundle_verifier_reports_removed_retired_network_pipeline_doc_gu
     )
 
 
+def test_release_bundle_verifier_reports_removed_generic_no_support_note_guard(
+    tmp_path: Path,
+) -> None:
+    """Launch-scope no-support note coverage must stay pinned in the guard."""
+
+    verifier = load_verify_helpers()
+    required_markers = verifier.SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS[0][1]
+    removed_marker = "def test_generic_no_support_note_stays_in_launch_scope_files"
+    guard = tmp_path / "sccp_retired_network_surface_test.py"
+    guard.write_text(
+        "\n".join(marker for marker in required_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+
+    errors = verifier._sccp_retired_network_surface_guard_inventory_errors(
+        (
+            (
+                guard,
+                required_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP retired network-surface guard source inventory" in error
+        and str(guard) in error
+        and removed_marker in error
+        for error in errors
+    )
+
+
 def test_release_bundle_verifier_reports_stale_retired_network_surface_allowlist(
     tmp_path: Path,
 ) -> None:
     """Retired network-surface guard allowlists must fail verification."""
 
     verifier = load_verify_helpers()
-    stale_marker = "APPROVED_RETIREMENT_NOTICE_PATTERNS"
+    stale_marker = "def _is_explicit_unsupported_scope_note_match"
     guard = tmp_path / "sccp_retired_network_surface_test.py"
     guard.write_text(
         "\n".join(
@@ -693,12 +724,41 @@ def test_release_bundle_java_android_phase_requires_source_proof_harness() -> No
     report = load_report_module()
     verifier = load_verify_helpers()
     source_harness = "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests"
+    ton_harness = "org.hyperledger.iroha.android.sccp.TonSccpProverTests"
 
     assert source_harness in corridor_android_harness_mains()
+    assert ton_harness in corridor_android_harness_mains()
     for module in (report, verifier):
         assert source_harness in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
             "java-android"
         ]
+        assert ton_harness in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS[
+            "java-android"
+        ]
+
+
+def test_release_bundle_kotlin_phase_requires_ton_prover_test() -> None:
+    """Kotlin corridor evidence must prove the TON proof-request tests ran."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    ton_test = "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest"
+
+    for module in (report, verifier):
+        assert ton_test in module.PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS["kotlin-sdk"]
+        assert module._phase_command_matches_required_fragment(
+            "kotlin-sdk",
+            "+ ./gradlew :core-jvm:test --console=plain "
+            "--tests org.hyperledger.iroha.sdk.sccp.* "
+            "--tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
+            ton_test,
+        )
+        assert not module._phase_command_matches_required_fragment(
+            "kotlin-sdk",
+            "+ ./gradlew :core-jvm:test --console=plain "
+            "--tests org.hyperledger.iroha.sdk.sccp.*",
+            ton_test,
+        )
 
 
 def write_active_launch_evidence(tmp_path: Path) -> tuple[Path, str]:
@@ -1438,6 +1498,90 @@ def test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker(
     assert not output_dir.exists()
 
 
+def test_release_bundle_rejects_native_evm_prover_uri_scheme_path_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject remote-looking native artifact paths."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(
+        tmp_path,
+        evidence,
+        overrides={"proof_artifact": "s3:bucket/proof-artifact.bin"},
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact path must not contain "
+        "URI schemes or drive prefixes"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_native_evm_prover_forbidden_path_marker_before_copy(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject WASM-named native artifacts before publishing."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(
+        tmp_path,
+        evidence,
+        overrides={"proof_artifact": "native-prover-artifacts/proof.wasm"},
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "native EVM Groth16 prover bundle proof_artifact path contains "
+        "forbidden prover dependency marker: wasm"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
 def test_release_bundle_rejects_empty_native_evm_prover_payload(
     tmp_path: Path,
 ) -> None:
@@ -1583,6 +1727,200 @@ def test_release_bundle_rejects_duplicate_native_evm_prover_json_keys(
         "native EVM Groth16 prover bundle JSON contains duplicate key: bundle_id"
     ) in completed.stderr
     assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_duplicate_native_evm_prover_nested_json_keys(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject duplicate keys inside native manifest maps."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    manifest = native_bundle.read_text(encoding="utf-8")
+    native_bundle.write_text(
+        manifest.replace(
+            '    "circuit_security_audit": "',
+            '    "circuit_security_audit": "0x'
+            + "f1" * 32
+            + '",\n    "circuit_security_audit": "',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert (
+        "native EVM Groth16 prover bundle JSON contains duplicate key: "
+        "circuit_security_audit"
+    ) in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_duplicate_native_evm_prover_sdk_artifact_keys(
+    tmp_path: Path,
+) -> None:
+    """Bundle generation must reject duplicate keys inside native SDK rows."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    manifest = native_bundle.read_text(encoding="utf-8")
+    native_bundle.write_text(
+        manifest.replace(
+            '      "implementation_hash": "',
+            '      "implementation_hash": "0x'
+            + "f2" * 32
+            + '",\n      "implementation_hash": "',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    write_phase_artifacts(tmp_path)
+    output_dir = tmp_path / "bundle"
+
+    completed = subprocess.run(
+        [
+            "python3",
+            str(SCRIPT),
+            "--output-dir",
+            str(output_dir),
+            "--phase-result",
+            "all=passed",
+            "--phase-evidence-dir",
+            str(tmp_path / "phase-artifacts"),
+            "--native-evm-prover-bundle",
+            str(native_bundle),
+            str(evidence),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    duplicate_marker = "native EVM Groth16 prover bundle JSON contains duplicate key: implementation_hash"
+    assert duplicate_marker in completed.stderr
+    assert not output_dir.exists()
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields(
+    tmp_path: Path,
+) -> None:
+    """Published native manifests must keep root and audit schemas exact."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    removed_audit = sorted(payload["audit_hashes"])[0]
+    payload["operator_note"] = "not allowed"
+    payload["audit_hashes"].pop(removed_audit)
+    payload["audit_hashes"]["operator_note"] = "0x" + "d5" * 32
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle contains unknown field: operator_note"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle audit_hashes contains unexpected field: operator_note"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        f"bundle audit_hashes missing field: {removed_audit}"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys(
+    tmp_path: Path,
+) -> None:
+    """Published native manifests must reject duplicate keys below the root."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    manifest = native_path.read_text(encoding="utf-8")
+    native_path.write_text(
+        manifest.replace(
+            '    "circuit_security_audit": "',
+            '    "circuit_security_audit": "0x'
+            + "f1" * 32
+            + '",\n    "circuit_security_audit": "',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle JSON contains duplicate key: circuit_security_audit"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
 
 
 def test_release_bundle_rejects_duplicate_native_evm_prover_payload_paths_before_copy(
@@ -2551,6 +2889,80 @@ def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_mar
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_native_evm_prover_uri_scheme_path(
+    tmp_path: Path,
+) -> None:
+    """Published native prover manifests must not contain URI-like artifact paths."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["proof_artifact"] = "ipfs:proof-artifact.bin"
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle proof_artifact path must not contain URI schemes or drive prefixes"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_path_marker(
+    tmp_path: Path,
+) -> None:
+    """Published native prover manifests must not keep WASM artifact names."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["proof_artifact"] = "native-prover-artifacts/proof.wasm"
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle proof_artifact path contains forbidden prover dependency marker: wasm"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload(
     tmp_path: Path,
 ) -> None:
@@ -2780,6 +3192,52 @@ def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_report_path
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifact_keys(
+    tmp_path: Path,
+) -> None:
+    """Published native manifests must reject duplicate keys inside SDK rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    manifest = native_path.read_text(encoding="utf-8")
+    native_path.write_text(
+        manifest.replace(
+            '      "implementation_hash": "',
+            '      "implementation_hash": "0x'
+            + "f2" * 32
+            + '",\n      "implementation_hash": "',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle JSON contains duplicate key: implementation_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash(
     tmp_path: Path,
 ) -> None:
@@ -2815,6 +3273,217 @@ def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash(
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         "bundle audit_hashes.circuit_security_audit must be a canonical "
         "non-zero 32-byte hex value"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Published native prover manifests must keep one row per required SDK."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    sdk_artifacts = payload["native_sdk_artifacts"]
+    duplicate_sdk = sdk_artifacts[0]["sdk"]
+    removed_sdk = sdk_artifacts[-1]["sdk"]
+    sdk_artifacts[-1] = dict(sdk_artifacts[0])
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts "
+        f"contains duplicate sdk: {duplicate_sdk}"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts "
+        f"missing sdk: {removed_sdk}"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Published native prover manifests must reject malformed SDK artifact rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["native_sdk_artifacts"][0] = []
+    payload["native_sdk_artifacts"][1]["operator_note"] = "not allowed"
+    payload["native_sdk_artifacts"][2].pop("implementation_hash")
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts[0] "
+        "must be an object"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts[1] "
+        "contains unknown field: operator_note"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts[2] "
+        "missing field: implementation_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift(
+    tmp_path: Path,
+) -> None:
+    """Published native prover manifests must reject SDK artifact semantic drift."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    unknown_sdk = "rogue-sdk"
+    missing_sdk = payload["native_sdk_artifacts"][0]["sdk"]
+    drift_implementation_sdk = payload["native_sdk_artifacts"][1]["sdk"]
+    expected_implementation = payload["native_sdk_artifacts"][1]["implementation"]
+    drift_sdk = payload["native_sdk_artifacts"][2]["sdk"]
+    payload["native_sdk_artifacts"][0]["sdk"] = unknown_sdk
+    payload["native_sdk_artifacts"][1]["implementation"] = "wrong-implementation"
+    payload["native_sdk_artifacts"][2]["prover_artifact_hash"] = "0x" + "d3" * 32
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts "
+        f"contains unknown sdk: {unknown_sdk}"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native_sdk_artifacts "
+        f"missing sdk: {missing_sdk}"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: "
+        f"{drift_implementation_sdk} implementation must be {expected_implementation}"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: "
+        f"{drift_sdk} prover_artifact_hash must match proof_artifact_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift(
+    tmp_path: Path,
+) -> None:
+    """Published native manifests must reject SDK implementation artifact drift."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    uri_sdk = payload["native_sdk_artifacts"][0]["sdk"]
+    hash_sdk = payload["native_sdk_artifacts"][1]["sdk"]
+    payload["native_sdk_artifacts"][0]["implementation_artifact"] = (
+        "ipfs:sdk-implementation.bin"
+    )
+    payload["native_sdk_artifacts"][1]["implementation_hash"] = "0x" + "d4" * 32
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        [
+            "python3",
+            str(VERIFY_SCRIPT),
+            str(output_dir),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        f"bundle {uri_sdk} implementation_artifact path must not contain URI "
+        "schemes or drive prefixes"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        f"bundle {hash_sdk} implementation_artifact sha256 must match "
+        "implementation_hash"
     ) in verified.stdout
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
@@ -3041,6 +3710,65 @@ def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_key
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_sdk_result_keys(
+    tmp_path: Path,
+) -> None:
+    """A rehashed parity SDK row still fails if the JSON has duplicate keys."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / relative_path
+    parity_text = parity_path.read_text(encoding="utf-8")
+    duplicate_key_offset = parity_text.index(
+        '      "calldata_hash": "',
+        parity_text.index('    "javascript": {'),
+    )
+    parity_bytes = (
+        parity_text[:duplicate_key_offset]
+        + '      "calldata_hash": "0x'
+        + "f1" * 32
+        + '",\n'
+        + parity_text[duplicate_key_offset:]
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact JSON contains duplicate key: "
+        "calldata_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_keys(
     tmp_path: Path,
 ) -> None:
@@ -3084,6 +3812,65 @@ def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_keys(
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         "bundle native_prover_self_test_artifact JSON contains duplicate key: "
         "schema"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_sdk_result_keys(
+    tmp_path: Path,
+) -> None:
+    """A rehashed self-test SDK row still fails if the JSON has duplicate keys."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / relative_path
+    self_test_text = self_test_path.read_text(encoding="utf-8")
+    duplicate_key_offset = self_test_text.index(
+        '      "proof_hash": "',
+        self_test_text.index('    "kotlin": {'),
+    )
+    self_test_bytes = (
+        self_test_text[:duplicate_key_offset]
+        + '      "proof_hash": "0x'
+        + "f2" * 32
+        + '",\n'
+        + self_test_text[duplicate_key_offset:]
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact JSON contains duplicate key: "
+        "proof_hash"
     ) in verified.stdout
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
@@ -3136,6 +3923,648 @@ def test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift(
         "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
         "bundle cross_sdk_fixture_parity_artifact sdk_results.javascript."
         "calldata_hash must match calldata_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_fixture_missing_sdk_results(
+    tmp_path: Path,
+) -> None:
+    """Published fixture vectors must include every required SDK result row."""
+
+    output_dir = build_ready_bundle(tmp_path)
+
+    parity_relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / parity_relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    removed_parity_sdk = sorted(parity_payload["sdk_results"])[0]
+    parity_payload["sdk_results"].pop(removed_parity_sdk)
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, parity_relative_path)
+
+    self_test_relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / self_test_relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    removed_self_test_sdk = sorted(self_test_payload["sdk_results"])[-1]
+    self_test_payload["sdk_results"].pop(removed_self_test_sdk)
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, self_test_relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sdk_results missing sdk: "
+        f"{removed_parity_sdk}"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results missing sdk: "
+        f"{removed_self_test_sdk}"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_results(
+    tmp_path: Path,
+) -> None:
+    """Published fixture vectors must carry SDK results as non-empty objects."""
+
+    output_dir = build_ready_bundle(tmp_path)
+
+    parity_relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / parity_relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_payload["sdk_results"] = {}
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, parity_relative_path)
+
+    self_test_relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / self_test_relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    self_test_payload["sdk_results"] = []
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, self_test_relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sdk_results must be a "
+        "non-empty object"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results must be a "
+        "non-empty object"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_rows(
+    tmp_path: Path,
+) -> None:
+    """Published fixture vectors must reject malformed SDK result rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+
+    parity_relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / parity_relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_sdk = sorted(parity_payload["sdk_results"])[0]
+    parity_payload["sdk_results"][parity_sdk] = []
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, parity_relative_path)
+
+    self_test_relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / self_test_relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    self_test_sdk = sorted(self_test_payload["sdk_results"])[-1]
+    self_test_payload["sdk_results"][self_test_sdk]["operator_note"] = "not allowed"
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, self_test_relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact "
+        f"sdk_results.{parity_sdk} must be an object"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact "
+        f"sdk_results.{self_test_sdk} contains unknown field: operator_note"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_missing_fields(
+    tmp_path: Path,
+) -> None:
+    """Published fixture vectors must reject incomplete SDK result rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+
+    parity_relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / parity_relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_sdk = sorted(parity_payload["sdk_results"])[0]
+    parity_payload["sdk_results"][parity_sdk].pop("calldata_hash")
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, parity_relative_path)
+
+    self_test_relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / self_test_relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    self_test_sdk = sorted(self_test_payload["sdk_results"])[-1]
+    self_test_payload["sdk_results"][self_test_sdk].pop("proof_hash")
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, self_test_relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact "
+        f"sdk_results.{parity_sdk} missing field: calldata_hash"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact "
+        f"sdk_results.{self_test_sdk} missing field: proof_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_value_drift(
+    tmp_path: Path,
+) -> None:
+    """Published fixture vectors must reject SDK row value drift."""
+
+    output_dir = build_ready_bundle(tmp_path)
+
+    parity_relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / parity_relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_sdk = sorted(parity_payload["sdk_results"])[0]
+    parity_signal_words = list(
+        parity_payload["sdk_results"][parity_sdk]["public_signal_words"]
+    )
+    parity_signal_words[0] = "0x" + "e1" * 32
+    parity_payload["sdk_results"][parity_sdk][
+        "public_signal_words"
+    ] = parity_signal_words
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, parity_relative_path)
+
+    self_test_relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / self_test_relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    self_test_sdk = sorted(self_test_payload["sdk_results"])[-1]
+    self_test_payload["sdk_results"][self_test_sdk]["proof_hash"] = (
+        "0x" + "d2" * 32
+    )
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, self_test_relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact "
+        f"sdk_results.{parity_sdk}.public_signal_words must match public_signal_words"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact "
+        f"sdk_results.{self_test_sdk}.proof_hash must match proof_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results(
+    tmp_path: Path,
+) -> None:
+    """Published fixture vectors must not include unrecognized SDK result rows."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    rogue_sdk = "rogue-sdk"
+
+    parity_relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / parity_relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_result = next(iter(parity_payload["sdk_results"].values()))
+    parity_payload["sdk_results"][rogue_sdk] = dict(parity_result)
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, parity_relative_path)
+
+    self_test_relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / self_test_relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    self_test_result = next(iter(self_test_payload["sdk_results"].values()))
+    self_test_payload["sdk_results"][rogue_sdk] = dict(self_test_result)
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, self_test_relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact sdk_results contains "
+        f"unknown sdk: {rogue_sdk}"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact sdk_results contains "
+        f"unknown sdk: {rogue_sdk}"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_fixture_public_signal_shape(
+    tmp_path: Path,
+) -> None:
+    """Published fixture vectors must keep canonical public signal words."""
+
+    output_dir = build_ready_bundle(tmp_path)
+
+    parity_relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / parity_relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_payload["public_signal_words"] = parity_payload["public_signal_words"][:-1]
+    for result in parity_payload["sdk_results"].values():
+        result["public_signal_words"] = parity_payload["public_signal_words"]
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, parity_relative_path)
+
+    self_test_relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / self_test_relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    self_test_payload["public_signal_words"][0] = "0x" + "zz" * 32
+    for result in self_test_payload["sdk_results"].values():
+        result["public_signal_words"] = self_test_payload["public_signal_words"]
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, self_test_relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact public_signal_words must "
+        "contain 9 words"
+    ) in verified.stdout
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact public_signal_words[0] must "
+        "be a canonical 32-byte hex value"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_parity_fixture_role_reuse(
+    tmp_path: Path,
+) -> None:
+    """A rehashed parity vector still fails if proof roles share one hash."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = (
+        "native-prover/native-prover-artifacts/cross-sdk-fixture-parity.json"
+    )
+    parity_path = output_dir / relative_path
+    parity_payload = json.loads(parity_path.read_text(encoding="utf-8"))
+    parity_payload["source_proof_hash"] = parity_payload["receipt_proof_hash"]
+    for result in parity_payload["sdk_results"].values():
+        result["source_proof_hash"] = parity_payload["source_proof_hash"]
+    parity_bytes = (
+        json.dumps(parity_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    parity_path.write_bytes(parity_bytes)
+    rewrite_manifest_artifact(output_dir, relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["cross_sdk_fixture_parity"] = (
+        "0x" + hashlib.sha256(parity_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle cross_sdk_fixture_parity_artifact source_proof_hash must not "
+        "reuse receipt_proof_hash"
+    ) in verified.stdout
+    assert (
+        "readiness report native_evm_prover_bundle does not match bundled native "
+        "prover manifest"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse(
+    tmp_path: Path,
+) -> None:
+    """A rehashed self-test vector still fails if proof roles share one hash."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    relative_path = (
+        "native-prover/native-prover-artifacts/native-prover-self-test.json"
+    )
+    self_test_path = output_dir / relative_path
+    self_test_payload = json.loads(self_test_path.read_text(encoding="utf-8"))
+    self_test_payload["proof_hash"] = self_test_payload["source_proof_hash"]
+    for result in self_test_payload["sdk_results"].values():
+        result["proof_hash"] = self_test_payload["proof_hash"]
+    self_test_bytes = (
+        json.dumps(self_test_payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    self_test_path.write_bytes(self_test_bytes)
+    rewrite_manifest_artifact(output_dir, relative_path)
+
+    native_path = output_dir / "native-prover" / "00-native-evm-prover-bundle.json"
+    payload = json.loads(native_path.read_text(encoding="utf-8"))
+    payload["audit_hashes"]["native_prover_self_test"] = (
+        "0x" + hashlib.sha256(self_test_bytes).hexdigest()
+    )
+    native_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(
+        output_dir,
+        "native-prover/00-native-evm-prover-bundle.json",
+    )
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "bundled native EVM prover manifest blocker: native EVM Groth16 prover "
+        "bundle native_prover_self_test_artifact proof_hash must not reuse "
+        "source_proof_hash"
     ) in verified.stdout
     assert (
         "readiness report native_evm_prover_bundle does not match bundled native "
@@ -4243,6 +5672,869 @@ def test_release_bundle_verifier_rejects_missing_report_root_json_fields(
 
     assert verified.returncode == 1
     assert "readiness report missing top-level field: inputs" in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_unknown_source_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must not carry unrecognized gates."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"]["operator_attestation_gate"] = {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory contains unknown gate: "
+        "operator_attestation_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_source_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the proof-request gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("proof_request_bundle_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "proof_request_bundle_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_launch_scope_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the launch-scope constants gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("launch_scope_constant_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "launch_scope_constant_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_launch_policy_selector_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the ETH-only launch selector gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_launch_policy_selector_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_launch_policy_selector_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_launch_policy_documentation_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the active launch-policy doc gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_launch_policy_documentation_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_launch_policy_documentation_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_public_discovery_documentation_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the public discovery docs gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("public_discovery_documentation_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "public_discovery_documentation_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_data_collection_no_proxy_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the ETH no-proxy collection gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_data_collection_no_proxy_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_data_collection_no_proxy_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_native_receipt_finality_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the native receipt-finality gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_native_receipt_finality_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_native_receipt_finality_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_beacon_rest_finalized_header_shape_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the Beacon REST header-shape gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_beacon_rest_finalized_header_shape_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_beacon_rest_finalized_header_shape_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_beacon_rest_execution_payload_binding_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the Beacon REST execution-binding gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop(
+        "ethereum_beacon_rest_execution_payload_binding_gate"
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_beacon_rest_execution_payload_binding_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_sync_committee_roster_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the sync-committee roster gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_sync_committee_roster_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_sync_committee_roster_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_source_bridge_config_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the ETH source-bridge config gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_source_bridge_config_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_source_bridge_config_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_evm_source_adapter_deployment_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the active EVM adapter gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_evm_source_adapter_deployment_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_evm_source_adapter_deployment_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_contract_smoke_eth_mainnet_network_id_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the EVM smoke ETH network-id gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("contract_smoke_eth_mainnet_network_id_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "contract_smoke_eth_mainnet_network_id_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_contract_smoke_evm_production_surface_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the EVM production smoke gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("contract_smoke_evm_production_surface_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "contract_smoke_evm_production_surface_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_core_range_finality_binding_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep Core range/finality binding."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_core_range_finality_binding_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_core_range_finality_binding_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_core_message_replay_guard_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep Core message replay guards."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_core_message_replay_guard_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_core_message_replay_guard_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_torii_pinned_message_proof_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep Torii pinned message proofs."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_torii_pinned_message_proof_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_torii_pinned_message_proof_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_evm_source_live_production_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the active EVM source-live gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_evm_source_live_production_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_evm_source_live_production_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_evm_live_destination_production_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the active EVM destination-live gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_evm_live_destination_production_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_evm_live_destination_production_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_route_canary_finalized_receipt_block_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep route-canary receipt finality."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop(
+        "ethereum_route_canary_finalized_receipt_block_gate"
+    )
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_route_canary_finalized_receipt_block_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_evm_block_tag_metadata_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the EVM block-tag metadata gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_evm_block_tag_metadata_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_evm_block_tag_metadata_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_native_sccp_no_wasm_readiness_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the native no-WASM readiness gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("native_sccp_no_wasm_readiness_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "native_sccp_no_wasm_readiness_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_retired_network_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the retired-network gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("retired_network_surface_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "retired_network_surface_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_unready_config_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the unready-proof config gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("unready_transparent_proof_config_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "unready_transparent_proof_config_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_blocked_source_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Production readiness source inventory gates must be passed."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"]["proof_request_bundle_gate"] = {
+        "validation_status": "blocked",
+        "validation_blockers": ["Swift source marker missing"],
+    }
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate "
+        "validation_status must be passed"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate "
+        "validation_blockers must be empty"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_malformed_source_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory gates must use the canonical object shape."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"]["proof_request_bundle_gate"] = {
+        "validation_status": "reviewed",
+        "validation_blockers": [""],
+        "operator_note": "manual override",
+    }
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate contains "
+        "unknown field: operator_note"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate "
+        "validation_status must be passed or blocked"
+    ) in verified.stdout
+    assert (
+        "readiness report source_inventory.proof_request_bundle_gate "
+        "validation_blockers must be a list of non-empty strings"
+    ) in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_manifest_readiness_claim_drift(
@@ -9758,6 +12050,77 @@ def test_release_bundle_verifier_rejects_java_android_log_without_source_harness
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_java_android_log_without_ton_harness(
+    tmp_path: Path,
+) -> None:
+    """Android phase evidence must show the TON proof-request harness."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    phase_log = output_dir / "corridor" / "java-android.log"
+    ton_harness = "org.hyperledger.iroha.android.sccp.TonSccpProverTests"
+    phase_log.write_text(
+        "==> SCCP production corridor: java-android\n"
+        "+ ANDROID_HARNESS_MAINS="
+        "org.hyperledger.iroha.android.sccp.EvmSccpProverTests,"
+        "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests,"
+        "org.hyperledger.iroha.android.sccp.TronSccpProverTests\n"
+        "+ ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests\n"
+        "+ ./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests\n"
+        "BUILD SUCCESSFUL\n"
+        "SCCP production corridor completed.\n",
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "java-android")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase java-android evidence artifact is missing "
+        f"expected phase-block command: {ton_harness}"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_kotlin_log_without_ton_prover_test(
+    tmp_path: Path,
+) -> None:
+    """Kotlin phase evidence must show the TON proof-request test selector."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    phase_log = output_dir / "corridor" / "kotlin-sdk.log"
+    ton_test = "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest"
+    phase_log.write_text(
+        "==> SCCP production corridor: kotlin-sdk\n"
+        "+ java -version\n"
+        "+ ./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.*\n"
+        'openjdk version "21.0.1"\n'
+        "BUILD SUCCESSFUL\n"
+        "SCCP production corridor completed.\n",
+        encoding="utf-8",
+    )
+    rewrite_report_phase_artifact(output_dir, "kotlin-sdk")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report phase kotlin-sdk evidence artifact is missing "
+        f"expected phase-block command: {ton_test}"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_requires_release_verifier_tests_in_evidence_phase(
     tmp_path: Path,
 ) -> None:
@@ -10487,7 +12850,8 @@ def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation(
     sparse_docs = tmp_path / "bridge_proofs.md"
     sparse_docs.write_text(
         "active launch policy is Ethereum-mainnet lane readiness\n"
-        "active launch policy is BSC-mainnet lane readiness\n",
+        "active launch policy is BSC-mainnet lane readiness\n"
+        "BSC mainnet only when the configured BSC source-chain finality/inclusion\n",
         encoding="utf-8",
     )
     verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_MARKERS = (
@@ -10501,6 +12865,7 @@ def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation(
     )
     verifier.ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_FORBIDDEN_MARKERS = (
         "active launch policy is BSC-mainnet lane readiness",
+        "BSC mainnet only when the configured BSC source-chain finality/inclusion",
     )
 
     bundle_dir = tmp_path / "bundle"
@@ -10519,6 +12884,15 @@ def test_release_bundle_verifier_guards_ethereum_launch_policy_documentation(
         and (
             "contains stale marker: active launch policy is BSC-mainnet "
             "lane readiness"
+        )
+        in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "Ethereum mainnet launch-policy documentation source inventory" in error
+        and (
+            "contains stale marker: BSC mainnet only when the configured BSC "
+            "source-chain finality/inclusion"
         )
         in error
         for error in verified["errors"]
@@ -10716,6 +13090,101 @@ def test_release_bundle_verifier_guards_sccp_unready_config_only_sources(
     )
 
 
+def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin proof-request bundle gate tests."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_proof_request_bundle_gate_inventory_errors() == []
+
+    sparse_gate = tmp_path / "sccp_test.py"
+    sparse_gate.write_text(
+        "def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes():\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    missing_marker = "sourceProofBytes required for non-SORA source bundle"
+
+    errors = verifier._sccp_proof_request_bundle_gate_inventory_errors(
+        (
+            (
+                sparse_gate,
+                (
+                    "def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes",
+                    missing_marker,
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP proof-request bundle/source-proof gate source inventory" in error
+        and str(sparse_gate) in error
+        and missing_marker in error
+        for error in errors
+    )
+
+    sparse_swift_impl = tmp_path / "SccpTonProver.swift"
+    sparse_swift_impl.write_text(
+        "private func requireTonSccpProofRequestBundleMatchesPublicInputs() {}\n"
+        "private func decodeCanonicalTonSccpMessageProofBundleSummary() {}\n",
+        encoding="utf-8",
+    )
+    missing_impl_marker = (
+        "summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty"
+    )
+
+    implementation_errors = verifier._sccp_proof_request_bundle_gate_inventory_errors(
+        (
+            (
+                sparse_swift_impl,
+                (
+                    "func requireTonSccpProofRequestBundleMatchesPublicInputs",
+                    "func decodeCanonicalTonSccpMessageProofBundleSummary",
+                    missing_impl_marker,
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP proof-request bundle/source-proof gate source inventory" in error
+        and str(sparse_swift_impl) in error
+        and missing_impl_marker in error
+        for error in implementation_errors
+    )
+
+    sparse_dist = tmp_path / "dist-sccp.js"
+    sparse_dist.write_text(
+        "const requireSccpProofRequestBundleMatchesPublicInputs = () => {};\n"
+        "summary.sourceDomain !== SCCP_DOMAIN_SORA;\n",
+        encoding="utf-8",
+    )
+    missing_dist_marker = 'toBytes(sourceProofBytes, "sourceProofBytes").length === 0'
+
+    dist_errors = verifier._sccp_proof_request_bundle_gate_inventory_errors(
+        (
+            (
+                sparse_dist,
+                (
+                    "const requireSccpProofRequestBundleMatchesPublicInputs = (",
+                    "summary.sourceDomain !== SCCP_DOMAIN_SORA",
+                    missing_dist_marker,
+                    "sourceProofBytes required for non-SORA source bundle",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP proof-request bundle/source-proof gate source inventory" in error
+        and str(sparse_dist) in error
+        and missing_dist_marker in error
+        for error in dist_errors
+    )
+
+
 def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
     tmp_path: Path,
 ) -> None:
@@ -10748,19 +13217,19 @@ def test_release_bundle_verifier_guards_contract_smoke_eth_mainnet_network_id(
 
     assert verified["verified"] is False
     assert any(
-        "EVM contract smoke Ethereum mainnet network id SDK test inventory" in error
+        "EVM contract smoke Ethereum mainnet network id source inventory" in error
         and "missing marker: const ethMainnetNetworkId = ethers.zeroPadValue(ethers.toBeHex(1), 32);"
         in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke Ethereum mainnet network id SDK test inventory" in error
+        "EVM contract smoke Ethereum mainnet network id source inventory" in error
         and 'missing marker: callExceptionWithReason("Network id must be ETH mainnet")'
         in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke Ethereum mainnet network id SDK test inventory" in error
+        "EVM contract smoke Ethereum mainnet network id source inventory" in error
         and (
             'missing marker: callExceptionWithReason("Network id must be '
             'BSC mainnet or testnet")'
@@ -10816,94 +13285,94 @@ def test_release_bundle_verifier_guards_contract_smoke_evm_production_surface(
 
     assert verified["verified"] is False
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and 'missing marker: callExceptionWithReason("Verifier key hash mismatch")'
         in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and 'missing marker: callExceptionWithReason("Verifier key hash unavailable")'
         in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and "missing marker: nonVerifierContract" in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and "missing marker: nonVerifierContractCodeHash" in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and 'missing marker: callExceptionWithReason("Destination binding hash is required")'
         in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and 'missing marker: callExceptionWithReason("Source domain overflow")'
         in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and 'missing marker: callExceptionWithReason("Target domain overflow")'
         in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and 'missing marker: callExceptionWithReason("Source and target domains must differ")'
         in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and "missing marker: overflowTargetDomainGrothInputs" in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and "missing marker: sameDomainGroth16ProofBytes" in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and "missing marker: wrongDestinationBindingHash" in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and "missing marker: crossDeploymentGroth16Bridge" in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and "missing marker: crossDeploymentGroth16Tx" in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and "missing marker: !usedMessageProofs[publicInputs[0]]" in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and "missing marker: assert.equal(await groth16Bridge.usedMessageProofs(messageId), true);"
         in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and "missing marker: duplicateInvalidGroth16Tx" in error
         for error in verified["errors"]
     )
     assert any(
-        "EVM contract smoke production surface SDK test inventory" in error
+        "EVM contract smoke production surface source inventory" in error
         and 'missing marker: callExceptionWithReason("Message proof already used")'
         in error
         for error in verified["errors"]
@@ -11079,18 +13548,40 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
             sparse_report_script,
             (
                 "NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (",
+                "NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (",
                 "NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES",
                 "NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA",
                 "NATIVE_EVM_PROVER_SELF_TEST_SCHEMA",
+                "NATIVE_EVM_PROVER_PARITY_HASH_ROLE_KEYS",
+                "NATIVE_EVM_PROVER_SELF_TEST_HASH_ROLE_KEYS",
                 "def _native_evm_prover_forbidden_payload_blockers(",
                 "_native_evm_prover_forbidden_payload_blockers(artifact_path, label)",
+                "audit_hashes contains unexpected field",
+                "audit_hashes missing field",
                 "def _native_evm_prover_parity_fixture_status(",
                 "def _native_evm_prover_self_test_status(",
+                "def _native_evm_prover_fixture_hash_role_blockers(",
                 "sha256 must match audit_hashes.cross_sdk_fixture_parity",
                 "sha256 must match audit_hashes.native_prover_self_test",
                 "native_prover_self_test_artifact",
+                "public_signal_words must contain 9 words",
+                "sdk_results must be a non-empty object",
+                "sdk_results.{sdk}",
+                "contains unknown field",
+                "missing field",
+                "must match {key}",
+                "must match public_signal_words",
+                "sdk_results contains unknown sdk",
                 "sdk_results missing sdk",
+                "native_sdk_artifacts[",
+                "native_sdk_artifacts contains duplicate sdk",
+                "native_sdk_artifacts contains unknown sdk",
+                "implementation must be",
+                "prover_artifact_hash must match proof_artifact_hash",
+                "sha256 must match {hash_field}",
                 "def _native_evm_prover_hash_role_blockers(",
+                "path must not contain URI schemes or drive prefixes",
+                "path contains forbidden prover dependency marker",
                 "must not be empty",
                 "must be at least",
                 "must not duplicate",
@@ -11123,6 +13614,10 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "must not use multiple aliases",
                 "isCanonicalDecimalText",
                 "canonical decimal integer",
+                "must not contain URI schemes or drive prefixes",
+                "path contains forbidden prover dependency marker",
+                'value.contains(":")',
+                "forbiddenPathMarkers",
                 "implementationBytes are required",
                 "nativeProverArtifacts must bind sdk implementation and implementationHash",
                 "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
@@ -11151,19 +13646,44 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "def test_release_readiness_all_public_sccp_sdk_sources_are_native_local_prover_only",
                 "def test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned",
                 "def test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned",
+                "def test_release_readiness_report_blocks_duplicate_native_evm_prover_nested_json_keys",
+                "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifact_keys",
+                "def test_release_readiness_report_blocks_native_evm_prover_unknown_root_and_audit_fields",
                 "def test_release_readiness_report_blocks_empty_native_evm_prover_payload",
                 "def test_release_readiness_report_blocks_tiny_native_evm_prover_payload",
                 "def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash",
                 "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
+                "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifacts",
+                "def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifacts",
+                "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift",
+                "def test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift",
                 "def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash",
                 "def test_release_readiness_report_blocks_missing_native_evm_parity_fixture",
                 "def test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash",
                 "def test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift",
+                "def test_release_readiness_report_blocks_native_evm_fixture_missing_sdk_results",
+                "def test_release_readiness_report_blocks_native_evm_fixture_malformed_sdk_results",
+                "def test_release_readiness_report_blocks_native_evm_fixture_malformed_sdk_result_rows",
+                "def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_missing_fields",
+                "def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_value_drift",
+                "def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results",
+                "def test_release_readiness_report_blocks_native_evm_fixture_public_signal_shape",
+                "def test_release_readiness_report_blocks_native_evm_parity_fixture_role_reuse",
+                "def test_release_readiness_report_blocks_native_evm_self_test_role_reuse",
                 "def test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker",
+                "def test_release_readiness_report_blocks_native_evm_prover_uri_scheme_path",
+                "def test_release_readiness_report_blocks_native_evm_prover_forbidden_path_marker",
+                "ipfs:proof-artifact.bin",
+                "artifacts/eth-mainnet/proof.wasm",
                 "def test_release_readiness_report_blocks_duplicate_native_evm_parity_fixture_keys",
+                "def test_release_readiness_report_blocks_duplicate_native_evm_parity_fixture_sdk_result_keys",
                 "def test_release_readiness_report_blocks_duplicate_native_evm_self_test_keys",
+                "def test_release_readiness_report_blocks_duplicate_native_evm_self_test_sdk_result_keys",
                 "cross_sdk_fixture_parity_artifact JSON contains duplicate key",
                 "native_prover_self_test_artifact JSON contains duplicate key",
+                "JSON contains duplicate key: implementation_hash",
+                "JSON contains duplicate key: calldata_hash",
+                "JSON contains duplicate key: proof_hash",
                 '"prover_endpoint"',
             ),
         ),
@@ -11173,17 +13693,43 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
                 "def test_release_bundle_rejects_empty_native_evm_prover_payload",
                 "def test_release_bundle_rejects_tiny_native_evm_prover_payload",
                 "def test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker",
+                "def test_release_bundle_rejects_duplicate_native_evm_prover_nested_json_keys",
+                "native EVM Groth16 prover bundle JSON contains duplicate key: circuit_security_audit",
+                "def test_release_bundle_rejects_duplicate_native_evm_prover_sdk_artifact_keys",
+                "native EVM Groth16 prover bundle JSON contains duplicate key: implementation_hash",
+                "def test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields",
+                "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys",
+                "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifact_keys",
+                "def test_release_bundle_rejects_native_evm_prover_uri_scheme_path_before_copy",
+                "def test_release_bundle_rejects_native_evm_prover_forbidden_path_marker_before_copy",
                 "def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload",
                 "def test_release_bundle_verifier_rejects_tiny_native_evm_prover_payload",
                 "def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash",
                 "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
+                "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifacts",
+                "def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifacts",
+                "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift",
+                "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift",
                 "def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash",
                 "def test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture",
                 "def test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash",
                 "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift",
+                "def test_release_bundle_verifier_rejects_native_evm_fixture_missing_sdk_results",
+                "def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_results",
+                "def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_rows",
+                "def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_missing_fields",
+                "def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_value_drift",
+                "def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results",
+                "def test_release_bundle_verifier_rejects_native_evm_fixture_public_signal_shape",
+                "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_role_reuse",
+                "def test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse",
                 "def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker",
+                "def test_release_bundle_verifier_rejects_native_evm_prover_uri_scheme_path",
+                "def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_path_marker",
                 "def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_keys",
+                "def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_sdk_result_keys",
                 "def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_keys",
+                "def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_sdk_result_keys",
                 "native proof artifact imports proof.wasm",
             ),
         ),
@@ -11210,10 +13756,121 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     )
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: audit_hashes contains unexpected field" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: audit_hashes missing field" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
         and (
             "missing marker: def _native_evm_prover_hash_role_blockers("
             in error
         )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: NATIVE_EVM_PROVER_PARITY_HASH_ROLE_KEYS" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: NATIVE_EVM_PROVER_SELF_TEST_HASH_ROLE_KEYS" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def _native_evm_prover_fixture_hash_role_blockers("
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: native_sdk_artifacts contains duplicate sdk" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: native_sdk_artifacts[" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: native_sdk_artifacts contains unknown sdk" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: implementation must be" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: prover_artifact_hash must match proof_artifact_hash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: sha256 must match {hash_field}" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: public_signal_words must contain 9 words" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: sdk_results must be a non-empty object" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: sdk_results.{sdk}" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: missing field" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: must match {key}" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: must match public_signal_words" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: sdk_results contains unknown sdk" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: path must not contain URI schemes" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: path contains forbidden prover dependency marker" in error
         for error in verified["errors"]
     )
     assert any(
@@ -11483,7 +14140,135 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
         and (
+            "missing marker: def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifacts"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_duplicate_native_evm_prover_nested_json_keys"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifact_keys"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_prover_unknown_root_and_audit_fields"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifacts"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_fixture_missing_sdk_results"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_fixture_malformed_sdk_results"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_fixture_malformed_sdk_result_rows"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_missing_fields"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_value_drift"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_fixture_public_signal_shape"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
             "missing marker: def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_parity_fixture_role_reuse"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_native_evm_self_test_role_reuse"
             in error
         )
         for error in verified["errors"]
@@ -11515,6 +14300,62 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
         and (
+            "missing marker: def test_release_bundle_rejects_duplicate_native_evm_prover_nested_json_keys"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: native EVM Groth16 prover bundle JSON contains duplicate key: circuit_security_audit"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_rejects_duplicate_native_evm_prover_sdk_artifact_keys"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: native EVM Groth16 prover bundle JSON contains duplicate key: implementation_hash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifact_keys"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
             "missing marker: def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload"
             in error
         )
@@ -11539,7 +14380,111 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
         and (
+            "missing marker: def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifacts"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifacts"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_fixture_missing_sdk_results"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_results"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_rows"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_missing_fields"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_value_drift"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_fixture_public_signal_shape"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
             "missing marker: def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_parity_fixture_role_reuse"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse"
             in error
         )
         for error in verified["errors"]
@@ -11555,7 +14500,23 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
         and (
+            "missing marker: def test_release_readiness_report_blocks_duplicate_native_evm_parity_fixture_sdk_result_keys"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
             "missing marker: def test_release_readiness_report_blocks_duplicate_native_evm_self_test_keys"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_readiness_report_blocks_duplicate_native_evm_self_test_sdk_result_keys"
             in error
         )
         for error in verified["errors"]
@@ -11578,6 +14539,21 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     )
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: JSON contains duplicate key: calldata_hash" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: JSON contains duplicate key: implementation_hash" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and "missing marker: JSON contains duplicate key: proof_hash" in error
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
         and (
             "missing marker: def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_keys"
             in error
@@ -11587,7 +14563,23 @@ def test_release_bundle_verifier_guards_native_no_wasm_readiness_inventory(
     assert any(
         "native SCCP no-WASM readiness SDK test inventory" in error
         and (
+            "missing marker: def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_sdk_result_keys"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
             "missing marker: def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_keys"
+            in error
+        )
+        for error in verified["errors"]
+    )
+    assert any(
+        "native SCCP no-WASM readiness SDK test inventory" in error
+        and (
+            "missing marker: def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_sdk_result_keys"
             in error
         )
         for error in verified["errors"]
@@ -13110,7 +16102,7 @@ def test_release_bundle_verifier_guards_ethereum_source_bridge_config_tests(
 
     assert verified["verified"] is False
     assert any(
-        "Ethereum mainnet source bridge config SDK test inventory" in error
+        "Ethereum mainnet source-bridge config source inventory" in error
         and "missing marker: source_bridge_network_id must be Ethereum mainnet chain id 1"
         in error
         for error in verified["errors"]

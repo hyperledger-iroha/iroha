@@ -21,7 +21,7 @@ records شامل ہوں جو DA-2 کے ذریعے قبول شدہ blobs کو ب�
 מבני נתונים קנוניים, ווי צנרת בלוק, הוכחות לקוח אור, ועוד
 Torii/RPC משטחים
 checks میں DA commitments پر بھروسہ کرنے سے پہلے لازمی ہیں۔ تمام payloads
-Norito בקידוד SCALE یا ad-hoc JSON نہیں۔
+Norito בקידוד retired codec یا ad-hoc JSON نہیں۔
 
 ## מידע
 

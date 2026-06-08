@@ -33,6 +33,7 @@ public struct PrivacyProductionGate: Equatable, Sendable {
         "witness privacy checks are incomplete",
         "deterministic tests are incomplete",
         "negative/adversarial tests are incomplete",
+        "replay/nullifier rejection tests are incomplete",
         "fuzzing gate is incomplete",
         "parser fuzzing gate is incomplete",
         "verifier fuzzing gate is incomplete",
@@ -54,6 +55,7 @@ public struct PrivacyProductionGate: Equatable, Sendable {
     public let witnessPrivacyChecks: Bool
     public let deterministicTests: Bool
     public let negativeAdversarialTests: Bool
+    public let replayNullifierTests: Bool
     public let fuzzing: Bool
     public let parserFuzzing: Bool
     public let verifierFuzzing: Bool
@@ -77,6 +79,7 @@ public struct PrivacyProductionGate: Equatable, Sendable {
         witnessPrivacyChecks = false
         deterministicTests = false
         negativeAdversarialTests = false
+        replayNullifierTests = false
         fuzzing = false
         parserFuzzing = false
         verifierFuzzing = false

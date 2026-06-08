@@ -3,18 +3,16 @@
 //! Focuses on a representative shape: (u64, String, bool) with varying batch sizes.
 //! Uses bare payloads (no Norito header) for apples-to-apples comparison.
 
-#[cfg(feature = "parity-scale")]
+#[cfg(feature = "bench-internal")]
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-#[cfg(feature = "parity-scale")]
+#[cfg(feature = "bench-internal")]
 use norito::NoritoSerialize as _;
-#[cfg(feature = "parity-scale")]
+#[cfg(feature = "bench-internal")]
 use norito::codec::{Decode as _, Encode as _};
-#[cfg(feature = "parity-scale")]
+#[cfg(feature = "bench-internal")]
 use norito::columnar as ncb;
-#[cfg(feature = "parity-scale")]
-use parity_scale_codec as scale;
 
-#[cfg(feature = "parity-scale")]
+#[cfg(feature = "bench-internal")]
 fn make_rows(n: usize) -> Vec<(u64, String, bool)> {
     // Deterministic data with short and mid-sized names to exercise var-width
     let mut out = Vec::with_capacity(n);
@@ -33,7 +31,7 @@ fn make_rows(n: usize) -> Vec<(u64, String, bool)> {
     out
 }
 
-#[cfg(feature = "parity-scale")]
+#[cfg(feature = "bench-internal")]
 fn bench_encode(c: &mut Criterion) {
     let mut group = c.benchmark_group("encode_u64_str_bool");
     for &n in &[1usize, 8, 64, 512, 4096] {
@@ -72,18 +70,11 @@ fn bench_encode(c: &mut Criterion) {
                 std::hint::black_box(bytes)
             })
         });
-
-        group.bench_with_input(BenchmarkId::new("SCALE_encode", n), &n, |b, &_n| {
-            b.iter(|| {
-                let bytes = scale::Encode::encode(&aos_owned);
-                std::hint::black_box(bytes)
-            })
-        });
     }
     group.finish();
 }
 
-#[cfg(feature = "parity-scale")]
+#[cfg(feature = "bench-internal")]
 fn bench_decode(c: &mut Criterion) {
     let mut group = c.benchmark_group("decode_u64_str_bool");
     for &n in &[1usize, 8, 64, 512, 4096] {
@@ -98,7 +89,6 @@ fn bench_decode(c: &mut Criterion) {
         let ncb_bytes_offsets = ncb::encode_ncb_u64_str_bool_no_dict(&ncb_borrowed);
         let ncb_bytes_dict = ncb::encode_ncb_u64_str_bool_force_dict(&ncb_borrowed);
         let ncb_bytes_delta = ncb::encode_ncb_u64_str_bool_delta(&ncb_borrowed);
-        let scale_bytes = scale::Encode::encode(&aos_owned);
 
         group.bench_with_input(
             BenchmarkId::new("AoS_decode_materialize", n),
@@ -378,32 +368,17 @@ fn bench_decode(c: &mut Criterion) {
                 })
             },
         );
-
-        group.bench_with_input(
-            BenchmarkId::new("SCALE_decode_materialize", n),
-            &n,
-            |b, &_n| {
-                b.iter(|| {
-                    let decoded: Vec<(u64, String, bool)> =
-                        scale::Decode::decode(&mut &scale_bytes[..]).unwrap();
-                    let sum = decoded
-                        .iter()
-                        .fold(0u64, |acc, (id, _s, _b)| acc.wrapping_add(*id));
-                    std::hint::black_box(sum)
-                })
-            },
-        );
     }
     group.finish();
 }
 
-#[cfg(feature = "parity-scale")]
+#[cfg(feature = "bench-internal")]
 criterion_group!(benches, bench_encode, bench_decode);
 
-#[cfg(feature = "parity-scale")]
+#[cfg(feature = "bench-internal")]
 criterion_main!(benches);
 
-#[cfg(not(feature = "parity-scale"))]
+#[cfg(not(feature = "bench-internal"))]
 fn main() {
-    eprintln!("Enable the `parity-scale` feature to run this benchmark.");
+    eprintln!("Enable the `bench-internal` feature to run this benchmark.");
 }

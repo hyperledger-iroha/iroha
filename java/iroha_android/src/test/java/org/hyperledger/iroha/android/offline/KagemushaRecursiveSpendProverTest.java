@@ -273,12 +273,12 @@ public final class KagemushaRecursiveSpendProverTest {
         KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1, 1);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(null, 1);
     assert !KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend("", 1);
+    assert "checked_prefold_v1"
+        .equals(KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName());
     assert "recursive_compact_v1"
         .equals(KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName());
     assert "recursive_spend_v1"
         .equals(KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName());
-    assert "checked_prefold_v1"
-        .equals(KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName());
     assert KagemushaRecursiveSpendProver.preferredMode(true, true)
         == KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1;
     assert KagemushaRecursiveSpendProver.preferredMode(true, false)

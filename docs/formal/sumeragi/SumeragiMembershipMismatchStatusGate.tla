@@ -70,6 +70,7 @@ Cases == {
 
 SnapshotSetCases == {"snapshot_set"}
 SnapshotResetCases == {"snapshot_reset"}
+SnapshotCases == {"snapshot_unset"} \union SnapshotSetCases \union SnapshotResetCases
 RecordCases == {
   "record_first_peer",
   "record_repeat_peer",
@@ -388,5 +389,63 @@ ResultMatchesSpec ==
      /\ last_epoch = SpecLastEpoch(candidate)
      /\ last_local_hash = SpecLastLocalHash(candidate)
      /\ last_remote_hash = SpecLastRemoteHash(candidate)
+
+SnapshotFieldsMatch(c) ==
+  /\ snapshot_present = SpecSnapshotPresent(c)
+  /\ snapshot_height = SpecSnapshotHeight(c)
+  /\ snapshot_view = SpecSnapshotView(c)
+  /\ snapshot_epoch = SpecSnapshotEpoch(c)
+  /\ snapshot_hash = SpecSnapshotHash(c)
+
+RegistryFieldsMatch(c) ==
+  /\ active_peers = SpecActivePeers(c)
+  /\ count_a = SpecCount(PeerA, c)
+  /\ count_b = SpecCount(PeerB, c)
+  /\ count_c = SpecCount(PeerC, c)
+  /\ returned_count = SpecReturnCount(c)
+
+LastFieldsMatch(c) ==
+  /\ last_present = SpecLastPresent(c)
+  /\ last_peer = SpecLastPeer(c)
+  /\ last_height = SpecLastHeight(c)
+  /\ last_view = SpecLastView(c)
+  /\ last_epoch = SpecLastEpoch(c)
+  /\ last_local_hash = SpecLastLocalHash(c)
+  /\ last_remote_hash = SpecLastRemoteHash(c)
+
+MembershipMismatchSnapshotExact ==
+  \/ candidate = "none"
+  \/ candidate \notin SnapshotCases
+  \/ SnapshotFieldsMatch(candidate)
+
+MembershipMismatchRecordRegistryExact ==
+  \/ candidate = "none"
+  \/ candidate \notin RecordCases
+  \/ RegistryFieldsMatch(candidate)
+
+MembershipMismatchRecordLastExact ==
+  \/ candidate = "none"
+  \/ candidate \notin RecordCases
+  \/ LastFieldsMatch(candidate)
+
+MembershipMismatchClearExact ==
+  \/ candidate = "none"
+  \/ candidate \notin ClearCases
+  \/ /\ RegistryFieldsMatch(candidate)
+     /\ LastFieldsMatch(candidate)
+
+MembershipMismatchResetExact ==
+  \/ candidate = "none"
+  \/ candidate \notin ResetRegistryCases
+  \/ /\ SnapshotFieldsMatch(candidate)
+     /\ RegistryFieldsMatch(candidate)
+     /\ LastFieldsMatch(candidate)
+
+MembershipMismatchStatusExactness ==
+  /\ MembershipMismatchSnapshotExact
+  /\ MembershipMismatchRecordRegistryExact
+  /\ MembershipMismatchRecordLastExact
+  /\ MembershipMismatchClearExact
+  /\ MembershipMismatchResetExact
 
 ====

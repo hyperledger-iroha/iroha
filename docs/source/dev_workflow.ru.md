@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   производство `serde`/`serde_json` соответствует `AGENTS_BASE_REF`. Установить
   `SERDE_GUARD_ALLOW=1` только для экспериментов CI после подачи плана миграции.
 - `make guards` применяет политику сериализации Norito: он запрещает новые
-  Использование `serde`/`serde_json`, специальные помощники AoS и внешние зависимости SCALE.
+  Использование `serde`/`serde_json`, специальные помощники AoS и внешние зависимости retired codec.
   скамейки Norito (`scripts/deny_serde_json.sh`,
   И18НИ00000083Х, И18НИ00000084Х,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **Политика пользовательского интерфейса proc-macro:** каждый контейнер proc-macro должен поставлять `trybuild`.
   жгут проводов (`tests/ui.rs` с метками «прошел/не прошел») за `trybuild-tests`
   функция. Поместите образцы счастливого пути под `tests/ui/pass`, случаи отклонения — под

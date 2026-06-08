@@ -45,7 +45,7 @@ PERSISTED_RECORD_VERSION = 1
 RECORDS_DIR = "messages"
 RECEIPT_DIGEST_FIELD = "receipt_sha256"
 RECEIPT_VERSION = 1
-RECEIPT_SUMMARY_VERSION = 1
+RECEIPT_SUMMARY_VERSION = 2
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 SUPPORTED_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
@@ -104,6 +104,7 @@ SECRET_RESPONSE_PREVIEW_MARKERS = (
     "token",
     "x_iroha_signature",
 )
+REDACTED_RESPONSE_PREVIEW = "[redacted: sensitive response body]"
 SECRET_VALUE_SCAN_EXEMPT_FIELDS = {"response_body_preview", "error"}
 SECRET_VALUE_PATTERNS = [
     re.compile(r"\bauthorization\s*:", re.IGNORECASE),
@@ -161,6 +162,13 @@ def _contains_secret_identifier_material(value: str) -> bool:
         any(marker in lowered for marker in strong_markers)
         or ("secret" in lowered and any(marker in lowered for marker in paired_markers))
         for lowered in (candidate.lower() for candidate in _secret_scan_values(value))
+    )
+
+
+def _contains_unsafe_preview_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\t"}) or ord(ch) == 0x7F
+        for ch in value
     )
 RAIL_SIDECAR_KEYS = {"message_type", "profile", "payload_sha256", "rail_message_id"}
 COMMON_RECEIPT_KEYS = {
@@ -499,7 +507,7 @@ def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) for key in unknown):
+        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
             raise ReceiptError(f"{label} contains unknown keys")
         raise ReceiptError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -538,6 +546,17 @@ def _is_secret_looking_key(value: Any) -> bool:
         marker in candidate.lower()
         for candidate in _secret_scan_values(str(value))
         for marker in markers
+    )
+
+
+def _is_control_bearing_key(value: Any) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+
+
+def _contains_unsafe_json_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        for ch in value
     )
 
 
@@ -601,12 +620,16 @@ def _check_no_secret_material(value: Any, path: Path, *, field_name: str | None 
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise ReceiptError(f"{path} contains forbidden secret-looking field")
+            if _is_control_bearing_key(key):
+                raise ReceiptError(f"{path} contains forbidden control-bearing field")
             _check_no_secret_material(child, path, field_name=str(key))
     elif isinstance(value, list):
         for child in value:
             _check_no_secret_material(child, path)
-    elif isinstance(value, str) and field_name not in SECRET_VALUE_SCAN_EXEMPT_FIELDS:
-        if _contains_secret_material(value):
+    elif isinstance(value, str):
+        if _contains_unsafe_json_control(value):
+            raise ReceiptError(f"{path} contains unsafe control characters")
+        if field_name not in SECRET_VALUE_SCAN_EXEMPT_FIELDS and _contains_secret_material(value):
             raise ReceiptError(f"{path} contains secret-looking material")
 
 
@@ -729,6 +752,21 @@ def _reject_local_url_host(
         raise ReceiptError(f"{label} must not use local, private, or reserved IP addresses")
     if _address_embeds_non_global_ipv4(address):
         raise ReceiptError(f"{label} must not embed local, private, or reserved IPv4 addresses")
+
+
+def _url_requires_insecure_http_override(parsed: urllib.parse.ParseResult) -> bool:
+    if parsed.scheme == "http":
+        return True
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    if _host_uses_rebinding_suffix(hostname):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return (not address.is_global) or _address_embeds_non_global_ipv4(address)
 
 
 def _host_uses_rebinding_suffix(hostname: str) -> bool:
@@ -1171,12 +1209,22 @@ def _check_response_metadata(receipt: dict[str, Any], path: Path) -> None:
             raise ReceiptError(f"{path} response_body_preview must be a string")
         if len(response_body_preview) > 4096:
             raise ReceiptError(f"{path} response_body_preview exceeds 4096 characters")
+        if _contains_unsafe_preview_control(response_body_preview):
+            raise ReceiptError(
+                f"{path} response_body_preview contains unsafe control characters"
+            )
         if _response_preview_looks_secret(response_body_preview):
             raise ReceiptError(f"{path} response_body_preview contains secret-looking material")
+        if receipt.get("ok") and response_body_preview == REDACTED_RESPONSE_PREVIEW:
+            raise ReceiptError(
+                f"{path} successful receipt must not carry redacted response_body_preview"
+            )
 
     error = receipt.get("error")
     if error is not None:
         error = _normalize_optional_string(error, f"{path} error")
+        if _contains_unsafe_preview_control(error):
+            raise ReceiptError(f"{path} error contains unsafe control characters")
         if _response_preview_looks_secret(error):
             raise ReceiptError(f"{path} error contains secret-looking material")
     if receipt.get("ok") and error is not None:
@@ -1761,6 +1809,10 @@ def _receipt_metadata(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
         "receipt_sha256": receipt[RECEIPT_DIGEST_FIELD],
         "ok": receipt.get("ok"),
         "status_code": receipt.get("status_code"),
+        "response_body_sha256": receipt.get("response_body_sha256"),
+        "endpoint_requires_insecure_http": _url_requires_insecure_http_override(
+            urllib.parse.urlparse(_receipt_endpoint_url(receipt))
+        ),
     }
     if receipt["receipt_kind"] == "iso-audit-notary":
         metadata.update(
@@ -1780,6 +1832,42 @@ def _receipt_metadata(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
             }
         )
     return metadata
+
+
+def _receipt_endpoint_url(receipt: dict[str, Any]) -> str:
+    if receipt["receipt_kind"] == "iso-audit-notary":
+        return receipt["endpoint"]
+    return receipt["endpoint_url"]
+
+
+def _reject_unused_local_overrides(args: argparse.Namespace, receipts: list[dict[str, Any]]) -> None:
+    if args.allow_failed and not any(receipt.get("ok") is False for receipt in receipts):
+        raise ReceiptError("--allow-failed requires at least one failed receipt")
+    if args.allow_insecure_http and not any(
+        _url_requires_insecure_http_override(
+            urllib.parse.urlparse(_receipt_endpoint_url(receipt))
+        )
+        for receipt in receipts
+    ):
+        raise ReceiptError(
+            "--allow-insecure-http requires at least one http:// or local/private receipt endpoint"
+        )
+    if args.allow_legacy_colr007 and not any(
+        receipt.get("receipt_kind") == "iso-rail-gateway"
+        and receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES
+        for receipt in receipts
+    ):
+        raise ReceiptError(
+            "--allow-legacy-colr007 requires at least one rail receipt with legacy colr.007 message_type"
+        )
+    if args.allow_default_profile and not any(
+        receipt.get("receipt_kind") == "iso-rail-gateway"
+        and receipt.get("profile") is None
+        for receipt in receipts
+    ):
+        raise ReceiptError(
+            "--allow-default-profile requires at least one rail receipt without an explicit profile"
+        )
 
 
 def run(args: argparse.Namespace) -> int:
@@ -1811,6 +1899,8 @@ def run(args: argparse.Namespace) -> int:
         seen_receipt_digests[receipt_digest] = offset
         verified.append(receipt)
         receipt_entries.append(_receipt_metadata(path, receipt))
+
+    _reject_unused_local_overrides(args, verified)
 
     summary = {
         "version": RECEIPT_SUMMARY_VERSION,

@@ -268,11 +268,59 @@ FrontierEvidenceOwnershipRules ==
   /\ QuorumTimeoutDropsStaleSameViewOwner \in tried =>
        ImplementationQuorumTimeoutStaleOwnerDropped(QuorumTimeoutDropsStaleSameViewOwner)
 
+HardCapCleanupLiveSameHeightCases == {
+  LiveCleanupSkipsSameHeightPrune, LiveCleanupKeepsMetadata,
+  LiveCleanupKeepsRecoveryState, LiveCleanupKeepsValidRbc,
+  LiveCleanupKeepsRbcPacing
+}
+
+HardCapCleanupPruneCases == {
+  LiveCleanupPrunesInvalidRbc, LiveCleanupPrunesFuturePending,
+  LiveCleanupPrunesFutureMissing, LiveCleanupPrunesFutureRbc,
+  NoLiveCleanupPrunesSameHeightPending, NoLiveCleanupClearsRecoveryState
+}
+
+HardCapCleanupQuorumRepairCases == {
+  QuorumBackedPreservesMissingRequest, QuorumBackedPreservesSameHeightRbc
+}
+
+HardCapCleanupEvidenceOwnerCases == {
+  HardCapKeepsFrontierNewViewEvidence, HardCapKeepsSameViewOwner,
+  QuorumTimeoutDropsStaleSameViewOwner
+}
+
+HardCapCleanupGroupedCases ==
+  PreserveDecisionCandidates \cup HardCapCleanupLiveSameHeightCases \cup
+  HardCapCleanupPruneCases \cup HardCapCleanupQuorumRepairCases \cup
+  HardCapCleanupEvidenceOwnerCases
+
+HardCapCleanupCaseGroupsComplete ==
+  HardCapCleanupGroupedCases = Candidates
+
+HardCapCleanupPreservationExact ==
+  HardCapPreservationDecisionMatchesSpec
+
+HardCapCleanupLiveSameHeightExact ==
+  LiveCleanupPreservesSameHeightState
+
+HardCapCleanupPruningExact ==
+  CleanupStillPrunesDeadOrFutureState
+
+HardCapCleanupQuorumRepairExact ==
+  QuorumBackedRepairSurvivesCleanup
+
+HardCapCleanupEvidenceOwnerExact ==
+  FrontierEvidenceOwnershipRules
+
+MissingBlockHardCapCleanupExactness ==
+  /\ HardCapCleanupCaseGroupsComplete
+  /\ HardCapCleanupPreservationExact
+  /\ HardCapCleanupLiveSameHeightExact
+  /\ HardCapCleanupPruningExact
+  /\ HardCapCleanupQuorumRepairExact
+  /\ HardCapCleanupEvidenceOwnerExact
+
 Safety ==
-  /\ HardCapPreservationDecisionMatchesSpec
-  /\ LiveCleanupPreservesSameHeightState
-  /\ CleanupStillPrunesDeadOrFutureState
-  /\ QuorumBackedRepairSurvivesCleanup
-  /\ FrontierEvidenceOwnershipRules
+  MissingBlockHardCapCleanupExactness
 
 ====

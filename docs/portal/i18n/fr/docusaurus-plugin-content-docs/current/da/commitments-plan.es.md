@@ -21,7 +21,7 @@ déterministes qui décrivent les blobs acceptés par DA-2. Cette note a été c
 structures de données canoniques, los hooks del pipeline de bloques, las pruebas de
 client léger et superficies Torii/RPC qui doivent s'attarder avant de les
 les validateurs peuvent confier des compromis à l'admission ou des chèques de
-gobernanza. Toutes les charges utiles sont codifiées en Norito ; sin SCALE ni annonce JSON
+gobernanza. Toutes les charges utiles sont codifiées en Norito ; sin retired codec ni annonce JSON
 ponctuellement.
 
 ## Objets- Faire des compromis par blob (racine de morceau + hachage manifeste + engagement KZG

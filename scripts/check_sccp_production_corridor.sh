@@ -372,7 +372,9 @@ phase_kotlin_sdk() {
   run_java_version_check "$java_home"
   run_in_dir "$ROOT/kotlin" \
     env "JAVA_HOME=$java_home" "PATH=$java_home/bin:$PATH" \
-    ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.*'
+    ./gradlew :core-jvm:test --console=plain \
+      --tests 'org.hyperledger.iroha.sdk.sccp.*' \
+      --tests 'org.hyperledger.iroha.sdk.sccp.TonSccpProverTest'
 }
 
 phase_java_android() {

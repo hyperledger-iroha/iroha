@@ -77,6 +77,7 @@ SECRET_IDENTIFIER_PATTERN = re.compile(
     r"(?![a-z0-9])",
     re.IGNORECASE,
 )
+SAFE_OUTPUT_CONTROL_CHARS = {"\t", "\n", "\r"}
 SCRIPT_DIR = Path(__file__).resolve().parent
 
 
@@ -532,7 +533,7 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) for key in unknown):
+        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
             raise CanaryError(f"{label} contains unknown keys")
         raise CanaryError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -565,6 +566,10 @@ def _is_secret_looking_key(value: Any) -> bool:
         for candidate in _secret_scan_values(str(value))
         for marker in markers
     )
+
+
+def _is_control_bearing_key(value: Any) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
 
 
 def _is_secret_looking_identifier(value: Any) -> bool:
@@ -714,12 +719,43 @@ def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
         seen[key] = offset
 
 
+def _reject_receipts_covered_by_dirs(
+    receipts: list[Path],
+    receipt_dirs: list[Path],
+) -> None:
+    dirs_by_key = {
+        str(receipt_dir.resolve()): offset
+        for offset, receipt_dir in enumerate(receipt_dirs)
+    }
+    for offset, receipt in enumerate(receipts):
+        dir_offset = dirs_by_key.get(str(receipt.parent.resolve()))
+        if dir_offset is not None:
+            raise CanaryError(
+                f"verify.receipts[{offset}] is already covered by "
+                f"verify.receipt_dirs[{dir_offset}]"
+            )
+
+
+def _reject_receipts_from_stage_dirs(
+    receipts: list[Path],
+    stage_receipt_dirs: list[Path],
+) -> None:
+    stage_dirs = {str(receipt_dir.resolve()) for receipt_dir in stage_receipt_dirs}
+    for offset, receipt in enumerate(receipts):
+        if str(receipt.parent.resolve()) in stage_dirs:
+            raise CanaryError(
+                f"verify.receipts[{offset}] must not replace a generated "
+                "stage receipt_dir"
+            )
+
+
 def _validate_path_string(
     raw: str,
     label: str,
     *,
     allow_runtime_secret_path: bool = False,
 ) -> None:
+    _reject_control_chars(raw, label)
     if any(ch.isspace() for ch in raw):
         raise CanaryError(f"{label} must not contain whitespace")
     if "\\" in raw:
@@ -1277,6 +1313,8 @@ def _build_verify_stage(
     ]
     _reject_duplicate_paths(receipt_dirs, "verify.receipt_dirs")
     _reject_duplicate_paths(receipts, "verify.receipts")
+    _reject_receipts_covered_by_dirs(receipts, receipt_dirs)
+    _reject_receipts_from_stage_dirs(receipts, stage_receipt_dirs)
     if not receipt_dirs and not receipts:
         raise CanaryError("verify requires generated stage receipts or explicit receipts/receipt_dirs")
 
@@ -1498,16 +1536,40 @@ def _contains_secret_output_material(value: str) -> bool:
     return _contains_secret_material(value) or _contains_secret_identifier_material(value)
 
 
-def _reject_secret_stage_output(results: list[StageResult]) -> None:
+def _contains_unsafe_control_chars(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 or ord(ch) == 0x7F) and ch not in SAFE_OUTPUT_CONTROL_CHARS
+        for ch in value
+    )
+
+
+def _reject_unsafe_stage_output(results: list[StageResult]) -> None:
     for result in results:
+        if _contains_unsafe_control_chars(result.stdout_preview):
+            raise CanaryError(
+                f"stage {result.name} stdout_preview contains unsafe control characters"
+            )
         if _contains_secret_output_material(result.stdout_preview):
             raise CanaryError(
                 f"stage {result.name} stdout_preview contains secret-looking material"
+            )
+        if _contains_unsafe_control_chars(result.stderr_preview):
+            raise CanaryError(
+                f"stage {result.name} stderr_preview contains unsafe control characters"
             )
         if _contains_secret_output_material(result.stderr_preview):
             raise CanaryError(
                 f"stage {result.name} stderr_preview contains secret-looking material"
             )
+
+
+def _stage_failed(result: StageResult) -> bool:
+    return (
+        result.returncode != 0
+        or result.stdout_truncated
+        or result.stderr_truncated
+        or (result.returncode == 0 and bool(result.stderr_preview.strip()))
+    )
 
 
 def _skipped_verify_result(reason: str) -> StageResult:
@@ -1668,7 +1730,7 @@ def run(args: argparse.Namespace) -> int:
         results.append(result)
         if stage.receipt_dir is not None and not stage.dry_run:
             stage_receipt_dirs.append(stage.receipt_dir)
-        if result.returncode != 0:
+        if _stage_failed(result):
             prior_failure = True
 
     verify_stage = _build_verify_stage(
@@ -1688,10 +1750,10 @@ def run(args: argparse.Namespace) -> int:
                 stage_timeout_secs,
             )
             results.append(verify_result)
-            if verify_result.returncode != 0:
+            if _stage_failed(verify_result):
                 prior_failure = True
 
-    _reject_secret_stage_output(results)
+    _reject_unsafe_stage_output(results)
 
     summary: dict[str, Any] = {
         "version": CANARY_SUMMARY_VERSION,

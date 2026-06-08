@@ -17,11 +17,11 @@ translator: machine-google-reviewed
 
 Bu layihəyə edilən bütün nəzərəçarpacaq dəyişikliklər bu faylda sənədləşdiriləcək.
 
-## [Yayımlanmamış]- SCALE şimini buraxın; `norito::codec` indi yerli Norito serializasiyası ilə həyata keçirilir.
-- `parity_scale_codec` istifadələrini qutular arasında `norito::codec` ilə əvəz edin.
+## [Yayımlanmamış]- retired codec şimini buraxın; `norito::codec` indi yerli Norito serializasiyası ilə həyata keçirilir.
+- `retired_codec` istifadələrini qutular arasında `norito::codec` ilə əvəz edin.
 - Alətləri yerli Norito serializasiyasına köçürməyə başlayın.
-- Yerli Norito serializasiyasının xeyrinə iş sahəsindən qalan `parity-scale-codec` asılılığını silin.
-- Qalıq SCALE əlamət törəmələrini yerli Norito tətbiqləri ilə əvəz edin və versiyalı kodek modulunun adını dəyişin.
+- Yerli Norito serializasiyasının xeyrinə iş sahəsindən qalan `retired codec` asılılığını silin.
+- Qalıq retired codec əlamət törəmələrini yerli Norito tətbiqləri ilə əvəz edin və versiyalı kodek modulunun adını dəyişin.
 - Xüsusiyyət qapalı makrolarla `iroha_config_base_derive` və `iroha_futures_derive`-i `iroha_derive`-ə birləşdirin.
 - *(multisig)* Sabit xəta kodu/səbəbi ilə multisig orqanlarından birbaşa imzaları rədd edin, iç içə daxil edilmiş relayerlər arasında multisig TTL qapaqlarını tətbiq edin və təqdim etməzdən əvvəl CLI-də TTL qapaqlarını tətbiq edin (SDK pariteti gözlənilir).
 - FFI prosedur makrolarını `iroha_ffi`-ə köçürün və `iroha_ffi_derive` qutusunu çıxarın.
@@ -242,7 +242,7 @@ Bu layihəyə edilən bütün nəzərəçarpacaq dəyişikliklər bu faylda sən
 - TransactionValue adını CommittedTransaction olaraq dəyişdirin (#4610)
 - Şəxsi hesabları şəxsiyyət vəsiqəsi ilə təsdiqləyin (#4411)
 - şəxsi açarlar üçün multihash formatından istifadə edin (#4541)
- - `parity_scale_decoder` adını `norito_cli` olaraq dəyişdirin
+ - `legacy_codec_decoder` adını `norito_cli` olaraq dəyişdirin
 - Set B təsdiqləyicilərinə bloklar göndərin
 - `Role` şəffaf olun (#4886)
 - başlıqdan blok hash əldə edin (#4890)
@@ -1153,7 +1153,7 @@ Bu layihəyə edilən bütün nəzərəçarpacaq dəyişikliklər bu faylda sən
 - hyperledger#2309: CI-də sənəd testlərini yenidən aktivləşdirin.
 - hyperledger#2165 Codecov quraşdırmasını silin.
 - Cari istifadəçilərlə münaqişələrin qarşısını almaq üçün yeni konteynerə keçin.
- - hyperledger#2158 `parity_scale_codec` və digər asılılıqları təkmilləşdirin. (Norito kodek)
+ - hyperledger#2158 `retired_codec` və digər asılılıqları təkmilləşdirin. (Norito kodek)
 - Quraşdırmanı düzəldin.
 - hyperledger#2461 iroha2 CI-ni təkmilləşdirin.
 - `syn`-i yeniləyin.

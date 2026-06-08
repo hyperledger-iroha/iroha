@@ -299,12 +299,73 @@ DeferralMatchesProgressAndBacklog ==
   /\ BacklogAfterExtensionNoDefer \in tried =>
        ~ImplementationShouldDefer(BacklogAfterExtensionNoDefer)
 
+ViewChangeAuthorityCases == {
+  ConsensusCanTrigger, BackgroundCannotTrigger
+}
+
+ViewChangeDueWindowCases == {
+  MissingWindowNotDue, ZeroWindowNotDue, EarlyDwellNotDue, DwellBoundaryDue,
+  CurrentViewLatchSuppresses, PriorViewLatchAllows, MissingLastTriggerAllows,
+  RecentLastTriggerThrottles, LastTriggerBoundaryDue
+}
+
+ViewChangeMarkCases == {
+  MarkDueReturnsTrue, MarkDueLatchesCurrentView, MarkDueRecordsNow,
+  MarkNotDueReturnsFalse, MarkNotDueLeavesState
+}
+
+ViewChangeClearCases == {
+  ClearDropsWindow, ClearDropsTriggeredView, ClearKeepsRequest
+}
+
+ViewChangeSchedulerCases == {
+  SchedulerIncludesViewDeadline, SchedulerSkipsCurrentViewLatch,
+  SchedulerSkipsMissingWindow, SchedulerSkipsZeroWindow
+}
+
+ViewChangeDeferralCases == {
+  DeferRecentDependencyProgress, DeferRecentRbcProgress,
+  DeferRecentDependencyAcrossView, DeferInflightRangePullProgress,
+  StaleProgressNoDefer, BacklogBeforeExtensionDefers,
+  BacklogAfterExtensionNoDefer
+}
+
+MissingBlockViewChangeGroupedCases ==
+  ViewChangeAuthorityCases \cup ViewChangeDueWindowCases \cup
+  ViewChangeMarkCases \cup ViewChangeClearCases \cup
+  ViewChangeSchedulerCases \cup ViewChangeDeferralCases
+
+MissingBlockViewChangeCaseGroupsComplete ==
+  MissingBlockViewChangeGroupedCases = Candidates
+
+MissingBlockViewChangeAuthorityExact ==
+  ViewChangeAuthority
+
+MissingBlockViewChangeDueExact ==
+  ViewChangeDueMatchesSpec
+
+MissingBlockViewChangeMarkExact ==
+  MarkingSemantics
+
+MissingBlockViewChangeClearExact ==
+  ClearDropsOnlyViewChangeState
+
+MissingBlockViewChangeSchedulerExact ==
+  SchedulerMatchesArmedWindows
+
+MissingBlockViewChangeDeferralExact ==
+  DeferralMatchesProgressAndBacklog
+
+MissingBlockViewChangeExactness ==
+  /\ MissingBlockViewChangeCaseGroupsComplete
+  /\ MissingBlockViewChangeAuthorityExact
+  /\ MissingBlockViewChangeDueExact
+  /\ MissingBlockViewChangeMarkExact
+  /\ MissingBlockViewChangeClearExact
+  /\ MissingBlockViewChangeSchedulerExact
+  /\ MissingBlockViewChangeDeferralExact
+
 Safety ==
-  /\ ViewChangeAuthority
-  /\ ViewChangeDueMatchesSpec
-  /\ MarkingSemantics
-  /\ ClearDropsOnlyViewChangeState
-  /\ SchedulerMatchesArmedWindows
-  /\ DeferralMatchesProgressAndBacklog
+  MissingBlockViewChangeExactness
 
 ====

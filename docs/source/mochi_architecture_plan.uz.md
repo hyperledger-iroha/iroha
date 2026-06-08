@@ -40,7 +40,7 @@ Qo'shimcha old qismlar (masalan, Tauri qobig'i) keyinchalik nazoratchi mantig'in
 - Genesis va asosiy materiallar `kagami` chaqiruvlari orqali foydalanuvchi tomonidan taqdim etilgan ma'lumotlar (zanjir identifikatori, dastlabki hisoblar, aktivlar) orqali yaratiladi.
 - Konfiguratsiya fayllari Torii va P2P portlari, saqlash yo'llari, surat sozlamalari va ishonchli tengdoshlar ro'yxatini to'ldiruvchi TOML shablonlaridan yaratilgan. Yaratilgan konfiguratsiyalar har bir tarmoq ish maydoni katalogi ostida saqlanadi.
 - Nazoratchi jarayonning hayot davrlarini kuzatib boradi, jurnallar uchun stdout/stderr oqimlarini yuboradi va sog'liq uchun `/status`, `/metrics` va `/configuration` so'rovlarini oladi.
-- Yupqa Torii mijoz qatlami HTTP va WebSocket qo'ng'iroqlarini o'rab oladi va SCALE kodlash/dekodlashni qayta qo'llashdan qochish uchun Iroha Rust mijoz qutilariga tayanadi.
+- Yupqa Torii mijoz qatlami HTTP va WebSocket qo'ng'iroqlarini o'rab oladi va retired codec kodlash/dekodlashni qayta qo'llashdan qochish uchun Iroha Rust mijoz qutilariga tayanadi.
 
 ## `mochi-core` tomonidan qo'llab-quvvatlangan foydalanuvchi oqimlari- **Tarmoq yaratish ustasi**: bitta yoki to‘rt tengdoshli profilni tanlang, kataloglarni tanlang va `kagami` raqamiga qo‘ng‘iroq qiling va identifikator va genezisni yarating.
 - **Lifecycle Controls**: boshlash, to'xtatish, tengdoshlarni qayta ishga tushirish; sirt jonli ko'rsatkichlari; log dumlarini ochish; ish vaqti konfiguratsiyasining so'nggi nuqtalarini almashtirish (masalan, jurnal darajalari).

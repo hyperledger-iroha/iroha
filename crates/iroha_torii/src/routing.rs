@@ -5749,33 +5749,35 @@ fn parse_sccp_message_id_hex(value: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(
+    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
 /// Optional deployment destination fields for SCCP artifact and job requests.
 pub struct SccpEvmDestinationQuery {
     /// Hex-encoded 32-byte destination network id.
-    #[serde(default)]
+    #[norito(default)]
     pub network_id_hex: Option<String>,
     /// Hex-encoded 20-byte verifier contract address.
-    #[serde(default)]
+    #[norito(default)]
     pub verifier_address_hex: Option<String>,
     /// Hex-encoded 20-byte bridge contract address.
-    #[serde(default)]
+    #[norito(default)]
     pub bridge_address_hex: Option<String>,
     /// Hex-encoded 32-byte verifier contract bytecode hash.
-    #[serde(default)]
+    #[norito(default)]
     pub verifier_code_hash_hex: Option<String>,
     /// Hex-encoded 32-byte Groth16 verifier key hash.
-    #[serde(default)]
+    #[norito(default)]
     pub verifier_key_hash_hex: Option<String>,
     /// Hex-encoded expected canonical destination binding hash, required when
     /// EVM/TRON deployment destination fields are supplied.
-    #[serde(default)]
+    #[norito(default)]
     pub expected_destination_binding_hash_hex: Option<String>,
     /// Base58Check TRON verifier contract address.
-    #[serde(default)]
+    #[norito(default)]
     pub tron_verifier_address: Option<String>,
     /// Hex-encoded externally generated 384-byte Groth16 ABI proof tuple.
-    #[serde(default)]
+    #[norito(default)]
     pub proof_bytes_hex: Option<String>,
 }
 
@@ -6147,7 +6149,7 @@ fn bridge_message_destination_query_from_dto(
 
 fn sccp_bundle_response<T>(bundle: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
 where
-    T: norito::core::NoritoSerialize + serde::Serialize,
+    T: norito::core::NoritoSerialize + json::JsonSerialize,
 {
     let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(format) => format,
@@ -6168,7 +6170,7 @@ where
         return Ok(resp);
     }
 
-    let body = serde_json::to_vec_pretty(bundle).map_err(|err| {
+    let body = json::to_vec_pretty(bundle).map_err(|err| {
         sccp_internal_error(format!("failed to serialize SCCP bundle JSON: {err}"))
     })?;
     let mut resp = Response::new(Body::from(body));
@@ -6179,8 +6181,8 @@ where
     Ok(resp)
 }
 
-fn sccp_json_value_response(value: &serde_json::Value) -> Result<Response> {
-    let body = serde_json::to_vec_pretty(value).map_err(|err| {
+fn sccp_json_value_response(value: &Value) -> Result<Response> {
+    let body = json::to_vec_pretty(value).map_err(|err| {
         sccp_internal_error(format!("failed to serialize SCCP bundle JSON: {err}"))
     })?;
     let mut resp = Response::new(Body::from(body));
@@ -6193,11 +6195,11 @@ fn sccp_json_value_response(value: &serde_json::Value) -> Result<Response> {
 
 fn sccp_bundle_response_with_json_value<T>(
     bundle: &T,
-    json_value: serde_json::Value,
+    json_value: Value,
     accept: Option<&axum::http::HeaderValue>,
 ) -> Result<Response>
 where
-    T: norito::core::NoritoSerialize + serde::Serialize,
+    T: norito::core::NoritoSerialize + json::JsonSerialize,
 {
     let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(format) => format,
@@ -6259,27 +6261,9 @@ fn sccp_open_verify_summary_to_json(
     ]))
 }
 
-fn sccp_open_verify_summary_to_serde_json(
-    summary: &SccpOpenVerifyEnvelopeSummaryV1,
-) -> serde_json::Value {
-    serde_json::json!({
-        "version": summary.version,
-        "backend": summary.backend,
-        "circuit_id": summary.circuit_id,
-        "vk_hash": hex::encode(summary.vk_hash),
-        "public_inputs_schema_hash": hex::encode(summary.public_inputs_schema_hash),
-        "public_inputs_schema_len_bytes": summary.public_inputs_schema_len_bytes,
-        "public_input_column_count": summary.public_input_column_count,
-        "public_input_word_count": summary.public_input_word_count,
-        "open_proof_len_bytes": summary.open_proof_len_bytes,
-        "backend_proof_len_bytes": summary.backend_proof_len_bytes,
-        "aux_len_bytes": summary.aux_len_bytes,
-    })
-}
-
-fn sccp_groth16_summary_to_serde_json(
+fn sccp_groth16_summary_to_json(
     platform_payload: &iroha_sccp::SccpPlatformSubmissionPayloadV1,
-) -> Option<serde_json::Value> {
+) -> Option<Value> {
     let (platform, proof_bytes, destination_binding) = match platform_payload {
         iroha_sccp::SccpPlatformSubmissionPayloadV1::EvmGroth16ContractCall(payload) => (
             "evm_groth16_contract_call",
@@ -6294,24 +6278,22 @@ fn sccp_groth16_summary_to_serde_json(
         _ => return None,
     };
     let proof = iroha_sccp::decode_sccp_evm_groth16_bn254_proof_bytes(proof_bytes)?;
-    Some(serde_json::json!({
+    Some(norito::json!({
         "platform_payload": platform,
-        "version": proof.version,
-        "proof_len_bytes": proof_bytes.len(),
+        "version": (proof.version),
+        "proof_len_bytes": (proof_bytes.len()),
         "public_input_word_count": 6,
         "groth16_public_signal_count": 9,
-        "message_id": hex::encode(proof.message_id),
-        "source_domain": proof.source_domain,
-        "commitment_root": hex::encode(proof.commitment_root),
-        "destination_binding_key": destination_binding.key.as_str(),
-        "destination_binding_hash": hex::encode(destination_binding.binding_hash),
+        "message_id": (hex::encode(proof.message_id)),
+        "source_domain": (proof.source_domain),
+        "commitment_root": (hex::encode(proof.commitment_root)),
+        "destination_binding_key": (destination_binding.key.as_str()),
+        "destination_binding_hash": (hex::encode(destination_binding.binding_hash)),
     }))
 }
 
-fn sccp_artifact_json_value(
-    artifact: &NexusSccpMessageTransparentProofV1,
-) -> Result<serde_json::Value> {
-    let mut value = serde_json::to_value(artifact).map_err(|err| {
+fn sccp_artifact_json_value(artifact: &NexusSccpMessageTransparentProofV1) -> Result<Value> {
+    let mut value = json::to_value(artifact).map_err(|err| {
         sccp_internal_error(format!(
             "failed to serialize SCCP proof artifact JSON value: {err}"
         ))
@@ -6322,7 +6304,7 @@ fn sccp_artifact_json_value(
         ));
     };
     if let Some(summary) =
-        sccp_groth16_summary_to_serde_json(&artifact.submission_package.platform_payload)
+        sccp_groth16_summary_to_json(&artifact.submission_package.platform_payload)
     {
         map.insert("groth16_proof_summary".into(), summary);
     } else if let Some(summary) =
@@ -6330,14 +6312,14 @@ fn sccp_artifact_json_value(
     {
         map.insert(
             "proof_envelope_summary".into(),
-            sccp_open_verify_summary_to_serde_json(&summary),
+            sccp_open_verify_summary_to_json(&summary),
         );
     }
     Ok(value)
 }
 
-fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<serde_json::Value> {
-    let mut value = serde_json::to_value(job).map_err(|err| {
+fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<Value> {
+    let mut value = json::to_value(job).map_err(|err| {
         sccp_internal_error(format!(
             "failed to serialize SCCP proof job JSON value: {err}"
         ))
@@ -6347,16 +6329,14 @@ fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<serde_json::V
             "SCCP proof job JSON serialization must produce an object",
         ));
     };
-    if let Some(summary) =
-        sccp_groth16_summary_to_serde_json(&job.submission_package.platform_payload)
-    {
+    if let Some(summary) = sccp_groth16_summary_to_json(&job.submission_package.platform_payload) {
         map.insert("groth16_proof_summary".into(), summary);
     } else if let Some(summary) =
         build_sccp_message_transparent_open_verify_summary_from_bundle(&job.bundle)
     {
         map.insert(
             "proof_envelope_summary".into(),
-            sccp_open_verify_summary_to_serde_json(&summary),
+            sccp_open_verify_summary_to_json(&summary),
         );
     }
     Ok(value)
@@ -6365,8 +6345,6 @@ fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<serde_json::V
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
@@ -6385,8 +6363,6 @@ pub struct SccpCodecCapabilityDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
@@ -6409,7 +6385,6 @@ pub struct SccpCounterpartyCapabilityDto {
     /// Stable logical key for `counterparty_account_codec`.
     pub counterparty_account_codec_key: String,
     /// Per-family destination verifier rollout state for this lane family.
-    #[serde(default)]
     #[norito(default)]
     pub destination_rollout: iroha_sccp::SccpDestinationRolloutV1,
     /// Whether the current lane is safe to use for production proof generation and consumption.
@@ -6418,7 +6393,6 @@ pub struct SccpCounterpartyCapabilityDto {
     #[norito(default)]
     pub disabled_reason: Option<String>,
     /// Full production-readiness checklist for this lane.
-    #[serde(default)]
     #[norito(default)]
     pub production_readiness: iroha_sccp::SccpLaneProductionReadinessV1,
 }
@@ -6426,8 +6400,6 @@ pub struct SccpCounterpartyCapabilityDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
@@ -6462,11 +6434,9 @@ pub struct SccpCapabilitiesDto {
     #[norito(default)]
     pub message_submit_path: Option<String>,
     /// SCCP production launch policy advertised to proof tooling.
-    #[serde(default)]
     #[norito(default)]
     pub production_policy: iroha_sccp::SccpProductionPolicyV1,
     /// Whether the currently configured SCCP production launch policy is satisfied.
-    #[serde(default)]
     #[norito(default)]
     pub launch_ready: bool,
     /// Generic SCCP payload kinds supported by `/v1/sccp/proofs/message/{message_id}`.
@@ -6477,7 +6447,7 @@ pub struct SccpCapabilitiesDto {
     pub counterparties: Vec<SccpCounterpartyCapabilityDto>,
 }
 
-#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Existing bundle/artifact/job lookup paths for a recent SCCP message item.
 pub struct SccpRecentMessageLinksDto {
     /// Canonical SCCP bundle lookup path.
@@ -6488,7 +6458,7 @@ pub struct SccpRecentMessageLinksDto {
     pub job_path: String,
 }
 
-#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Compact newest-first SCCP message discovery record.
 pub struct SccpRecentMessageDto {
     /// Height of the finalized block that anchored the message.
@@ -6527,7 +6497,7 @@ pub struct SccpRecentMessageDto {
     pub links: SccpRecentMessageLinksDto,
 }
 
-#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Newest-first SCCP recent-message discovery response.
 pub struct SccpRecentMessagesDto {
     /// Newest-first committed SCCP messages within the requested history window.
@@ -6537,8 +6507,8 @@ pub struct SccpRecentMessagesDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6553,8 +6523,8 @@ pub struct SccpRouteManifestVkRefDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6577,8 +6547,8 @@ pub struct SccpRouteManifestBurnRecordDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6627,8 +6597,8 @@ pub struct SccpRouteManifestDestinationRolloutDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6651,8 +6621,8 @@ pub struct SccpRouteManifestDestinationBindingDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6679,8 +6649,8 @@ pub struct SccpRouteManifestSettlementDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6713,8 +6683,8 @@ pub struct SccpRouteManifestPostDeployEvidenceDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6797,8 +6767,8 @@ pub struct SccpRouteManifestDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -8743,6 +8713,36 @@ mod sccp_message_backend_tests {
             )) => Some(message.as_str()),
             _ => None,
         }
+    }
+
+    #[test]
+    fn sccp_evm_destination_query_decodes_norito_json_defaults() {
+        let mut value = Map::new();
+        value.insert(
+            "network_id_hex".to_string(),
+            Value::from(test_sccp_hex32_string(1)),
+        );
+        value.insert(
+            "verifier_address_hex".to_string(),
+            Value::from(test_sccp_evm_address(2)),
+        );
+        let query: SccpEvmDestinationQuery =
+            norito::json::from_value(Value::Object(value)).expect("query should decode");
+        assert_eq!(
+            query.network_id_hex.as_deref(),
+            Some(test_sccp_hex32_string(1).as_str())
+        );
+        assert_eq!(
+            query.verifier_address_hex.as_deref(),
+            Some(test_sccp_evm_address(2).as_str())
+        );
+        assert_eq!(query.bridge_address_hex, None);
+        assert_eq!(query.proof_bytes_hex, None);
+
+        let empty: SccpEvmDestinationQuery =
+            norito::json::from_value(Value::Object(Map::new())).expect("empty query should decode");
+        assert_eq!(empty.network_id_hex, None);
+        assert_eq!(empty.tron_verifier_address, None);
     }
 
     #[test]
@@ -11828,28 +11828,26 @@ mod sccp_message_backend_tests {
         let object = json.as_object().expect("artifact json object");
         let summary = object
             .get("proof_envelope_summary")
-            .and_then(serde_json::Value::as_object)
+            .and_then(Value::as_object)
             .expect("proof envelope summary");
         let expected_vk_hash = hex::encode(expected_summary.vk_hash);
 
         assert_eq!(
-            summary.get("backend").and_then(serde_json::Value::as_str),
+            summary.get("backend").and_then(Value::as_str),
             Some("stark")
         );
         assert_eq!(
-            summary
-                .get("circuit_id")
-                .and_then(serde_json::Value::as_str),
+            summary.get("circuit_id").and_then(Value::as_str),
             Some("sccp-message-transparent-v1")
         );
         assert_eq!(
-            summary.get("vk_hash").and_then(serde_json::Value::as_str),
+            summary.get("vk_hash").and_then(Value::as_str),
             Some(expected_vk_hash.as_str())
         );
         assert_eq!(
             summary
                 .get("public_input_column_count")
-                .and_then(serde_json::Value::as_u64),
+                .and_then(Value::as_u64),
             Some(u64::from(expected_summary.public_input_column_count))
         );
     }
@@ -11875,17 +11873,15 @@ mod sccp_message_backend_tests {
         let object = json.as_object().expect("job json object");
         let summary = object
             .get("proof_envelope_summary")
-            .and_then(serde_json::Value::as_object)
+            .and_then(Value::as_object)
             .expect("proof envelope summary");
 
         assert_eq!(
-            summary.get("backend").and_then(serde_json::Value::as_str),
+            summary.get("backend").and_then(Value::as_str),
             Some("stark")
         );
         assert_eq!(
-            summary
-                .get("circuit_id")
-                .and_then(serde_json::Value::as_str),
+            summary.get("circuit_id").and_then(Value::as_str),
             Some("sccp-message-transparent-v1")
         );
     }
@@ -11903,36 +11899,27 @@ mod sccp_message_backend_tests {
         let object = json.as_object().expect("job json object");
         let summary = object
             .get("groth16_proof_summary")
-            .and_then(serde_json::Value::as_object)
+            .and_then(Value::as_object)
             .expect("groth16 proof summary");
 
         assert_eq!(object.get("proof_envelope_summary"), None);
+        assert_eq!(summary.get("version").and_then(Value::as_u64), Some(1));
         assert_eq!(
-            summary.get("version").and_then(serde_json::Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            summary
-                .get("proof_len_bytes")
-                .and_then(serde_json::Value::as_u64),
+            summary.get("proof_len_bytes").and_then(Value::as_u64),
             Some(384)
         );
         assert_eq!(
             summary
                 .get("groth16_public_signal_count")
-                .and_then(serde_json::Value::as_u64),
+                .and_then(Value::as_u64),
             Some(9)
         );
         assert_eq!(
-            summary
-                .get("message_id")
-                .and_then(serde_json::Value::as_str),
+            summary.get("message_id").and_then(Value::as_str),
             Some(expected_message_id.as_str())
         );
         assert_eq!(
-            summary
-                .get("commitment_root")
-                .and_then(serde_json::Value::as_str),
+            summary.get("commitment_root").and_then(Value::as_str),
             Some(expected_commitment_root.as_str())
         );
     }
@@ -19253,17 +19240,13 @@ pub async fn handle_post_bridge_proof_submit(
 
     let burn_bundle = burn_bundle
         .map(|value| {
-            let raw = json::to_string(&value)
-                .map_err(|err| conversion_error(format!("invalid burn_bundle: {err}")))?;
-            serde_json::from_str::<NexusSccpBurnProofV1>(&raw)
+            json::from_value::<NexusSccpBurnProofV1>(value)
                 .map_err(|err| conversion_error(format!("invalid burn_bundle: {err}")))
         })
         .transpose()?;
     let message_bundle = message_bundle
         .map(|value| {
-            let raw = json::to_string(&value)
-                .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))?;
-            serde_json::from_str::<NexusSccpMessageProofV1>(&raw)
+            json::from_value::<NexusSccpMessageProofV1>(value)
                 .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))
         })
         .transpose()?;
@@ -19519,9 +19502,7 @@ pub async fn handle_post_bridge_message_submit(
         ..
     } = req;
 
-    let raw = json::to_string(&message_bundle)
-        .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))?;
-    let message_bundle = serde_json::from_str::<NexusSccpMessageProofV1>(&raw)
+    let message_bundle = json::from_value::<NexusSccpMessageProofV1>(message_bundle)
         .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))?;
     let target_domain = sccp_message_target_domain(&message_bundle.payload);
     if target_domain != iroha_sccp::SCCP_DOMAIN_SORA {
@@ -20889,7 +20870,7 @@ fn build_contract_call_metadata(
             Name::from_str("contract_payload").expect("static metadata key `contract_payload`");
         metadata.insert(payload_key, payload.clone());
     }
-    if let Some(module) = trader_contract_module(
+    if let Some(module) = canonical_contract_module(
         contract_alias.map(ToString::to_string).as_deref(),
         &contract_address.to_string(),
     ) {
@@ -24165,11 +24146,11 @@ mod multisig_selector_tests {
             _active_hash,
         ) = multisig_test_world();
         let asset_definition_id = test_asset_definition_id().to_string();
-        let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({
+        let pacs009_marker_payload = norito::json::to_string_pretty(&norito::json!({
             "instruction_id": "pacs-1",
-            "asset_id": asset_definition_id,
+            "asset_id": (asset_definition_id),
             "amount": "25",
-            "to_account_id": multisig_account_id.to_string(),
+            "to_account_id": (multisig_account_id.to_string()),
             "mint_intent": "pacs009",
         }))
         .expect("pacs009 marker payload");
@@ -24262,11 +24243,11 @@ mod multisig_selector_tests {
             _alias_literal,
             _active_hash,
         ) = multisig_test_world();
-        let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({
+        let pacs009_marker_payload = norito::json::to_string_pretty(&norito::json!({
             "instruction_id": "pacs-non-mint",
-            "asset_id": test_asset_definition_id().to_string(),
+            "asset_id": (test_asset_definition_id().to_string()),
             "amount": "25",
-            "to_account_id": signer_two_id.to_string(),
+            "to_account_id": (signer_two_id.to_string()),
             "mint_intent": "pacs009",
         }))
         .expect("pacs009 marker payload");
@@ -24681,11 +24662,11 @@ mod multisig_selector_tests {
             _alias_literal,
             onchain_hash,
         ) = multisig_test_world();
-        let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({
+        let pacs009_marker_payload = norito::json::to_string_pretty(&norito::json!({
             "instruction_id": "pacs-1",
-            "asset_id": test_asset_definition_id().to_string(),
+            "asset_id": (test_asset_definition_id().to_string()),
             "amount": "25",
-            "to_account_id": multisig_account_id.to_string(),
+            "to_account_id": (multisig_account_id.to_string()),
             "mint_intent": "pacs009",
         }))
         .expect("pacs009 marker payload");
@@ -28501,10 +28482,13 @@ pub struct SetContractAliasResponseDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
 /// Query parameters for bundle deployment.
 pub struct DeployBundleQuery {
     /// Whether to validate and simulate the bundle without submitting transactions.
+    #[norito(default)]
     pub dry_run: Option<bool>,
 }
 
@@ -37068,7 +37052,7 @@ fn contract_activity_projections_for_height_range(
 
 #[cfg(feature = "app_api")]
 fn contract_event_module(contract_alias: Option<&str>, contract_address: &str) -> String {
-    if let Some(module) = trader_contract_module(contract_alias, contract_address) {
+    if let Some(module) = canonical_contract_module(contract_alias, contract_address) {
         return module.to_owned();
     }
     let source = contract_alias.unwrap_or(contract_address);
@@ -37077,6 +37061,30 @@ fn contract_event_module(contract_alias: Option<&str>, contract_address: &str) -
         .find(|segment| !segment.is_empty())
         .unwrap_or(source)
         .to_owned()
+}
+
+#[cfg(feature = "app_api")]
+fn canonical_contract_module(
+    contract_alias: Option<&str>,
+    contract_address: &str,
+) -> Option<&'static str> {
+    trader_contract_module(contract_alias, contract_address)
+        .or_else(|| uranai_contract_module(contract_alias, contract_address))
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_contract_module(
+    contract_alias: Option<&str>,
+    contract_address: &str,
+) -> Option<&'static str> {
+    let source = contract_alias
+        .unwrap_or(contract_address)
+        .trim()
+        .to_ascii_lowercase();
+    if source.contains("uranai") || source.contains("uranai_market") {
+        return Some("uranai");
+    }
+    None
 }
 
 #[cfg(feature = "app_api")]
@@ -37195,6 +37203,16 @@ fn canonical_contract_event_kind(module: &str, entrypoint: &str) -> Option<&'sta
         ("dlmmHooks", "place_limit_order") => Some("dlmm_hook_limit_order_placed"),
         ("dlmmHooks", "schedule_twamm") => Some("dlmm_hook_twamm_scheduled"),
         ("dlmmHooks", "record_execution") => Some("dlmm_hook_execution_recorded"),
+        ("uranai", "bind") => Some("contract_bound"),
+        ("uranai", "create_market") => Some("market_created"),
+        ("uranai", "buy") => Some("shares_bought"),
+        ("uranai", "sell") => Some("shares_sold"),
+        ("uranai", "private_buy") => Some("private_shares_bought"),
+        ("uranai", "claim") => Some("payout_claimed"),
+        ("uranai", "private_claim") => Some("private_payout_claimed"),
+        ("uranai", "report_market") => Some("market_reported"),
+        ("uranai", "shield_deposit") => Some("shield_deposit_recorded"),
+        ("uranai", "sweep_creation_fees") => Some("creation_fees_swept"),
         _ => None,
     }
 }
@@ -37215,6 +37233,44 @@ fn canonical_contract_event_payload(
                 Some(object)
             }
         }
+    }
+
+    fn is_uranai_private_proof_key(key: &str) -> bool {
+        let normalized = key
+            .chars()
+            .filter(|ch| *ch != '_')
+            .flat_map(|ch| ch.to_lowercase())
+            .collect::<String>();
+        matches!(
+            normalized.as_str(),
+            "proofenv" | "proof" | "openverifyproof" | "privatekey"
+        )
+    }
+
+    fn redact_uranai_private_proofs_from_value(value: &mut Value) -> bool {
+        match value {
+            Value::Object(object) => redact_uranai_private_proofs_from_object(object),
+            Value::Array(array) => array.iter_mut().fold(false, |redacted, item| {
+                redact_uranai_private_proofs_from_value(item) || redacted
+            }),
+            _ => false,
+        }
+    }
+
+    fn redact_uranai_private_proofs_from_object(object: &mut Map) -> bool {
+        let keys = object
+            .keys()
+            .filter(|key| is_uranai_private_proof_key(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut redacted = false;
+        for key in keys {
+            redacted |= object.remove(&key).is_some();
+        }
+        for value in object.values_mut() {
+            redacted |= redact_uranai_private_proofs_from_value(value);
+        }
+        redacted
     }
 
     fn copy_first(object: &Map, target: &mut Map, target_key: &str, keys: &[&str]) -> bool {
@@ -37242,6 +37298,17 @@ fn canonical_contract_event_payload(
     let normalized_entrypoint = entrypoint.trim().to_ascii_lowercase();
 
     match (module, normalized_entrypoint.as_str()) {
+        ("uranai", _) => {
+            let redacted = redact_uranai_private_proofs_from_object(&mut normalized);
+            if redacted
+                || matches!(
+                    normalized_entrypoint.as_str(),
+                    "private_buy" | "private_claim"
+                )
+            {
+                normalized.insert("private_proof_redacted".into(), Value::Bool(true));
+            }
+        }
         ("swaps", "route_swap") => {
             copy_first(
                 &normalized.clone(),
@@ -40182,6 +40249,9 @@ pub const ENDPOINT_CONTRACTS_ROLLUPS_MARGIN_HEALTH: &str = "/v1/contracts/rollup
 pub const ENDPOINT_CONTRACTS_ROLLUPS_RWA_LOTS: &str = "/v1/contracts/rollups/rwa/lots";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_CONTRACTS_ROLLUPS_DLMM_HOOKS: &str = "/v1/contracts/rollups/dlmm/hooks";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY: &str =
+    "/v1/contracts/rollups/uranai/markets/history";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
 #[cfg(feature = "app_api")]
@@ -58725,6 +58795,33 @@ pub struct ContractRollupSwapsCandlesParams {
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
+pub struct UranaiMarketHistoryParams {
+    /// Market id whose committed DPM price history should be replayed.
+    pub market_id: String,
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+    /// Optional canonical contract address for the Uranai market contract.
+    #[norito(default)]
+    pub contract_address: Option<String>,
+    /// Optional contract alias for the Uranai market contract.
+    #[norito(default)]
+    pub contract_alias: Option<String>,
+    /// Return replayed points whose timestamp is greater than or equal to this value.
+    pub since_timestamp_ms: Option<u64>,
+    /// Return replayed points whose timestamp is less than or equal to this value.
+    pub until_timestamp_ms: Option<u64>,
+    /// Count mode: "bounded" omits exact totals; "exact" preserves total counts.
+    #[norito(default)]
+    pub count_mode: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
+)]
 pub struct TraderRollupAccountParams {
     /// Trader authority whose product summary should be returned.
     pub authority: String,
@@ -59757,6 +59854,582 @@ fn parse_contract_view_int(value: &Value) -> Option<i64> {
         Value::Object(object) => object_lookup_i64(object, &["value", "result"]),
         other => value_as_i64(other),
     }
+}
+
+#[cfg(feature = "app_api")]
+const URANAI_DPM_VIRTUAL_SHARES_XOR: i64 = 100;
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+struct UranaiOutcomeDescriptor {
+    outcome_id: String,
+    label: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+struct UranaiDpmReplayState {
+    market_id: String,
+    outcome_count: usize,
+    outcomes: Vec<UranaiOutcomeDescriptor>,
+    outstanding_shares: Vec<i64>,
+    trade_count: u64,
+    volume_xor_total: i64,
+    incomplete_replay: bool,
+    initialized: bool,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum UranaiReplayAction {
+    CreateMarket,
+    Buy,
+    Sell,
+    PrivateBuy,
+}
+
+#[cfg(feature = "app_api")]
+impl UranaiDpmReplayState {
+    fn new(market_id: &str) -> Self {
+        let outcome_count = 2;
+        Self {
+            market_id: market_id.to_owned(),
+            outcome_count,
+            outcomes: uranai_default_outcome_descriptors(outcome_count),
+            outstanding_shares: vec![0; outcome_count],
+            trade_count: 0,
+            volume_xor_total: 0,
+            incomplete_replay: false,
+            initialized: false,
+        }
+    }
+
+    fn configure_market(&mut self, payload: &Map) {
+        if self.trade_count > 0 {
+            self.incomplete_replay = true;
+            return;
+        }
+        let outcome_count = uranai_market_outcome_count(payload).max(2);
+        self.outcome_count = outcome_count;
+        self.outcomes = uranai_outcome_descriptors_from_payload(payload, outcome_count);
+        self.outstanding_shares = vec![0; outcome_count];
+        self.initialized = true;
+    }
+
+    fn ensure_outcome(&mut self, outcome_index: i64) -> Option<usize> {
+        let index = usize::try_from(outcome_index).ok()?;
+        if index >= self.outcome_count {
+            self.incomplete_replay = true;
+            self.outcome_count = index + 1;
+            self.outstanding_shares.resize(self.outcome_count, 0);
+            self.outcomes = uranai_default_outcome_descriptors(self.outcome_count);
+        }
+        Some(index)
+    }
+
+    fn apply_buy(&mut self, outcome_index: usize, collateral_in: i64) -> bool {
+        if !self.initialized {
+            self.incomplete_replay = true;
+        }
+        if collateral_in <= 0 {
+            self.incomplete_replay = true;
+            return false;
+        }
+        let shares_out =
+            uranai_quote_dpm_buy(&self.outstanding_shares, outcome_index, collateral_in);
+        if shares_out <= 0 {
+            self.incomplete_replay = true;
+            return false;
+        }
+        self.outstanding_shares[outcome_index] =
+            self.outstanding_shares[outcome_index].saturating_add(shares_out);
+        self.trade_count = self.trade_count.saturating_add(1);
+        self.volume_xor_total = self.volume_xor_total.saturating_add(collateral_in);
+        true
+    }
+
+    fn apply_sell(&mut self, outcome_index: usize, shares_in: i64) -> bool {
+        if !self.initialized {
+            self.incomplete_replay = true;
+        }
+        if shares_in <= 0 {
+            self.incomplete_replay = true;
+            return false;
+        }
+        let collateral_out =
+            uranai_quote_dpm_sell(&self.outstanding_shares, outcome_index, shares_in);
+        if collateral_out <= 0 {
+            self.incomplete_replay = true;
+            return false;
+        }
+        self.outstanding_shares[outcome_index] =
+            self.outstanding_shares[outcome_index].saturating_sub(shares_in);
+        self.trade_count = self.trade_count.saturating_add(1);
+        self.volume_xor_total = self.volume_xor_total.saturating_add(collateral_out);
+        true
+    }
+
+    fn history_point(
+        &self,
+        projection: &ContractEventProjection,
+        side: &'static str,
+        traded_outcome_index: usize,
+    ) -> Value {
+        let mut object = Map::new();
+        object.insert("marketId".into(), Value::from(self.market_id.clone()));
+        object.insert(
+            "timestampMs".into(),
+            Value::from(projection.timestamp_ms.unwrap_or_default()),
+        );
+        object.insert("blockHeight".into(), Value::from(projection.block_height));
+        object.insert(
+            "txHashHex".into(),
+            Value::from(projection.tx_hash_hex.clone()),
+        );
+        object.insert("tradeCount".into(), Value::from(self.trade_count));
+        object.insert(
+            "volumeXorTotal".into(),
+            Value::from(self.volume_xor_total.max(0) as u64),
+        );
+        object.insert("side".into(), Value::from(side));
+        object.insert(
+            "tradedOutcomeIndex".into(),
+            Value::from(traded_outcome_index as u64),
+        );
+        object.insert(
+            "outcomes".into(),
+            Value::Array(self.outcome_snapshot_values()),
+        );
+        Value::Object(object)
+    }
+
+    fn outcome_snapshot_values(&self) -> Vec<Value> {
+        let total_quantity = self
+            .outstanding_shares
+            .iter()
+            .map(|shares| uranai_dpm_quantity(*shares) as f64)
+            .sum::<f64>();
+        let exact_cost = self
+            .outstanding_shares
+            .iter()
+            .map(|shares| {
+                let quantity = uranai_dpm_quantity(*shares) as f64;
+                quantity * quantity
+            })
+            .sum::<f64>()
+            .sqrt();
+
+        (0..self.outcome_count)
+            .map(|outcome_index| {
+                let descriptor = self
+                    .outcomes
+                    .get(outcome_index)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        uranai_default_outcome_descriptor(self.outcome_count, outcome_index)
+                    });
+                let shares = self
+                    .outstanding_shares
+                    .get(outcome_index)
+                    .copied()
+                    .unwrap_or_default();
+                let quantity = uranai_dpm_quantity(shares) as f64;
+                let mut object = Map::new();
+                object.insert("outcomeIndex".into(), Value::from(outcome_index as u64));
+                object.insert("outcomeId".into(), Value::from(descriptor.outcome_id));
+                object.insert("label".into(), Value::from(descriptor.label));
+                object.insert(
+                    "probability".into(),
+                    Value::from(if total_quantity > 0.0 {
+                        quantity / total_quantity
+                    } else {
+                        0.0
+                    }),
+                );
+                object.insert(
+                    "priceXor".into(),
+                    Value::from(if exact_cost > 0.0 {
+                        quantity / exact_cost
+                    } else {
+                        0.0
+                    }),
+                );
+                object.insert("reserveXor".into(), Value::from(0_u64));
+                object.insert(
+                    "outstandingSharesXor".into(),
+                    Value::from(shares.max(0) as u64),
+                );
+                Value::Object(object)
+            })
+            .collect()
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_default_outcome_descriptor(
+    outcome_count: usize,
+    outcome_index: usize,
+) -> UranaiOutcomeDescriptor {
+    match (outcome_count, outcome_index) {
+        (2, 0) => UranaiOutcomeDescriptor {
+            outcome_id: "yes".to_owned(),
+            label: "Yes".to_owned(),
+        },
+        (2, 1) => UranaiOutcomeDescriptor {
+            outcome_id: "no".to_owned(),
+            label: "No".to_owned(),
+        },
+        _ => UranaiOutcomeDescriptor {
+            outcome_id: format!("outcome-{outcome_index}"),
+            label: format!("Outcome {}", outcome_index + 1),
+        },
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_default_outcome_descriptors(outcome_count: usize) -> Vec<UranaiOutcomeDescriptor> {
+    (0..outcome_count)
+        .map(|outcome_index| uranai_default_outcome_descriptor(outcome_count, outcome_index))
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_market_outcome_count(payload: &Map) -> usize {
+    object_lookup_i64(payload, &["outcome_count", "outcomeCount"])
+        .and_then(|value| usize::try_from(value).ok())
+        .or_else(|| {
+            payload
+                .get("spec_json")
+                .or_else(|| payload.get("specJson"))
+                .and_then(Value::as_object)
+                .and_then(|object| object_lookup_i64(object, &["outcomeCount", "outcome_count"]))
+                .and_then(|value| usize::try_from(value).ok())
+        })
+        .unwrap_or(2)
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_outcome_descriptors_from_payload(
+    payload: &Map,
+    outcome_count: usize,
+) -> Vec<UranaiOutcomeDescriptor> {
+    let defaults = uranai_default_outcome_descriptors(outcome_count);
+    let Some(spec) = payload
+        .get("spec_json")
+        .or_else(|| payload.get("specJson"))
+        .and_then(Value::as_object)
+    else {
+        return defaults;
+    };
+    let Some(outcomes) = spec.get("outcomes").and_then(Value::as_array) else {
+        return defaults;
+    };
+
+    (0..outcome_count)
+        .map(|outcome_index| {
+            let default = defaults
+                .get(outcome_index)
+                .cloned()
+                .unwrap_or_else(|| uranai_default_outcome_descriptor(outcome_count, outcome_index));
+            let Some(Value::Object(object)) = outcomes.get(outcome_index) else {
+                return default;
+            };
+            UranaiOutcomeDescriptor {
+                outcome_id: object_lookup_string(object, &["id", "outcome_id", "outcomeId"])
+                    .unwrap_or(default.outcome_id),
+                label: object_lookup_string(object, &["label", "name"]).unwrap_or(default.label),
+            }
+        })
+        .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_dpm_quantity(shares: i64) -> i64 {
+    URANAI_DPM_VIRTUAL_SHARES_XOR.saturating_add(shares.max(0))
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_int_sqrt_floor(value: u128) -> u128 {
+    if value == 0 {
+        return 0;
+    }
+    let mut low = 0_u128;
+    let mut high = 1_u128;
+    while high.saturating_mul(high) <= value {
+        high = high.saturating_mul(2);
+    }
+    while low < high {
+        let mid = (low + high + 1) / 2;
+        if mid.saturating_mul(mid) <= value {
+            low = mid;
+        } else {
+            high = mid - 1;
+        }
+    }
+    low
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_dpm_cost(outstanding_shares: &[i64]) -> i64 {
+    let sum = outstanding_shares.iter().fold(0_u128, |total, shares| {
+        let quantity = uranai_dpm_quantity(*shares) as u128;
+        total.saturating_add(quantity.saturating_mul(quantity))
+    });
+    i64::try_from(uranai_int_sqrt_floor(sum)).unwrap_or(i64::MAX)
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_quote_dpm_buy(
+    outstanding_shares: &[i64],
+    outcome_index: usize,
+    collateral_in: i64,
+) -> i64 {
+    if collateral_in <= 0 || outcome_index >= outstanding_shares.len() {
+        return 0;
+    }
+    let selected_quantity = uranai_dpm_quantity(outstanding_shares[outcome_index]) as u128;
+    let target_cost =
+        (uranai_dpm_cost(outstanding_shares).max(0) as u128).saturating_add(collateral_in as u128);
+    let target_square = target_cost
+        .saturating_add(1)
+        .saturating_mul(target_cost.saturating_add(1))
+        .saturating_sub(1);
+    let other_squares = outstanding_shares
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != outcome_index)
+        .fold(0_u128, |total, (_index, shares)| {
+            let quantity = uranai_dpm_quantity(*shares) as u128;
+            total.saturating_add(quantity.saturating_mul(quantity))
+        });
+    if target_square <= other_squares {
+        return 0;
+    }
+    let selected_after = uranai_int_sqrt_floor(target_square - other_squares);
+    let shares_out = selected_after.saturating_sub(selected_quantity);
+    i64::try_from(shares_out).unwrap_or(i64::MAX)
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_quote_dpm_sell(outstanding_shares: &[i64], outcome_index: usize, shares_in: i64) -> i64 {
+    if shares_in <= 0 || outcome_index >= outstanding_shares.len() {
+        return 0;
+    }
+    let current_shares = outstanding_shares[outcome_index].max(0);
+    if current_shares < shares_in {
+        return 0;
+    }
+    let before = uranai_dpm_cost(outstanding_shares);
+    let mut next = outstanding_shares.to_vec();
+    next[outcome_index] = current_shares.saturating_sub(shares_in);
+    before.saturating_sub(uranai_dpm_cost(&next)).max(0)
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_replay_action(event_kind: &str) -> Option<UranaiReplayAction> {
+    match event_kind.trim().to_ascii_lowercase().as_str() {
+        "market_created" | "create_market" => Some(UranaiReplayAction::CreateMarket),
+        "shares_bought" | "buy" => Some(UranaiReplayAction::Buy),
+        "shares_sold" | "sell" => Some(UranaiReplayAction::Sell),
+        "private_shares_bought" | "private_buy" => Some(UranaiReplayAction::PrivateBuy),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_payload_market_id(payload: &Map) -> Option<String> {
+    object_lookup_string(payload, &["market_id", "marketId"])
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_projection_contract_matches(
+    projection: &ContractEventProjection,
+    params: &UranaiMarketHistoryParams,
+) -> bool {
+    if !projection.result_ok || projection.module != "uranai" {
+        return false;
+    }
+    if let Some(contract_address) = params.contract_address.as_deref() {
+        if projection.contract_address != contract_address {
+            return false;
+        }
+    }
+    if let Some(contract_alias) = params.contract_alias.as_deref() {
+        if projection.contract_alias.as_deref() != Some(contract_alias) {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_history_timestamp_in_range(
+    timestamp_ms: Option<u64>,
+    params: &UranaiMarketHistoryParams,
+) -> bool {
+    if params.since_timestamp_ms.is_none() && params.until_timestamp_ms.is_none() {
+        return true;
+    }
+    let Some(timestamp_ms) = timestamp_ms else {
+        return false;
+    };
+    if params
+        .since_timestamp_ms
+        .is_some_and(|since| timestamp_ms < since)
+    {
+        return false;
+    }
+    if params
+        .until_timestamp_ms
+        .is_some_and(|until| timestamp_ms > until)
+    {
+        return false;
+    }
+    true
+}
+
+#[cfg(feature = "app_api")]
+fn collect_uranai_market_history_points(
+    index: &ContractEventIndex,
+    params: &UranaiMarketHistoryParams,
+) -> (Vec<Value>, bool, Option<String>, Option<String>) {
+    let market_id = params.market_id.trim();
+    let mut replay = UranaiDpmReplayState::new(market_id);
+    let mut points = Vec::new();
+    let mut contract_address = params.contract_address.clone();
+    let mut contract_alias = params.contract_alias.clone();
+    let mut candidates = index
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_position, projection)| uranai_projection_contract_matches(projection, params))
+        .filter(|(_position, projection)| uranai_replay_action(&projection.event_kind).is_some())
+        .collect::<Vec<_>>();
+    candidates.sort_by(|(left_position, left), (right_position, right)| {
+        left.block_height
+            .cmp(&right.block_height)
+            .then_with(|| left_position.cmp(right_position))
+    });
+
+    for (_position, projection) in candidates {
+        let action = uranai_replay_action(&projection.event_kind)
+            .expect("filtered candidates have replay actions");
+        let Some(payload) = event_payload_object(projection) else {
+            replay.incomplete_replay = true;
+            continue;
+        };
+        match uranai_payload_market_id(&payload).as_deref() {
+            Some(payload_market_id) if payload_market_id == market_id => {}
+            Some(_) => continue,
+            None => {
+                replay.incomplete_replay = true;
+                continue;
+            }
+        };
+        contract_address.get_or_insert_with(|| projection.contract_address.clone());
+        if contract_alias.is_none() {
+            contract_alias = projection.contract_alias.clone();
+        }
+
+        match action {
+            UranaiReplayAction::CreateMarket => replay.configure_market(&payload),
+            UranaiReplayAction::Buy | UranaiReplayAction::PrivateBuy => {
+                let Some(outcome_index) =
+                    object_lookup_i64(&payload, &["outcome_index", "outcomeIndex"])
+                        .and_then(|raw| replay.ensure_outcome(raw))
+                else {
+                    replay.incomplete_replay = true;
+                    continue;
+                };
+                let collateral_in =
+                    object_lookup_i64(&payload, &["collateral_in", "collateralIn"]).unwrap_or(0);
+                if replay.apply_buy(outcome_index, collateral_in)
+                    && uranai_history_timestamp_in_range(projection.timestamp_ms, params)
+                {
+                    points.push(replay.history_point(
+                        projection,
+                        if action == UranaiReplayAction::PrivateBuy {
+                            "private_buy"
+                        } else {
+                            "buy"
+                        },
+                        outcome_index,
+                    ));
+                }
+            }
+            UranaiReplayAction::Sell => {
+                let Some(outcome_index) =
+                    object_lookup_i64(&payload, &["outcome_index", "outcomeIndex"])
+                        .and_then(|raw| replay.ensure_outcome(raw))
+                else {
+                    replay.incomplete_replay = true;
+                    continue;
+                };
+                let shares_in =
+                    object_lookup_i64(&payload, &["shares_in", "sharesIn"]).unwrap_or(0);
+                if replay.apply_sell(outcome_index, shares_in)
+                    && uranai_history_timestamp_in_range(projection.timestamp_ms, params)
+                {
+                    points.push(replay.history_point(projection, "sell", outcome_index));
+                }
+            }
+        }
+    }
+
+    (
+        points,
+        replay.incomplete_replay,
+        contract_address,
+        contract_alias,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn uranai_market_history_rollup_to_json_value(
+    index: &ContractEventIndex,
+    params: &UranaiMarketHistoryParams,
+    pagination: EffectivePagination,
+    count_mode: AppCountMode,
+) -> Value {
+    let (points, incomplete_replay, contract_address, contract_alias) =
+        collect_uranai_market_history_points(index, params);
+    let page =
+        collect_page_linear_for_mode(points, params.offset, pagination.limit, None, count_mode);
+    let mut top = Map::new();
+    top.insert("ok".into(), Value::Bool(true));
+    top.insert(
+        "marketId".into(),
+        Value::from(params.market_id.trim().to_owned()),
+    );
+    if let Some(contract_address) = contract_address {
+        top.insert("contract_address".into(), Value::from(contract_address));
+    }
+    if let Some(contract_alias) = contract_alias {
+        top.insert("contract_alias".into(), Value::from(contract_alias));
+    }
+    top.insert("incompleteReplay".into(), Value::Bool(incomplete_replay));
+    if incomplete_replay {
+        top.insert(
+            "warning".into(),
+            Value::from(
+                "Market history replay skipped one or more malformed or mismatched events.",
+            ),
+        );
+    }
+    top.insert("offset".into(), Value::from(params.offset));
+    top.insert(
+        "limit".into(),
+        Value::from(pagination.limit.unwrap_or(pagination.cap)),
+    );
+    if page.has_more {
+        top.insert(
+            "next_offset".into(),
+            Value::from(params.offset.saturating_add(page.items.len() as u64)),
+        );
+    }
+    insert_page_metadata(&mut top, &page, count_mode);
+    top.insert("items".into(), Value::Array(page.items));
+    Value::Object(top)
 }
 
 #[cfg(feature = "app_api")]
@@ -61046,6 +61719,46 @@ pub async fn handle_v1_contracts_rollups_swaps_candles_get(
 }
 
 #[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_rollups_uranai_markets_history_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<UranaiMarketHistoryParams>,
+    _telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    if params.market_id.trim().is_empty() {
+        return Err(Error::AppQueryValidation {
+            code: "invalid_market_id",
+            message: "market_id must not be empty for /v1/contracts/rollups/uranai/markets/history"
+                .to_owned(),
+        });
+    }
+    let cap = app_query_page_cap(&state);
+    let pagination = enforce_app_pagination(
+        params.limit,
+        params.offset,
+        cap,
+        ENDPOINT_CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY,
+    )?;
+    let count_mode = app_count_mode(
+        params.count_mode.as_deref(),
+        ENDPOINT_CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY,
+    );
+    let index = contract_event_index_snapshot(state.as_ref());
+    let body = norito::json::to_json_pretty(&uranai_market_history_rollup_to_json_value(
+        index.as_ref(),
+        &params,
+        pagination,
+        count_mode,
+    ))
+    .unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
 pub async fn handle_v1_contracts_rollups_trader_activity_get(
     state: Arc<CoreState>,
     crate::NoritoQuery(params): crate::NoritoQuery<ContractEventGetParams>,
@@ -61724,6 +62437,369 @@ mod tx_projection_display_tests {
         assert_eq!(total, 3);
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].tx_hash_hex, "hash-3");
+    }
+
+    #[test]
+    fn uranai_event_payload_normalization_redacts_private_proofs() {
+        assert_eq!(
+            canonical_contract_module(Some("uranai::markets.universal"), "tairac1uranai"),
+            Some("uranai")
+        );
+        assert_eq!(
+            canonical_contract_event_kind("uranai", "private_buy"),
+            Some("private_shares_bought")
+        );
+
+        let payload = IrohaJson::new(norito::json!({
+            "market_id": "mkt-1",
+            "outcome_index": 1,
+            "collateral_in": 25,
+            "proof_env": "secret-proof",
+            "proof": "secret-proof-alias",
+            "proofs": [
+                {
+                    "proofEnv": "nested-secret",
+                    "note": "kept"
+                }
+            ],
+            "open_verify": {
+                "openVerifyProof": "nested-open-secret",
+                "publicSignal": "kept"
+            },
+            "wallet": {
+                "private_key": "nested-private-key"
+            }
+        }));
+        let normalized = canonical_contract_event_payload("uranai", "private_buy", Some(&payload))
+            .expect("normalized payload");
+        let value = json::parse_value(normalized.get()).expect("json payload");
+
+        assert_eq!(value["market_id"].as_str(), Some("mkt-1"));
+        assert_eq!(value["private_proof_redacted"].as_bool(), Some(true));
+        assert!(value.get("proof_env").is_none());
+        assert!(value.get("proof").is_none());
+        assert!(value["proofs"][0].get("proofEnv").is_none());
+        assert_eq!(value["proofs"][0]["note"].as_str(), Some("kept"));
+        assert!(value["open_verify"].get("openVerifyProof").is_none());
+        assert_eq!(value["open_verify"]["publicSignal"].as_str(), Some("kept"));
+        assert!(value["wallet"].get("private_key").is_none());
+    }
+
+    fn uranai_projection(
+        event_kind: &str,
+        block_height: u64,
+        timestamp_ms: u64,
+        payload: Value,
+    ) -> ContractEventProjection {
+        ContractEventProjection {
+            event_id: format!("uranai-{block_height}:0"),
+            schema_version: 1,
+            provenance: "emitted".into(),
+            authority: Some(ALICE_ID.to_string()),
+            timestamp_ms: Some(timestamp_ms),
+            tx_hash_hex: format!("hash-{block_height}"),
+            block_height,
+            block_hash_hex: format!("block-{block_height}"),
+            result_ok: true,
+            contract_address: "tairac1uranai".into(),
+            contract_alias: Some("uranai::markets.universal".into()),
+            module: "uranai".into(),
+            event_kind: event_kind.into(),
+            participants: vec![ALICE_ID.to_string()],
+            asset_ids: Vec::new(),
+            numeric_fields: Map::new(),
+            payload: Some(payload),
+            gas_asset_id: None,
+            fee_sponsor: None,
+            gas_limit: None,
+        }
+    }
+
+    fn sample_uranai_history_index() -> ContractEventIndex {
+        let mut index = ContractEventIndex::default();
+        for projection in [
+            uranai_projection(
+                "market_created",
+                1,
+                100,
+                norito::json!({
+                    "market_id": "mkt-1",
+                    "outcome_count": 2,
+                    "spec_json": {
+                        "outcomeCount": 2,
+                        "outcomes": [
+                            { "id": "yes", "label": "Yes" },
+                            { "id": "no", "label": "No" }
+                        ]
+                    }
+                }),
+            ),
+            uranai_projection(
+                "shares_bought",
+                2,
+                200,
+                norito::json!({
+                    "market_id": "mkt-1",
+                    "outcome_index": 0,
+                    "collateral_in": 100
+                }),
+            ),
+            uranai_projection(
+                "private_shares_bought",
+                3,
+                300,
+                norito::json!({
+                    "market_id": "mkt-1",
+                    "outcome_index": 1,
+                    "collateral_in": 80,
+                    "private_proof_redacted": true
+                }),
+            ),
+            uranai_projection(
+                "shares_sold",
+                4,
+                400,
+                norito::json!({
+                    "market_id": "mkt-1",
+                    "outcome_index": 0,
+                    "shares_in": 5
+                }),
+            ),
+        ] {
+            append_contract_event_projection(&mut index, projection);
+        }
+        index
+    }
+
+    #[test]
+    fn uranai_market_history_rollup_replays_before_range_and_paginates() {
+        let index = sample_uranai_history_index();
+        let params = UranaiMarketHistoryParams {
+            market_id: "mkt-1".into(),
+            limit: Some(1),
+            offset: 0,
+            contract_address: None,
+            contract_alias: Some("uranai::markets.universal".into()),
+            since_timestamp_ms: Some(250),
+            until_timestamp_ms: Some(450),
+            count_mode: Some("exact".into()),
+        };
+        let json = uranai_market_history_rollup_to_json_value(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(1),
+                offset: 0,
+                cap: 100,
+            },
+            AppCountMode::Exact,
+        );
+
+        assert_eq!(json["ok"].as_bool(), Some(true));
+        assert_eq!(json["marketId"].as_str(), Some("mkt-1"));
+        assert_eq!(json["incompleteReplay"].as_bool(), Some(false));
+        assert_eq!(json["total"].as_u64(), Some(2));
+        assert_eq!(json["next_offset"].as_u64(), Some(1));
+        assert_eq!(json["items"].as_array().map(Vec::len), Some(1));
+        assert_eq!(json["items"][0]["side"].as_str(), Some("private_buy"));
+        assert_eq!(json["items"][0]["tradeCount"].as_u64(), Some(2));
+        assert_eq!(json["items"][0]["volumeXorTotal"].as_u64(), Some(180));
+        assert_eq!(
+            json["items"][0]["outcomes"].as_array().map(Vec::len),
+            Some(2)
+        );
+        assert_eq!(
+            json["items"][0]["outcomes"][1]["label"].as_str(),
+            Some("No")
+        );
+    }
+
+    #[test]
+    fn uranai_market_history_rollup_replays_in_block_order() {
+        let mut index = ContractEventIndex::default();
+        for projection in [
+            uranai_projection(
+                "private_shares_bought",
+                3,
+                300,
+                norito::json!({
+                    "market_id": "mkt-1",
+                    "outcome_index": 1,
+                    "collateral_in": 80
+                }),
+            ),
+            uranai_projection(
+                "shares_bought",
+                2,
+                200,
+                norito::json!({
+                    "market_id": "mkt-1",
+                    "outcome_index": 0,
+                    "collateral_in": 100
+                }),
+            ),
+            uranai_projection(
+                "market_created",
+                1,
+                100,
+                norito::json!({
+                    "market_id": "mkt-1",
+                    "outcome_count": 2
+                }),
+            ),
+        ] {
+            append_contract_event_projection(&mut index, projection);
+        }
+        let params = UranaiMarketHistoryParams {
+            market_id: "mkt-1".into(),
+            limit: Some(10),
+            offset: 0,
+            contract_address: None,
+            contract_alias: None,
+            since_timestamp_ms: None,
+            until_timestamp_ms: None,
+            count_mode: Some("exact".into()),
+        };
+        let json = uranai_market_history_rollup_to_json_value(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(10),
+                offset: 0,
+                cap: 100,
+            },
+            AppCountMode::Exact,
+        );
+
+        assert_eq!(json["incompleteReplay"].as_bool(), Some(false));
+        assert_eq!(json["items"].as_array().map(Vec::len), Some(2));
+        assert_eq!(json["items"][0]["side"].as_str(), Some("buy"));
+        assert_eq!(json["items"][0]["tradeCount"].as_u64(), Some(1));
+        assert_eq!(json["items"][1]["side"].as_str(), Some("private_buy"));
+        assert_eq!(json["items"][1]["tradeCount"].as_u64(), Some(2));
+        assert_eq!(json["items"][1]["volumeXorTotal"].as_u64(), Some(180));
+    }
+
+    #[test]
+    fn uranai_market_history_rollup_marks_mismatched_replay_incomplete() {
+        let mut index = ContractEventIndex::default();
+        append_contract_event_projection(
+            &mut index,
+            uranai_projection(
+                "market_created",
+                1,
+                100,
+                norito::json!({
+                    "market_id": "mkt-1",
+                    "outcome_count": 2
+                }),
+            ),
+        );
+        append_contract_event_projection(
+            &mut index,
+            uranai_projection(
+                "shares_sold",
+                2,
+                200,
+                norito::json!({
+                    "market_id": "mkt-1",
+                    "outcome_index": 0,
+                    "shares_in": 5
+                }),
+            ),
+        );
+        let params = UranaiMarketHistoryParams {
+            market_id: "mkt-1".into(),
+            limit: Some(10),
+            offset: 0,
+            contract_address: None,
+            contract_alias: None,
+            since_timestamp_ms: None,
+            until_timestamp_ms: None,
+            count_mode: Some("exact".into()),
+        };
+        let json = uranai_market_history_rollup_to_json_value(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(10),
+                offset: 0,
+                cap: 100,
+            },
+            AppCountMode::Exact,
+        );
+
+        assert_eq!(json["incompleteReplay"].as_bool(), Some(true));
+        assert!(json["warning"].as_str().is_some());
+        assert_eq!(json["items"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn uranai_market_history_rollup_warns_on_unreplayable_metadata() {
+        let mut index = sample_uranai_history_index();
+        let mut missing_payload = uranai_projection(
+            "shares_bought",
+            5,
+            500,
+            norito::json!({
+                "market_id": "mkt-1",
+                "outcome_index": 1,
+                "collateral_in": 70
+            }),
+        );
+        missing_payload.payload = None;
+        append_contract_event_projection(&mut index, missing_payload);
+        append_contract_event_projection(
+            &mut index,
+            uranai_projection(
+                "shares_bought",
+                6,
+                600,
+                norito::json!({
+                    "outcome_index": 1,
+                    "collateral_in": 90
+                }),
+            ),
+        );
+        append_contract_event_projection(
+            &mut index,
+            uranai_projection(
+                "shares_bought",
+                7,
+                700,
+                norito::json!({
+                    "market_id": "mkt-other",
+                    "outcome_index": 1,
+                    "collateral_in": 1000000
+                }),
+            ),
+        );
+        let params = UranaiMarketHistoryParams {
+            market_id: "mkt-1".into(),
+            limit: Some(10),
+            offset: 0,
+            contract_address: None,
+            contract_alias: None,
+            since_timestamp_ms: None,
+            until_timestamp_ms: None,
+            count_mode: Some("exact".into()),
+        };
+        let json = uranai_market_history_rollup_to_json_value(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(10),
+                offset: 0,
+                cap: 100,
+            },
+            AppCountMode::Exact,
+        );
+
+        assert_eq!(json["incompleteReplay"].as_bool(), Some(true));
+        assert!(json["warning"].as_str().is_some());
+        assert_eq!(json["items"].as_array().map(Vec::len), Some(3));
+        assert_eq!(json["items"][2]["side"].as_str(), Some("sell"));
+        assert_eq!(json["items"][2]["volumeXorTotal"].as_u64(), Some(183));
     }
 
     fn sample_swap_fill_rollup() -> SwapFillRollup {

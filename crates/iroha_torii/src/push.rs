@@ -11,6 +11,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD};
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::actual;
 use iroha_core::{EventsSender, kura::Kura};
@@ -27,7 +28,7 @@ use iroha_data_model::{
         signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
     },
 };
-use jsonwebtoken::{Algorithm, EncodingKey, Header};
+use jsonwebtoken::{Algorithm, EncodingKey};
 #[cfg(test)]
 use nonzero_ext::nonzero;
 use reqwest::StatusCode as HttpStatusCode;
@@ -980,19 +981,48 @@ fn http_client(settings: &DispatchSettings) -> Result<reqwest::Client, String> {
         .map_err(|error| error.to_string())
 }
 
-#[derive(serde::Serialize)]
-struct FcmClaims<'a> {
-    iss: &'a str,
-    scope: &'static str,
-    aud: &'static str,
-    iat: u64,
-    exp: u64,
+fn jwt_algorithm_name(algorithm: Algorithm) -> &'static str {
+    match algorithm {
+        Algorithm::HS256 => "HS256",
+        Algorithm::HS384 => "HS384",
+        Algorithm::HS512 => "HS512",
+        Algorithm::ES256 => "ES256",
+        Algorithm::ES384 => "ES384",
+        Algorithm::RS256 => "RS256",
+        Algorithm::RS384 => "RS384",
+        Algorithm::RS512 => "RS512",
+        Algorithm::PS256 => "PS256",
+        Algorithm::PS384 => "PS384",
+        Algorithm::PS512 => "PS512",
+        Algorithm::EdDSA => "EdDSA",
+    }
 }
 
-#[derive(serde::Serialize)]
-struct ApnsClaims<'a> {
-    iss: &'a str,
-    iat: u64,
+fn encode_jwt_claims(
+    algorithm: Algorithm,
+    key_id: Option<&str>,
+    claims: norito::json::Value,
+    key: &EncodingKey,
+) -> Result<String, String> {
+    let mut header = norito::json::Map::new();
+    header.insert("typ".to_string(), norito::json::Value::from("JWT"));
+    header.insert(
+        "alg".to_string(),
+        norito::json::Value::from(jwt_algorithm_name(algorithm)),
+    );
+    if let Some(key_id) = key_id {
+        header.insert("kid".to_string(), norito::json::Value::from(key_id));
+    }
+    let encoded_header = BASE64_URL_SAFE_NO_PAD.encode(
+        norito::json::to_vec(&norito::json::Value::Object(header))
+            .map_err(|error| error.to_string())?,
+    );
+    let encoded_claims = BASE64_URL_SAFE_NO_PAD
+        .encode(norito::json::to_vec(&claims).map_err(|error| error.to_string())?);
+    let message = format!("{encoded_header}.{encoded_claims}");
+    let signature = jsonwebtoken::crypto::sign(message.as_bytes(), key, algorithm)
+        .map_err(|error| error.to_string())?;
+    Ok(format!("{message}.{signature}"))
 }
 
 async fn mint_fcm_access_token(
@@ -1006,19 +1036,24 @@ async fn mint_fcm_access_token(
     let client_email = json_string_field(&value, "client_email")?;
     let private_key = json_string_field(&value, "private_key")?;
     let issued_at = now_ms() / 1000;
-    let claims = FcmClaims {
-        iss: &client_email,
-        scope: FCM_SCOPE,
-        aud: FCM_TOKEN_ENDPOINT,
-        iat: issued_at,
-        exp: issued_at.saturating_add(3600),
-    };
-    let jwt = jsonwebtoken::encode(
-        &Header::new(Algorithm::RS256),
-        &claims,
+    let mut claims = norito::json::Map::new();
+    claims.insert("iss".to_string(), norito::json::Value::from(client_email));
+    claims.insert("scope".to_string(), norito::json::Value::from(FCM_SCOPE));
+    claims.insert(
+        "aud".to_string(),
+        norito::json::Value::from(FCM_TOKEN_ENDPOINT),
+    );
+    claims.insert("iat".to_string(), norito::json::Value::from(issued_at));
+    claims.insert(
+        "exp".to_string(),
+        norito::json::Value::from(issued_at.saturating_add(3600)),
+    );
+    let jwt = encode_jwt_claims(
+        Algorithm::RS256,
+        None,
+        norito::json::Value::Object(claims),
         &EncodingKey::from_rsa_pem(private_key.as_bytes()).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())?;
+    )?;
     let response = client
         .post(FCM_TOKEN_ENDPOINT)
         .timeout(settings.request_timeout)
@@ -1048,19 +1083,16 @@ fn mint_apns_provider_token(
     private_key_path: &Path,
 ) -> Result<String, String> {
     let private_key = fs::read(private_key_path).map_err(|error| error.to_string())?;
-    let mut header = Header::new(Algorithm::ES256);
-    header.kid = Some(key_id.to_owned());
     let issued_at = now_ms() / 1000;
-    let claims = ApnsClaims {
-        iss: team_id,
-        iat: issued_at,
-    };
-    jsonwebtoken::encode(
-        &header,
-        &claims,
+    let mut claims = norito::json::Map::new();
+    claims.insert("iss".to_string(), norito::json::Value::from(team_id));
+    claims.insert("iat".to_string(), norito::json::Value::from(issued_at));
+    encode_jwt_claims(
+        Algorithm::ES256,
+        Some(key_id),
+        norito::json::Value::Object(claims),
         &EncodingKey::from_ec_pem(&private_key).map_err(|error| error.to_string())?,
     )
-    .map_err(|error| error.to_string())
 }
 
 fn json_string_field(value: &norito::json::Value, field: &str) -> Result<String, String> {
@@ -1172,6 +1204,7 @@ fn classify_apns_status_body(status: HttpStatusCode, body: &str) -> DispatchOutc
 mod tests {
     use super::*;
     use crate::data_dir::OverrideGuard;
+    use base64::Engine as _;
 
     const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
 
@@ -1182,6 +1215,54 @@ mod tests {
             fcm_service_account_path: Some(PathBuf::from("/tmp/service-account.json")),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn encode_jwt_claims_builds_verifiable_compact_token() {
+        let mut claims = norito::json::Map::new();
+        claims.insert("iss".to_string(), norito::json::Value::from("issuer"));
+        claims.insert(
+            "iat".to_string(),
+            norito::json::Value::from(1_700_000_000_u64),
+        );
+        let key = EncodingKey::from_secret(b"shared-secret");
+        let token = encode_jwt_claims(
+            Algorithm::HS256,
+            Some("test-key"),
+            norito::json::Value::Object(claims),
+            &key,
+        )
+        .expect("JWT should encode");
+        let parts: Vec<_> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+
+        let header: norito::json::Value = norito::json::from_slice(
+            &BASE64_URL_SAFE_NO_PAD
+                .decode(parts[0])
+                .expect("header should be base64url"),
+        )
+        .expect("header should decode");
+        assert_eq!(header["typ"].as_str(), Some("JWT"));
+        assert_eq!(header["alg"].as_str(), Some("HS256"));
+        assert_eq!(header["kid"].as_str(), Some("test-key"));
+
+        let payload: norito::json::Value = norito::json::from_slice(
+            &BASE64_URL_SAFE_NO_PAD
+                .decode(parts[1])
+                .expect("payload should be base64url"),
+        )
+        .expect("payload should decode");
+        assert_eq!(payload["iss"].as_str(), Some("issuer"));
+        assert_eq!(payload["iat"].as_u64(), Some(1_700_000_000));
+        assert!(
+            jsonwebtoken::crypto::verify(
+                parts[2],
+                format!("{}.{}", parts[0], parts[1]).as_bytes(),
+                &jsonwebtoken::DecodingKey::from_secret(b"shared-secret"),
+                Algorithm::HS256,
+            )
+            .expect("signature should verify")
+        );
     }
 
     #[test]

@@ -74,11 +74,13 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "kotlin-sdk": (
         "java -version",
         "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.",
+        "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
     ),
     "java-android": (
         "java -version",
         "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
         "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests",
+        "org.hyperledger.iroha.android.sccp.TonSccpProverTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
     ),
@@ -166,6 +168,29 @@ SCCP_LAUNCH_SCOPE_CONSTANT_MARKERS = (
             'ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"',
             'ACTIVE_LAUNCH_DISPLAY = "Ethereum mainnet"',
             '"eth": "1",\n    "bsc": "56",',
+            "def _sccp_launch_scope_constant_gate_inventory_errors",
+            "def _ethereum_launch_policy_documentation_gate_inventory_errors",
+            "def _sccp_public_discovery_documentation_gate_inventory_errors",
+            "\"launch_scope_constant_gate\"",
+            "\"ethereum_launch_policy_documentation_gate\"",
+            "\"public_discovery_documentation_gate\"",
+            "SCCP launch-scope source inventory must pin",
+            "SCCP Ethereum launch-policy documentation source inventory must pin",
+            "SCCP public discovery documentation source inventory must pin",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_launch_scope_constant_gate_inventory",
+            "def test_release_readiness_report_guards_ethereum_launch_policy_documentation_gate_inventory",
+            "def test_release_readiness_report_guards_public_discovery_documentation_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_launch_scope_source_gate",
+            "def test_release_readiness_report_blocks_missing_ethereum_launch_policy_documentation_gate",
+            "def test_release_readiness_report_blocks_missing_public_discovery_documentation_gate",
+            "launch_scope_constant_gate",
+            "ethereum_launch_policy_documentation_gate",
+            "public_discovery_documentation_gate",
         ),
     ),
 )
@@ -282,6 +307,7 @@ READINESS_REPORT_KEYS = {
     "inputs",
     "input_artifacts",
     "native_evm_prover_bundle",
+    "source_inventory",
     "cryptographic_evidence",
     "user_prover_submission_surfaces",
 }
@@ -292,6 +318,7 @@ READINESS_MARKDOWN_REQUIRED_HEADINGS = (
     "## Cryptographic Evidence",
     "## User Prover Submission Surfaces",
     "## Native Prover Bundle",
+    "## Source Inventory",
     "## Lane Readiness",
     "## Blocking Items",
     "## Required Release Evidence",
@@ -308,6 +335,26 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "Public release notes",
     "--native-evm-prover-bundle",
     "sccp-native-evm-groth16-prover-bundle-v1",
+    "Ethereum launch-policy selector source inventory",
+    "Ethereum launch-policy documentation source inventory",
+    "public discovery documentation source inventory",
+    "Ethereum no-proxy data-collection source inventory",
+    "Ethereum native receipt-finality source inventory",
+    "Ethereum Beacon REST finalized-header shape source inventory",
+    "Ethereum Beacon REST execution-payload binding source inventory",
+    "Ethereum sync-committee roster source inventory",
+    "Ethereum source-bridge config source inventory",
+    "Ethereum EVM source-adapter deployment source inventory",
+    "EVM contract smoke Ethereum mainnet network-id source inventory",
+    "EVM contract smoke production-surface source inventory",
+    "Ethereum core range/finality binding source inventory",
+    "Ethereum core message replay source inventory",
+    "Ethereum Torii pinned message proof source inventory",
+    "Ethereum EVM live source/destination source inventory",
+    "Ethereum route-canary finalized receipt-block source inventory",
+    "Ethereum EVM block-tag metadata source inventory",
+    "SCCP native no-WASM/no-remote source inventory",
+    "proof-request bundle/source-proof source inventory",
 )
 NATIVE_EVM_PROVER_BUNDLE_SCHEMA = "sccp-native-evm-groth16-prover-bundle-v1"
 NATIVE_EVM_PROVER_BUNDLE_ID = (
@@ -355,6 +402,12 @@ NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS = {
     "calldata_hash",
     "torii_submit_payload_hash",
 }
+NATIVE_EVM_PROVER_PARITY_HASH_ROLE_KEYS = (
+    "receipt_proof_hash",
+    "source_proof_hash",
+    "calldata_hash",
+    "torii_submit_payload_hash",
+)
 NATIVE_EVM_PROVER_SELF_TEST_SCHEMA = (
     "sccp-ethereum-mainnet-native-evm-prover-self-test-v1"
 )
@@ -385,6 +438,14 @@ NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS = {
     "calldata_hash",
     "torii_submit_payload_hash",
 }
+NATIVE_EVM_PROVER_SELF_TEST_HASH_ROLE_KEYS = (
+    "request_hash",
+    "witness_hash",
+    "source_proof_hash",
+    "proof_hash",
+    "calldata_hash",
+    "torii_submit_payload_hash",
+)
 NATIVE_EVM_PROVER_BUNDLE_REQUIRED_KEYS = {
     "schema",
     "bundle_id",
@@ -425,6 +486,21 @@ NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (
     b"prover-url",
     b"proverendpoint",
     b"prover endpoint",
+)
+NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (
+    "webassembly",
+    "wasm",
+    "snarkjs",
+    "remoteprover",
+    "remote-prover",
+    "remote_prover",
+    "remote prover",
+    "prover-url",
+    "prover_url",
+    "proverendpoint",
+    "prover-endpoint",
+    "prover_endpoint",
+    "prover endpoint",
 )
 NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES = 256
 NATIVE_EVM_PROVER_BUNDLE_SUMMARY_KEYS = {
@@ -490,6 +566,36 @@ USER_PROVER_SUBMISSION_SURFACE_KEYS = {
     "required_phases",
     "validation_status",
     "validation_blockers",
+}
+SOURCE_INVENTORY_KEYS = {
+    "validation_status",
+    "validation_blockers",
+}
+SOURCE_INVENTORY_REQUIRED_GATES = {
+    "launch_scope_constant_gate",
+    "ethereum_launch_policy_selector_gate",
+    "ethereum_launch_policy_documentation_gate",
+    "public_discovery_documentation_gate",
+    "ethereum_data_collection_no_proxy_gate",
+    "ethereum_native_receipt_finality_gate",
+    "ethereum_beacon_rest_finalized_header_shape_gate",
+    "ethereum_beacon_rest_execution_payload_binding_gate",
+    "ethereum_sync_committee_roster_gate",
+    "ethereum_source_bridge_config_gate",
+    "ethereum_evm_source_adapter_deployment_gate",
+    "contract_smoke_eth_mainnet_network_id_gate",
+    "contract_smoke_evm_production_surface_gate",
+    "ethereum_core_range_finality_binding_gate",
+    "ethereum_core_message_replay_guard_gate",
+    "ethereum_torii_pinned_message_proof_gate",
+    "ethereum_evm_source_live_production_gate",
+    "ethereum_evm_live_destination_production_gate",
+    "ethereum_route_canary_finalized_receipt_block_gate",
+    "ethereum_evm_block_tag_metadata_gate",
+    "native_sccp_no_wasm_readiness_gate",
+    "proof_request_bundle_gate",
+    "retired_network_surface_gate",
+    "unready_transparent_proof_config_gate",
 }
 USER_PROVER_SDK_HOOK_MARKERS = {
     "js-sdk": ("witnessProvider", "proveFn"),
@@ -1795,6 +1901,22 @@ ETHEREUM_NATIVE_RECEIPT_FINALITY_GUARD_MARKERS = (
         (
             "def test_release_readiness_ethereum_native_sdks_keep_receipt_finality_guards",
             "Native SDK receipt-proof builders must require Beacon finality roots",
+            "def test_release_readiness_report_guards_ethereum_native_receipt_finality_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_native_receipt_finality_gate",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_native_receipt_finality_gate_inventory_errors(",
+            '"ethereum_native_receipt_finality_gate"',
+            "SCCP Ethereum native receipt-finality source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_native_receipt_finality_inventory_gate",
         ),
     ),
 )
@@ -1929,6 +2051,27 @@ ETHEREUM_BEACON_REST_FINALIZED_HEADER_SHAPE_MARKERS = (
             '("parent_root", "01")',
             'string.Concat(Enumerable.Repeat("12", 95))',
             'Assert.Contains("signature", malformedSignature.Message)',
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_beacon_rest_finalized_header_shape_gate_inventory_errors(",
+            '"ethereum_beacon_rest_finalized_header_shape_gate"',
+            "SCCP Ethereum Beacon REST finalized-header shape source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_beacon_rest_finalized_header_shape_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_beacon_rest_finalized_header_shape_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_beacon_rest_finalized_header_shape_inventory_gate",
         ),
     ),
 )
@@ -2286,6 +2429,27 @@ ETHEREUM_BEACON_REST_EXECUTION_PAYLOAD_BINDING_MARKERS = (
             "execution payload receipts_root must match block.receiptsRoot",
         ),
     ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_beacon_rest_execution_payload_binding_gate_inventory_errors(",
+            '"ethereum_beacon_rest_execution_payload_binding_gate"',
+            "SCCP Ethereum Beacon REST execution-payload binding source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_beacon_rest_execution_payload_binding_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_beacon_rest_execution_payload_binding_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_beacon_rest_execution_payload_binding_inventory_gate",
+        ),
+    ),
 )
 ETHEREUM_SYNC_COMMITTEE_ROSTER_MARKERS = (
     (
@@ -2425,6 +2589,27 @@ ETHEREUM_SYNC_COMMITTEE_ROSTER_MARKERS = (
             "WeightedSyncCommitteePayload()",
         ),
     ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_sync_committee_roster_gate_inventory_errors(",
+            '"ethereum_sync_committee_roster_gate"',
+            "SCCP Ethereum sync-committee roster source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_sync_committee_roster_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_sync_committee_roster_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_sync_committee_roster_inventory_gate",
+        ),
+    ),
 )
 ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS = (
     (
@@ -2526,6 +2711,27 @@ ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS = (
             "SourceBridgeConfigHash = \"0x\" + new string('9', 64)",
         ),
     ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_source_bridge_config_gate_inventory_errors(",
+            '"ethereum_source_bridge_config_gate"',
+            "SCCP Ethereum source-bridge config source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_source_bridge_config_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_source_bridge_config_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_source_bridge_config_inventory_gate",
+        ),
+    ),
 )
 ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
     (
@@ -2567,6 +2773,27 @@ ETHEREUM_EVM_SOURCE_LIVE_PRODUCTION_MARKERS = (
             "test_evm_source_live_rejects_receipt_block_code_hash_drift",
             "test_evm_source_live_toml_revalidates_imported_summary_metadata",
             "test_evm_source_live_toml_requires_independent_pins",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_evm_source_live_production_gate_inventory_errors(",
+            '"ethereum_evm_source_live_production_gate"',
+            "SCCP Ethereum EVM live source/destination source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_evm_source_live_production_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_evm_source_live_production_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_evm_source_live_production_inventory_gate",
         ),
     ),
 )
@@ -2616,6 +2843,27 @@ ETHEREUM_EVM_LIVE_DESTINATION_PRODUCTION_MARKERS = (
             "proof version must be 1",
             "proof sourceDomain does not match expectedSourceDomain()",
             "usedMessageProofs(bytes32) is false",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_evm_live_destination_production_gate_inventory_errors(",
+            '"ethereum_evm_live_destination_production_gate"',
+            "SCCP Ethereum EVM live source/destination source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_evm_live_destination_production_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_evm_live_destination_production_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_evm_live_destination_production_inventory_gate",
         ),
     ),
 )
@@ -2710,6 +2958,27 @@ ETHEREUM_ROUTE_CANARY_FINALIZED_RECEIPT_BLOCK_MARKERS = (
             "configured_sccp_all_lanes_launch_rejects_evm_non_finalized_route_canary",
         ),
     ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_route_canary_finalized_receipt_block_gate_inventory_errors(",
+            '"ethereum_route_canary_finalized_receipt_block_gate"',
+            "SCCP Ethereum route-canary finalized receipt-block source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_route_canary_finalized_receipt_block_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_route_canary_finalized_receipt_block_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_route_canary_finalized_receipt_block_inventory_gate",
+        ),
+    ),
 )
 ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS = (
     (
@@ -2800,7 +3069,23 @@ ETHEREUM_EVM_BLOCK_TAG_METADATA_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_evm_evidence_keeps_block_tag_metadata_guards",
+            "def test_release_readiness_report_guards_ethereum_evm_block_tag_metadata_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_evm_block_tag_metadata_gate",
             "Ethereum production evidence must keep finalized block-tag tripwires",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_evm_block_tag_metadata_gate_inventory_errors(",
+            '"ethereum_evm_block_tag_metadata_gate"',
+            "SCCP Ethereum EVM block-tag metadata source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_evm_block_tag_metadata_inventory_gate",
         ),
     ),
 )
@@ -2817,6 +3102,27 @@ ETHEREUM_EVM_SOURCE_ADAPTER_DEPLOYMENT_GATE_MARKERS = (
             "wrong_emitter_deployment.source_bridge_emitter_address = [0x99; 20].to_vec();",
         ),
     ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_evm_source_adapter_deployment_gate_inventory_errors(",
+            '"ethereum_evm_source_adapter_deployment_gate"',
+            "SCCP Ethereum EVM source-adapter deployment source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_evm_source_adapter_deployment_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_evm_source_adapter_deployment_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_evm_source_adapter_deployment_inventory_gate",
+        ),
+    ),
 )
 ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS = (
     (
@@ -2830,6 +3136,27 @@ ETHEREUM_LAUNCH_POLICY_SELECTOR_MARKERS = (
             "EthereumMainnetLane must still fail closed when ETH evidence is incomplete",
             "AllLanesAtOnce must continue to wait for every advertised lane",
             "BscMainnetLane must not open ETH",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_launch_policy_selector_gate_inventory_errors(",
+            '"ethereum_launch_policy_selector_gate"',
+            "SCCP Ethereum launch-policy selector source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_launch_policy_selector_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_launch_policy_selector_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_launch_policy_selector_inventory_gate",
         ),
     ),
 )
@@ -2850,6 +3177,7 @@ ETHEREUM_LAUNCH_POLICY_DOCUMENTATION_FORBIDDEN_MARKERS = (
     "active launch policy is BSC-mainnet lane readiness",
     "active BSC launch lane",
     "with the first-release BSC-mainnet launch policy",
+    "BSC mainnet only when the configured BSC source-chain finality/inclusion",
 )
 SCCP_PUBLIC_DISCOVERY_DOCUMENTATION_MARKERS = (
     (
@@ -2872,11 +3200,15 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def test_retired_network_patterns_catch_adversarial_examples",
             "def test_retired_network_surface_scan_covers_expected_files",
             "def test_retired_network_surface_scan_covers_pipeline_translations",
-            "def test_retired_network_surface_scan_allows_only_explicit_no_support_note",
+            "def test_retired_network_surface_scan_rejects_family_specific_notes",
+            "def test_generic_no_support_note_stays_in_launch_scope_files",
             "def test_active_tree_excludes_retired_network_surface_tokens",
             "BANNED_PATTERNS",
-            "SCCP_EXPLICIT_UNSUPPORTED_SCOPE_NOTE_SNIPPETS",
-            "def _is_explicit_unsupported_scope_note_match",
+            "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES",
+            "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE",
+            "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
+            "def _is_specific_no_support_scope_note_match",
+            "violations.append(f\"{relative}:{match.start()}: {match.group(0)!r}\")",
             '_literal("sub", "strate")',
             '_literal("pol", "kadot")',
             '_literal("ku", "sama")',
@@ -2890,6 +3222,22 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             'Path("python/iroha_torii_client/tests/sccp_test.py")',
         ),
     ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_retired_network_surface_gate_inventory_errors",
+            "\"retired_network_surface_gate\"",
+            "SCCP retired network-surface source inventory must pin",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_retired_network_surface_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_retired_network_source_gate",
+            "retired_network_surface_gate",
+        ),
+    ),
 )
 SCCP_RETIRED_NETWORK_SURFACE_GUARD_FORBIDDEN_MARKERS = (
     "APPROVED_RETIREMENT_NOTICE_PATTERNS",
@@ -2898,6 +3246,8 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_FORBIDDEN_MARKERS = (
     "_is_approved_retirement_notice_match",
     "_CHAIN_STYLE_PHRASE",
     "_CHAIN_NAMES_PHRASE",
+    "SCCP_EXPLICIT_UNSUPPORTED_SCOPE_NOTE_SNIPPETS",
+    "def _is_explicit_unsupported_scope_note_match",
 )
 ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS = (
     (
@@ -2917,6 +3267,27 @@ ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS = (
             "proof.range = BridgeProofRange",
             "ETH source proofs must bind the outer range to artifact finality",
             "SCCP message proof range must match finality height",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_core_range_finality_binding_gate_inventory_errors(",
+            '"ethereum_core_range_finality_binding_gate"',
+            "SCCP Ethereum core range/finality binding source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_core_range_finality_binding_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_core_range_finality_binding_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_core_range_finality_binding_inventory_gate",
         ),
     ),
 )
@@ -2949,6 +3320,27 @@ ETHEREUM_CORE_MESSAGE_REPLAY_GUARD_MARKERS = (
             "ETH source proofs must ignore non-canonical SCCP message history",
         ),
     ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_core_message_replay_guard_gate_inventory_errors(",
+            '"ethereum_core_message_replay_guard_gate"',
+            "SCCP Ethereum core message replay source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_core_message_replay_guard_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_core_message_replay_guard_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_core_message_replay_guard_inventory_gate",
+        ),
+    ),
 )
 ETHEREUM_TORII_PINNED_MESSAGE_PROOF_MARKERS = (
     (
@@ -2961,6 +3353,27 @@ ETHEREUM_TORII_PINNED_MESSAGE_PROOF_MARKERS = (
             "unpinned SCCP message records must not be served as source-chain envelopes",
             "bridge_proof_from_sccp_message_bundle_builds_taira_tron_xor_diagnostic_when_allowed",
             "verified_bridge_record_extracts_non_sora_message_bundle_candidate",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_torii_pinned_message_proof_gate_inventory_errors(",
+            '"ethereum_torii_pinned_message_proof_gate"',
+            "SCCP Ethereum Torii pinned message proof source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_torii_pinned_message_proof_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_torii_pinned_message_proof_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_torii_pinned_message_proof_inventory_gate",
         ),
     ),
 )
@@ -2988,7 +3401,18 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
         "pytests/scripts/sccp_release_readiness_report_test.py",
         (
             "def test_release_readiness_sccp_allow_unready_transparent_proofs_is_config_only",
+            "def test_release_readiness_report_guards_unready_transparent_proof_config_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_unready_transparent_proof_config_gate",
             "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS",
+            "unready_transparent_proof_config_gate",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_unready_transparent_proof_config_gate_inventory_errors",
+            "\"unready_transparent_proof_config_gate\"",
+            "SCCP unready transparent-proof source inventory must pin",
         ),
     ),
 )
@@ -2999,6 +3423,130 @@ SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV_PATHS = (
 )
 SCCP_UNREADY_TRANSPARENT_PROOF_FORBIDDEN_ENV = (
     "ZK_SCCP_ALLOW_UNREADY_TRANSPARENT_PROOFS"
+)
+SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS = (
+    (
+        "crates/iroha_sccp/src/lib.rs",
+        (
+            "fn decode_canonical_nexus_sccp_message_bundle_summary",
+            "fn sccp_proof_request_bundle_bytes_match_public_inputs",
+            "fn rust_evm_groth16_proof_requests_require_non_sora_source_proof_bytes",
+            "fn rust_evm_groth16_proof_request_wraps_ui_generated_proof",
+            "TON proof requests must reject arbitrary non-canonical SCCP bundle bytes",
+            "TON proof requests for non-SORA source bundles must carry source proof bytes",
+            "wrapped TON proof results must reject self-consistent requests with stripped non-SORA source proof bytes",
+            "SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1",
+        ),
+    ),
+    (
+        "javascript/iroha_js/src/sccp.js",
+        (
+            "const requireSccpProofRequestBundleMatchesPublicInputs = (",
+            "summary.sourceDomain !== SCCP_DOMAIN_SORA",
+            "toBytes(sourceProofBytes, \"sourceProofBytes\").length === 0",
+            "sourceProofBytes required for non-SORA source bundle",
+        ),
+    ),
+    (
+        "javascript/iroha_js/dist/sccp.js",
+        (
+            "const requireSccpProofRequestBundleMatchesPublicInputs = (",
+            "summary.sourceDomain !== SCCP_DOMAIN_SORA",
+            "toBytes(sourceProofBytes, \"sourceProofBytes\").length === 0",
+            "sourceProofBytes required for non-SORA source bundle",
+        ),
+    ),
+    (
+        "javascript/iroha_js/test/sccpSolanaProver.test.js",
+        (
+            "rejects TON proof requests with non-canonical or mismatched SCCP bundle bytes",
+            "sourceProofBytes required for non-SORA source bundle",
+            "rejects non-empty all-zero source proof bytes in SCCP proof requests",
+        ),
+    ),
+    (
+        "python/iroha_torii_client/sccp.py",
+        (
+            "def _require_sccp_proof_request_bundle_matches_public_inputs",
+            'summary["source_domain"] != SCCP_DOMAIN_SORA',
+            "len(source_proof_bytes) == 0",
+            "sourceProofBytes required for non-SORA source bundle",
+        ),
+    ),
+    (
+        "python/iroha_torii_client/tests/sccp_test.py",
+        (
+            "def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes",
+            "sourceProofBytes required for non-SORA source bundle",
+            "def test_sccp_proof_requests_reject_all_zero_source_proof_bytes",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt",
+        (
+            "private fun requireSccpProofRequestBundleMatchesPublicInputs",
+            "summary.sourceDomain == SccpSolana.DOMAIN_SORA || sourceProofBytes.isNotEmpty()",
+            "sourceProofBytes required for non-SORA source bundle",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt",
+        (
+            "sourceProofBytes required for non-SORA",
+            "strippedSourceProof",
+            "proofRequestHashMatchesCrossSdkVector",
+        ),
+    ),
+    (
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java",
+        (
+            "private static SccpBundleSummary requireSccpProofRequestBundleMatchesPublicInputs",
+            "summary.sourceDomain != SolanaSccpProver.DOMAIN_SORA && sourceProofBytes.length == 0",
+            "sourceProofBytes required for non-SORA source bundle",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java",
+        (
+            "sourceProofBytes required for non-SORA source bundle",
+            "TON proof-result submissions must reject stripped non-SORA source proofs",
+            "proofRequestHashMatchesCrossSdkVector",
+        ),
+    ),
+    (
+        "IrohaSwift/Sources/IrohaSwift/SccpTonProver.swift",
+        (
+            "func requireTonSccpProofRequestBundleMatchesPublicInputs",
+            "func decodeCanonicalTonSccpMessageProofBundleSummary",
+            "summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty",
+            "throw TonSccpProverError.invalidField(\"sourceProofBytes\")",
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+        (
+            "func testTonProofRequestRejectsNoncanonicalOrMismatchedBundleBytes",
+            "strippedSourceProofResult",
+            "func testTonProofRequestHashMatchesCrossSdkVector",
+            "func testSccpProofRequestsRejectAllZeroSourceProofBytes",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_proof_request_bundle_gate_inventory_errors",
+            "\"proof_request_bundle_gate\"",
+            "SCCP proof-request bundle/source-proof source inventory must pin",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_sccp_proof_request_bundle_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_sccp_proof_request_source_gate",
+            "source_inventory",
+        ),
+    ),
 )
 CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS = (
     (
@@ -3011,6 +3559,27 @@ CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS = (
             "networkId = ethMainnetNetworkId",
             "const networkId = ethMainnetNetworkId;",
             "assert.equal(acceptedGroth16Logs[0].args.networkId, networkId);",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _contract_smoke_eth_mainnet_network_id_gate_inventory_errors(",
+            '"contract_smoke_eth_mainnet_network_id_gate"',
+            "SCCP EVM contract smoke Ethereum mainnet network-id source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_contract_smoke_eth_mainnet_network_id_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_contract_smoke_eth_mainnet_network_id_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_contract_smoke_eth_mainnet_network_id_inventory_gate",
         ),
     ),
 )
@@ -3062,28 +3631,74 @@ CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS = (
             '"Message proof already used"',
         ),
     ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _contract_smoke_evm_production_surface_gate_inventory_errors(",
+            '"contract_smoke_evm_production_surface_gate"',
+            "SCCP EVM contract smoke production-surface source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_contract_smoke_evm_production_surface_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_contract_smoke_evm_production_surface_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_contract_smoke_evm_production_surface_inventory_gate",
+        ),
+    ),
 )
 NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
     (
         "scripts/sccp_release_readiness_report.py",
         (
             "NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (",
+            "NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (",
             "NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES",
             "NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA",
             "NATIVE_EVM_PROVER_SELF_TEST_SCHEMA",
+            "NATIVE_EVM_PROVER_PARITY_HASH_ROLE_KEYS",
+            "NATIVE_EVM_PROVER_SELF_TEST_HASH_ROLE_KEYS",
+            "def _native_sccp_no_wasm_readiness_gate_inventory_errors(",
+            '"native_sccp_no_wasm_readiness_gate"',
+            "SCCP native no-WASM/no-remote source inventory",
             "class DuplicateJsonKeyError",
             "object_pairs_hook=_reject_duplicate_json_keys",
             "native EVM Groth16 prover bundle JSON contains duplicate key",
             "def _native_evm_prover_forbidden_payload_blockers(",
             "_native_evm_prover_forbidden_payload_blockers(artifact_path, label)",
+            "audit_hashes contains unexpected field",
+            "audit_hashes missing field",
             "def _native_evm_prover_parity_fixture_status(",
             "def _native_evm_prover_self_test_status(",
+            "def _native_evm_prover_fixture_hash_role_blockers(",
             "sha256 must match audit_hashes.cross_sdk_fixture_parity",
             "sha256 must match audit_hashes.native_prover_self_test",
             "native_prover_self_test_artifact",
+            "public_signal_words must contain 9 words",
+            "sdk_results must be a non-empty object",
+            "sdk_results.{sdk}",
+            "contains unknown field",
+            "missing field",
+            "must match {key}",
+            "must match public_signal_words",
+            "sdk_results contains unknown sdk",
             "sdk_results missing sdk",
+            "native_sdk_artifacts[",
+            "native_sdk_artifacts contains duplicate sdk",
+            "native_sdk_artifacts contains unknown sdk",
+            "implementation must be",
+            "prover_artifact_hash must match proof_artifact_hash",
+            "sha256 must match {hash_field}",
             "def _native_evm_prover_hash_role_blockers(",
             "def _native_evm_prover_path_role_blockers(",
+            "path must not contain URI schemes or drive prefixes",
+            "path contains forbidden prover dependency marker",
             "path must not reuse",
             "must not be empty",
             "must be at least",
@@ -3097,10 +3712,13 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
     (
         "scripts/sccp_release_bundle.py",
         (
+            "NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (",
             "class DuplicateJsonKeyError",
             "object_pairs_hook=_reject_duplicate_json_keys",
             "native EVM Groth16 prover bundle JSON contains duplicate key",
             "def _native_evm_prover_payload_sources(",
+            "path must not contain URI schemes or drive prefixes",
+            "path contains forbidden prover dependency marker",
             "path must not reuse",
             "cross_sdk_fixture_parity_artifact",
         ),
@@ -3134,6 +3752,10 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "must not use multiple aliases",
             "isCanonicalDecimalText",
             "canonical decimal integer",
+            "must not contain URI schemes or drive prefixes",
+            "path contains forbidden prover dependency marker",
+            'value.contains(":")',
+            "forbiddenPathMarkers",
             "implementationBytes are required",
             "nativeProverArtifacts must bind sdk implementation and implementationHash",
             "nativeProverArtifacts verifierKeyHash must match nativeProverBundle",
@@ -3172,19 +3794,46 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_native_evm_prover_bundle_manifest_parsers_are_sdk_owned",
             "def test_release_readiness_native_evm_prover_artifact_verifiers_are_sdk_owned",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_json_keys",
+            "def test_release_readiness_report_blocks_duplicate_native_evm_prover_nested_json_keys",
+            "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifact_keys",
+            "def test_release_readiness_report_blocks_native_evm_prover_unknown_root_and_audit_fields",
             "def test_release_readiness_report_blocks_empty_native_evm_prover_payload",
             "def test_release_readiness_report_blocks_tiny_native_evm_prover_payload",
             "def test_release_readiness_report_blocks_reused_native_evm_prover_role_hash",
             "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
+            "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifacts",
+            "def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifacts",
+            "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift",
+            "def test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift",
             "def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash",
             "def test_release_readiness_report_blocks_missing_native_evm_parity_fixture",
             "def test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash",
             "def test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift",
+            "def test_release_readiness_report_blocks_native_evm_fixture_missing_sdk_results",
+            "def test_release_readiness_report_blocks_native_evm_fixture_malformed_sdk_results",
+            "def test_release_readiness_report_blocks_native_evm_fixture_malformed_sdk_result_rows",
+            "def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_missing_fields",
+            "def test_release_readiness_report_blocks_native_evm_fixture_sdk_result_value_drift",
+            "def test_release_readiness_report_blocks_native_evm_fixture_unknown_sdk_results",
+            "def test_release_readiness_report_blocks_native_evm_fixture_public_signal_shape",
+            "def test_release_readiness_report_blocks_native_evm_parity_fixture_role_reuse",
+            "def test_release_readiness_report_blocks_native_evm_self_test_role_reuse",
             "def test_release_readiness_report_blocks_native_evm_prover_forbidden_payload_marker",
+            "def test_release_readiness_report_blocks_native_evm_prover_uri_scheme_path",
+            "def test_release_readiness_report_blocks_native_evm_prover_forbidden_path_marker",
+            "ipfs:proof-artifact.bin",
+            "artifacts/eth-mainnet/proof.wasm",
             "def test_release_readiness_report_blocks_duplicate_native_evm_parity_fixture_keys",
+            "def test_release_readiness_report_blocks_duplicate_native_evm_parity_fixture_sdk_result_keys",
             "def test_release_readiness_report_blocks_duplicate_native_evm_self_test_keys",
+            "def test_release_readiness_report_blocks_duplicate_native_evm_self_test_sdk_result_keys",
+            "def test_release_readiness_report_guards_native_sccp_no_wasm_readiness_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_native_sccp_no_wasm_readiness_gate",
             "cross_sdk_fixture_parity_artifact JSON contains duplicate key",
             "native_prover_self_test_artifact JSON contains duplicate key",
+            "JSON contains duplicate key: implementation_hash",
+            "JSON contains duplicate key: calldata_hash",
+            "JSON contains duplicate key: proof_hash",
             "def test_release_readiness_native_local_prover_guard_covers_identifier_variants",
             '"remoteProver"',
             '"remote prover"',
@@ -3199,6 +3848,10 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
         (
             "def test_release_bundle_rejects_duplicate_native_evm_prover_json_keys",
             "native EVM Groth16 prover bundle JSON contains duplicate key: bundle_id",
+            "def test_release_bundle_rejects_duplicate_native_evm_prover_nested_json_keys",
+            "native EVM Groth16 prover bundle JSON contains duplicate key: circuit_security_audit",
+            "def test_release_bundle_rejects_duplicate_native_evm_prover_sdk_artifact_keys",
+            "native EVM Groth16 prover bundle JSON contains duplicate key: implementation_hash",
         ),
     ),
     (
@@ -3219,6 +3872,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "nativeProverSelfTestBytes",
             "nativeProverSelfTest(context)",
             "SCCP_NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1",
+            "ipfs:proof-artifact.bin",
+            "artifacts/eth-mainnet/proof.wasm",
             "WebAssembly.compile(bytes)",
             "import './proof.wasm'",
             "fallback remote prover",
@@ -3231,17 +3886,40 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_rejects_empty_native_evm_prover_payload",
             "def test_release_bundle_rejects_tiny_native_evm_prover_payload",
             "def test_release_bundle_rejects_native_evm_prover_forbidden_payload_marker",
+            "def test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields",
+            "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys",
+            "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifact_keys",
+            "def test_release_bundle_rejects_native_evm_prover_uri_scheme_path_before_copy",
+            "def test_release_bundle_rejects_native_evm_prover_forbidden_path_marker_before_copy",
             "def test_release_bundle_verifier_rejects_empty_native_evm_prover_payload",
             "def test_release_bundle_verifier_rejects_tiny_native_evm_prover_payload",
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_role_hash",
             "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
+            "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifacts",
+            "def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifacts",
+            "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift",
+            "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift",
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash",
             "def test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture",
             "def test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash",
             "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift",
+            "def test_release_bundle_verifier_rejects_native_evm_fixture_missing_sdk_results",
+            "def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_results",
+            "def test_release_bundle_verifier_rejects_native_evm_fixture_malformed_sdk_result_rows",
+            "def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_missing_fields",
+            "def test_release_bundle_verifier_rejects_native_evm_fixture_sdk_result_value_drift",
+            "def test_release_bundle_verifier_rejects_native_evm_fixture_unknown_sdk_results",
+            "def test_release_bundle_verifier_rejects_native_evm_fixture_public_signal_shape",
+            "def test_release_bundle_verifier_rejects_native_evm_parity_fixture_role_reuse",
+            "def test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse",
             "def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_payload_marker",
+            "def test_release_bundle_verifier_rejects_native_evm_prover_uri_scheme_path",
+            "def test_release_bundle_verifier_rejects_native_evm_prover_forbidden_path_marker",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_keys",
+            "def test_release_bundle_verifier_rejects_duplicate_native_evm_parity_fixture_sdk_result_keys",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_keys",
+            "def test_release_bundle_verifier_rejects_duplicate_native_evm_self_test_sdk_result_keys",
+            "def test_release_bundle_verifier_rejects_missing_native_sccp_no_wasm_readiness_inventory_gate",
             "native proof artifact imports proof.wasm",
         ),
     ),
@@ -3481,6 +4159,29 @@ ETHEREUM_DATA_COLLECTION_REGIONS = {
         ),
     ),
 }
+ETHEREUM_DATA_COLLECTION_NO_PROXY_GATE_MARKERS = (
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_data_collection_no_proxy_gate_inventory_errors(",
+            '"ethereum_data_collection_no_proxy_gate"',
+            "SCCP Ethereum no-proxy data-collection source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_data_collection_no_proxy_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_data_collection_no_proxy_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_data_collection_no_proxy_inventory_gate",
+        ),
+    ),
+)
 BSC_INBOUND_ADVERSARIAL_SDK_TEST_MARKERS = (
     (
         "javascript/iroha_js/test/sccpBscMainnet.test.js",
@@ -4798,6 +5499,7 @@ def _source_region(
 
 def _ethereum_data_collection_no_proxy_inventory_errors(
     regions: dict[str, tuple[str | Path, str, str, tuple[str, ...]]] | None = None,
+    gate_inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
     """Return errors for Ethereum SDK data collection proxy-fallback guards."""
 
@@ -4832,6 +5534,14 @@ def _ethereum_data_collection_no_proxy_inventory_errors(
                     f"{sdk} data collection source {display_path} contains "
                     f"forbidden {label}"
                 )
+    if gate_inventory is None:
+        gate_inventory = ETHEREUM_DATA_COLLECTION_NO_PROXY_GATE_MARKERS
+    errors.extend(
+        _source_marker_inventory_errors(
+            gate_inventory,
+            label="Ethereum mainnet no-proxy data-collection gate",
+        )
+    )
     return errors
 
 
@@ -5102,9 +5812,9 @@ def _ethereum_source_bridge_config_inventory_errors(
 
     if inventory is None:
         inventory = ETHEREUM_SOURCE_BRIDGE_CONFIG_MARKERS
-    return _sdk_test_inventory_errors(
+    return _source_marker_inventory_errors(
         inventory,
-        label="Ethereum mainnet source bridge config",
+        label="Ethereum mainnet source-bridge config",
     )
 
 
@@ -5358,6 +6068,19 @@ def _sccp_unready_transparent_proof_config_inventory_errors(
     return errors
 
 
+def _sccp_proof_request_bundle_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for SCCP proof-request bundle/source-proof gates."""
+
+    if inventory is None:
+        inventory = SCCP_PROOF_REQUEST_BUNDLE_GATE_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP proof-request bundle/source-proof gate",
+    )
+
+
 def _contract_smoke_eth_mainnet_network_id_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -5365,7 +6088,7 @@ def _contract_smoke_eth_mainnet_network_id_inventory_errors(
 
     if inventory is None:
         inventory = CONTRACT_SMOKE_ETH_MAINNET_NETWORK_ID_MARKERS
-    return _sdk_test_inventory_errors(
+    return _source_marker_inventory_errors(
         inventory,
         label="EVM contract smoke Ethereum mainnet network id",
     )
@@ -5378,7 +6101,7 @@ def _contract_smoke_evm_production_surface_inventory_errors(
 
     if inventory is None:
         inventory = CONTRACT_SMOKE_EVM_PRODUCTION_SURFACE_MARKERS
-    return _sdk_test_inventory_errors(
+    return _source_marker_inventory_errors(
         inventory,
         label="EVM contract smoke production surface",
     )
@@ -5601,6 +6324,14 @@ def _kotlin_sdk_command_has_fragment(command: str, fragment: str) -> bool:
         return tuple(tokens[:2]) == ("java", "-version")
     if not tokens or _command_token_basename(tokens[0]) != "gradlew":
         return False
+    if fragment.startswith("./gradlew "):
+        return (
+            ":core-jvm:test" in tokens
+            and "--tests" in tokens
+            and any(token.startswith("org.hyperledger.iroha.sdk.sccp.") for token in tokens)
+        )
+    if fragment.startswith("org.hyperledger.iroha.sdk.sccp."):
+        return fragment in tokens
     return (
         ":core-jvm:test" in tokens
         and "--tests" in tokens
@@ -5617,7 +6348,10 @@ def _java_android_command_has_fragment(command: str, fragment: str) -> bool:
     all_tokens = _phase_command_tokens(command)
     if fragment.startswith("ANDROID_HARNESS_MAINS="):
         return any(token.startswith(fragment) for token in all_tokens)
-    if fragment == "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests":
+    if (
+        fragment.startswith("org.hyperledger.iroha.android.sccp.")
+        and fragment.endswith("Tests")
+    ):
         return any(
             token.startswith("ANDROID_HARNESS_MAINS=") and fragment in token
             for token in all_tokens
@@ -5896,8 +6630,18 @@ def _native_evm_manifest_relative_path(
             f"{prefix} path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {value!r}"
         ]
+    if ":" in value:
+        return None, [
+            f"{prefix} path must not contain URI schemes or drive prefixes"
+        ]
     if "\\" in value:
         return None, [f"{prefix} path must use POSIX separators"]
+    normalized_value = value.lower()
+    for marker in NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS:
+        if marker in normalized_value:
+            return None, [
+                f"{prefix} path contains forbidden prover dependency marker: {marker}"
+            ]
     path = PurePosixPath(value)
     if (
         path.is_absolute()
@@ -6162,6 +6906,13 @@ def _native_evm_prover_parity_fixture_status(
             blockers.append(
                 f"{prefix} {key} must be a canonical non-zero 32-byte hex value"
             )
+    blockers.extend(
+        _native_evm_prover_fixture_hash_role_blockers(
+            prefix,
+            fixture,
+            NATIVE_EVM_PROVER_PARITY_HASH_ROLE_KEYS,
+        )
+    )
 
     public_signal_words = fixture.get("public_signal_words")
     if not isinstance(public_signal_words, list) or len(public_signal_words) != 9:
@@ -6324,6 +7075,13 @@ def _native_evm_prover_self_test_status(
             blockers.append(
                 f"{prefix} {key} must be a canonical non-zero 32-byte hex value"
             )
+    blockers.extend(
+        _native_evm_prover_fixture_hash_role_blockers(
+            prefix,
+            fixture,
+            NATIVE_EVM_PROVER_SELF_TEST_HASH_ROLE_KEYS,
+        )
+    )
 
     public_signal_words = fixture.get("public_signal_words")
     if not isinstance(public_signal_words, list) or len(public_signal_words) != 9:
@@ -6413,6 +7171,25 @@ def _native_evm_prover_hash_role_blockers(payload: dict[str, Any]) -> list[str]:
                 f"native EVM Groth16 prover bundle {role} must not reuse "
                 f"{previous_role}"
             )
+            continue
+        seen[value] = role
+    return blockers
+
+
+def _native_evm_prover_fixture_hash_role_blockers(
+    prefix: str,
+    fixture: dict[str, Any],
+    roles: tuple[str, ...],
+) -> list[str]:
+    blockers: list[str] = []
+    seen: dict[str, str] = {}
+    for role in roles:
+        value = fixture.get(role)
+        if not _is_nonzero_hex32(value):
+            continue
+        previous_role = seen.get(value)
+        if previous_role is not None:
+            blockers.append(f"{prefix} {role} must not reuse {previous_role}")
             continue
         seen[value] = role
     return blockers
@@ -6724,9 +7501,12 @@ def _expected_native_evm_prover_bundle_status(
     blockers: list[str] = []
     try:
         payload = _load_json(artifact_path)
-    except DuplicateKeyError as exc:
+    except DuplicateJsonKeyError as exc:
         payload = {}
-        blockers.append(f"native EVM Groth16 prover bundle contains duplicate key: {exc.key}")
+        blockers.append(
+            "native EVM Groth16 prover bundle JSON contains duplicate key: "
+            f"{exc.key}"
+        )
     except UnicodeDecodeError as exc:
         payload = {}
         blockers.append(f"native EVM Groth16 prover bundle is not UTF-8 text: {exc}")
@@ -7385,6 +8165,23 @@ def _render_readiness_markdown(
         )
     )
 
+    lines.extend(["", "## Source Inventory", ""])
+    lines.append("| Gate | Status | Blockers |")
+    lines.append("| --- | --- | --- |")
+    for gate in sorted(report["source_inventory"]):
+        inventory = report["source_inventory"][gate]
+        inventory_blockers = inventory.get("validation_blockers") or []
+        blocker_text = (
+            "<br>".join(inventory_blockers) if inventory_blockers else "-"
+        )
+        lines.append(
+            "| `{gate}` | {status} | {blockers} |".format(
+                gate=gate,
+                status=inventory.get("validation_status", "blocked"),
+                blockers=blocker_text,
+            )
+        )
+
     lines.extend(["", "## Lane Readiness", ""])
     lines.append("| Domain | Chain | Status | Records | Blockers |")
     lines.append("| --- | --- | --- | --- | --- |")
@@ -7423,6 +8220,29 @@ def _render_readiness_markdown(
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
+            "- SCCP launch-scope source inventory must pin active launch policy constants and the supported launch-domain set across Rust, all-lanes evidence, and readiness tooling.",
+            "- SCCP Ethereum launch-policy selector source inventory must pin the EthereumMainnetLane selector and negative cross-lane policy tests.",
+            "- SCCP Ethereum launch-policy documentation source inventory must pin the active Ethereum-mainnet policy wording and reject stale BSC-only production-packaging text.",
+            "- SCCP public discovery documentation source inventory must pin supported launch-lane and verifier-target wording so unsupported lanes cannot re-enter Torii discovery evidence silently.",
+            "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
+            "- SCCP Ethereum native receipt-finality source inventory must pin Swift/Kotlin/JVM/Java Android/.NET receipt-proof builders to require finalized-header root, sync-committee root, and beacon slot before local proving can run.",
+            "- SCCP Ethereum Beacon REST finalized-header shape source inventory must pin public SDK validators and negative tests for non-zero parent/state/body roots plus 96-byte finalized-header signatures before local finality evidence can be accepted.",
+            "- SCCP Ethereum Beacon REST execution-payload binding source inventory must pin Beacon target-header/root/block reads, light-client finality-update evidence, execution block-hash/receipts-root binding, and C# SSZ root parity vectors before local finality evidence can be accepted.",
+            "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",
+            "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing and negative config-drift tests.",
+            "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, and negative drift tests.",
+            "- SCCP EVM contract smoke Ethereum mainnet network-id source inventory must pin ETH chain-id vectors, BSC rejection vectors, and accepted-event network-id assertions.",
+            "- SCCP EVM contract smoke production-surface source inventory must pin verifier-code/key, destination-binding, domain-overflow, proof-shape, cross-deployment, and replay rejection smoke coverage.",
+            "- SCCP Ethereum core range/finality binding source inventory must pin finality-height range binding in Core and negative outer-range replay tests.",
+            "- SCCP Ethereum core message replay source inventory must pin durable pinned-record replay protection and negative replay/history tests.",
+            "- SCCP Ethereum Torii pinned message proof source inventory must pin pinned message-proof extraction and negative unpinned-record serving tests.",
+            "- SCCP Ethereum EVM live source/destination source inventory must pin canonical live RPC chain ids, finalized block tags, deployment receipt binding, runtime bytecode hashes, route canary calldata, and proof tuple drift tests.",
+            "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
+            "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
+            "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, and adversarial manifest coverage.",
+            "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte and non-SORA source-proof rejection gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, and Java Android.",
+            "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
+            "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned and reject environment override paths.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
     )
@@ -8958,6 +9778,40 @@ def _submission_surface_inventory_errors(surfaces: list[Any]) -> list[str]:
     for lanes in USER_PROVER_REQUIRED_LANE_BACKENDS:
         if lanes not in seen_lanes:
             errors.append(f"{label} missing required lanes row: {lanes}")
+    return errors
+
+
+def _source_inventory_schema_errors(source_inventory: Any) -> list[str]:
+    label = "readiness report source_inventory"
+    errors: list[str] = []
+    if not isinstance(source_inventory, dict):
+        return [f"{label} is not an object"]
+    for gate in sorted(set(source_inventory) - SOURCE_INVENTORY_REQUIRED_GATES):
+        errors.append(f"{label} contains unknown gate: {gate}")
+    for gate in sorted(SOURCE_INVENTORY_REQUIRED_GATES - set(source_inventory)):
+        errors.append(f"{label} missing required gate: {gate}")
+    for gate, status in sorted(source_inventory.items()):
+        gate_label = f"{label}.{gate}"
+        if not isinstance(status, dict):
+            errors.append(f"{gate_label} must be an object")
+            continue
+        errors.extend(_exact_object_key_errors(gate_label, status, SOURCE_INVENTORY_KEYS))
+        validation_status = status.get("validation_status")
+        if validation_status not in {"passed", "blocked"}:
+            errors.append(f"{gate_label} validation_status must be passed or blocked")
+        elif validation_status != "passed":
+            errors.append(f"{gate_label} validation_status must be passed")
+        errors.extend(
+            _string_list_field_errors(
+                gate_label,
+                status,
+                "validation_blockers",
+                allow_empty=True,
+            )
+        )
+        blockers = status.get("validation_blockers")
+        if isinstance(blockers, list) and blockers:
+            errors.append(f"{gate_label} validation_blockers must be empty")
     return errors
 
 
@@ -10893,6 +11747,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
                     report_native_bundle
                 )
             )
+        errors.extend(_source_inventory_schema_errors(report.get("source_inventory")))
     if summary:
         errors.extend(
             _all_lanes_summary_schema_errors("all-lanes summary", summary)
@@ -11024,6 +11879,7 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_ethereum_route_canary_finalized_receipt_block_inventory_errors())
     errors.extend(_ethereum_evm_block_tag_metadata_inventory_errors())
     errors.extend(_sccp_unready_transparent_proof_config_inventory_errors())
+    errors.extend(_sccp_proof_request_bundle_gate_inventory_errors())
     errors.extend(_contract_smoke_eth_mainnet_network_id_inventory_errors())
     errors.extend(_contract_smoke_evm_production_surface_inventory_errors())
     errors.extend(_native_sccp_no_wasm_readiness_inventory_errors())

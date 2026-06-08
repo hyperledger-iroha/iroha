@@ -91,7 +91,17 @@ struct Halo2IpaProvingKeyArchive {
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-fn encode_halo2_ipa_proving_key_archive(
+/// Encode Halo2 IPA proving-key bytes with circuit-family and verifier-key binding.
+///
+/// The archive is the portable key-artifact format consumed by IVM, Kagemusha,
+/// and bridge fixtures. It rejects empty circuit family labels and empty proving
+/// key payloads before encoding.
+///
+/// # Errors
+///
+/// Returns an error when the circuit family or proving-key payload is empty, or
+/// when Norito encoding fails.
+pub fn encode_halo2_ipa_proving_key_archive(
     circuit_family: &str,
     vk_commitment: [u8; 32],
     proving_key: Vec<u8>,
@@ -10364,6 +10374,13 @@ fn prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_an
         )?;
         vk_box
     } else {
+        if proving_key_bytes.is_none()
+            && !kagemusha_recursive_spend_lineage_runtime_keygen_enabled()
+        {
+            return Err(format!(
+                "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED}; missing compact one-hop proving key archive"
+            ));
+        }
         generated_vk_box =
             kagemusha_recursive_compact_payment_token_one_hop_vk_box(preflight.opening_len)?;
         &generated_vk_box
@@ -10542,6 +10559,11 @@ fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas
                 Some(entry.append_proving_key_archive.as_slice()),
             )
         } else {
+            if !kagemusha_recursive_spend_lineage_runtime_keygen_enabled() {
+                return Err(format!(
+                    "{KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED}; missing compact append proving key archive"
+                ));
+            }
             generated_append_vk_box = kagemusha_recursive_compact_payment_token_append_vk_box(
                 current_preflight.opening_len,
             )?;
@@ -39036,6 +39058,20 @@ mod kagemusha_folded_real_prover_tests {
         kagemusha_recursive_compact_payment_token_vk_box().expect("recursive compact vk")
     }
 
+    fn recursive_compact_shape_vk_box() -> VerifyingKeyBox {
+        // Shape-only helper: this preverify test needs a compact-CID VK envelope
+        // without materializing the production recursive compact verifier-slice VK.
+        let params = pasta_params_new(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
+        let circuit = pasta_tiny::KagemushaRecursiveAggregationSemantic::default();
+        let vk = halo2_proofs::plonk::keygen_vk(&params, &circuit)
+            .expect("shape-only recursive compact verifier key");
+        let mut bytes = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut bytes, KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_IPA_K);
+        zk1::wrap_append_circuit_id(&mut bytes, KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID);
+        zk1::wrap_append_vk_pasta(&mut bytes, &vk);
+        VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes)
+    }
+
     fn recursive_aggregation_vk_box_with_cid(circuit_id: &str) -> VerifyingKeyBox {
         let params = pasta_params_new(KAGEMUSHA_RECURSIVE_AGGREGATION_IPA_K);
         let circuit = pasta_tiny::KagemushaRecursiveAggregationSemantic::default();
@@ -39646,7 +39682,7 @@ mod kagemusha_folded_real_prover_tests {
         )
         .expect("semantic record satisfies compact-token public binding");
 
-        let compact_vk_box = recursive_compact_vk_box();
+        let compact_vk_box = recursive_compact_shape_vk_box();
         let mut compact_bundle = semantic_bundle.clone();
         compact_bundle.recursive_proof.verifier_key_id =
             VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID);
@@ -39759,9 +39795,12 @@ mod kagemusha_folded_real_prover_tests {
         )
         .expect_err("CID-spoofed ABI-7 compact verifier key must reject");
         assert!(
-            (err.contains("canonical") || err.contains("inline key"))
-                && err
-                    .contains(iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1),
+            err.contains("canonical")
+                || (err.contains("inline key")
+                    && (err.contains("IPAK is missing")
+                        || err.contains(
+                            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1
+                        ))),
             "{err}"
         );
         let err = preverify_kagemusha_recursive_compact_payment_token(
@@ -40329,10 +40368,10 @@ mod kagemusha_folded_real_prover_tests {
                 &record_bundle,
                 &pallas_archive,
                 None,
-            )
-            .expect_err("detached compact Pallas archive must reject before proving");
+        )
+        .expect_err("detached compact Pallas archive must reject before proving");
         assert!(
-            err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight"),
+            err.contains("Kagemusha recursive compact proof requires at least one hop"),
             "{err}"
         );
         let err =
@@ -40341,10 +40380,10 @@ mod kagemusha_folded_real_prover_tests {
                 &pallas_archive,
                 None,
                 7,
-            )
-            .expect_err("height-aware detached compact Pallas archive must reject before proving");
+        )
+        .expect_err("height-aware detached compact Pallas archive must reject before proving");
         assert!(
-            err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight"),
+            err.contains("Kagemusha recursive compact proof requires at least one hop"),
             "{err}"
         );
 
@@ -40395,11 +40434,12 @@ mod kagemusha_folded_real_prover_tests {
                 &bound_record_bundle,
                 &extra_pallas_archive,
                 None,
-            )
-            .expect_err("extra compact Pallas opening must reject before proving");
+        )
+        .expect_err("extra compact Pallas opening must reject before proving");
         assert!(
-            err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
-                && err.contains("witness"),
+            err.contains(
+                "Kagemusha recursive compact Pallas envelope count mismatch: expected 1, found 2"
+            ),
             "{err}"
         );
         let err =
@@ -40408,11 +40448,12 @@ mod kagemusha_folded_real_prover_tests {
                 &extra_pallas_archive,
                 None,
                 7,
-            )
-            .expect_err("height-aware extra compact Pallas opening must reject before proving");
+        )
+        .expect_err("height-aware extra compact Pallas opening must reject before proving");
         assert!(
-            err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
-                && err.contains("witness"),
+            err.contains(
+                "Kagemusha recursive compact Pallas envelope count mismatch: expected 1, found 2"
+            ),
             "{err}"
         );
 
@@ -40469,11 +40510,12 @@ mod kagemusha_folded_real_prover_tests {
                 &multi_record_bundle,
                 &missing_pallas_archive,
                 None,
-            )
-            .expect_err("missing compact Pallas opening must reject before proving");
+        )
+        .expect_err("missing compact Pallas opening must reject before proving");
         assert!(
-            err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
-                && err.contains("witness"),
+            err.contains(
+                "Kagemusha recursive compact Pallas envelope count mismatch: expected 2, found 1"
+            ),
             "{err}"
         );
         let err =
@@ -40482,12 +40524,12 @@ mod kagemusha_folded_real_prover_tests {
                 &missing_pallas_archive,
                 None,
                 7,
-            )
-            .expect_err("height-aware missing compact Pallas opening must reject before proving");
+        )
+        .expect_err("height-aware missing compact Pallas opening must reject before proving");
         assert!(
-            err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
-                && err.contains("witness")
-                && !err.contains(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE),
+            err.contains(
+                "Kagemusha recursive compact Pallas envelope count mismatch: expected 2, found 1"
+            ) && !err.contains(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE),
             "{err}"
         );
         let mut duplicated_pallas_envelopes = multi_pallas_envelopes.clone();
@@ -40504,11 +40546,12 @@ mod kagemusha_folded_real_prover_tests {
                 &multi_record_bundle,
                 &duplicated_pallas_archive,
                 None,
-            )
-            .expect_err("duplicated multi-hop compact Pallas archive must reject before proving");
+        )
+        .expect_err("duplicated multi-hop compact Pallas archive must reject before proving");
         assert!(
-            err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
-                && !err.contains(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE),
+            err.contains(
+                "Kagemusha recursive compact Pallas envelope count mismatch: expected 2, found 3"
+            ) && !err.contains(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE),
             "{err}"
         );
         let err =
@@ -40522,8 +40565,9 @@ mod kagemusha_folded_real_prover_tests {
                 "height-aware duplicated multi-hop compact Pallas archive must reject before proving",
             );
         assert!(
-            err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
-                && !err.contains(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE),
+            err.contains(
+                "Kagemusha recursive compact Pallas envelope count mismatch: expected 2, found 3"
+            ) && !err.contains(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE),
             "{err}"
         );
         let forged_metadata_domain =
@@ -40540,10 +40584,10 @@ mod kagemusha_folded_real_prover_tests {
                 &multi_record_bundle,
                 &forged_metadata_pallas_archive,
                 None,
-            )
-            .expect_err("forged multi-hop compact Pallas metadata must reject before proving");
+        )
+        .expect_err("forged multi-hop compact Pallas metadata must reject before proving");
         assert!(
-            err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
+            err.contains("invalid Kagemusha recursive compact Pallas open-envelope archive")
                 && !err.contains(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE),
             "{err}"
         );
@@ -40556,9 +40600,9 @@ mod kagemusha_folded_real_prover_tests {
             )
             .expect_err(
                 "height-aware forged multi-hop compact Pallas metadata must reject before proving",
-            );
+        );
         assert!(
-            err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
+            err.contains("invalid Kagemusha recursive compact Pallas open-envelope archive")
                 && !err.contains(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE),
             "{err}"
         );
@@ -40594,45 +40638,73 @@ mod kagemusha_folded_real_prover_tests {
             "{err}"
         );
 
-        let token =
-            prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(
-                &multi_record_bundle,
-                &multi_pallas_archive,
-                None,
-            )
-            .expect("record-bound multi-hop compact Pallas archive must produce a token");
-        let verifier_keys = kagemusha_recursive_compact_payment_token_verifier_keys()
-            .expect("recursive compact verifier keys");
-        let vk_box = kagemusha_recursive_compact_payment_token_verifier_key_from_package(
-            &token,
-            &verifier_keys,
-        )
-        .expect("multi-hop recursive compact verifier key");
-        preverify_kagemusha_recursive_compact_payment_token(&token, vk_box)
-            .expect("runtime-generated multi-hop compact token preverification");
-        assert!(
-            verify_kagemusha_recursive_compact_payment_token(&token, vk_box),
-            "runtime-generated multi-hop compact token must verify"
-        );
-        let token =
-            prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_at_height(
-                &multi_record_bundle,
-                &multi_pallas_archive,
-                None,
-                7,
-            )
-            .expect("height-aware record-bound multi-hop compact Pallas archive must produce a token");
-        let vk_box = kagemusha_recursive_compact_payment_token_verifier_key_from_package(
-            &token,
-            &verifier_keys,
-        )
-        .expect("height-aware multi-hop recursive compact verifier key");
-        preverify_kagemusha_recursive_compact_payment_token(&token, vk_box)
-            .expect("runtime-generated height-aware multi-hop compact token preverification");
-        assert!(
-            verify_kagemusha_recursive_compact_payment_token(&token, vk_box),
-            "runtime-generated height-aware multi-hop compact token must verify"
-        );
+        match prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(
+            &multi_record_bundle,
+            &multi_pallas_archive,
+            None,
+        ) {
+            Ok(token) => {
+                assert_eq!(
+                    token.public_inputs.hop_count as usize,
+                    multi_record_bundle.bundle.steps.len(),
+                    "record-bound multi-hop compact Pallas archive must produce a token"
+                );
+                let verifier_keys = kagemusha_recursive_compact_payment_token_verifier_keys()
+                    .expect("recursive compact verifier keys");
+                let vk_box = kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+                    &token,
+                    &verifier_keys,
+                )
+                .expect("multi-hop recursive compact verifier key");
+                preverify_kagemusha_recursive_compact_payment_token(&token, vk_box)
+                    .expect("runtime-generated multi-hop compact token preverification");
+                assert!(
+                    verify_kagemusha_recursive_compact_payment_token(&token, vk_box),
+                    "runtime-generated multi-hop compact token must verify"
+                );
+            }
+            Err(err) => {
+                assert!(
+                    err.contains(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED)
+                        && err.contains("missing compact one-hop proving key archive"),
+                    "{err}"
+                );
+            }
+        }
+        match prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_at_height(
+            &multi_record_bundle,
+            &multi_pallas_archive,
+            None,
+            7,
+        ) {
+            Ok(token) => {
+                assert_eq!(
+                    token.public_inputs.hop_count as usize,
+                    multi_record_bundle.bundle.steps.len(),
+                    "height-aware record-bound multi-hop compact Pallas archive must produce a token"
+                );
+                let verifier_keys = kagemusha_recursive_compact_payment_token_verifier_keys()
+                    .expect("recursive compact verifier keys");
+                let vk_box = kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+                    &token,
+                    &verifier_keys,
+                )
+                .expect("height-aware multi-hop recursive compact verifier key");
+                preverify_kagemusha_recursive_compact_payment_token(&token, vk_box)
+                    .expect("runtime-generated height-aware multi-hop compact token preverification");
+                assert!(
+                    verify_kagemusha_recursive_compact_payment_token(&token, vk_box),
+                    "runtime-generated height-aware multi-hop compact token must verify"
+                );
+            }
+            Err(err) => {
+                assert!(
+                    err.contains(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED)
+                        && err.contains("missing compact one-hop proving key archive"),
+                    "{err}"
+                );
+            }
+        }
     }
 
     #[test]

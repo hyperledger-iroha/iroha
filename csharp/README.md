@@ -132,9 +132,12 @@ material: C# wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
-Native append streams the previous recursive proof bytes into
-`recursive_proof_chain_digest`; SDK code must not derive or patch the
-accumulator state.
+Native append streams the previous recursive proof bytes and per-hop accumulator
+material into native-owned accumulator digests (`recursive_proof_chain_digest`,
+lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
+verifier-witness batch, transition-profile, append-opening-preflight,
+append-boundary, scalar-projection, and previous/resulting accumulator digests);
+SDK code must not derive, supply, or patch accumulator state.
 Verify request archives must pass the same public-binding preflight before the
 native bridge returns a recursive spend verify result: Reserved-lineage bundles
 require a matching active `lineage_verifier_record`, semantic bundles must omit
@@ -170,8 +173,9 @@ operation-specific result schema before returning bytes to callers. Capability
 metadata reports `privacy-production-gate-v1`, keeps `ProductionReady = false`,
 and remains fail-closed with missing production gates and no audit references
 until real proving, verification, chain admission, witness privacy checks,
-deterministic testing, negative/adversarial testing, parser/verifier fuzzing, performance gates,
-and external audit signoff are complete.
+deterministic testing, negative/adversarial testing, replay/nullifier rejection
+testing, parser/verifier fuzzing, performance gates, and external audit signoff
+are complete.
 
 C# also exposes the deterministic privacy FFI status/error-code contract for
 diagnostics and cross-language parity: `StatusError`, `ErrorNullPointer`,

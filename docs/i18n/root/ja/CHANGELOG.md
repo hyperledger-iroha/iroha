@@ -17,11 +17,11 @@ translator: machine-google-reviewed
 
 このプロジェクトに対するすべての重要な変更は、このファイルに文書化されます。
 
-## [未公開]- SCALE シムを取り外します。 `norito::codec` はネイティブ Norito シリアル化で実装されるようになりました。
-- クレート全体で `parity_scale_codec` の使用を `norito::codec` に置き換えます。
+## [未公開]- retired codec シムを取り外します。 `norito::codec` はネイティブ Norito シリアル化で実装されるようになりました。
+- クレート全体で `retired_codec` の使用を `norito::codec` に置き換えます。
 - ツールをネイティブ Norito シリアル化に移行し始めます。
-- ネイティブ Norito シリアル化を優先して、残りの `parity-scale-codec` 依存関係をワークスペースから削除します。
-- 残りの SCALE 特性派生をネイティブ Norito 実装に置き換え、バージョン管理されたコーデック モジュールの名前を変更します。
+- ネイティブ Norito シリアル化を優先して、残りの `retired codec` 依存関係をワークスペースから削除します。
+- 残りの retired codec 特性派生をネイティブ Norito 実装に置き換え、バージョン管理されたコーデック モジュールの名前を変更します。
 - 機能ゲート マクロを使用して、`iroha_config_base_derive` と `iroha_futures_derive` を `iroha_derive` にマージします。
 - *(マルチシグ)* 安定したエラー コード/理由でマルチシグ機関からの直接署名を拒否し、ネストされたリレーラー全体でマルチシグ TTL キャップを強制し、送信前に CLI で TTL キャップを表示します (SDK パリティ保留中)。
 - FFI プロシージャ マクロを `iroha_ffi` に移動し、`iroha_ffi_derive` クレートを削除します。
@@ -242,7 +242,7 @@ translator: machine-google-reviewed
 - TransactionValue の名前を CommittedTransaction に変更 (#4610)
 - ID による個人アカウントの認証 (#4411)
 - 秘密鍵にマルチハッシュ形式を使用する (#4541)
- - `parity_scale_decoder` の名前を `norito_cli` に変更します
+ - `legacy_codec_decoder` の名前を `norito_cli` に変更します
 - ブロックをセット B バリデーターに送信します
 - `Role` を透明にする (#4886)
 - ヘッダーからブロックハッシュを導出する (#4890)
@@ -1153,7 +1153,7 @@ translator: machine-google-reviewed
 - hyperledger#2309: CI でのドキュメント テストを再度有効にします。
 - hyperledger#2165 codecov インストールを削除します。
 - 現在のユーザーとの競合を防ぐために、新しいコンテナに移動します。
- - hyperledger#2158 `parity_scale_codec` およびその他の依存関係をアップグレードします。 (Norito コーデック)
+ - hyperledger#2158 `retired_codec` およびその他の依存関係をアップグレードします。 (Norito コーデック)
 - ビルドを修正。
 - hyperledger#2461 iroha2 CIを改善。
 - `syn` を更新します。

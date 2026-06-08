@@ -23,6 +23,7 @@ extern "C" {
 #define CONNECT_NORITO_ERR_OFFLINE_NOTE_PROVE -310
 #define CONNECT_NORITO_ERR_KAGEMUSHA_PROVE -311
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE -312
+#define CONNECT_NORITO_ERR_OFFLINE_NOTE_VERIFY -313
 
 // ---------------- Bridge ABI ----------------
 uint32_t connect_norito_bridge_abi_version(void);
@@ -149,6 +150,48 @@ int32_t connect_norito_encode_defund_offline_note_signed_transaction(
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
     uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+// Generate a recursive Halo2/IPA proof for an Offline redemption against a chain-supplied verifying key.
+// Input: Norito-archive bytes of `OfflineNoteRedeem` and `VerifyingKeyBox`.
+// Output: Norito-archive bytes of `OfflineNoteRecursiveProof`.
+int32_t connect_norito_offline_prove_note_redeem_with_vk(
+    const uint8_t* redeem_norito_ptr,
+    unsigned long redeem_norito_len,
+    const uint8_t* vk_norito_ptr,
+    unsigned long vk_norito_len,
+    uint8_t** out_recursive_proof_ptr,
+    unsigned long* out_recursive_proof_len);
+
+// Generate a recursive Halo2/IPA proof for an Offline audit bundle against a chain-supplied verifying key.
+// Input: Norito-archive bytes of `OfflineNoteAuditBundle` and `VerifyingKeyBox`.
+// Output: Norito-archive bytes of `OfflineNoteRecursiveProof`.
+int32_t connect_norito_offline_prove_note_audit_with_vk(
+    const uint8_t* audit_norito_ptr,
+    unsigned long audit_norito_len,
+    const uint8_t* vk_norito_ptr,
+    unsigned long vk_norito_len,
+    uint8_t** out_recursive_proof_ptr,
+    unsigned long* out_recursive_proof_len);
+
+// Cryptographically verify an Offline redemption's embedded recursive proof against
+// a chain-supplied verifying key. Input: Norito-archive bytes of `OfflineNoteRedeem`
+// and `VerifyingKeyBox`. Returns 1 if valid, 0 if invalid, negative on decode/null error.
+int32_t connect_norito_offline_verify_note_redeem_with_vk(
+    const uint8_t* redeem_norito_ptr,
+    unsigned long redeem_norito_len,
+    const uint8_t* vk_norito_ptr,
+    unsigned long vk_norito_len,
+    int32_t* out_valid);
+
+// Cryptographically verify an Offline audit bundle's embedded recursive proof against
+// a chain-supplied verifying key. Input: Norito-archive bytes of `OfflineNoteAuditBundle`
+// and `VerifyingKeyBox`. Returns 1 if valid, 0 if invalid, negative on decode/null error.
+int32_t connect_norito_offline_verify_note_audit_with_vk(
+    const uint8_t* audit_norito_ptr,
+    unsigned long audit_norito_len,
+    const uint8_t* vk_norito_ptr,
+    unsigned long vk_norito_len,
+    int32_t* out_valid);
 
 // Legacy unanchored Kagemusha compact-token prover retained for ABI compatibility only.
 // Production callers must use `connect_norito_kagemusha_prove_verified_compact_payment_token_with_records`.

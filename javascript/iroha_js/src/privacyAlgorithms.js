@@ -130,6 +130,16 @@ const POST_QUANTUM_REQUIRED_PLANNED_ENTRYPOINT_FRAGMENTS = Object.freeze([
   "MlDsa",
   "MlKem",
 ]);
+const FORBIDDEN_ENTRYPOINT_EVIDENCE_FRAGMENT_PREFIXES = Object.freeze([
+  "Fake",
+  "Forged",
+  "Missing",
+  "No",
+  "Non",
+  "Not",
+  "Placeholder",
+  "Without",
+]);
 const POST_QUANTUM_REQUIRED_SECURITY_NOTE_TOKENS = Object.freeze(["ML-DSA", "ML-KEM"]);
 const POST_QUANTUM_REQUIRED_FAILURE_MODE_TOKENS = Object.freeze(["ML-DSA", "ML-KEM"]);
 const POST_QUANTUM_REQUIRED_STATE_TOKENS = Object.freeze(["ML-KEM"]);
@@ -191,6 +201,10 @@ const STATEFUL_LEDGER_PERSISTENCE_TOKEN_GROUPS = Object.freeze([
   Object.freeze(["persist", "persistence", "restart", "recovery"]),
   Object.freeze(["replay", "nullifier", "revocation", "link-tag", "link tag"]),
 ]);
+const STATEFUL_LEDGER_FAILURE_MODE_TOKEN_GROUPS = Object.freeze([
+  Object.freeze(["stale", "expired", "revoked", "unknown", "wrong"]),
+  Object.freeze(["duplicate", "replay", "replayed", "nullifier", "link-tag", "link tag"]),
+]);
 const WALLET_STATE_REQUIRED_IMPLEMENTATION_STAGES = new Set([
   "chain-executable",
   "sdk-builder",
@@ -204,13 +218,24 @@ const CREDENTIAL_STATE_REQUIRED_CATEGORIES = new Set([
   "credential",
   "identity",
 ]);
-const CREDENTIAL_STATE_METADATA_TOKENS = Object.freeze(["commitment", "accumulator"]);
+const CREDENTIAL_STATE_METADATA_TOKENS = Object.freeze([
+  "commitment",
+  "commitments",
+  "accumulator",
+  "accumulators",
+]);
 const VERIFIER_KEY_RECORD_METADATA_FIELDS = Object.freeze([
   "requiredState",
   "chainRequirements",
   "setupSteps",
 ]);
 const VERIFIER_KEY_RECORD_METADATA_TOKENS = Object.freeze(["verifier key", "verifier-key"]);
+const AFFIRMED_METADATA_FORBIDDEN_EVIDENCE_PREFIXES = Object.freeze([
+  "no",
+  "non",
+  "not",
+  "without",
+]);
 const CHAIN_DOMAIN_BINDING_METADATA_FIELDS = Object.freeze([
   "publicInputsSchema",
   "securityNotes",
@@ -220,26 +245,65 @@ const CHAIN_DOMAIN_BINDING_METADATA_FIELDS = Object.freeze([
 ]);
 const CHAIN_DOMAIN_BINDING_METADATA_TOKENS = Object.freeze([
   "domain_separator",
-  "domain-separat",
   "domain separat",
+  "domain separated",
+  "domain separation",
+  "domain separator",
+  "domain-separated",
+  "domain-separation",
+  "domain-separator",
+  "chain_id",
+  "chain-id",
+  "chain_tag",
+  "chain tag",
+  "tx_digest",
+  "tx digest",
+  "transaction digest",
+  "transaction-digest",
+  "reference_block",
+  "reference block",
+  "reference-block",
+  "rollup_state",
+  "rollup state",
+  "rollup-state",
+  "anchor",
+  "epoch",
+]);
+const CHAIN_DOMAIN_BINDING_FORBIDDEN_EVIDENCE_PREFIXES = Object.freeze([
+  "no",
+  "non",
+  "not",
+  "without",
+]);
+const PUBLIC_INPUT_SCHEMA_CHAIN_DOMAIN_BINDING_TOKEN_FRAGMENTS = Object.freeze([
+  "domain_separator",
   "chain_id",
   "chain_tag",
   "tx_digest",
-  "transaction",
-  "reference_block",
-  "reference block",
-  "rollup_state",
-  "rollup state",
   "anchor",
-  "epoch",
+  "reference_block",
+  "rollup_state",
+]);
+const PUBLIC_INPUT_SCHEMA_FORBIDDEN_EVIDENCE_PREFIXES = Object.freeze([
+  "no",
+  "non",
+  "not",
+  "without",
 ]);
 const SOURCE_REFERENCED_HARDENING_NOTE_TOKEN_GROUPS = Object.freeze([
   Object.freeze(["deterministic vector", "deterministic vectors"]),
   Object.freeze(["negative/adversarial", "negative test", "adversarial test"]),
+  Object.freeze(["replay/nullifier", "replay", "nullifier"]),
   Object.freeze(["parser/verifier fuzzing", "parser fuzzing"]),
   Object.freeze(["parser/verifier fuzzing", "verifier fuzzing"]),
   Object.freeze(["audit", "audited", "review"]),
   Object.freeze(["performance", "benchmark", "latency"]),
+]);
+const SOURCE_REFERENCED_HARDENING_FORBIDDEN_EVIDENCE_PREFIXES = Object.freeze([
+  "no",
+  "non",
+  "not",
+  "without",
 ]);
 const WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS = Object.freeze([
   Object.freeze(["wallet", "witness", "private input", "private inputs", "plaintext", "secret"]),
@@ -252,6 +316,17 @@ const WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS = Object.freeze([
     "must not leak",
     "never leave",
   ]),
+]);
+const WALLET_WITNESS_POSITIVE_NEGATION_PREFIXES = Object.freeze([
+  "not leak",
+  "must not leak",
+  "not expose",
+  "must not expose",
+  "not exposed",
+  "not be exposed",
+  "must not be exposed",
+  "never leave",
+  "never leave the",
 ]);
 const VERIFIER_NEGATIVE_FAILURE_MODE_TOKEN_GROUPS = Object.freeze([
   Object.freeze(["malformed proof", "invalid proof", "proof parse", "proof rejected"]),
@@ -296,10 +371,10 @@ const SECURITY_NOTE_COMPLETED_AUDIT_CLAIM_COMPACT_FRAGMENTS = Object.freeze([
   "auditapproved",
   "auditcleared",
   "auditsignoff",
-  "externalauditcomplete",
-  "externalauditcompleted",
-  "externalauditpassed",
-  "externalauditapproved",
+  "internalcryptographicreviewcomplete",
+  "internalcryptographicreviewcompleted",
+  "internalcryptographicreviewpassed",
+  "internalcryptographicreviewapproved",
   "securityreviewcomplete",
   "securityreviewcompleted",
   "securityreviewpassed",
@@ -342,7 +417,7 @@ const DISPLAY_FIELD_PRODUCTION_CLAIM_COMPACT_FRAGMENTS = Object.freeze([
   "thirdpartyaudited",
   "boiaudited",
   "auditedmainnet",
-  "externalaudit",
+  "internalcryptographicreview",
   "auditpassed",
   "auditapproved",
   "auditsignoff",
@@ -369,10 +444,10 @@ const DISPLAY_FIELD_PRODUCTION_CLAIM_COMPACT_FRAGMENTS = Object.freeze([
   "auditcompleted",
   "auditclaim",
   "claimedaudit",
-  "externalauditcomplete",
-  "externalauditcompleted",
-  "externalauditpassed",
-  "externalauditapproved",
+  "internalcryptographicreviewcomplete",
+  "internalcryptographicreviewcompleted",
+  "internalcryptographicreviewpassed",
+  "internalcryptographicreviewapproved",
   "securityreviewcomplete",
   "securityreviewcompleted",
   "securityreviewapproved",
@@ -419,11 +494,12 @@ const PRODUCTION_GATE_REQUIREMENTS = Object.freeze([
   Object.freeze(["witness_privacy_checks", "witness privacy checks are incomplete"]),
   Object.freeze(["deterministic_tests", "deterministic tests are incomplete"]),
   Object.freeze(["negative_adversarial_tests", "negative/adversarial tests are incomplete"]),
+  Object.freeze(["replay_nullifier_tests", "replay/nullifier rejection tests are incomplete"]),
   Object.freeze(["fuzzing", "fuzzing gate is incomplete"]),
   Object.freeze(["parser_fuzzing", "parser fuzzing gate is incomplete"]),
   Object.freeze(["verifier_fuzzing", "verifier fuzzing gate is incomplete"]),
   Object.freeze(["performance_gates", "performance gate is incomplete"]),
-  Object.freeze(["external_audit", "external audit signoff is missing"]),
+  Object.freeze(["external_audit", "internal cryptographic review signoff is missing"]),
 ]);
 const PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE =
   "implementation stage is not production-hardened";
@@ -878,7 +954,7 @@ const REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = Object.freeze({
   "zk-ams-recursive-admission-v0": Object.freeze(["duplicate credential admission", "wrong issuer root", "batch omission or account commitment substitution", "recursive proof parameter mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
   "vega-existing-credential-zk-v0": Object.freeze(["expired credential", "wrong issuer", "predicate mismatch", "wallet-binding replay", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
   "silent-threshold-anoncred-v0": Object.freeze(["insufficient issuer threshold", "issuer-set substitution", "credential showing replay", "verifier-policy mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
-  "zk-x509-onchain-identity-v0": Object.freeze(["expired certificate", "revoked certificate", "unknown CA root", "wrong wallet address binding", "stale revocation root", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["expired certificate", "revoked certificate", "unknown CA root", "wrong wallet address binding", "address-binding replay", "stale revocation root", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
   "jindo-lattice-pcs-zk-v0": Object.freeze(["parameter mismatch", "opening claim substitution", "unsupported query set", "backend misclassified as production-ready", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
   "sis-hints-anoncred-pq-v0": Object.freeze(["wrong parameter set", "issuer parameter substitution", "credential showing replay", "overclaiming production readiness from assumption research", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
   "zk-ace-pq-authorization-v0": Object.freeze(["transaction digest substitution", "chain-id or domain-separator mismatch", "replayed nullifier", "revoked identity commitment", "policy hash mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
@@ -890,22 +966,22 @@ const REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = Object.freeze({
   "pq-masp-stark-v0": Object.freeze(["stale asset-set root", "duplicate PQ nullifier", "ML-DSA or ML-KEM domain mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"]),
 });
 const REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID = Object.freeze({
-  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "verange-transparent-range-v1": Object.freeze(["This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "zkat-policy-private-auth-v1": Object.freeze(["Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "zk-ams-recursive-admission-v0": Object.freeze(["Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "vega-existing-credential-zk-v0": Object.freeze(["Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "silent-threshold-anoncred-v0": Object.freeze(["Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "zk-x509-onchain-identity-v0": Object.freeze(["Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "jindo-lattice-pcs-zk-v0": Object.freeze(["This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "sis-hints-anoncred-pq-v0": Object.freeze(["This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "zk-ace-pq-authorization-v0": Object.freeze(["Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "orchard-halo2-actions-v1": Object.freeze(["Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "penumbra-masp-v1": Object.freeze(["Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "monero-fcmp-plus-plus-v1": Object.freeze(["Full-chain membership roots must be canonical and replay protected.", "Link tags/key images must be unique without revealing owned outputs.", "Range-proof and amount-commitment parameters require production verifier review.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "miden-stark-note-v1": Object.freeze(["Private note data and off-chain delivery metadata must stay wallet-local.", "Account-local transition proofs must bind initial and final account commitments.", "Reference blocks must prevent replay against stale account state.", "Production Miden note transactions require audited STARK parameters and account-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "aztec-private-rollup-v1": Object.freeze(["Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.", "Encrypted log delivery metadata must not leak wallet note ownership.", "Recursive verifier registration must distinguish private-kernel versions and rollup state roots.", "Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
-  "pq-masp-stark-v0": Object.freeze(["PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.", "ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.", "Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review."]),
+  "anonymous-pgc-k-out-of-n-v1": Object.freeze(["Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "verange-transparent-range-v1": Object.freeze(["This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "zkat-policy-private-auth-v1": Object.freeze(["Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "zk-ams-recursive-admission-v0": Object.freeze(["Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "vega-existing-credential-zk-v0": Object.freeze(["Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "silent-threshold-anoncred-v0": Object.freeze(["Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "zk-x509-onchain-identity-v0": Object.freeze(["Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "jindo-lattice-pcs-zk-v0": Object.freeze(["This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "sis-hints-anoncred-pq-v0": Object.freeze(["This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "orchard-halo2-actions-v1": Object.freeze(["Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "penumbra-masp-v1": Object.freeze(["Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "monero-fcmp-plus-plus-v1": Object.freeze(["Full-chain membership roots must be canonical and replay protected.", "Link tags/key images must be unique without revealing owned outputs.", "Range-proof and amount-commitment parameters require production verifier review.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "miden-stark-note-v1": Object.freeze(["Private note data and off-chain delivery metadata must stay wallet-local.", "Account-local transition proofs must bind initial and final account commitments.", "Reference blocks must prevent replay against stale account state.", "Production Miden note transactions require audited STARK parameters and account-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "aztec-private-rollup-v1": Object.freeze(["Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.", "Encrypted log delivery metadata must not leak wallet note ownership.", "Recursive verifier registration must distinguish private-kernel versions and rollup state roots.", "Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
+  "pq-masp-stark-v0": Object.freeze(["PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.", "ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.", "Post-quantum readiness still requires parameter review, parser fuzzing, and internal cryptographic review.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."]),
 });
 const REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID = Object.freeze({
   "anonymous-pgc-k-out-of-n-v1": Object.freeze([
@@ -1285,6 +1361,241 @@ function publicInputSchemaTokenHasPayloadMetadata(value) {
   return value
     .split("_")
     .some((segment) => PUBLIC_INPUT_SCHEMA_FORBIDDEN_PAYLOAD_TOKEN_SEGMENTS.includes(segment));
+}
+
+function publicInputsSchemaHasChainDomainBinding(value) {
+  return value.split(",").some((token) =>
+    PUBLIC_INPUT_SCHEMA_CHAIN_DOMAIN_BINDING_TOKEN_FRAGMENTS.some((fragment) =>
+      publicInputSchemaTokenHasFragment(token, fragment),
+    )
+  );
+}
+
+function entrypointNameHasEvidenceFragment(name, fragment) {
+  let index = name.indexOf(fragment);
+  while (index !== -1) {
+    const prefix = name.slice(0, index);
+    const suffix = name.slice(index + fragment.length);
+    const hasPrefixBoundary = index === 0 || /^[A-Za-z0-9]$/u.test(name[index - 1]);
+    const hasSuffixBoundary = suffix === "" || /^[A-Z0-9]$/u.test(suffix[0]);
+    const hasForbiddenPrefix = FORBIDDEN_ENTRYPOINT_EVIDENCE_FRAGMENT_PREFIXES.some(
+      (forbiddenPrefix) => prefix.endsWith(forbiddenPrefix),
+    );
+    if (hasPrefixBoundary && hasSuffixBoundary && !hasForbiddenPrefix) {
+      return true;
+    }
+    index = name.indexOf(fragment, index + 1);
+  }
+  return false;
+}
+
+function entrypointNameHasTerminalEvidenceFragment(name, fragment) {
+  let index = name.indexOf(fragment);
+  while (index !== -1) {
+    const prefix = name.slice(0, index);
+    const suffix = name.slice(index + fragment.length);
+    const hasPrefixBoundary = index === 0 || /^[A-Za-z0-9]$/u.test(name[index - 1]);
+    const hasTerminalSuffix = suffix === "" || /^V[0-9]+$/u.test(suffix);
+    const hasForbiddenPrefix = FORBIDDEN_ENTRYPOINT_EVIDENCE_FRAGMENT_PREFIXES.some(
+      (forbiddenPrefix) => prefix.endsWith(forbiddenPrefix),
+    );
+    if (hasPrefixBoundary && hasTerminalSuffix && !hasForbiddenPrefix) {
+      return true;
+    }
+    index = name.indexOf(fragment, index + 1);
+  }
+  return false;
+}
+
+function plannedEntrypointNameHasPrimitiveFragment(name, fragment) {
+  return entrypointNameHasEvidenceFragment(name, fragment);
+}
+
+function publicInputSchemaTokenHasFragment(token, fragment) {
+  const tokenSegments = token.split("_");
+  const fragmentSegments = fragment.split("_");
+  for (let index = 0; index <= tokenSegments.length - fragmentSegments.length; index += 1) {
+    const matchesFragment = fragmentSegments.every(
+      (segment, offset) => tokenSegments[index + offset] === segment,
+    );
+    if (!matchesFragment) {
+      continue;
+    }
+    const hasForbiddenPrefix = tokenSegments
+      .slice(0, index)
+      .some((prefix) => PUBLIC_INPUT_SCHEMA_FORBIDDEN_EVIDENCE_PREFIXES.includes(prefix));
+    if (!hasForbiddenPrefix) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function catalogTextContainsBoundedToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    const after = index + token.length >= value.length ? "" : value[index + token.length];
+    if (!isAsciiAlnum(before) && !isAsciiAlnum(after)) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextValuesContainBoundedToken(values, token) {
+  return values.some((value) => catalogTextContainsBoundedToken(value, token));
+}
+
+function catalogTextValuesContainAffirmedMetadataToken(values, token) {
+  return values.some((value) => catalogTextContainsAffirmedMetadataToken(value, token));
+}
+
+function catalogTextContainsMetadataToken(value, token) {
+  return token === "zk::"
+    ? catalogTextContainsNamespaceToken(value, token)
+    : catalogTextContainsBoundedToken(value, token);
+}
+
+function catalogTextContainsTypedAdmissionToken(value, token) {
+  return token === "zk::"
+    ? catalogTextContainsAffirmedNamespaceToken(value, token)
+    : catalogTextContainsAffirmedMetadataToken(value, token);
+}
+
+function catalogTextContainsAffirmedNamespaceToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    if (
+      !isAsciiAlnum(before) &&
+      before !== "_" &&
+      !catalogTextHasForbiddenEvidencePrefix(
+        value,
+        index,
+        AFFIRMED_METADATA_FORBIDDEN_EVIDENCE_PREFIXES,
+      )
+    ) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextContainsAffirmedMetadataToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    const after = index + token.length >= value.length ? "" : value[index + token.length];
+    if (
+      !isAsciiAlnum(before) &&
+      !isAsciiAlnum(after) &&
+      !catalogTextHasForbiddenEvidencePrefix(
+        value,
+        index,
+        AFFIRMED_METADATA_FORBIDDEN_EVIDENCE_PREFIXES,
+      )
+    ) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextContainsWalletWitnessPrivacyToken(value, token) {
+  if (token.startsWith("not ") || token.startsWith("must not ") || token === "never leave") {
+    return catalogTextContainsMetadataToken(value, token);
+  }
+  if (catalogTextContainsAffirmedMetadataToken(value, token)) {
+    return true;
+  }
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    const after = index + token.length >= value.length ? "" : value[index + token.length];
+    if (
+      !isAsciiAlnum(before) &&
+      !isAsciiAlnum(after) &&
+      catalogTextHasPositiveWalletWitnessPrivacyPrefix(value, index)
+    ) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextHasPositiveWalletWitnessPrivacyPrefix(value, index) {
+  const segments = value.slice(0, index).toLowerCase().match(/[a-z0-9]+/gu) ?? [];
+  const tail = segments.slice(-5).join(" ");
+  return WALLET_WITNESS_POSITIVE_NEGATION_PREFIXES.some((prefix) => tail.endsWith(prefix));
+}
+
+function catalogTextContainsChainDomainBindingToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    const after = index + token.length >= value.length ? "" : value[index + token.length];
+    if (
+      !isAsciiAlnum(before) &&
+      !isAsciiAlnum(after) &&
+      !catalogTextHasForbiddenEvidencePrefix(
+        value,
+        index,
+        CHAIN_DOMAIN_BINDING_FORBIDDEN_EVIDENCE_PREFIXES,
+      )
+    ) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextContainsSourceHardeningToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    const after = index + token.length >= value.length ? "" : value[index + token.length];
+    if (
+      !isAsciiAlnum(before) &&
+      !isAsciiAlnum(after) &&
+      !catalogTextHasForbiddenEvidencePrefix(
+        value,
+        index,
+        SOURCE_REFERENCED_HARDENING_FORBIDDEN_EVIDENCE_PREFIXES,
+      )
+    ) {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function catalogTextHasForbiddenEvidencePrefix(value, index, forbiddenPrefixes) {
+  const prefix = value.slice(0, index).toLowerCase();
+  const segments = prefix.match(/[a-z0-9]+/gu) ?? [];
+  return segments.slice(-3).some((segment) => forbiddenPrefixes.includes(segment));
+}
+
+function catalogTextContainsNamespaceToken(value, token) {
+  let index = value.indexOf(token);
+  while (index !== -1) {
+    const before = index === 0 ? "" : value[index - 1];
+    if (!isAsciiAlnum(before) && before !== "_") {
+      return true;
+    }
+    index = value.indexOf(token, index + 1);
+  }
+  return false;
+}
+
+function isAsciiAlnum(value) {
+  return /^[A-Za-z0-9]$/u.test(value);
 }
 
 function isProofFamilyName(value) {
@@ -1725,44 +2036,37 @@ function entrypointIsDevFixture(entrypoint) {
 }
 
 function entrypointIsExplicitDevFixture(entrypoint) {
-  const normalized = entrypoint.replaceAll("-", "_").toLowerCase();
-  const compact = entrypoint.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const segments = entrypoint.split(".");
+  const name = segments[segments.length - 1];
   return (
-    normalized.includes("devfixture") ||
-    normalized.includes("dev_fixture") ||
-    normalized.includes("devprooffixture") ||
-    normalized.includes("dev_proof_fixture") ||
-    compact.includes("devfixture") ||
-    compact.includes("devprooffixture")
+    entrypointNameHasTerminalEvidenceFragment(name, "DevFixture") ||
+    entrypointNameHasTerminalEvidenceFragment(name, "DevProofFixture")
   );
 }
 
 function entrypointIsLocalVerifier(entrypoint) {
   const segments = entrypoint.split(".");
   const name = segments[segments.length - 1];
-  const lower = name.toLowerCase();
   return (
-    lower.startsWith("verify") &&
-    (lower.endsWith("locally") ||
-      lower.endsWith("local") ||
-      lower.includes("localverifier") ||
-      lower.includes("localonly"))
+    name.startsWith("verify") &&
+    (entrypointNameHasEvidenceFragment(name, "Local") ||
+      entrypointNameHasEvidenceFragment(name, "Locally"))
   );
 }
 
 function entrypointIsInstructionBuilder(entrypoint) {
   const segments = entrypoint.split(".");
   const name = segments[segments.length - 1];
-  return name.endsWith("Instruction");
+  return entrypointNameHasTerminalEvidenceFragment(name, "Instruction");
 }
 
 function entrypointIsPlannedLedgerMutation(entrypoint) {
   const segments = entrypoint.split(".");
   const name = segments[segments.length - 1];
   return (
-    name.endsWith("Instruction") ||
-    name.endsWith("Transaction") ||
-    name.includes("Submit")
+    ["Instruction", "Transaction"].some((fragment) =>
+      entrypointNameHasTerminalEvidenceFragment(name, fragment)
+    ) || entrypointNameHasEvidenceFragment(name, "Submit")
   );
 }
 
@@ -1783,7 +2087,7 @@ function entrypointIsProductionProofBuilder(entrypoint) {
   const name = segments[segments.length - 1];
   return (
     name.startsWith("build") &&
-    name.includes("Proof") &&
+    entrypointNameHasEvidenceFragment(name, "Proof") &&
     !entrypointIsInstructionBuilder(entrypoint) &&
     !entrypointIsPlannedLedgerMutation(entrypoint) &&
     !entrypointIsProofHelper(entrypoint) &&
@@ -1795,9 +2099,11 @@ function hasDevFixtureNonProductionWarning(notes) {
   return notes.some((note) => {
     const normalized = note.toLowerCase();
     return (
-      normalized.includes("dev fixture") &&
-      normalized.includes("production") &&
-      normalized.includes("unavailable")
+      ["dev fixture", "dev fixtures"].some((token) =>
+        catalogTextContainsAffirmedMetadataToken(normalized, token),
+      ) &&
+      catalogTextContainsAffirmedMetadataToken(normalized, "production") &&
+      catalogTextContainsAffirmedMetadataToken(normalized, "unavailable")
     );
   });
 }
@@ -2053,7 +2359,7 @@ function validateRequiredPrivacyPlanRows(descriptors) {
     for (const stateToken of REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID[
       algorithmId
     ]) {
-      if (!stateText.includes(stateToken)) {
+      if (!catalogTextContainsAffirmedMetadataToken(stateText, stateToken)) {
         throw new Error(
           `privacy algorithm catalog required production privacy plan row ${algorithmId} must retain required state token ${stateToken} until the production inventory is deliberately updated`,
         );
@@ -2066,7 +2372,7 @@ function validateRequiredPrivacyPlanRows(descriptors) {
       ...REQUIRED_PRIVACY_PLAN_COMMON_FAILURE_MODE_TOKENS,
       ...REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID[algorithmId],
     ]) {
-      if (!failureModeText.includes(failureToken)) {
+      if (!catalogTextContainsAffirmedMetadataToken(failureModeText, failureToken)) {
         throw new Error(
           `privacy algorithm catalog required production privacy plan row ${algorithmId} must retain required failure-mode token ${failureToken} until the production inventory is deliberately updated`,
         );
@@ -2560,7 +2866,7 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
       ...(descriptor.chainRequirements ?? []),
     ].map((value) => value.toLowerCase());
     const hasProtectionMetadata = LEDGER_MUTATION_PROTECTION_METADATA_TOKENS.some((token) =>
-      protectionValues.some((value) => value.includes(token)),
+      catalogTextValuesContainAffirmedMetadataToken(protectionValues, token),
     );
     if (!hasProtectionMetadata) {
       throw new Error(
@@ -2571,8 +2877,12 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
       (field) => descriptor[field] ?? [],
     ).join(" ").toLowerCase();
     const hasTypedAdmissionMetadata =
-      TYPED_CHAIN_ADMISSION_TYPE_TOKENS.some((token) => typedAdmissionText.includes(token)) &&
-      TYPED_CHAIN_ADMISSION_MUTATION_TOKENS.some((token) => typedAdmissionText.includes(token));
+      TYPED_CHAIN_ADMISSION_TYPE_TOKENS.some((token) =>
+        catalogTextContainsTypedAdmissionToken(typedAdmissionText, token),
+      ) &&
+      TYPED_CHAIN_ADMISSION_MUTATION_TOKENS.some((token) =>
+        catalogTextContainsTypedAdmissionToken(typedAdmissionText, token),
+      );
     if (!hasTypedAdmissionMetadata) {
       throw new Error(
         `privacy algorithm descriptor ${index}.plannedSdkEntrypoints ledger-mutating entries require explicit typed chain admission metadata; missing typed admission metadata for ${plannedLedgerMutations.join(", ")}`,
@@ -2580,18 +2890,33 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
     }
     const requiredStateText = (descriptor.requiredState ?? []).join(" ").toLowerCase();
     const hasStatefulLedgerState = STATEFUL_LEDGER_STATE_TOKENS.some((token) =>
-      requiredStateText.includes(token),
+      catalogTextContainsAffirmedMetadataToken(requiredStateText, token),
     );
     if (hasStatefulLedgerState) {
       const persistenceText = STATEFUL_LEDGER_PERSISTENCE_METADATA_FIELDS.flatMap(
         (field) => descriptor[field] ?? [],
       ).join(" ").toLowerCase();
       const missingPersistenceGroups = STATEFUL_LEDGER_PERSISTENCE_TOKEN_GROUPS.filter(
-        (tokens) => !tokens.some((token) => persistenceText.includes(token)),
+        (tokens) =>
+          !tokens.some((token) =>
+            catalogTextContainsAffirmedMetadataToken(persistenceText, token),
+          ),
       );
       if (missingPersistenceGroups.length > 0) {
         throw new Error(
           `privacy algorithm descriptor ${index}.plannedSdkEntrypoints ledger-mutating entries require restart/persistence metadata for root, nullifier, revocation, or replay state; missing persistence metadata for ${plannedLedgerMutations.join(", ")}`,
+        );
+      }
+      const failureModesText = (descriptor.failureModes ?? []).join(" ").toLowerCase();
+      const missingStatefulFailureModeGroups = STATEFUL_LEDGER_FAILURE_MODE_TOKEN_GROUPS.filter(
+        (tokens) =>
+          !tokens.some((token) =>
+            catalogTextContainsAffirmedMetadataToken(failureModesText, token),
+          ),
+      );
+      if (missingStatefulFailureModeGroups.length > 0) {
+        throw new Error(
+          `privacy algorithm descriptor ${index}.failureModes must include stale-state and duplicate/replay rejection for ledger-mutating root, nullifier, revocation, or replay state`,
         );
       }
     }
@@ -2694,7 +3019,10 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
     });
     const missingPlannedEntrypointFragments =
       POST_QUANTUM_REQUIRED_PLANNED_ENTRYPOINT_FRAGMENTS.filter(
-        (fragment) => !plannedEntrypointNames.some((name) => name.includes(fragment)),
+        (fragment) =>
+          !plannedEntrypointNames.some((name) =>
+            plannedEntrypointNameHasPrimitiveFragment(name, fragment),
+          ),
       );
     if (missingPlannedEntrypointFragments.length > 0) {
       throw new Error(
@@ -2722,7 +3050,10 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
       ],
     ]) {
       const missingTokens = requiredTokens.filter(
-        (token) => !values.some((value) => value.includes(token)),
+        (token) =>
+          !values.some((value) =>
+            catalogTextContainsAffirmedMetadataToken(value, token),
+          ),
       );
       if (missingTokens.length > 0) {
         throw new Error(
@@ -2820,14 +3151,21 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
     !WALLET_STATE_REQUIRED_EXCLUDED_CATEGORIES.has(descriptor.category)
   ) {
     const requiredStateText = (descriptor.requiredState ?? []).join(" ").toLowerCase();
-    if (!WALLET_STATE_METADATA_TOKENS.some((token) => requiredStateText.includes(token))) {
+    if (
+      !WALLET_STATE_METADATA_TOKENS.some((token) =>
+        catalogTextContainsAffirmedMetadataToken(requiredStateText, token),
+      )
+    ) {
       throw new Error(
         `privacy algorithm descriptor ${index}.requiredState must include wallet or witness state metadata for source-referenced privacy flows`,
       );
     }
     const securityNotesText = (descriptor.securityNotes ?? []).join(" ").toLowerCase();
     const missingWitnessPrivacyGroups = WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS.filter(
-      (tokens) => !tokens.some((token) => securityNotesText.includes(token)),
+      (tokens) =>
+        !tokens.some((token) =>
+          catalogTextContainsWalletWitnessPrivacyToken(securityNotesText, token),
+        ),
     );
     if (missingWitnessPrivacyGroups.length > 0) {
       throw new Error(
@@ -2840,7 +3178,11 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
     CREDENTIAL_STATE_REQUIRED_CATEGORIES.has(descriptor.category)
   ) {
     const requiredStateText = (descriptor.requiredState ?? []).join(" ").toLowerCase();
-    if (!CREDENTIAL_STATE_METADATA_TOKENS.some((token) => requiredStateText.includes(token))) {
+    if (
+      !CREDENTIAL_STATE_METADATA_TOKENS.some((token) =>
+        catalogTextContainsAffirmedMetadataToken(requiredStateText, token),
+      )
+    ) {
       throw new Error(
         `privacy algorithm descriptor ${index}.requiredState must include credential, identity, or admission commitment/accumulator state metadata`,
       );
@@ -2853,7 +3195,10 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
   ) {
     const failureModesText = (descriptor.failureModes ?? []).join(" ").toLowerCase();
     const missingNegativeFailureModeGroups = VERIFIER_NEGATIVE_FAILURE_MODE_TOKEN_GROUPS.filter(
-      (tokens) => !tokens.some((token) => failureModesText.includes(token)),
+      (tokens) =>
+        !tokens.some((token) =>
+          catalogTextContainsAffirmedMetadataToken(failureModesText, token),
+        ),
     );
     if (missingNegativeFailureModeGroups.length > 0) {
       throw new Error(
@@ -2865,7 +3210,7 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
     ).join(" ").toLowerCase();
     if (
       !VERIFIER_KEY_RECORD_METADATA_TOKENS.some((token) =>
-        verifierKeyRecordText.includes(token),
+        catalogTextContainsAffirmedMetadataToken(verifierKeyRecordText, token),
       )
     ) {
       throw new Error(
@@ -2884,32 +3229,38 @@ export function validatePrivacyAlgorithmDescriptor(descriptor, index = 0) {
     }).join(" ").toLowerCase();
     if (
       !CHAIN_DOMAIN_BINDING_METADATA_TOKENS.some((token) =>
-        chainDomainBindingText.includes(token),
+        catalogTextContainsChainDomainBindingToken(chainDomainBindingText, token),
       )
     ) {
       throw new Error(
         `privacy algorithm descriptor ${index} must include chain/domain binding metadata for source-referenced verifier entries`,
       );
     }
+    if (!publicInputsSchemaHasChainDomainBinding(descriptor.publicInputsSchema)) {
+      throw new Error(
+        `privacy algorithm descriptor ${index}.publicInputsSchema must include chain/domain binding public input for source-referenced verifier entries`,
+      );
+    }
   }
   if (SOURCE_REFERENCED_IMPLEMENTATION_STAGES.has(descriptor.implementationStage)) {
     const securityNotesText = (descriptor.securityNotes ?? []).join(" ").toLowerCase();
     const missingHardeningGroups = SOURCE_REFERENCED_HARDENING_NOTE_TOKEN_GROUPS.filter(
-      (tokens) => !tokens.some((token) => securityNotesText.includes(token)),
+      (tokens) =>
+        !tokens.some((token) => catalogTextContainsSourceHardeningToken(securityNotesText, token)),
     );
     if (missingHardeningGroups.length > 0) {
       throw new Error(
-        `privacy algorithm descriptor ${index}.securityNotes must include deterministic vectors, negative/adversarial cases, parser/verifier fuzzing, performance, and audit/review hardening gates for source-referenced entries`,
+        `privacy algorithm descriptor ${index}.securityNotes must include deterministic vectors, negative/adversarial cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance, and audit/review hardening gates for source-referenced entries`,
       );
     }
   }
   if (descriptor.implementationStage === RESEARCH_STAGE_MAY_2026) {
     const securityNotesText = (descriptor.securityNotes ?? []).join(" ").toLowerCase();
     const hasReadinessMarker = RESEARCH_TARGET_PRODUCTION_READINESS_TOKENS.every((token) =>
-      securityNotesText.includes(token),
+      catalogTextContainsAffirmedMetadataToken(securityNotesText, token),
     );
     const hasEvidenceMarker = RESEARCH_TARGET_READINESS_EVIDENCE_TOKENS.some((token) =>
-      securityNotesText.includes(token),
+      catalogTextContainsAffirmedMetadataToken(securityNotesText, token),
     );
     if (!hasReadinessMarker || !hasEvidenceMarker) {
       throw new Error(
@@ -3114,7 +3465,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "active identity commitment registry",
@@ -3194,7 +3545,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Receiver ciphertext commitments must bind to the same transaction digest as the proof.",
       "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "anonymous account commitment set",
@@ -3273,7 +3624,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Range parameters must be bound to the transaction payload and verifier key.",
       "Aggregated proof limits must be enforced by validators.",
       "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "range-proof verifier parameters",
@@ -3347,7 +3698,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "policy commitment registry",
@@ -3427,7 +3778,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "issuer root registry",
@@ -3505,7 +3856,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "credential issuer registry",
@@ -3584,7 +3935,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "threshold issuer registry",
@@ -3662,7 +4013,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "trusted CA root registry",
@@ -3678,6 +4029,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "revoked certificate",
       "unknown CA root",
       "wrong wallet address binding",
+      "address-binding replay",
       "stale revocation root",
       "malformed proof bytes",
       "wrong verifier key",
@@ -3743,7 +4095,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "PQ proof coverage alone does not imply PQ authorization or note encryption.",
       "Parameter selection and implementation security require independent review.",
       "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "lattice PCS parameter registry",
@@ -3820,7 +4172,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "lattice credential parameter registry",
@@ -3897,7 +4249,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.",
       "Viewing-key and outgoing-viewing metadata must remain wallet-local.",
       "Production readiness requires audited Halo2 parameters and note-encryption review.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "Orchard note commitment tree",
@@ -3976,7 +4328,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Groth16 parameter registration must distinguish spend and output circuits.",
       "Wallet note plaintexts and position metadata must not be exposed through public APIs.",
       "Production MASP use requires audited parameter governance and chain-state integration review.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "multi-asset state commitment tree",
@@ -4047,7 +4399,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Link tags/key images must be unique without revealing owned outputs.",
       "Range-proof and amount-commitment parameters require production verifier review.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "full-output-set commitment accumulator",
@@ -4129,7 +4481,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Account-local transition proofs must bind initial and final account commitments.",
       "Reference blocks must prevent replay against stale account state.",
       "Production Miden note transactions require audited STARK parameters and account-state integration review.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "private note hash database",
@@ -4204,7 +4556,7 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Encrypted log delivery metadata must not leak wallet note ownership.",
       "Recursive verifier registration must distinguish private-kernel versions and rollup state roots.",
       "Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "private note-hash tree",
@@ -4296,10 +4648,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
     securityNotes: Object.freeze([
       "PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.",
       "ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.",
-      "Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.",
+      "Post-quantum readiness still requires parameter review, parser fuzzing, and internal cryptographic review.",
       "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
       "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.",
-      "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
+      "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
       "PQ MASP asset-set commitment root",

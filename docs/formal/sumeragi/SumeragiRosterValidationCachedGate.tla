@@ -54,6 +54,51 @@ CheckpointPrefilterBeforeMemo == 24
 
 Candidates == 1..24
 
+CommitPrefilterCases == {
+  CommitHashPrefilter,
+  CommitHeightPrefilter,
+  CommitOptionalViewPrefilter,
+  CommitEpochPrefilter,
+  CommitPhasePrefilter,
+  CommitHighestQcPrefilter,
+  CommitModeTagPrefilter
+}
+
+CheckpointPrefilterCases == {
+  CheckpointHashPrefilter,
+  CheckpointHeightPrefilter,
+  CheckpointOptionalViewPrefilter
+}
+
+EmptyAggregateCases == {
+  CommitEmptyAggregateBypassesMemo,
+  CheckpointEmptyAggregateBypassesMemo
+}
+
+MemoKeyCases == {
+  CommitMemoKeyUsesModeInputs,
+  CheckpointMemoKeyUsesEpochModeInputs
+}
+
+MemoFlowCases == {
+  CommitMemoHitReturnsCached,
+  CommitMemoMissValidates,
+  CommitMemoInsertOnSuccess,
+  CheckpointMemoHitReturnsCached,
+  CheckpointMemoMissValidates,
+  CheckpointMemoInsertOnSuccess
+}
+
+ValidationForwardCases == {
+  CommitValidationForwardsArgs,
+  CheckpointValidationForwardsArgs
+}
+
+PrefilterOrderingCases == {
+  CommitPrefilterBeforeMemo,
+  CheckpointPrefilterBeforeMemo
+}
+
 CheckBlockHash == 1
 CheckHeight == 2
 CheckOptionalView == 3
@@ -293,6 +338,43 @@ TypeInvariant ==
 Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCachedCommitPrefilterExact ==
+  \A c \in CommitPrefilterCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCachedCheckpointPrefilterExact ==
+  \A c \in CheckpointPrefilterCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCachedEmptyAggregateExact ==
+  \A c \in EmptyAggregateCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCachedMemoKeyExact ==
+  \A c \in MemoKeyCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCachedMemoFlowExact ==
+  \A c \in MemoFlowCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCachedForwardingExact ==
+  \A c \in ValidationForwardCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCachedPrefilterOrderExact ==
+  \A c \in PrefilterOrderingCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCachedExactness ==
+  /\ RosterValidationCachedCommitPrefilterExact
+  /\ RosterValidationCachedCheckpointPrefilterExact
+  /\ RosterValidationCachedEmptyAggregateExact
+  /\ RosterValidationCachedMemoKeyExact
+  /\ RosterValidationCachedMemoFlowExact
+  /\ RosterValidationCachedForwardingExact
+  /\ RosterValidationCachedPrefilterOrderExact
 
 BugCommitIgnoresHash ==
   ImplementationActions(CommitHashPrefilter) = SpecActions(CommitHashPrefilter)

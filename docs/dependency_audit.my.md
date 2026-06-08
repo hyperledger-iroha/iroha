@@ -39,7 +39,7 @@ translator: machine-google-reviewed
 - PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — တရားဝင်ရည်ညွှန်းသေတ္တာများ။
 - TLS: `rustls`၊ `tokio-rustls`၊ `hyper-rustls` — canonical ခေတ်မီ Rust TLS စတက်။
 - ဆူညံသံ- `snow` — canonical အကောင်အထည်ဖော်မှု။
-- Serialization- `parity-scale-codec` သည် SCALE အတွက် canonical ဖြစ်သည်။ Serde ကို အလုပ်ခွင်အနှံ့ ထုတ်လုပ်မှု မှီခိုမှုမှ ဖယ်ရှားလိုက်သည် ။ Norito သည် runtime လမ်းကြောင်းတိုင်းကို ဆင်းသက်လာသည်/စာရေးသူများ။ ကျန်ရှိနေသည့် Serde ကိုးကားချက်များသည် သမိုင်းဆိုင်ရာ စာရွက်စာတမ်းများ၊ ကာရန်းစခရစ်များ သို့မဟုတ် စမ်းသပ်မှုသီးသန့်စာရင်းများတွင် နေထိုင်ပါသည်။
+- Serialization- `retired codec` သည် retired codec အတွက် canonical ဖြစ်သည်။ Serde ကို အလုပ်ခွင်အနှံ့ ထုတ်လုပ်မှု မှီခိုမှုမှ ဖယ်ရှားလိုက်သည် ။ Norito သည် runtime လမ်းကြောင်းတိုင်းကို ဆင်းသက်လာသည်/စာရေးသူများ။ ကျန်ရှိနေသည့် Serde ကိုးကားချက်များသည် သမိုင်းဆိုင်ရာ စာရွက်စာတမ်းများ၊ ကာရန်းစခရစ်များ သို့မဟုတ် စမ်းသပ်မှုသီးသန့်စာရင်းများတွင် နေထိုင်ပါသည်။
 - FFI/libs- `libsodium-sys-stable`၊ `openssl` — တရားဝင်၊ ထုတ်လုပ်မှုလမ်းကြောင်းများတွင် OpenSSL ထက် Rustls ကို ပိုနှစ်သက်သည် (လက်ရှိကုဒ်ရှိပြီးသား)။
 
 အကြံပြုချက်များ-

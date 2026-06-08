@@ -40,7 +40,7 @@ from typing import Any
 READINESS_VERSION = 1
 EVIDENCE_VERSION = 1
 CANARY_SUMMARY_VERSION = 1
-RECEIPT_SUMMARY_VERSION = 1
+RECEIPT_SUMMARY_VERSION = 2
 TRUST_SUMMARY_VERSION = 1
 XSD_SUMMARY_VERSION = 1
 SUMMARY_DIGEST_FIELD = "summary_sha256"
@@ -84,6 +84,10 @@ KNOWN_RAILS = {
 EXPECTED_CANARY_STAGE_ORDER = ("rail", "notary", "verify")
 REQUIRED_CANARY_STAGES = set(EXPECTED_CANARY_STAGE_ORDER)
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
+STAGE_RECEIPT_KINDS = {
+    "rail": "iso-rail-gateway",
+    "notary": "iso-audit-notary",
+}
 REQUIRE_VERIFIED = "require-verified"
 TRUST_SIGNATURE_POLICIES = {"record-only", "reject-unsupported", REQUIRE_VERIFIED}
 RECEIPT_PATH_SUFFIX = ".receipt.json"
@@ -193,6 +197,8 @@ RECEIPT_ENTRY_KEYS = {
     "receipt_sha256",
     "ok",
     "status_code",
+    "response_body_sha256",
+    "endpoint_requires_insecure_http",
     "anchor_sha256",
     "index_sha256",
     "record_count",
@@ -454,16 +460,27 @@ def _reject_secret_string(value: str, label: str) -> None:
         raise ReadinessError(f"{label} contains secret-looking material")
 
 
+def _contains_unsafe_json_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        for ch in value
+    )
+
+
 def _check_no_secret_material(value: Any, label: str = "$") -> None:
     if isinstance(value, dict):
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise ReadinessError(f"{label} contains forbidden secret-looking field")
+            if _is_control_bearing_key(key):
+                raise ReadinessError(f"{label} contains forbidden control-bearing field")
             _check_no_secret_material(child, f"{label}.{key}")
     elif isinstance(value, list):
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{label}[{offset}]")
     elif isinstance(value, str):
+        if _contains_unsafe_json_control(value):
+            raise ReadinessError(f"{label} contains unsafe control characters")
         _reject_secret_string(value, label)
 
 
@@ -845,7 +862,7 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) for key in unknown):
+        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
             raise ReadinessError(f"{label} contains unknown keys")
         raise ReadinessError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -855,6 +872,10 @@ def _is_secret_looking_key(value: Any) -> bool:
         SECRET_IDENTIFIER_PATTERN.search(candidate)
         for candidate in _secret_scan_values(str(value))
     )
+
+
+def _is_control_bearing_key(value: Any) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
 
 
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
@@ -1007,6 +1028,8 @@ def _validate_receipt_path(raw: str, label: str) -> str:
 
 def _validate_compact_summary_path(raw: str, label: str) -> str:
     _reject_path_smuggling(raw, label)
+    if not raw.endswith(".json"):
+        raise ReadinessError(f"{label} must point to a .json file")
     return raw
 
 
@@ -1281,7 +1304,12 @@ def _block_receipt_entry_metadata_errors(
 
 def _receipt_entry_content_metadata(receipt: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
     receipt_kind = receipt.get("receipt_kind")
-    generic_keys = ("ok", "status_code")
+    generic_keys = (
+        "ok",
+        "status_code",
+        "response_body_sha256",
+        "endpoint_requires_insecure_http",
+    )
     if receipt_kind == "iso-audit-notary":
         keys = ("anchor_sha256", "index_sha256", "record_count")
     elif receipt_kind == "iso-rail-gateway":
@@ -1853,6 +1881,24 @@ def _computed_profile_json_emittable(
         ):
             return False
     return True
+
+
+def _trust_profile_source_requires_insecure_override(source: dict[str, str] | None) -> bool:
+    if source is None:
+        return False
+    parsed = urllib.parse.urlparse(source["url"])
+    if parsed.scheme == "http":
+        return True
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    if _host_uses_rebinding_suffix(hostname):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return (not address.is_global) or _address_embeds_non_global_ipv4(address)
 
 
 def _block_duplicate_strings(
@@ -2552,34 +2598,6 @@ def _verify_receipt_summary(
     allow_legacy_colr007 = _require_bool(receipt_obj, "allow_legacy_colr007", label)
     allow_default_profile = _require_bool(receipt_obj, "allow_default_profile", label)
     require_source_files = _require_bool(receipt_obj, "require_source_files", label)
-    if allow_failed:
-        _blocker(
-            blockers,
-            allow_failed_code,
-            "receipt verifier evidence allowed failed receipts",
-            path,
-        )
-    if allow_insecure_http:
-        _blocker(
-            blockers,
-            allow_insecure_code,
-            "receipt verifier evidence allowed insecure HTTP endpoints",
-            path,
-        )
-    if allow_legacy_colr007:
-        _blocker(
-            blockers,
-            allow_legacy_code,
-            "receipt verifier evidence allowed legacy colr.007 rail receipts",
-            path,
-        )
-    if allow_default_profile:
-        _blocker(
-            blockers,
-            allow_default_profile_code,
-            "receipt verifier evidence allowed default rail profile fallback",
-            path,
-        )
     if not require_source_files:
         _blocker(
             blockers,
@@ -2600,6 +2618,10 @@ def _verify_receipt_summary(
     receipt_entry_kinds: set[str] = set()
     seen_receipt_paths: dict[str, int] = {}
     seen_receipt_digests: dict[str, int] = {}
+    has_failed_receipt = False
+    has_insecure_receipt_endpoint = False
+    has_legacy_colr007_receipt = False
+    has_default_profile_receipt = False
     for offset, receipt_raw in enumerate(receipts_raw):
         entry_label = f"{label}.receipts[{offset}]"
         receipt = _require_object(receipt_raw, entry_label)
@@ -2678,12 +2700,45 @@ def _verify_receipt_summary(
                     path,
                 )
             elif not ok:
+                has_failed_receipt = True
                 _blocker(
                     blockers,
                     unsuccessful_receipt_code,
                     f"{entry_label} did not succeed",
                     path,
                 )
+        response_body_sha256 = receipt.get("response_body_sha256")
+        if not _is_lower_sha256(response_body_sha256):
+            _blocker(
+                blockers,
+                metadata_code,
+                f"{entry_label}.response_body_sha256 must be a canonical SHA-256",
+                path,
+            )
+        endpoint_requires_insecure_http = receipt.get(
+            "endpoint_requires_insecure_http"
+        )
+        if not isinstance(endpoint_requires_insecure_http, bool):
+            _blocker(
+                blockers,
+                metadata_code,
+                f"{entry_label}.endpoint_requires_insecure_http must be a boolean",
+                path,
+            )
+        elif endpoint_requires_insecure_http and not allow_insecure_http:
+            _blocker(
+                blockers,
+                metadata_code,
+                (
+                    f"{entry_label}.endpoint_requires_insecure_http requires "
+                    "allow_insecure_http=true"
+                ),
+                path,
+            )
+        else:
+            has_insecure_receipt_endpoint = (
+                has_insecure_receipt_endpoint or endpoint_requires_insecure_http
+            )
         _block_receipt_entry_metadata_errors(
             receipt,
             entry_label,
@@ -2694,6 +2749,12 @@ def _verify_receipt_summary(
             allow_default_profile=allow_default_profile,
             metadata_code=metadata_code,
         )
+        if receipt_kind == "iso-rail-gateway":
+            message_type = receipt.get("message_type")
+            if isinstance(message_type, str) and message_type in LEGACY_RAIL_MESSAGE_TYPES:
+                has_legacy_colr007_receipt = True
+            if receipt.get("profile") is None:
+                has_default_profile_receipt = True
         receipts.append(dict(receipt))
         receipt_entry_kinds.add(receipt_kind)
     if receipt_kind_set != receipt_entry_kinds:
@@ -2703,6 +2764,26 @@ def _verify_receipt_summary(
             "receipt_kind does not match receipts[].receipt_kind",
             path,
         )
+    if allow_failed:
+        message = "receipt verifier evidence allowed failed receipts"
+        if not has_failed_receipt:
+            message += " but no failed receipt entry was recorded"
+        _blocker(blockers, allow_failed_code, message, path)
+    if allow_insecure_http:
+        message = "receipt verifier evidence allowed insecure HTTP endpoints"
+        if not has_insecure_receipt_endpoint:
+            message += " but no http:// or local/private receipt endpoint was recorded"
+        _blocker(blockers, allow_insecure_code, message, path)
+    if allow_legacy_colr007:
+        message = "receipt verifier evidence allowed legacy colr.007 rail receipts"
+        if not has_legacy_colr007_receipt:
+            message += " but no legacy colr.007 receipt entry was recorded"
+        _blocker(blockers, allow_legacy_code, message, path)
+    if allow_default_profile:
+        message = "receipt verifier evidence allowed default rail profile fallback"
+        if not has_default_profile_receipt:
+            message += " but no default-profile receipt entry was recorded"
+        _blocker(blockers, allow_default_profile_code, message, path)
 
     return {
         "version": version,
@@ -3247,6 +3328,30 @@ def _verify_canary(
             metadata_code="evidence.receipt_metadata_invalid",
             kind_entry_mismatch_code="evidence.receipt_kind_entry_mismatch",
         )
+        expected_receipt_kinds = {
+            STAGE_RECEIPT_KINDS[stage_name]
+            for stage_name in stage_names
+            if stage_name in STAGE_RECEIPT_KINDS
+        }
+        receipt_kinds = set(receipt_summary["receipt_kind"])
+        missing_stage_receipt_kinds = sorted(expected_receipt_kinds - receipt_kinds)
+        if missing_stage_receipt_kinds:
+            _blocker(
+                blockers,
+                "evidence.stage_receipt_kind_missing",
+                "canary receipt summary is missing receipt kinds for executed stages: "
+                + ", ".join(missing_stage_receipt_kinds),
+                path,
+            )
+        unexecuted_receipt_kinds = sorted(receipt_kinds - expected_receipt_kinds)
+        if unexecuted_receipt_kinds:
+            _blocker(
+                blockers,
+                "evidence.stage_receipt_kind_unexecuted",
+                "canary receipt summary contains receipt kinds for stages not executed: "
+                + ", ".join(unexecuted_receipt_kinds),
+                path,
+            )
     return {
         "version": version,
         "path": canary_path,
@@ -4127,20 +4232,6 @@ def verify_evidence_summary(
                 "trust summary was verified with --allow-synthetic-der",
                 path,
             )
-        if allow_record_only:
-            _blocker(
-                blockers,
-                "trust.allow_record_only",
-                "trust summary was verified with --allow-record-only",
-                path,
-            )
-        if allow_insecure_source_url:
-            _blocker(
-                blockers,
-                "trust.allow_insecure_source_url",
-                "trust summary was verified with --allow-insecure-source-url",
-                path,
-            )
         profile_json_emitted = _require_bool(trust_obj, "profile_json_emitted", label)
         profile_json_emittable = _require_bool(trust_obj, "profile_json_emittable", label)
         if profile_json_emitted:
@@ -4206,6 +4297,22 @@ def verify_evidence_summary(
             )
             for profile_offset, profile in enumerate(profiles_raw)
         ]
+        if allow_record_only:
+            message = "trust summary was verified with --allow-record-only"
+            if not any(
+                profile["embedded_signature_policy"] != REQUIRE_VERIFIED
+                for profile in profiles
+            ):
+                message += " but no non-production embedded_signature_policy was recorded"
+            _blocker(blockers, "trust.allow_record_only", message, path)
+        if allow_insecure_source_url:
+            message = "trust summary was verified with --allow-insecure-source-url"
+            if not any(
+                _trust_profile_source_requires_insecure_override(profile["source"])
+                for profile in profiles
+            ):
+                message += " but no http:// or local/private source URL was recorded"
+            _blocker(blockers, "trust.allow_insecure_source_url", message, path)
         computed_profile_json_emittable = _computed_profile_json_emittable(
             allow_synthetic_der=allow_synthetic_der,
             allow_record_only=allow_record_only,
@@ -4286,8 +4393,15 @@ def verify_evidence_summary(
         "canary_summaries": canaries,
         "trust_summaries": trust_outputs,
         "receipt_verification": archive_receipts,
+        "_policy_allows_canary_stage_receipts_only": summary["policy"][
+            "allow_canary_stage_receipts_only"
+        ],
         "summary_sha256": digest,
     }
+
+
+def _public_evidence_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in summary.items() if not key.startswith("_")}
 
 
 def run(args: argparse.Namespace) -> int:
@@ -4338,6 +4452,20 @@ def run(args: argparse.Namespace) -> int:
         verify_evidence_summary(path, args=args, blockers=blockers)
         for path in evidence_paths
     ]
+    if args.allow_reviewed_xsd_gaps and not warnings:
+        raise ReadinessError(
+            "--allow-reviewed-xsd-gaps requires at least one reviewed XSD gap warning"
+        )
+    if args.allow_canary_stage_receipts_only and not any(
+        summary["receipt_verification"] is None
+        or summary["_policy_allows_canary_stage_receipts_only"]
+        for summary in evidence_summaries
+    ):
+        raise ReadinessError(
+            "--allow-canary-stage-receipts-only requires at least one evidence "
+            "summary with canary-stage-only receipt policy or missing direct "
+            "receipt archive verification"
+        )
     _reject_duplicate_compact_summaries(xsd_summaries, "xsd_summaries")
     _reject_duplicate_compact_summaries(evidence_summaries, "evidence_summaries")
     _block_cross_xsd_summary_reuse(xsd_summaries, blockers)
@@ -4349,7 +4477,9 @@ def run(args: argparse.Namespace) -> int:
         "blockers": blockers,
         "warnings": warnings,
         "xsd_summaries": [_public_xsd_summary(summary) for summary in xsd_summaries],
-        "evidence_summaries": evidence_summaries,
+        "evidence_summaries": [
+            _public_evidence_summary(summary) for summary in evidence_summaries
+        ],
         "policy": {
             "provider": args.provider,
             "environment": args.environment,

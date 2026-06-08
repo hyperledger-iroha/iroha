@@ -540,7 +540,7 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) for key in unknown):
+        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
             raise TrustBundleError(f"{label} contains unknown keys")
         raise TrustBundleError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -575,6 +575,17 @@ def _is_secret_looking_key(value: Any) -> bool:
     )
 
 
+def _is_control_bearing_key(value: Any) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+
+
+def _contains_unsafe_json_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        for ch in value
+    )
+
+
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
     if _contains_secret_material(value) or _is_secret_looking_key(value):
         raise TrustBundleError(f"{label} must not contain secret-looking material")
@@ -585,11 +596,15 @@ def _check_no_secret_material(value: Any, path: str = "$") -> None:
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise TrustBundleError(f"{path} contains forbidden secret-looking field")
+            if _is_control_bearing_key(key):
+                raise TrustBundleError(f"{path} contains forbidden control-bearing field")
             _check_no_secret_material(child, f"{path}.{key}")
     elif isinstance(value, list):
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{path}[{offset}]")
     elif isinstance(value, str):
+        if _contains_unsafe_json_control(value):
+            raise TrustBundleError(f"{path} contains unsafe control characters")
         if _contains_secret_material(value):
             raise TrustBundleError(f"{path} contains secret-looking material")
 
@@ -777,7 +792,7 @@ def _strict_base64_der(
     *,
     kind: str,
     allow_synthetic_der: bool,
-) -> tuple[bytes, str]:
+) -> tuple[bytes, str, bool]:
     raw = value.strip()
     if len(raw) > MAX_DER_BASE64_CHARS:
         raise TrustBundleError(
@@ -790,12 +805,13 @@ def _strict_base64_der(
     if not der or len(der) > MAX_DER_BYTES:
         raise TrustBundleError(f"{label} must be non-empty DER no larger than {MAX_DER_BYTES} bytes")
     _require_der_sequence(der, label)
-    if not allow_synthetic_der:
-        _require_der_kind(der, label, kind)
+    matches_kind = _der_matches_kind(der, label, kind)
+    if not allow_synthetic_der and not matches_kind:
+        _raise_der_kind_error(label, kind)
     canonical = base64.b64encode(der).decode("ascii")
     if canonical != raw:
         raise TrustBundleError(f"{label} must be canonical padded base64")
-    return der, canonical
+    return der, canonical, not matches_kind
 
 
 def _require_der_sequence(der: bytes, label: str) -> None:
@@ -863,17 +879,29 @@ def _root_children(der: bytes, label: str) -> list[DerElement]:
 
 
 def _require_der_kind(der: bytes, label: str, kind: str) -> None:
+    if not _der_matches_kind(der, label, kind):
+        _raise_der_kind_error(label, kind)
+
+
+def _der_matches_kind(der: bytes, label: str, kind: str) -> bool:
     if kind == DER_KIND_CERTIFICATE:
-        if not _looks_like_x509_certificate(der, label):
-            raise TrustBundleError(f"{label} must look like an X.509 certificate")
+        return _looks_like_x509_certificate(der, label)
     elif kind == DER_KIND_CRL:
-        if not _looks_like_x509_crl(der, label):
-            raise TrustBundleError(f"{label} must look like an X.509 CRL")
+        return _looks_like_x509_crl(der, label)
     elif kind == DER_KIND_OCSP:
-        if not _looks_like_ocsp_response(der, label):
-            raise TrustBundleError(f"{label} must look like an OCSPResponse")
+        return _looks_like_ocsp_response(der, label)
     else:  # pragma: no cover - internal caller bug.
         raise TrustBundleError(f"{label} has unsupported DER kind {kind}")
+
+
+def _raise_der_kind_error(label: str, kind: str) -> None:
+    if kind == DER_KIND_CERTIFICATE:
+        raise TrustBundleError(f"{label} must look like an X.509 certificate")
+    if kind == DER_KIND_CRL:
+        raise TrustBundleError(f"{label} must look like an X.509 CRL")
+    if kind == DER_KIND_OCSP:
+        raise TrustBundleError(f"{label} must look like an OCSPResponse")
+    raise TrustBundleError(f"{label} has unsupported DER kind {kind}")
 
 
 def _looks_like_algorithm_identifier(element: DerElement, label: str) -> bool:
@@ -948,7 +976,7 @@ def _der_objects(
     *,
     kind: str,
     allow_synthetic_der: bool,
-) -> tuple[list[dict[str, Any]], list[str]]:
+) -> tuple[list[dict[str, Any]], list[str], bool]:
     raw = _required_list_field(bundle, key, label, "DER objects")
     if not isinstance(raw, list):
         raise TrustBundleError(f"{label}.{key} must be an array of DER objects")
@@ -958,6 +986,7 @@ def _der_objects(
     base64_values: list[str] = []
     seen: set[str] = set()
     seen_labels: set[str] = set()
+    uses_synthetic_der = False
     for offset, item in enumerate(raw):
         obj = _require_object(item, f"{label}.{key}[{offset}]")
         _reject_unknown_keys(obj, DER_OBJECT_KEYS, f"{label}.{key}[{offset}]")
@@ -973,12 +1002,13 @@ def _der_objects(
                 raise TrustBundleError(f"{label}.{key}[{offset}].label duplicates label")
             seen_labels.add(name)
         der_b64 = _required_string(obj, "der_base64", f"{label}.{key}[{offset}]")
-        der, canonical_b64 = _strict_base64_der(
+        der, canonical_b64, is_synthetic_der = _strict_base64_der(
             der_b64,
             f"{label}.{key}[{offset}].der_base64",
             kind=kind,
             allow_synthetic_der=allow_synthetic_der,
         )
+        uses_synthetic_der = uses_synthetic_der or is_synthetic_der
         digest = sha256_hex(der)
         declared_digest = obj.get("sha256")
         if not isinstance(declared_digest, str):
@@ -1001,7 +1031,7 @@ def _der_objects(
             entry["label"] = name
         entries.append(entry)
         base64_values.append(canonical_b64)
-    return entries, base64_values
+    return entries, base64_values, uses_synthetic_der
 
 
 def _source(
@@ -1185,6 +1215,49 @@ def _profile_json_emittable(args: argparse.Namespace, summaries: list[dict[str, 
             for summary in summaries
         )
     )
+
+
+def _summary_uses_insecure_source_url(summary: dict[str, Any]) -> bool:
+    source = summary["source"]
+    parsed = urllib.parse.urlparse(source["url"])
+    return parsed.scheme == "http"
+
+
+def _reject_unused_local_overrides(
+    args: argparse.Namespace,
+    summaries: list[dict[str, Any]],
+) -> None:
+    if args.allow_record_only and not any(
+        summary["embedded_signature_policy"] != REQUIRE_VERIFIED
+        for summary in summaries
+    ):
+        raise TrustBundleError(
+            "--allow-record-only requires at least one bundle with a "
+            "non-production embedded_signature_policy"
+        )
+    if args.allow_insecure_source_url and not any(
+        _summary_uses_insecure_source_url(summary)
+        for summary in summaries
+    ):
+        raise TrustBundleError(
+            "--allow-insecure-source-url requires at least one bundle with an "
+            "http:// source URL"
+        )
+    if args.allow_synthetic_der and not any(
+        summary.get("_uses_synthetic_der") is True
+        for summary in summaries
+    ):
+        raise TrustBundleError(
+            "--allow-synthetic-der requires at least one bundle with synthetic DER"
+        )
+
+
+def _public_bundle_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in summary.items()
+        if not key.startswith("_")
+    }
 
 
 def _reject_profile_emission_blockers(
@@ -1404,28 +1477,28 @@ def verify_bundle(
     revoked_pin_values = _sha256_list(bundle, "revoked_certificate_sha256", str(path))
     policy_oids = _oid_list(bundle, "x509_required_certificate_policy_oids", str(path))
 
-    trust_anchors, trust_anchor_der_values = _der_objects(
+    trust_anchors, trust_anchor_der_values, trust_anchor_uses_synthetic_der = _der_objects(
         bundle,
         "x509_trust_anchors",
         str(path),
         kind=DER_KIND_CERTIFICATE,
         allow_synthetic_der=allow_synthetic_der,
     )
-    revoked_certificates, _revoked_der_values = _der_objects(
+    revoked_certificates, _revoked_der_values, revoked_uses_synthetic_der = _der_objects(
         bundle,
         "revoked_certificates",
         str(path),
         kind=DER_KIND_CERTIFICATE,
         allow_synthetic_der=allow_synthetic_der,
     )
-    crls, crl_values = _der_objects(
+    crls, crl_values, crl_uses_synthetic_der = _der_objects(
         bundle,
         "x509_crls",
         str(path),
         kind=DER_KIND_CRL,
         allow_synthetic_der=allow_synthetic_der,
     )
-    ocsp_responses, ocsp_values = _der_objects(
+    ocsp_responses, ocsp_values, ocsp_uses_synthetic_der = _der_objects(
         bundle,
         "x509_ocsp_responses",
         str(path),
@@ -1529,6 +1602,12 @@ def verify_bundle(
         ],
         "profile_overrides": profile_overrides,
     }
+    summary["_uses_synthetic_der"] = (
+        trust_anchor_uses_synthetic_der
+        or revoked_uses_synthetic_der
+        or crl_uses_synthetic_der
+        or ocsp_uses_synthetic_der
+    )
     summary["bundle_sha256"] = sha256_hex(_canonical_json_bytes(bundle))
     return summary
 
@@ -1561,9 +1640,11 @@ def run(args: argparse.Namespace) -> int:
         for path in bundle_paths
     ]
     _reject_profile_emission_blockers(args, summaries)
+    _reject_unused_local_overrides(args, summaries)
     _reject_duplicate_summary_field(summaries, "bundle_sha256", "bundles")
     _reject_duplicate_summary_field(summaries, "profile_id", "bundles")
     profile_json_emittable = _profile_json_emittable(args, summaries)
+    public_summaries = [_public_bundle_summary(summary) for summary in summaries]
     profile_text = None
     profile_json_sha256 = None
     if args.emit_profile_json is not None:
@@ -1581,7 +1662,7 @@ def run(args: argparse.Namespace) -> int:
         "profile_json_emitted": args.emit_profile_json is not None,
         "profile_json_emittable": profile_json_emittable,
         "profile_json_sha256": profile_json_sha256,
-        "bundles": summaries,
+        "bundles": public_summaries,
     }
     output[SUMMARY_DIGEST_FIELD] = sha256_hex(_canonical_json_bytes(output))
     text = json.dumps(output, indent=2, sort_keys=True) + "\n"

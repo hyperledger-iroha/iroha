@@ -3988,6 +3988,22 @@ public sealed class SccpEthereumMainnetTests
                         ExpectedBindingHash,
                         proofArtifact: "../proof-artifact.bin"),
                     ExpectedBindingHash)).Message);
+        var uriArtifactPath = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                SampleNativeEvmProverBundleJson(
+                    ExpectedBindingHash,
+                    proofArtifact: "ipfs:proof-artifact.bin"),
+                ExpectedBindingHash));
+        Assert.Contains("proofArtifact", uriArtifactPath.Message);
+        Assert.Contains("URI schemes", uriArtifactPath.Message);
+        var wasmArtifactPath = Assert.Throws<ArgumentException>(
+            () => EthereumMainnetNativeEvmProverBundle.FromJson(
+                SampleNativeEvmProverBundleJson(
+                    ExpectedBindingHash,
+                    proofArtifact: "artifacts/eth-mainnet/proof.wasm"),
+                ExpectedBindingHash));
+        Assert.Contains("proofArtifact", wasmArtifactPath.Message);
+        Assert.Contains("forbidden prover dependency marker: wasm", wasmArtifactPath.Message);
         var unknownManifestField = Assert.Throws<ArgumentException>(
             () => EthereumMainnetNativeEvmProverBundle.FromJson(
                 SampleNativeEvmProverBundleJson(ExpectedBindingHash).Replace(

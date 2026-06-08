@@ -21,7 +21,7 @@ DA-3 расширяет формат блока Nexus também, чтобы каж
 зафиксированы канонические структуры данных, хуки блокового пайплайна,
 лайт-клиентские доказательства e поверхности Torii/RPC, которые должны появиться
 então, como validar o pedido de admissão no DA-коммитменты при admissão ou
-verificação. Essa carga útil é Norito-кодированы; sem SCALE e JSON ad-hoc.
+verificação. Essa carga útil é Norito-кодированы; sem retired codec e JSON ad-hoc.
 
 ##Céli
 

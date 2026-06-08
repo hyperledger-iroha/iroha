@@ -62,6 +62,59 @@ PrecommitStakeSnapshotForwarded == 26
 
 Candidates == 1..26
 
+ModeTagCases == {
+  ModeTagPermissioned,
+  ModeTagNpos
+}
+
+PrecommitHistoryCases == {
+  PrecommitExactFilters,
+  PrecommitOptionalViewAllowsAny,
+  PrecommitChoosesMaxView
+}
+
+ArtifactHistoryCases == {
+  CertHistoryFilters,
+  CertHistoryChoosesMaxHeightThenView,
+  CheckpointHistoryFilters,
+  CheckpointHistoryChoosesMaxHeightThenView
+}
+
+DerivationGateCases == {
+  FreshCertSuppressesDerive,
+  MissingCertDerivesFromPrecommit,
+  StaleCertDerivesFromPrecommit,
+  EmptyAggregateCertDerivesFromPrecommit,
+  DerivedCertUsesPrecommitSource
+}
+
+DerivationFallbackCases == {
+  DerivedFailsNoCheckpointFallsBackPrecommit,
+  DerivedFailsOldCheckpointFallsBackPrecommit,
+  DerivedFailsCurrentCheckpointUsesCheckpoint
+}
+
+SourceSelectionCases == {
+  NoCertNoCheckpointReturnsNone,
+  CertSourceQcHistory,
+  OnlyCheckpointSourceCheckpointHistory
+}
+
+RosterHeightViewCases == {
+  CertHeightMismatchUsesCertHeightView,
+  CertHeightMismatchFiltersCheckpoint,
+  OnlyCheckpointOlderUsesCheckpointHeight
+}
+
+SelectionFallbackCases == {
+  SelectionFailureFallsBackPrecommit,
+  SelectionFailureNoPrecommitReturnsNone
+}
+
+StakeForwardCases == {
+  PrecommitStakeSnapshotForwarded
+}
+
 ModeTagPermissionedAction == 1
 ModeTagNposAction == 2
 FilterPrecommitBlockHash == 3
@@ -282,6 +335,53 @@ TypeInvariant ==
 Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+BlockSyncHistoryRosterModeTagExact ==
+  \A c \in ModeTagCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncHistoryRosterPrecommitExact ==
+  \A c \in PrecommitHistoryCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncHistoryRosterArtifactHistoryExact ==
+  \A c \in ArtifactHistoryCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncHistoryRosterDerivationGateExact ==
+  \A c \in DerivationGateCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncHistoryRosterDerivationFallbackExact ==
+  \A c \in DerivationFallbackCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncHistoryRosterSourceExact ==
+  \A c \in SourceSelectionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncHistoryRosterHeightViewExact ==
+  \A c \in RosterHeightViewCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncHistoryRosterSelectionFallbackExact ==
+  \A c \in SelectionFallbackCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncHistoryRosterStakeForwardExact ==
+  \A c \in StakeForwardCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncHistoryRosterExactness ==
+  /\ BlockSyncHistoryRosterModeTagExact
+  /\ BlockSyncHistoryRosterPrecommitExact
+  /\ BlockSyncHistoryRosterArtifactHistoryExact
+  /\ BlockSyncHistoryRosterDerivationGateExact
+  /\ BlockSyncHistoryRosterDerivationFallbackExact
+  /\ BlockSyncHistoryRosterSourceExact
+  /\ BlockSyncHistoryRosterHeightViewExact
+  /\ BlockSyncHistoryRosterSelectionFallbackExact
+  /\ BlockSyncHistoryRosterStakeForwardExact
 
 BugPermissionedUsesNposTag ==
   ImplementationActions(ModeTagPermissioned) = SpecActions(ModeTagPermissioned)

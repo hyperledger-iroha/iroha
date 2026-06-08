@@ -159,6 +159,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("password_trust_unknown_secret", "trust_unknown_secret"),
             ("%70assword_trust_unknown_leak", "trust_unknown_leak"),
             ("private-key_trust_unknown_leak", "trust_unknown_leak"),
+            ("unexpected\x1btrust_key", "\x1b"),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -171,6 +172,29 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 self.assertIn("contains unknown keys", message)
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_nested_control_material_in_bundle_is_rejected_without_echo(self):
+        cases = (
+            (
+                {"metadata": {"unexpected\x1btrust_key": "redacted"}},
+                "forbidden control-bearing field",
+                "trust_key",
+            ),
+            (
+                {"metadata": {"note": "warning \x1b[31mred"}},
+                "unsafe control characters",
+                "[31mred",
+            ),
+        )
+        for body, expected, hidden in cases:
+            with self.subTest(body=body):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._check_no_secret_material(body)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn("\x1b", message)
                 self.assertNotIn(hidden, message)
 
     def test_output_cli_path_flags_reject_flag_like_values(self):
@@ -1212,6 +1236,35 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 0,
             )
 
+    def test_unused_local_overrides_are_rejected(self):
+        cases = (
+            (
+                "--allow-record-only",
+                "--allow-record-only requires at least one bundle with a "
+                "non-production embedded_signature_policy",
+            ),
+            (
+                "--allow-insecure-source-url",
+                "--allow-insecure-source-url requires at least one bundle with "
+                "an http:// source URL",
+            ),
+            (
+                "--allow-synthetic-der",
+                "--allow-synthetic-der requires at least one bundle with synthetic DER",
+            ),
+        )
+        for flag, message in cases:
+            with self.subTest(flag=flag):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    path = write_bundle(root, valid_bundle())
+
+                    rc, stdout, stderr = run_verify(["--bundle", str(path), flag])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
     def test_placeholder_source_summary_only_is_not_profile_emittable(self):
         cases = (
             ("authority", lambda bundle: bundle["source"].__setitem__("authority", "Rail PKI placeholder")),
@@ -1782,6 +1835,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertFalse(summary["profile_json_emittable"])
             self.assertFalse(summary["profile_json_emitted"])
             self.assertIsNone(summary["profile_json_sha256"])
+            self.assertNotIn("_uses_synthetic_der", json.dumps(summary))
 
     def test_synthetic_der_cannot_emit_profile_overrides(self):
         with tempfile.TemporaryDirectory() as raw_root:

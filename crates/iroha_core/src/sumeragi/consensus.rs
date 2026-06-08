@@ -524,6 +524,33 @@ mod tests {
             .collect()
     }
 
+    fn qc_with_raw_signers_bitmap(signers_bitmap: Vec<u8>) -> Qc {
+        let validator_set = Vec::<PeerId>::new();
+        let validator_set_hash = HashOf::new(&validator_set);
+        Qc {
+            phase: Phase::Commit,
+            subject_block_hash: HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed(
+                [3u8; 32],
+            )),
+            parent_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            post_state_root: iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]),
+            height: 2,
+            view: 0,
+            epoch: 0,
+            chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+            rechain_seq: 0,
+            mode_tag: PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set,
+            aggregate: QcAggregate {
+                signers_bitmap,
+                bls_aggregate_signature: vec![1],
+            },
+        }
+    }
+
     #[test]
     fn qc_roundtrip_encode_decode() {
         let validator_set = sample_validator_set(16);
@@ -552,6 +579,33 @@ mod tests {
         let bytes = qc.encode();
         let dec = Qc::decode(&mut &bytes[..]).expect("decode qc");
         assert_eq!(qc, dec);
+    }
+
+    #[test]
+    fn qc_signer_count_formal_gate_matrix() {
+        let cases: [(&str, &[u8], usize); 12] = [
+            ("empty", &[], 0),
+            ("zero_byte", &[0], 0),
+            ("low_bit", &[1], 1),
+            ("high_bit", &[128], 1),
+            ("full_byte", &[255], 8),
+            ("two_sparse", &[3, 5], 4),
+            ("three_sparse", &[1, 2, 4], 3),
+            ("padding_bits", &[240], 4),
+            ("alternating_pair", &[170, 85], 8),
+            ("two_full_bytes", &[255, 255], 16),
+            ("three_zero_bytes", &[0, 0, 0], 0),
+            ("mixed_three", &[15, 0, 240], 8),
+        ];
+
+        for (name, bitmap, expected) in cases {
+            let qc = qc_with_raw_signers_bitmap(bitmap.to_vec());
+            assert_eq!(qc_signer_count(&qc), expected, "{name}");
+            assert!(
+                expected <= bitmap.len().saturating_mul(8),
+                "{name} count must fit inside the bitmap width"
+            );
+        }
     }
 
     #[test]

@@ -361,8 +361,81 @@ TypeInvariant ==
   /\ tried \subseteq Candidates
   /\ \A candidate \in tried: ImplementationActions(candidate) \subseteq Actions
 
-Safety ==
+CertifiedFetchRequestCases == {
+  NonCommitQcNoRequest, SignerTargetsPreferred,
+  OutOfRangeSignersFallbackTopology, LocalTargetsRemoved,
+  EmptyRemoteTargetsNoRequest, RequestUsesHighPriority,
+  RequestAvoidsGenericMissingFetch
+}
+
+CertifiedFetchServeCases == {
+  MismatchedRequesterDropped, MissingLocalBlockNoResponse,
+  LocalSubjectMismatchDropped, MissingLocalCommitQcNoResponse,
+  MismatchedCommitQcNoResponse, NposResponseCarriesMatchingStakeSnapshot
+}
+
+CertifiedFetchDispatchCases == {
+  FullResponseUnderCapDispatchesFull, OversizedFullSplitsProofBody,
+  OversizedProofDropsAll, OversizedBodyUsesBodyResponseFallback,
+  OversizedBodyResponseUsesBlockCreatedFallback, OversizedAllDropsBodyKeepsProof
+}
+
+CertifiedFetchAdmissionCases == {
+  ResponseHeightMismatchRejected, ResponseViewMismatchRejected,
+  ResponseBlockHashMismatchRejected, ResponseQcHeightMismatchRejected,
+  ResponseQcViewMismatchRejected, ResponseUncertifiedRejected,
+  ResponseCheckpointMismatchRejected, ProofAcceptedCachesQc,
+  MalformedProofRejected, BodyWithoutProofRejected, BodyMismatchedProofRejected
+}
+
+CertifiedFetchMaterializationCases == {
+  ProofThenBodyMaterializes, FullResponseMaterializes,
+  InvalidInflightRejected, InvalidPendingRejected, RetryAbortedRevived,
+  MaterializationClearsDeferrals
+}
+
+CertifiedFetchGroupedCases ==
+  CertifiedFetchRequestCases \cup CertifiedFetchServeCases \cup
+  CertifiedFetchDispatchCases \cup CertifiedFetchAdmissionCases \cup
+  CertifiedFetchMaterializationCases
+
+CertifiedFetchCaseGroupsComplete ==
+  CertifiedFetchGroupedCases = Candidates
+
+CertifiedFetchRequestExact ==
   \A candidate \in tried:
-    ImplementationActions(candidate) = SpecActions(candidate)
+    candidate \in CertifiedFetchRequestCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+CertifiedFetchServeExact ==
+  \A candidate \in tried:
+    candidate \in CertifiedFetchServeCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+CertifiedFetchDispatchExact ==
+  \A candidate \in tried:
+    candidate \in CertifiedFetchDispatchCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+CertifiedFetchAdmissionExact ==
+  \A candidate \in tried:
+    candidate \in CertifiedFetchAdmissionCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+CertifiedFetchMaterializationExact ==
+  \A candidate \in tried:
+    candidate \in CertifiedFetchMaterializationCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+CertifiedFetchExactness ==
+  /\ CertifiedFetchCaseGroupsComplete
+  /\ CertifiedFetchRequestExact
+  /\ CertifiedFetchServeExact
+  /\ CertifiedFetchDispatchExact
+  /\ CertifiedFetchAdmissionExact
+  /\ CertifiedFetchMaterializationExact
+
+Safety ==
+  CertifiedFetchExactness
 
 ====

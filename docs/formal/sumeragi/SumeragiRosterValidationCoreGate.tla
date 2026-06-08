@@ -60,6 +60,69 @@ CheckpointReturnsValidatorSet == 30
 
 Candidates == 1..30
 
+CommitAdmissionCases == {
+  CommitRejectEmptyRoster,
+  CommitHashVersionV1,
+  CommitRosterHashBindsValidatorSet,
+  CommitBitmapLengthCeil
+}
+
+CommitGenesisSignatureCases == {
+  CommitGenesisStubRequiresFlagHeightViewEmptySigZeroBitmap,
+  CommitMissingSignatureRejected,
+  CommitGenesisStubReturnsRoster
+}
+
+CommitSignerBitmapCases == {
+  CommitBitmapRejectsOutOfRange,
+  CommitSignerSetFromBitmap
+}
+
+CommitQuorumStakeCases == {
+  CommitPermissionedRequiresCommitQuorum,
+  CommitNposRequiresMatchingStakeSnapshot,
+  CommitNposStakeQuorumResult
+}
+
+CommitBlsOutputCases == {
+  CommitRequiresPopForSigner,
+  CommitBlsPreimageUsesQcChainMode,
+  CommitBlsVerifiesSignerKeysPops,
+  CommitReturnsValidatorSet
+}
+
+CheckpointAdmissionCases == {
+  CheckpointHashVersionV1,
+  CheckpointRejectExpiredAtBoundary,
+  CheckpointRejectEmptyRoster,
+  CheckpointRosterHashBindsValidatorSet,
+  CheckpointBitmapLengthCeil
+}
+
+CheckpointGenesisSignatureCases == {
+  CheckpointGenesisStubRequiresFlagHeightViewEmptySigZeroBitmap,
+  CheckpointMissingSignatureRejected
+}
+
+CheckpointSignerBitmapCases == {
+  CheckpointBitmapRejectsOutOfRange
+}
+
+CheckpointQuorumStakeCases == {
+  CheckpointPermissionedRequiresCommitQuorum,
+  CheckpointNposRequiresMatchingStakeSnapshot
+}
+
+CheckpointRootPreimageCases == {
+  CheckpointRootsMatchWhenProvided,
+  CheckpointVotePreimageFields
+}
+
+CheckpointBlsOutputCases == {
+  CheckpointBlsVerifiesSignerKeysPops,
+  CheckpointReturnsValidatorSet
+}
+
 CheckNonEmptyRoster == 1
 CheckHashVersion == 2
 CheckRosterHash == 3
@@ -328,6 +391,63 @@ TypeInvariant ==
 Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCommitAdmissionExact ==
+  \A c \in CommitAdmissionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCommitGenesisSignatureExact ==
+  \A c \in CommitGenesisSignatureCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCommitSignerBitmapExact ==
+  \A c \in CommitSignerBitmapCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCommitQuorumStakeExact ==
+  \A c \in CommitQuorumStakeCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCommitBlsOutputExact ==
+  \A c \in CommitBlsOutputCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCheckpointAdmissionExact ==
+  \A c \in CheckpointAdmissionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCheckpointGenesisSignatureExact ==
+  \A c \in CheckpointGenesisSignatureCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCheckpointSignerBitmapExact ==
+  \A c \in CheckpointSignerBitmapCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCheckpointQuorumStakeExact ==
+  \A c \in CheckpointQuorumStakeCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCheckpointRootPreimageExact ==
+  \A c \in CheckpointRootPreimageCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreCheckpointBlsOutputExact ==
+  \A c \in CheckpointBlsOutputCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationCoreExactness ==
+  /\ RosterValidationCoreCommitAdmissionExact
+  /\ RosterValidationCoreCommitGenesisSignatureExact
+  /\ RosterValidationCoreCommitSignerBitmapExact
+  /\ RosterValidationCoreCommitQuorumStakeExact
+  /\ RosterValidationCoreCommitBlsOutputExact
+  /\ RosterValidationCoreCheckpointAdmissionExact
+  /\ RosterValidationCoreCheckpointGenesisSignatureExact
+  /\ RosterValidationCoreCheckpointSignerBitmapExact
+  /\ RosterValidationCoreCheckpointQuorumStakeExact
+  /\ RosterValidationCoreCheckpointRootPreimageExact
+  /\ RosterValidationCoreCheckpointBlsOutputExact
 
 BugCommitAcceptsEmptyRoster ==
   ImplementationActions(CommitRejectEmptyRoster) =

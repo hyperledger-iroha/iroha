@@ -45,17 +45,17 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
         case .emptyVerifierKeysArchive:
             return "Kagemusha recursive compact verifier-keys archive must not be empty."
         case .oversizedRecordBundleArchive:
-            return "Kagemusha verified fold record bundle archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha verified fold record bundle archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
         case .oversizedPallasOpenEnvelopesArchive:
-            return "Kagemusha Pallas open-envelope archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha Pallas open-envelope archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
         case .oversizedKeyArtifactsArchive:
-            return "Kagemusha recursive compact key-artifacts archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha recursive compact key-artifacts archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
         case .oversizedVerifierKeysArchive:
-            return "Kagemusha recursive compact verifier-keys archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha recursive compact verifier-keys archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
         case .emptyBundleArchive:
             return "Kagemusha recursive spend bundle archive must not be empty."
         case .oversizedBundleArchive:
-            return "Kagemusha recursive spend bundle archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha recursive spend bundle archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
         case .invalidBundleArchive:
             return "Kagemusha recursive spend bundle archive must be a valid Norito archive."
         case .emptyBundlePayload:
@@ -83,7 +83,7 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
         case .emptyCompactTokenPayload:
             return "Kagemusha recursive compact-token archive must contain a non-empty Norito payload."
         case .oversizedCompactTokenArchive:
-            return "Kagemusha recursive compact-token archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha recursive compact-token archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
         case .emptyVerifierRecordArchive:
             return "Kagemusha verifier record archive must not be empty."
         case .invalidVerifierRecordArchive:
@@ -91,7 +91,7 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
         case .emptyVerifierRecordPayload:
             return "Kagemusha verifier record archive must contain a non-empty Norito payload."
         case .oversizedVerifierRecordArchive:
-            return "Kagemusha verifier record archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+            return "Kagemusha verifier record archive must not exceed \(KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes) bytes."
         case .bridgeUnavailable:
             return NoritoNativeBridge.bridgeUnavailableMessage(
                 "Kagemusha recursive compact-token prover/verifier is unavailable."
@@ -108,6 +108,7 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
 
 public enum KagemushaRecursiveCompactPaymentTokenProver {
     public static let requiredBridgeAbiVersion: UInt32 = 7
+    public static let nativeArchiveMaxBytes = 64 * 1024 * 1024
     public static let recursiveCompactCircuitIdV1 = "kagemusha-recursive-compact-v1"
     private static let maxNoritoHeaderPaddingBytes = 64
 
@@ -369,7 +370,7 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
         invalidError: KagemushaRecursiveCompactPaymentTokenProverError,
         emptyPayloadError: KagemushaRecursiveCompactPaymentTokenProverError
     ) throws {
-        guard archive.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes else {
+        guard archive.count <= nativeArchiveMaxBytes else {
             throw oversizedError
         }
         guard let frame = noritoDecodeFrame(archive),
@@ -382,7 +383,7 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
     }
 
     private static func requireValidRecursiveCompactTokenArchive(_ archive: Data) throws {
-        guard archive.count <= KagemushaRecursiveSpendProver.nativeArchiveMaxBytes else {
+        guard archive.count <= nativeArchiveMaxBytes else {
             throw KagemushaRecursiveCompactPaymentTokenProverError.oversizedCompactTokenArchive
         }
         guard let frame = noritoDecodeFrame(archive),

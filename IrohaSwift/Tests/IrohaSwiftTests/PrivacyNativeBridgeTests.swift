@@ -951,6 +951,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertFalse(capabilities.productionGate.witnessPrivacyChecks)
         XCTAssertFalse(capabilities.productionGate.deterministicTests)
         XCTAssertFalse(capabilities.productionGate.negativeAdversarialTests)
+        XCTAssertFalse(capabilities.productionGate.replayNullifierTests)
         XCTAssertFalse(capabilities.productionGate.fuzzing)
         XCTAssertFalse(capabilities.productionGate.parserFuzzing)
         XCTAssertFalse(capabilities.productionGate.verifierFuzzing)
@@ -976,6 +977,11 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertTrue(
             capabilities.productionGate.missing.contains(
                 "negative/adversarial tests are incomplete"
+            )
+        )
+        XCTAssertTrue(
+            capabilities.productionGate.missing.contains(
+                "replay/nullifier rejection tests are incomplete"
             )
         )
         XCTAssertTrue(

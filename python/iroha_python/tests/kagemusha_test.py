@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import inspect
 import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
@@ -1402,8 +1403,14 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         as root_lineage_key_artifacts_for_init,
         kagemusha_recursive_spend_compact_payment_token_from_bundle
         as root_recursive_spend_compact_projection,
+        kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes
+        as root_recursive_compact_prover,
+        kagemusha_verify_recursive_compact_payment_token
+        as root_recursive_compact_verify,
         kagemusha_verify_recursive_spend_compact_payment_token_projection
         as root_recursive_spend_compact_projection_verify,
+        is_kagemusha_recursive_compact_payment_token_prover_available
+        as root_is_recursive_compact_prover_available,
         is_kagemusha_recursive_compact_payment_token_verifier_available
         as root_is_recursive_compact_verifier_available,
         is_kagemusha_recursive_spend_compact_payment_token_projection_available
@@ -1437,6 +1444,11 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         "is_kagemusha_recursive_compact_payment_token_verifier_available"
         in iroha_python.__all__
     )
+    assert (
+        "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes"
+        in iroha_python.__all__
+    )
+    assert "kagemusha_verify_recursive_compact_payment_token" in iroha_python.__all__
     assert (
         "is_kagemusha_recursive_spend_compact_payment_token_projection_available"
         in iroha_python.__all__
@@ -1474,8 +1486,20 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         is kagemusha.kagemusha_recursive_spend_lineage_key_artifacts_for_append
     )
     assert (
+        root_is_recursive_compact_prover_available
+        is kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available
+    )
+    assert (
         root_is_recursive_compact_verifier_available
         is kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available
+    )
+    assert (
+        root_recursive_compact_prover
+        is getattr(kagemusha, RECURSIVE_COMPACT_METHOD)
+    )
+    assert (
+        root_recursive_compact_verify
+        is getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)
     )
     assert (
         root_is_recursive_spend_compact_projection_available
@@ -1492,6 +1516,25 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
     assert (
         root_recursive_spend_compact_projection_verify
         is kagemusha.kagemusha_verify_recursive_spend_compact_payment_token_projection
+    )
+    prover_signature = inspect.signature(root_recursive_compact_prover)
+    assert list(prover_signature.parameters) == [
+        "record_bundle_archive",
+        "pallas_open_envelopes_archive",
+        "recursive_compact_key_artifacts_archive",
+    ]
+    assert all(
+        parameter.default is inspect.Parameter.empty
+        for parameter in prover_signature.parameters.values()
+    )
+    verifier_signature = inspect.signature(root_recursive_compact_verify)
+    assert list(verifier_signature.parameters) == [
+        "compact_token_archive",
+        "recursive_compact_verifier_keys_archive",
+    ]
+    assert all(
+        parameter.default is inspect.Parameter.empty
+        for parameter in verifier_signature.parameters.values()
     )
 
 

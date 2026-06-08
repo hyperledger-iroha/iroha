@@ -56,9 +56,9 @@ public final class KagemushaRecursiveSpendProver {
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
   public enum Mode {
+    CHECKED_PREFOLD_V1("checked_prefold_v1"),
     RECURSIVE_COMPACT_V1("recursive_compact_v1"),
-    RECURSIVE_SPEND_V1("recursive_spend_v1"),
-    CHECKED_PREFOLD_V1("checked_prefold_v1");
+    RECURSIVE_SPEND_V1("recursive_spend_v1");
 
     private final String wireName;
 
@@ -88,7 +88,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static Mode preferredMode(
       final boolean recursiveCompactAvailable, final boolean recursiveSpendAvailable) {
-    // Kept for source compatibility; compact mode is not a production default yet.
+    // ABI-7 compact mode is not a production default yet.
     return recursiveSpendAvailable ? Mode.RECURSIVE_SPEND_V1 : Mode.CHECKED_PREFOLD_V1;
   }
 

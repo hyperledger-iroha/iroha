@@ -335,7 +335,47 @@ DiagnosticsRequireNewTimeout ==
 NewMarkRequiresReturnTrue ==
   timeout_newly_marked => report_returned
 
+CommitInflightTimeoutEligibilityExact ==
+  /\ CasePartitionExact
+  /\ ReportReturnMatchesSpec
+  /\ ReportTrueOnlyForNewTimeout
+  /\ NonTimeoutDoesNotReport
+  /\ NoInflightDoesNotPreservePhantomOwner
+
+CommitInflightTimeoutMarkExact ==
+  /\ TimeoutMarkMatchesSpec
+  /\ TimeoutNewlyMarkedMatchesSpec
+  /\ NewTimeoutReportsExactlyOnce
+  /\ AlreadyReportedDoesNotDuplicateDiagnostics
+  /\ NewMarkRequiresReturnTrue
+
+CommitInflightTimeoutDiagnosticsExact ==
+  /\ StatusRecordedMatchesSpec
+  /\ WarningRecordedMatchesSpec
+  /\ DiagnosticsRequireNewTimeout
+
+CommitInflightTimeoutAttachabilityExact ==
+  /\ InflightPreservationMatchesSpec
+  /\ LateResultAttachabilityMatchesSpec
+  /\ TimeoutReportingKeepsInflightAttachable
+
+CommitInflightTimeoutNoSideEffectsExact ==
+  /\ TimeoutReportingDoesNotRequeueOrAbort
+  /\ TimeoutReportingDoesNotPruneOrForceView
+  /\ TimeoutReportingDoesNotRecordCommitFailure
+  /\ TimeoutReportingDoesNotApplyCommitOutcome
+
+CommitInflightTimeoutExactness ==
+  /\ CommitInflightTimeoutEligibilityExact
+  /\ CommitInflightTimeoutMarkExact
+  /\ CommitInflightTimeoutDiagnosticsExact
+  /\ CommitInflightTimeoutAttachabilityExact
+  /\ CommitInflightTimeoutNoSideEffectsExact
+
 Safety ==
+  CommitInflightTimeoutExactness
+
+SafetyBreakdown ==
   /\ CasePartitionExact
   /\ ReportReturnMatchesSpec
   /\ TimeoutMarkMatchesSpec

@@ -1214,6 +1214,22 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
     ],
     "JavaScript TypeScript recursive compact declarations",
   );
+  const dts = source("javascript/iroha_js/index.d.ts");
+  assert.match(
+    dts,
+    /export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\(\s*recordBundleArchive: BinaryLike,\s*pallasOpenEnvelopesArchive: BinaryLike,\s*recursiveCompactKeyArtifactsArchive: BinaryLike,\s*\): Buffer;/u,
+    "JavaScript TypeScript recursive compact prover declaration must require key artifacts",
+  );
+  assert.match(
+    dts,
+    /export function kagemushaVerifyRecursiveCompactPaymentToken\(\s*compactTokenArchive: BinaryLike,\s*recursiveCompactVerifierKeysArchive: BinaryLike,\s*\): boolean;/u,
+    "JavaScript TypeScript recursive compact verifier declaration must require verifier keys",
+  );
+  assert.doesNotMatch(
+    dts,
+    /recursiveCompact(?:KeyArtifactsArchive|VerifierKeysArchive)\?:\s*BinaryLike/u,
+    "JavaScript TypeScript recursive compact key packages must not be optional",
+  );
   assertContainsAll(
     source("javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"),
     [
@@ -1232,6 +1248,16 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "verifierRecordArchive must be a valid Norito archive",
     ],
     "JavaScript recursive compact verifier tests",
+  );
+  assertContainsAll(
+    source("javascript/iroha_js/test/package_dist.test.js"),
+    [
+      "package declarations expose recursive compact key-package signatures",
+      'packageJson.exports["./crypto"].types, "./index.d.ts"',
+      "package declarations keep accumulator digests native-owned",
+      "recursive accumulator digests must remain native-owned",
+    ],
+    "JavaScript package recursive compact declaration tests",
   );
 
   assertContainsAll(
@@ -1269,6 +1295,16 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "returned non-boolean result",
     ],
     "Python recursive compact verifier surface",
+  );
+  assertContainsAll(
+    source("python/iroha_python/src/iroha_python/__init__.py"),
+    [
+      "is_kagemusha_recursive_compact_payment_token_prover_available",
+      "is_kagemusha_recursive_compact_payment_token_verifier_available",
+      "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes",
+      "kagemusha_verify_recursive_compact_payment_token",
+    ],
+    "Python package recursive compact root re-exports",
   );
   assertContainsAll(
     source("python/iroha_python/tests/kagemusha_test.py"),
@@ -1484,6 +1520,56 @@ test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () =>
       "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height",
     ],
     "C# recursive compact wrapper",
+  );
+  assert.doesNotMatch(
+    source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"),
+    /recursiveCompactKeyArtifactsArchive:\s*Data\s*=\s*Data\s*\(/u,
+    "Swift recursive compact prover must not default missing key artifacts to empty Data",
+  );
+  assert.doesNotMatch(
+    source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"),
+    /recursiveCompactVerifierKeysArchive:\s*Data\s*=\s*Data\s*\(/u,
+    "Swift recursive compact verifier must not default missing verifier keys to empty Data",
+  );
+  assert.match(
+    source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"),
+    /public\s+static\s+func\s+proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*\(\s*recordBundleArchive:\s*Data\s*,\s*pallasOpenEnvelopesArchive:\s*Data\s*,\s*recursiveCompactKeyArtifactsArchive:\s*Data\s*\)\s*throws\s*->\s*Data/su,
+    "Swift recursive compact prover must require key artifacts",
+  );
+  assert.match(
+    source("IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift"),
+    /public\s+static\s+func\s+verifyRecursiveCompactPaymentToken\s*\(\s*compactTokenArchive:\s*Data\s*,\s*recursiveCompactVerifierKeysArchive:\s*Data\s*\)\s*throws\s*->\s*Bool/su,
+    "Swift recursive compact verifier must require verifier keys",
+  );
+  assert.doesNotMatch(
+    source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"),
+    /fun\s+proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*\(\s*recordBundleArchive:\s*ByteArray\?,\s*pallasOpenEnvelopesArchive:\s*ByteArray\?,?\s*\)\s*:\s*ByteArray/su,
+    "Kotlin recursive compact prover must not expose a stale two-archive overload",
+  );
+  assert.doesNotMatch(
+    source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt"),
+    /fun\s+verifyRecursiveCompactPaymentToken\s*\(\s*compactTokenArchive:\s*ByteArray\?,?\s*\)\s*:\s*Boolean/su,
+    "Kotlin recursive compact verifier must not expose a stale one-archive overload",
+  );
+  assert.doesNotMatch(
+    source("java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"),
+    /public\s+static\s+byte\[\]\s+proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*\(\s*final\s+byte\[\]\s+recordBundleArchive\s*,\s*final\s+byte\[\]\s+pallasOpenEnvelopesArchive\s*\)/su,
+    "Android Java recursive compact prover must not expose a stale two-archive overload",
+  );
+  assert.doesNotMatch(
+    source("java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java"),
+    /public\s+static\s+boolean\s+verifyRecursiveCompactPaymentToken\s*\(\s*final\s+byte\[\]\s+compactTokenArchive\s*\)/su,
+    "Android Java recursive compact verifier must not expose a stale one-archive overload",
+  );
+  assert.doesNotMatch(
+    source("csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"),
+    /public\s+static\s+KagemushaRecursiveCompactPaymentTokenArchive\s+ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes\s*\(\s*ReadOnlySpan<byte>\s+recordBundleArchive\s*,\s*ReadOnlySpan<byte>\s+pallasOpenEnvelopesArchive\s*\)/su,
+    "C# recursive compact prover must not expose a stale two-archive overload",
+  );
+  assert.doesNotMatch(
+    source("csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs"),
+    /public\s+static\s+bool\s+VerifyRecursiveCompactPaymentToken\s*\(\s*ReadOnlySpan<byte>\s+compactTokenArchive\s*\)/su,
+    "C# recursive compact verifier must not expose a stale one-archive overload",
   );
   assertContainsAll(
     source("csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs"),
@@ -2017,6 +2103,21 @@ test("recursive Kagemusha SDK docs expose compact projection verifier APIs", () 
   );
 });
 
+test("recursive Kagemusha Python SDK docs name compact root helpers exactly", () => {
+  const readme = source("python/iroha_python/README.md").replace(/\s+/gu, " ");
+  assertContainsAll(
+    readme,
+    [
+      "Import the helpers from `iroha_python` or `iroha_python.kagemusha`",
+      "kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(record_bundle_archive, pallas_open_envelopes_archive, recursive_compact_key_artifacts_archive)",
+      "kagemusha_verify_recursive_compact_payment_token(compact_token_archive, recursive_compact_verifier_keys_archive)",
+      "is_kagemusha_recursive_compact_payment_token_prover_available()",
+      "is_kagemusha_recursive_compact_payment_token_verifier_available()",
+    ],
+    "Python recursive compact README root helper docs",
+  );
+});
+
 test("Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries", () => {
   const readiness = source("ci/check_kagemusha_production_readiness.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
@@ -2134,6 +2235,114 @@ test("Kagemusha production readiness negative controls pin ABI-7 compact launch 
   }
 });
 
+test("recursive Kagemusha payload reducer pins expected-hop and benchmark-name controls", () => {
+  const reducer = source("ci/check_kagemusha_recursive_spend_payload_bench.sh");
+  const policy = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const benchmarkNameModes = [
+    "--negative-control-malformed-payload-benchmark-name",
+  ];
+  const hopModes = [
+    "--negative-control-empty-hop-list",
+    "--negative-control-blank-hop-list",
+    "--negative-control-non-integer-hop",
+    "--negative-control-zero-hop",
+    "--negative-control-duplicate-hop",
+    "--negative-control-unsorted-hop",
+    "--negative-control-leading-zero-hop",
+  ];
+
+  assertContainsAll(reducer, benchmarkNameModes, "payload reducer benchmark-name negative controls");
+  assertContainsAll(reducer, hopModes, "payload reducer expected-hop negative controls");
+  assertContainsAll(
+    reducer,
+    [
+      "def write_named_benchmark(group, benchmark_name):",
+      "unexpected recursive Kagemusha {label} benchmark name:",
+      'f"{expected_hops[0]}_hop_{payload_baseline}_bytes"',
+      "def parse_expected_hops(raw):",
+      "expected recursive Kagemusha payload hops must be a non-empty",
+      "expected recursive Kagemusha payload hops must be positive integers",
+      "expected recursive Kagemusha payload hops must be positive",
+      "expected recursive Kagemusha payload hops must be unique",
+      "expected recursive Kagemusha payload hops must be sorted in ascending order",
+      "expected recursive Kagemusha payload hops must use canonical decimal integers",
+      'EXPECTED_HOPS="${KAGEMUSHA_RECURSIVE_SPEND_PAYLOAD_HOPS-1,2,3,5,8,13,21,34,55,64}"',
+      'REDUCER_EXPECTED_HOPS=""',
+      'REDUCER_EXPECTED_HOPS="1,,2"',
+      'REDUCER_EXPECTED_HOPS="1,two,3"',
+      'REDUCER_EXPECTED_HOPS="0,1,2"',
+      'REDUCER_EXPECTED_HOPS="1,2,2"',
+      'REDUCER_EXPECTED_HOPS="1,3,2"',
+      'REDUCER_EXPECTED_HOPS="1,02,3"',
+    ],
+    "payload reducer expected-hop and benchmark-name validation",
+  );
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_payload_bench.sh",
+    benchmarkNameModes,
+    "Kagemusha payload reducer",
+  );
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_payload_bench.sh",
+    hopModes,
+    "Kagemusha payload reducer",
+  );
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    [
+      "--negative-control-payload-benchmark-name-negative-controls-workflow",
+      "--negative-control-payload-hop-list-negative-controls-workflow",
+    ],
+    "Kagemusha policy guard",
+  );
+  assertContainsAll(
+    policy,
+    [
+      "--negative-control-payload-benchmark-name-negative-controls-workflow",
+      "--negative-control-payload-hop-list-negative-controls-workflow",
+      "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-malformed-payload-benchmark-name",
+      "ci/check_kagemusha_recursive_spend_payload_bench.sh --synthetic-malformed-payload-name-check",
+      "ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-duplicate-hop",
+      "ci/check_kagemusha_recursive_spend_payload_bench.sh --synthetic-duplicate-hop-check",
+    ],
+    "policy hop-list negative-control meta guard",
+  );
+
+  const benchmarkNameBranch = policy.slice(
+    policy.indexOf('if mode == "--negative-control-payload-benchmark-name-negative-controls-workflow":'),
+    policy.indexOf('if mode == "--negative-control-payload-negative-controls-comment-workflow":'),
+  );
+  assert.match(
+    benchmarkNameBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "payload benchmark-name policy negative control must validate the mutated workflow snapshot",
+  );
+  assert.match(
+    benchmarkNameBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: payload benchmark-name reducer drift was not detected"\)/u,
+    "payload benchmark-name policy negative control must only pass after detecting injected drift",
+  );
+
+  const branch = policy.slice(
+    policy.indexOf('if mode == "--negative-control-payload-hop-list-negative-controls-workflow":'),
+    policy.indexOf('if mode == "--negative-control-payload-benchmark-name-negative-controls-workflow":'),
+  );
+  assert.match(
+    branch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "payload hop-list policy negative control must validate the mutated workflow snapshot",
+  );
+  assert.match(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: payload hop-list reducer drift was not detected"\)/u,
+    "payload hop-list policy negative control must only pass after detecting injected drift",
+  );
+});
+
 test("recursive Kagemusha policy negative controls pin native host archive caps", () => {
   const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
   const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
@@ -2206,6 +2415,653 @@ test("recursive Kagemusha policy negative controls pin native host archive caps"
     pythonArchiveCapBranch,
     /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Python host archive-cap negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin lineage accumulator coverage", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const expectedModes = [
+    "--negative-control-core-lineage-profile-split",
+    "--negative-control-core-proof-chain-accumulator",
+    "--negative-control-core-fixed-window-table-base-accumulator",
+    "--negative-control-core-append-boundary-accumulator",
+    "--negative-control-core-previous-accumulator-boundary",
+    "--negative-control-core-resulting-accumulator-boundary",
+    "--negative-control-core-append-boundary-digest-match",
+    "--negative-control-core-append-boundary-context-matches",
+    "--negative-control-core-append-digest-unchecked-surface",
+    "--negative-control-core-append-digest-wrapper-bypass",
+    "--negative-control-core-append-boundary-profile-comparison",
+    "--negative-control-data-model-proof-public-input-circuit-binding",
+    "--negative-control-data-model-previous-proof-field-binding",
+    "--negative-control-core-recursive-public-input-schema-order",
+    "--negative-control-core-recursive-public-input-index-map",
+    "--negative-control-core-recursive-public-input-value-order",
+    "--negative-control-core-recursive-public-input-nonzero-groups",
+    "--negative-control-core-recursive-append-semantic-nonzero-groups",
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    expectedModes,
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  for (const mode of expectedModes) {
+    assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+    assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+  }
+
+  const proofPublicInputCircuitBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-proof-public-input-circuit-binding":'),
+    guard.indexOf('if mode == "--negative-control-data-model-previous-proof-field-binding":'),
+  );
+  assert.match(
+    proofPublicInputCircuitBranch,
+    /expected\.append_opening_preflight_digest == \[0u8; Hash::LENGTH\][\s\S]*?expected\.append_opening_preflight_digest != \[0u8; Hash::LENGTH\]/u,
+    "proof public-input circuit binding negative control must flip append preflight boundary routing",
+  );
+  assert.match(
+    proofPublicInputCircuitBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "proof public-input circuit binding negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    proofPublicInputCircuitBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: proof public-input circuit binding drift was not detected"\)/u,
+    "proof public-input circuit binding negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    proofPublicInputCircuitBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "proof public-input circuit binding negative control must not unconditionally pass after run_checks",
+  );
+
+  const previousProofFieldBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-previous-proof-field-binding":'),
+    guard.indexOf('if mode == "--negative-control-core-append-cap-boundary":'),
+  );
+  assert.match(
+    previousProofFieldBranch,
+    /ensure_recursive_spend_previous_proof_matches[\s\S]*?ensure_field!\(folded_public_inputs_hash\)/u,
+    "previous-proof field binding negative control must target the previous-proof folded hash comparison",
+  );
+  assert.match(
+    previousProofFieldBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "previous-proof field binding negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    previousProofFieldBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: previous-proof field binding drift was not detected"\)/u,
+    "previous-proof field binding negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    previousProofFieldBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "previous-proof field binding negative control must not unconditionally pass after run_checks",
+  );
+  assertContainsAll(
+    guard,
+    [
+      "spliced previous proof folded public-input hash",
+      'field: "previous_recursive_proof.folded_public_inputs_hash"',
+    ],
+    "previous-proof folded hash adversarial fixture policy coverage",
+  );
+
+  const profileSplitBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-lineage-profile-split":'),
+    guard.indexOf('if mode == "--negative-control-core-proof-chain-accumulator":'),
+  );
+  assert.match(
+    profileSplitBranch,
+    /Reserved-lineage one-hop and append verifier records must coexist under distinct circuit ids[\s\S]*?Reserved-lineage verifier records must coexist/u,
+    "Reserved-lineage profile split negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    profileSplitBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "Reserved-lineage profile split negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    profileSplitBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: Reserved-lineage profile split drift was not detected"\)/u,
+    "Reserved-lineage profile split negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    profileSplitBranch,
+    /\n    raise SystemExit\(0\)\n    raise SystemExit\("negative control failed: Reserved-lineage profile split drift was not detected"\)/u,
+    "Reserved-lineage profile split negative control must not pass after an undetected run_checks result",
+  );
+
+  const proofChainBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-proof-chain-accumulator":'),
+    guard.indexOf('if mode == "--negative-control-core-fixed-window-table-base-accumulator":'),
+  );
+  assert.match(
+    proofChainBranch,
+    /proof-byte splice is bound into accumulator state[\s\S]*?proof-byte splice may be detached from accumulator state/u,
+    "proof-chain accumulator negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    proofChainBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "proof-chain accumulator negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    proofChainBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: proof-chain accumulator drift was not detected"\)/u,
+    "proof-chain accumulator negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    proofChainBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "proof-chain accumulator negative control must not unconditionally pass after run_checks",
+  );
+
+  const tableBaseBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-fixed-window-table-base-accumulator":'),
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-accumulator":'),
+  );
+  assert.match(
+    tableBaseBranch,
+    /per-hop fixed-window table-base digest must stream across append[\s\S]*?per-hop fixed-window table-base digest may be detached from append/u,
+    "fixed-window table-base accumulator negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    tableBaseBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "fixed-window table-base accumulator negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    tableBaseBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: fixed-window table-base accumulator drift was not detected"\)/u,
+    "fixed-window table-base accumulator negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    tableBaseBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "fixed-window table-base accumulator negative control must not unconditionally pass after run_checks",
+  );
+
+  const appendBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-accumulator":'),
+    guard.indexOf('if mode == "--negative-control-core-previous-accumulator-boundary":'),
+  );
+  assert.match(
+    appendBoundaryBranch,
+    /append-boundary digest must not feed back into the accumulator digest[\s\S]*?append-boundary digest may feed back into the accumulator digest/u,
+    "append-boundary accumulator negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    appendBoundaryBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append-boundary accumulator negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    appendBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary accumulator drift was not detected"\)/u,
+    "append-boundary accumulator negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    appendBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append-boundary accumulator negative control must not unconditionally pass after run_checks",
+  );
+
+  const previousAccumulatorBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-previous-accumulator-boundary":'),
+    guard.indexOf('if mode == "--negative-control-core-resulting-accumulator-boundary":'),
+  );
+  assert.match(
+    previousAccumulatorBoundaryBranch,
+    /field: "append_boundary\.previous_accumulator_digest"[\s\S]*?field: "append_boundary\.previous_accumulator_digest_unchecked"/u,
+    "previous accumulator boundary negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    previousAccumulatorBoundaryBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "previous accumulator boundary negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    previousAccumulatorBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: previous accumulator boundary drift was not detected"\)/u,
+    "previous accumulator boundary negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    previousAccumulatorBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "previous accumulator boundary negative control must not unconditionally pass after run_checks",
+  );
+
+  const resultingAccumulatorBoundaryBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-resulting-accumulator-boundary":'),
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-digest-match":'),
+  );
+  assert.match(
+    resultingAccumulatorBoundaryBranch,
+    /append_boundary\.resulting_accumulator_digest != expected_accumulator_digest[\s\S]*?append_boundary\.resulting_accumulator_digest == expected_accumulator_digest/u,
+    "resulting accumulator boundary negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    resultingAccumulatorBoundaryBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "resulting accumulator boundary negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    resultingAccumulatorBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: resulting accumulator boundary drift was not detected"\)/u,
+    "resulting accumulator boundary negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    resultingAccumulatorBoundaryBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "resulting accumulator boundary negative control must not unconditionally pass after run_checks",
+  );
+
+  const appendBoundaryDigestMatchBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-digest-match":'),
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-context-matches":'),
+  );
+  assert.match(
+    appendBoundaryDigestMatchBranch,
+    /append_boundary\.append_boundary_digest != accumulator\.append_boundary_digest[\s\S]*?append_boundary\.append_boundary_digest == accumulator\.append_boundary_digest/u,
+    "append-boundary digest match negative control must mutate the guarded coverage",
+  );
+  assert.match(
+    appendBoundaryDigestMatchBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append-boundary digest match negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    appendBoundaryDigestMatchBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary digest match drift was not detected"\)/u,
+    "append-boundary digest match negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    appendBoundaryDigestMatchBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append-boundary digest match negative control must not unconditionally pass after run_checks",
+  );
+
+  const appendBoundaryContextMatchesBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-context-matches":'),
+    guard.indexOf('if mode == "--negative-control-core-vesta-ipa-h-fold":'),
+  );
+  for (const [before, after] of [
+    [
+      /append_boundary\.transition_profile_binding_digest\\n            != accumulator\.transition_profile_binding_digest/u,
+      /append_boundary\.transition_profile_binding_digest\\n            == accumulator\.transition_profile_binding_digest/u,
+    ],
+    [
+      /append_boundary\.chain_asset_binding_digest != expected_chain_asset_binding_digest/u,
+      /append_boundary\.chain_asset_binding_digest == expected_chain_asset_binding_digest/u,
+    ],
+    [
+      /append_boundary\.final_note_binding_digest != expected_final_note_binding_digest/u,
+      /append_boundary\.final_note_binding_digest == expected_final_note_binding_digest/u,
+    ],
+    [
+      /append_boundary\.resulting_public_inputs_hash != expected_public_inputs_hash/u,
+      /append_boundary\.resulting_public_inputs_hash == expected_public_inputs_hash/u,
+    ],
+  ]) {
+    assert.match(
+      appendBoundaryContextMatchesBranch,
+      before,
+      "append-boundary context match negative control must name the guarded comparator",
+    );
+    assert.match(
+      appendBoundaryContextMatchesBranch,
+      after,
+      "append-boundary context match negative control must flip the guarded comparator",
+    );
+  }
+  assert.match(
+    appendBoundaryContextMatchesBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append-boundary context match negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    appendBoundaryContextMatchesBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary context match drift was not detected"\)/u,
+    "append-boundary context match negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    appendBoundaryContextMatchesBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append-boundary context match negative control must not unconditionally pass after run_checks",
+  );
+
+  assert.match(
+    guard,
+    /def check_append_digest_helpers_are_checked\(\):[\s\S]*?unchecked append digest helper must remain private[\s\S]*?append opening preflight public digest wrapper[\s\S]*?preflight\.validate_context\(\)\?;[\s\S]*?Ok\(preflight\.append_opening_preflight_digest\)[\s\S]*?append boundary public digest wrapper[\s\S]*?boundary\.validate_context\(\)\?;[\s\S]*?Ok\(boundary\.append_boundary_digest\)/u,
+    "policy guard must pin private unchecked append digest helpers and checked public wrappers",
+  );
+
+  const uncheckedSurfaceBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-digest-unchecked-surface":'),
+    guard.indexOf('if mode == "--negative-control-core-append-digest-wrapper-bypass":'),
+  );
+  assert.match(
+    uncheckedSurfaceBranch,
+    /fn \{helper\}\([\s\S]*?pub fn \{helper\}\(/u,
+    "append digest unchecked surface negative control must expose private helpers",
+  );
+  assert.match(
+    uncheckedSurfaceBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append digest unchecked surface negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    uncheckedSurfaceBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append digest unchecked surface drift was not detected"\)/u,
+    "append digest unchecked surface negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    uncheckedSurfaceBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append digest unchecked surface negative control must not unconditionally pass after run_checks",
+  );
+
+  const wrapperBypassBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-digest-wrapper-bypass":'),
+    guard.indexOf('if mode == "--negative-control-core-vesta-ipa-h-fold":'),
+  );
+  assert.match(
+    wrapperBypassBranch,
+    /preflight\.validate_context\(\)\?;\\n"\s*"    Ok\(preflight\.append_opening_preflight_digest\)[\s\S]*?kagemusha_recursive_spend_lineage_append_opening_preflight_digest_unchecked\(preflight\)[\s\S]*?boundary\.validate_context\(\)\?;\\n"\s*"    Ok\(boundary\.append_boundary_digest\)[\s\S]*?kagemusha_recursive_spend_lineage_append_boundary_digest_unchecked\(boundary\)/u,
+    "append digest wrapper bypass negative control must replace checked wrappers with unchecked digest recomputation",
+  );
+  assert.match(
+    wrapperBypassBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append digest wrapper bypass negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    wrapperBypassBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append digest wrapper bypass drift was not detected"\)/u,
+    "append digest wrapper bypass negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    wrapperBypassBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append digest wrapper bypass negative control must not unconditionally pass after run_checks",
+  );
+
+  assert.match(
+    guard,
+    /def check_append_boundary_profile_comparison_is_complete\(\):[\s\S]*?expected_fields = \[[\s\S]*?"domain"[\s\S]*?"append_opening_preflight_digest"[\s\S]*?"resulting_public_inputs_hash"[\s\S]*?"fixed_window_shared_table_manifest_digest"[\s\S]*?"append_boundary_digest"[\s\S]*?actual_fields != expected_fields/u,
+    "policy guard must pin the exact append-boundary transition-profile comparison field list",
+  );
+
+  const profileComparisonBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-append-boundary-profile-comparison":'),
+    guard.indexOf('if mode == "--negative-control-core-vesta-ipa-h-fold":'),
+  );
+  assert.match(
+    profileComparisonBranch,
+    /ensure_field!\(append_boundary_digest\);\\n"[\s\S]*?""/u,
+    "append-boundary profile comparison negative control must remove the terminal digest comparison",
+  );
+  assert.match(
+    profileComparisonBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append-boundary profile comparison negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    profileComparisonBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append-boundary profile comparison drift was not detected"\)/u,
+    "append-boundary profile comparison negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    profileComparisonBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append-boundary profile comparison negative control must not unconditionally pass after run_checks",
+  );
+
+  assert.match(
+    guard,
+    /def check_recursive_public_input_schema_order_and_indices\(\):[\s\S]*?expected_recursive_aggregation_public_inputs\(\)[\s\S]*?actual_fields != expected_fields[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_HOP_COUNT_INDEX/u,
+    "policy guard must pin recursive aggregation public-input schema order and core index constants",
+  );
+  assert.match(
+    guard,
+    /def expected_recursive_aggregation_instance_value_expressions\(\):[\s\S]*?append_opening_preflight_digest[\s\S]*?append_opening_preflight_limbs[\s\S]*?append_boundary_digest[\s\S]*?append_boundary_limbs[\s\S]*?u64::from\(public_inputs\.hop_count\)[\s\S]*?def check_recursive_public_input_value_builder_order\(\):[\s\S]*?extract_recursive_public_input_value_expressions\(core\)[\s\S]*?actual_values != expected_values[\s\S]*?required_derivations[\s\S]*?function_body/u,
+    "policy guard must pin recursive aggregation public-input value builder order",
+  );
+  assert.match(
+    guard,
+    /def check_recursive_public_input_non_zero_groups\(\):[\s\S]*?expected_recursive_aggregation_limb_prefixes\(\)\[:9\][\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUPS[\s\S]*?actual_groups != expected_groups[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_NON_ZERO_PUBLIC_FIELD_GROUP_LABELS[\s\S]*?actual_labels != expected_prefixes[\s\S]*?ensure_kagemusha_recursive_compact_token_public_instance_context/u,
+    "policy guard must pin recursive aggregation non-zero public field groups and labels",
+  );
+  assert.match(
+    guard,
+    /def check_recursive_append_semantic_non_zero_groups\(\):[\s\S]*?validate_append_semantic_profile[\s\S]*?validate_one_hop_semantic_non_zero_witnesses\(semantic\)[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_TRANSITION_PROFILE_BINDING_START_INDEX[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_VERIFIER_SCALAR_PROJECTION_START_INDEX[\s\S]*?actual_calls != expected_calls/u,
+    "policy guard must pin append verifier-slice semantic non-zero groups",
+  );
+  assert.match(
+    guard,
+    /def check_recursive_spend_proof_public_input_circuit_binding\(\):[\s\S]*?expected_kagemusha_recursive_spend_public_inputs_for_proof[\s\S]*?SemanticAggregation[\s\S]*?append_boundary_digest[\s\S]*?Lineage[\s\S]*?recursive_verifier_scalar_projection_digest[\s\S]*?expected\.recursive_verifier_scalar_projection_digest = scalar_projection[\s\S]*?expected\.append_opening_preflight_digest == \[0u8; Hash::LENGTH\][\s\S]*?append_boundary_digest != expected\.append_boundary_digest/u,
+    "policy guard must pin recursive spend proof public-input circuit binding",
+  );
+  assert.match(
+    guard,
+    /def check_recursive_spend_previous_proof_field_binding\(\):[\s\S]*?ensure_recursive_spend_previous_proof_matches[\s\S]*?"folded_public_inputs_hash"[\s\S]*?"recursive_verifier_scalar_projection_digest"[\s\S]*?actual_fields != expected_fields[\s\S]*?previous_recursive_proof\.public_inputs_hash != expected\.public_inputs_hash\(\)\?/u,
+    "policy guard must pin previous recursive proof public-input field binding",
+  );
+
+  const schemaOrderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-recursive-public-input-schema-order":'),
+    guard.indexOf('if mode == "--negative-control-core-recursive-public-input-index-map":'),
+  );
+  assert.match(
+    schemaOrderBranch,
+    /append_opening_preflight_digest_limb0[\s\S]*?append_boundary_digest_limb0[\s\S]*?append_boundary_digest_limb0[\s\S]*?append_opening_preflight_digest_limb0/u,
+    "recursive public-input schema negative control must swap append-opening and append-boundary groups",
+  );
+  assert.match(
+    schemaOrderBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "recursive public-input schema negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    schemaOrderBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: recursive public-input schema order drift was not detected"\)/u,
+    "recursive public-input schema negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    schemaOrderBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "recursive public-input schema negative control must not unconditionally pass after run_checks",
+  );
+
+  const indexMapBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-recursive-public-input-index-map":'),
+    guard.indexOf('if mode == "--negative-control-core-recursive-public-input-value-order":'),
+  );
+  assert.match(
+    indexMapBranch,
+    /KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX: usize = 48;[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX: usize = 44;/u,
+    "recursive public-input index negative control must shift the append-boundary start index",
+  );
+  assert.match(
+    indexMapBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "recursive public-input index negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    indexMapBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: recursive public-input index map drift was not detected"\)/u,
+    "recursive public-input index negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    indexMapBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "recursive public-input index negative control must not unconditionally pass after run_checks",
+  );
+
+  const valueOrderBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-recursive-public-input-value-order":'),
+    guard.indexOf('if mode == "--negative-control-core-recursive-public-input-nonzero-groups":'),
+  );
+  assert.match(
+    valueOrderBranch,
+    /append_opening_preflight_limbs\[0\][\s\S]*?append_boundary_limbs\[0\][\s\S]*?append_boundary_limbs\[0\][\s\S]*?append_opening_preflight_limbs\[0\]/u,
+    "recursive public-input value negative control must swap append-opening and append-boundary value groups",
+  );
+  assert.match(
+    valueOrderBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "recursive public-input value negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    valueOrderBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: recursive public-input value order drift was not detected"\)/u,
+    "recursive public-input value negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    valueOrderBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "recursive public-input value negative control must not unconditionally pass after run_checks",
+  );
+
+  const nonzeroGroupBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-recursive-public-input-nonzero-groups":'),
+    guard.indexOf('if mode == "--negative-control-core-recursive-append-semantic-nonzero-groups":'),
+  );
+  assert.match(
+    nonzeroGroupBranch,
+    /\[32, 33, 34, 35\][\s\S]*?\[28, 29, 30, 31\]/u,
+    "recursive public-input nonzero group negative control must drop verifier-witness batch coverage",
+  );
+  assert.match(
+    nonzeroGroupBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "recursive public-input nonzero group negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    nonzeroGroupBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: recursive public-input nonzero group drift was not detected"\)/u,
+    "recursive public-input nonzero group negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    nonzeroGroupBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "recursive public-input nonzero group negative control must not unconditionally pass after run_checks",
+  );
+
+  const appendSemanticNonzeroBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-core-recursive-append-semantic-nonzero-groups":'),
+    guard.indexOf('if mode == "--negative-control-core-vesta-ipa-h-fold":'),
+  );
+  assert.match(
+    appendSemanticNonzeroBranch,
+    /KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_BOUNDARY_START_INDEX[\s\S]*?KAGEMUSHA_RECURSIVE_AGGREGATION_APPEND_OPENING_PREFLIGHT_START_INDEX/u,
+    "append semantic nonzero group negative control must redirect append-boundary coverage to append-opening",
+  );
+  assert.match(
+    appendSemanticNonzeroBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "append semantic nonzero group negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    appendSemanticNonzeroBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: append semantic nonzero group drift was not detected"\)/u,
+    "append semantic nonzero group negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    appendSemanticNonzeroBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "append semantic nonzero group negative control must not unconditionally pass after run_checks",
+  );
+});
+
+test("recursive Kagemusha policy negative controls pin checked-fold preverification order", () => {
+  const guard = source("ci/check_kagemusha_recursive_spend_policy.sh");
+  const workflow = source(".github/workflows/pr_kagemusha_payload_bench.yml");
+  const expectedModes = [
+    "--negative-control-core-fold-public-input-preverify-order",
+    "--negative-control-core-record-backed-fold-public-input-preverify-order",
+  ];
+
+  assertWorkflowRunsNegativeControlModes(
+    workflow,
+    "ci/check_kagemusha_recursive_spend_policy.sh",
+    expectedModes,
+    "Kagemusha policy guard",
+  );
+  const inventoryModes = negativeControlModesFromInventory(
+    guard,
+    "POLICY_NEGATIVE_CONTROL_COMMANDS = (",
+    "class PolicyError",
+  );
+  for (const mode of expectedModes) {
+    assert.ok(inventoryModes.includes(mode), `policy negative-control inventory must include ${mode}`);
+    assert.ok(guard.includes(`if mode == "${mode}":`), `policy guard must implement ${mode}`);
+  }
+
+  assert.match(
+    guard,
+    /def check_checked_fold_public_input_preverification_order\(\):[\s\S]*?validate_kagemusha_fold_metadata\(steps\)\?;[\s\S]*?validate_required_kagemusha_confidential_v2_step_public_inputs\(chain_id, asset, step\)\?;[\s\S]*?verified_steps\.push\(kagemusha_verified_fold_step\(step\)\?\);[\s\S]*?validate_kagemusha_fold_metadata\(&steps\)\?;[\s\S]*?validate_kagemusha_hop_verifier_record_set\(&steps, records\)\?;[\s\S]*?validate_required_kagemusha_confidential_v2_step_public_inputs\(/u,
+    "policy guard must pin direct and record-backed checked-fold public-input preverification order",
+  );
+
+  const start = guard.indexOf('if mode == "--negative-control-core-fold-public-input-preverify-order":');
+  const end = guard.indexOf('if mode == "--negative-control-core-record-backed-fold-public-input-preverify-order":');
+  const branch = guard.slice(start, end);
+  assert.match(
+    branch,
+    /validate_required_kagemusha_confidential_v2_step_public_inputs\(chain_id, asset, step\)\?;\\n"\s*"        verified_steps\.push\(kagemusha_verified_fold_step\(step\)\?\);[\s\S]*?verified_steps\.push\(kagemusha_verified_fold_step\(step\)\?\);\\n"\s*"        validate_required_kagemusha_confidential_v2_step_public_inputs\(chain_id, asset, step\)\?;/u,
+    "checked-fold public-input negative control must reorder validation after fold-step recording",
+  );
+  assert.match(
+    branch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "checked-fold public-input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: checked-fold public-input preverification order drift was not detected"\)/u,
+    "checked-fold public-input negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    branch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "checked-fold public-input negative control must not unconditionally pass after run_checks",
+  );
+
+  const recordStart = guard.indexOf(
+    'if mode == "--negative-control-core-record-backed-fold-public-input-preverify-order":',
+  );
+  const recordEnd = guard.indexOf('if mode == "--negative-control-core-lineage-witness-fold-predecode":');
+  const recordBranch = guard.slice(recordStart, recordEnd);
+  assert.match(
+    recordBranch,
+    /validate_kagemusha_fold_verifier_record\(step, record, block_height\)\?;\\n"[\s\S]*?validate_required_kagemusha_confidential_v2_step_public_inputs\([\s\S]*?validate_required_kagemusha_confidential_v2_step_public_inputs\([\s\S]*?validate_kagemusha_fold_verifier_record\(step, record, block_height\)\?;/u,
+    "record-backed checked-fold negative control must reorder verifier-record validation after public-input validation",
+  );
+  assert.match(
+    recordBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "record-backed checked-fold public-input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    recordBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: record-backed checked-fold public-input preverification order drift was not detected"\s*\)/u,
+    "record-backed checked-fold public-input negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    recordBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "record-backed checked-fold public-input negative control must not unconditionally pass after run_checks",
   );
 });
 
@@ -2406,6 +3262,16 @@ test("recursive Kagemusha policy negative controls pin core Vesta IPA fold cover
     /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "core Vesta IPA H-fold negative control must validate the mutated text snapshot",
   );
+  assert.match(
+    hFoldBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: non-native Vesta IPA H-fold drift was not detected"\)/u,
+    "core Vesta IPA H-fold negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    hFoldBranch,
+    /\n    raise SystemExit\(0\)\n    raise SystemExit\("negative control failed: non-native Vesta IPA H-fold drift was not detected"\)/u,
+    "core Vesta IPA H-fold negative control must not pass after an undetected run_checks result",
+  );
 
   const gFoldBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-core-vesta-ipa-g-fold":'),
@@ -2425,6 +3291,16 @@ test("recursive Kagemusha policy negative controls pin core Vesta IPA fold cover
     gFoldBranch,
     /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
     "core Vesta IPA G-fold negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    gFoldBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: non-native Vesta IPA G-fold drift was not detected"\)/u,
+    "core Vesta IPA G-fold negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    gFoldBranch,
+    /\n    raise SystemExit\(0\)\n    raise SystemExit\("negative control failed: non-native Vesta IPA G-fold drift was not detected"\)/u,
+    "core Vesta IPA G-fold negative control must not pass after an undetected run_checks result",
   );
 });
 
@@ -2457,16 +3333,33 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-helper-surface",
     "--negative-control-sdk-readme-boundary",
     "--negative-control-sdk-readme-proof-chain-accumulator",
+    "--negative-control-offline-doc-native-owned-accumulator-boundary",
+    "--negative-control-sdk-proof-chain-accumulator-input",
+    "--negative-control-sdk-accumulator-digest-inputs",
+    "--negative-control-sdk-accumulator-boundary-digest-inputs",
     "--negative-control-sdk-readme-availability-surface",
     "--negative-control-sdk-readme-recursive-compact-unavailable",
     "--negative-control-sdk-readme-compact-projection-verifier",
     "--negative-control-sdk-readme-stale-future-lineage",
     "--negative-control-sdk-readme-native-output-csharp",
     "--negative-control-cross-sdk-helper-bodies",
+    "--negative-control-cross-sdk-preferred-mode-fallback",
     "--negative-control-mobile-halo2-vk-hash",
     "--negative-control-rust-recursive-compact-unavailable-classifier",
     "--negative-control-sdk-recursive-compact-unavailable-helper",
     "--negative-control-recursive-compact-verifier-surface",
+    "--negative-control-recursive-compact-key-package-arity",
+    "--negative-control-python-recursive-compact-probe-arity",
+    "--negative-control-js-recursive-compact-key-package-dispatch",
+    "--negative-control-js-package-dist-recursive-compact-declarations",
+    "--negative-control-js-package-dist-accumulator-digest-declarations",
+    "--negative-control-js-package-dist-accumulator-digest-denylist",
+    "--negative-control-js-package-dist-terminal-accumulator-digest-denylist",
+    "--negative-control-js-package-dist-declaration-sweep",
+    "--negative-control-js-package-dist-nexus-declaration-sweep",
+    "--negative-control-js-package-dist-kotodama-declaration-sweep",
+    "--negative-control-js-dts-recursive-compact-key-package",
+    "--negative-control-python-recursive-compact-root-export",
     "--negative-control-recursive-spend-compact-projection-surface",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
     "--negative-control-kagemusha-abi-probe-bounds",
@@ -2617,9 +3510,44 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     );
   }
 
+  const preferredModeFallbackBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-cross-sdk-preferred-mode-fallback":'),
+    guard.indexOf('if mode == "--negative-control-rust-recursive-compact-unavailable-classifier":'),
+  );
+  assert.match(
+    preferredModeFallbackBranch,
+    /recursiveCompactAvailable[\s\S]*KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1[\s\S]*recursive_compact_available[\s\S]*RECURSIVE_COMPACT_V1/u,
+    "preferred-mode fallback negative control must inject compact-default drift across SDKs",
+  );
+  assert.match(
+    preferredModeFallbackBranch,
+    /Swift preferred Kagemusha mode fallback policy[\s\S]*Android Java preferred Kagemusha mode fallback policy[\s\S]*C# preferred Kagemusha mode fallback policy/u,
+    "preferred-mode fallback negative control must expect mobile and C# fallback-policy labels",
+  );
+  assert.match(
+    preferredModeFallbackBranch,
+    /run_checks\(mutated\)/u,
+    "preferred-mode fallback negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    preferredModeFallbackBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*raise\s+SystemExit\(0\)[\s\S]*raise\s+SystemExit\("negative control failed: cross-SDK preferred-mode fallback drift was not detected"\)/u,
+    "preferred-mode fallback negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    preferredModeFallbackBranch,
+    /\n    raise SystemExit\(0\)\n    raise SystemExit\("negative control failed: cross-SDK preferred-mode fallback drift was not detected"\)/u,
+    "preferred-mode fallback negative control must not pass after an undetected run_checks result",
+  );
+
   const nativeBridgeTestWorkflowBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-native-bridge-test-workflow":'),
     guard.indexOf('if mode == "--negative-control-native-bridge-windowed-record-order-workflow":'),
+  );
+  assert.match(
+    guard,
+    /NATIVE_BRIDGE_RECURSIVE_COMPACT_TEST_COMMAND = "CARGO_PROFILE_TEST_OPT_LEVEL=3 CARGO_PROFILE_TEST_DEBUG=0 cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib -- --test-threads=1"/u,
+    "heavyweight native recursive compact bridge test must use the optimized Cargo test profile",
   );
   assert.match(
     nativeBridgeTestWorkflowBranch,
@@ -2973,11 +3901,11 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const sdkReadmeProofChainAccumulatorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-readme-proof-chain-accumulator":'),
-    guard.indexOf('if mode == "--negative-control-sdk-readme-availability-surface":'),
+    guard.indexOf('if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":'),
   );
   assert.match(
     sdkReadmeProofChainAccumulatorBranch,
-    /previous recursive proof bytes[\s\S]*?optional SDK metadata[\s\S]*?run_checks\(mutated\)/u,
+    /previous recursive proof bytes and per-hop accumulator[\s\S]*?native-owned accumulator digests[\s\S]*?append-boundary[\s\S]*?scalar-projection[\s\S]*?previous\/resulting accumulator digests[\s\S]*?must not derive, supply, or patch accumulator state[\s\S]*?optional SDK metadata[\s\S]*?run_checks\(mutated\)/u,
     "SDK README proof-chain accumulator negative control must mutate the accumulator boundary",
   );
   assert.match(
@@ -2989,6 +3917,97 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     sdkReadmeProofChainAccumulatorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "SDK README proof-chain accumulator negative control must not unconditionally pass after run_checks",
+  );
+  const offlineDocAccumulatorBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":'),
+    guard.indexOf('if mode == "--negative-control-sdk-proof-chain-accumulator-input":'),
+  );
+  assert.match(
+    offlineDocAccumulatorBranch,
+    /previous recursive proof bytes and per-hop[\s\S]*?native-owned accumulator digests[\s\S]*?append-boundary[\s\S]*?scalar-projection[\s\S]*?previous\/resulting accumulator digests[\s\S]*?SDKs must not derive, supply[\s\S]*?accumulator state themselves[\s\S]*?SDKs supply accumulator digests as optional metadata[\s\S]*?run_checks\(mutated\)/u,
+    "offline Kagemusha doc accumulator negative control must mutate the native-owned accumulator boundary",
+  );
+  assert.match(
+    offlineDocAccumulatorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: offline Kagemusha accumulator boundary drift was not detected"\)/u,
+    "offline Kagemusha doc accumulator negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    offlineDocAccumulatorBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "offline Kagemusha doc accumulator negative control must not unconditionally pass after run_checks",
+  );
+  const sdkProofChainAccumulatorInputBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-proof-chain-accumulator-input":'),
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-digest-inputs":'),
+  );
+  assert.match(
+    sdkProofChainAccumulatorInputBranch,
+    /StaleProofChainDigestInputFixture[\s\S]*?recursiveProofChainDigest[\s\S]*?proofChainDigest[\s\S]*?recursive_proof_chain_digest[\s\S]*?javascript\/iroha_js\/index\.d\.ts/u,
+    "SDK proof-chain accumulator input negative control must inject digest parameters across SDKs and TypeScript declarations",
+  );
+  assert.match(
+    sdkProofChainAccumulatorInputBranch,
+    /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
+    "SDK proof-chain accumulator input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkProofChainAccumulatorInputBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK proof-chain accumulator public input drift was not detected"\s*\)/u,
+    "SDK proof-chain accumulator input negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkProofChainAccumulatorInputBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK proof-chain accumulator input negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAccumulatorDigestInputBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-digest-inputs":'),
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":'),
+  );
+  assert.match(
+    sdkAccumulatorDigestInputBranch,
+    /StaleAccumulatorDigestInputFixture[\s\S]*?lineageDigest[\s\S]*?aggregationTranscriptDigest[\s\S]*?fixedWindowTableBaseDigest[\s\S]*?verifierWitnessBatchDigest[\s\S]*?lineage_digest[\s\S]*?aggregation_transcript_digest[\s\S]*?javascript\/iroha_js\/index\.d\.ts/u,
+    "SDK accumulator digest input negative control must inject stale digest parameters across SDKs and TypeScript declarations",
+  );
+  assert.match(
+    sdkAccumulatorDigestInputBranch,
+    /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
+    "SDK accumulator digest input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkAccumulatorDigestInputBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator digest public input drift was not detected"\s*\)/u,
+    "SDK accumulator digest input negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAccumulatorDigestInputBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK accumulator digest input negative control must not unconditionally pass after run_checks",
+  );
+  const sdkAccumulatorBoundaryDigestInputBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-sdk-accumulator-boundary-digest-inputs":'),
+    guard.indexOf('if mode == "--negative-control-sdk-readme-availability-surface":'),
+  );
+  assert.match(
+    sdkAccumulatorBoundaryDigestInputBranch,
+    /StaleAccumulatorBoundaryDigestInputFixture[\s\S]*?appendBoundaryDigest[\s\S]*?transitionProfileBindingDigest[\s\S]*?appendOpeningPreflightDigest[\s\S]*?fixedWindowTableScheduleDigest[\s\S]*?fixedWindowSharedTableManifestDigest[\s\S]*?recursiveVerifierScalarProjectionDigest[\s\S]*?PreviousAccumulatorDigest[\s\S]*?append_boundary_digest[\s\S]*?resulting_accumulator_digest[\s\S]*?javascript\/iroha_js\/index\.d\.ts/u,
+    "SDK accumulator boundary digest input negative control must inject stale boundary digest parameters across SDKs and TypeScript declarations",
+  );
+  assert.match(
+    sdkAccumulatorBoundaryDigestInputBranch,
+    /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
+    "SDK accumulator boundary digest input negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    sdkAccumulatorBoundaryDigestInputBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: SDK accumulator boundary digest public input drift was not detected"\s*\)/u,
+    "SDK accumulator boundary digest input negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    sdkAccumulatorBoundaryDigestInputBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "SDK accumulator boundary digest input negative control must not unconditionally pass after run_checks",
   );
   const sdkReadmeCompactProjectionVerifierBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-readme-compact-projection-verifier":'),
@@ -3054,7 +4073,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const recursiveCompactVerifierSurfaceBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-recursive-compact-verifier-surface":'),
-    guard.indexOf('if mode == "--negative-control-recursive-spend-compact-projection-surface":'),
+    guard.indexOf('if mode == "--negative-control-recursive-compact-key-package-arity":'),
   );
   assert.match(
     recursiveCompactVerifierSurfaceBranch,
@@ -3065,6 +4084,294 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     recursiveCompactVerifierSurfaceBranch,
     /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
     "recursive compact verifier surface negative control must validate the mutated text snapshot",
+  );
+  const recursiveCompactKeyPackageArityBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-recursive-compact-key-package-arity":'),
+    guard.indexOf('if mode == "--negative-control-python-recursive-compact-probe-arity":'),
+  );
+  assert.match(
+    recursiveCompactKeyPackageArityBranch,
+    /StaleRecursiveCompactKeyPackageArityFixture[\s\S]*?recursiveCompactKeyArtifactsArchive:\s*Data\s*=\s*Data\(\)[\s\S]*?fun proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes[\s\S]*?public static byte\[\] proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes[\s\S]*?ReadOnlySpan<byte> pallasOpenEnvelopesArchive/u,
+    "recursive compact key-package arity negative control must inject stale SDK overloads",
+  );
+  assert.match(
+    recursiveCompactKeyPackageArityBranch,
+    /mutated\[target\]\s*\+=\s*addition[\s\S]*?run_checks\(mutated\)/u,
+    "recursive compact key-package arity negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    recursiveCompactKeyPackageArityBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: ABI-7 recursive compact key-package arity drift was not detected"\s*\)/u,
+    "recursive compact key-package arity negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    recursiveCompactKeyPackageArityBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "recursive compact key-package arity negative control must not unconditionally pass after run_checks",
+  );
+  const pythonRecursiveCompactProbeArityBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-recursive-compact-probe-arity":'),
+    guard.indexOf('if mode == "--negative-control-js-recursive-compact-key-package-dispatch":'),
+  );
+  assert.match(
+    pythonRecursiveCompactProbeArityBranch,
+    /stale_prover_probe[\s\S]*?_RECURSIVE_COMPACT_TOKEN_METHOD[\s\S]*?stale_verifier_probe[\s\S]*?_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD/u,
+    "Python recursive compact probe arity negative control must mutate prover and verifier probes",
+  );
+  assert.match(
+    pythonRecursiveCompactProbeArityBranch,
+    /mutated\[target\]\s*=\s*mutated_text[\s\S]*?run_checks\(mutated\)/u,
+    "Python recursive compact probe arity negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    pythonRecursiveCompactProbeArityBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python recursive compact probe arity drift was not detected"\s*\)/u,
+    "Python recursive compact probe arity negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonRecursiveCompactProbeArityBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python recursive compact probe arity negative control must not unconditionally pass after run_checks",
+  );
+  const jsRecursiveCompactKeyPackageDispatchBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-recursive-compact-key-package-dispatch":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-compact-declarations":'),
+  );
+  assert.match(
+    jsRecursiveCompactKeyPackageDispatchBranch,
+    /package dist Kagemusha recursive compact requires key packages before native dispatch[\s\S]*?package dist Kagemusha recursive compact allows missing key packages before native dispatch/u,
+    "JS recursive compact key-package dispatch negative control must mutate the package-dist test name",
+  );
+  assert.match(
+    jsRecursiveCompactKeyPackageDispatchBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS recursive compact key-package dispatch negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsRecursiveCompactKeyPackageDispatchBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript recursive compact key-package dispatch drift was not detected"\s*\)/u,
+    "JS recursive compact key-package dispatch negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsRecursiveCompactKeyPackageDispatchBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS recursive compact key-package dispatch negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistRecursiveCompactDeclarationsBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-recursive-compact-declarations":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-accumulator-digest-declarations":'),
+  );
+  assert.match(
+    jsPackageDistRecursiveCompactDeclarationsBranch,
+    /package declarations expose recursive compact key-package signatures[\s\S]*?package declarations omit recursive compact key-package signatures/u,
+    "JS package dist recursive compact declarations negative control must mutate the package-dist test name",
+  );
+  assert.match(
+    jsPackageDistRecursiveCompactDeclarationsBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist recursive compact declarations negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistRecursiveCompactDeclarationsBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist recursive compact declaration drift was not detected"\s*\)/u,
+    "JS package dist recursive compact declarations negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistRecursiveCompactDeclarationsBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist recursive compact declarations negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistAccumulatorDigestDeclarationsBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-accumulator-digest-declarations":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-accumulator-digest-denylist":'),
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestDeclarationsBranch,
+    /package declarations keep accumulator digests native-owned[\s\S]*?package declarations allow accumulator digest inputs/u,
+    "JS package dist accumulator digest declarations negative control must mutate the package-dist test name",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestDeclarationsBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist accumulator digest declarations negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestDeclarationsBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist accumulator digest declaration drift was not detected"\s*\)/u,
+    "JS package dist accumulator digest declarations negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistAccumulatorDigestDeclarationsBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist accumulator digest declarations negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistAccumulatorDigestDenylistBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-accumulator-digest-denylist":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-terminal-accumulator-digest-denylist":'),
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestDenylistBranch,
+    /appendBoundaryDigest\|AppendBoundaryDigest\|append_boundary_digest\|[\s\S]*?""/u,
+    "JS package dist accumulator digest denylist negative control must remove a guarded digest token",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestDenylistBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist accumulator digest denylist negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistAccumulatorDigestDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist accumulator digest denylist drift was not detected"\s*\)/u,
+    "JS package dist accumulator digest denylist negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistAccumulatorDigestDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist accumulator digest denylist negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistTerminalAccumulatorDigestDenylistBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-terminal-accumulator-digest-denylist":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-declaration-sweep":'),
+  );
+  assert.match(
+    jsPackageDistTerminalAccumulatorDigestDenylistBranch,
+    /previousAccumulatorDigest\|PreviousAccumulatorDigest\|previous_accumulator_digest\|resultingAccumulatorDigest\|ResultingAccumulatorDigest\|resulting_accumulator_digest\|[\s\S]*?""/u,
+    "JS package dist terminal accumulator digest denylist negative control must remove previous/resulting digest tokens",
+  );
+  assert.match(
+    jsPackageDistTerminalAccumulatorDigestDenylistBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist terminal accumulator digest denylist negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistTerminalAccumulatorDigestDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist terminal accumulator digest denylist drift was not detected"\s*\)/u,
+    "JS package dist terminal accumulator digest denylist negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistTerminalAccumulatorDigestDenylistBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist terminal accumulator digest denylist negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistDeclarationSweepBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-declaration-sweep":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-nexus-declaration-sweep":'),
+  );
+  assert.match(
+    jsPackageDistDeclarationSweepBranch,
+    /connect\.browser\.d\.ts[\s\S]*?""/u,
+    "JS package dist declaration sweep negative control must remove a secondary declaration file from the sweep",
+  );
+  assert.match(
+    jsPackageDistDeclarationSweepBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist declaration sweep negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistDeclarationSweepBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist declaration sweep drift was not detected"\s*\)/u,
+    "JS package dist declaration sweep negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistDeclarationSweepBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist declaration sweep negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistNexusDeclarationSweepBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-nexus-declaration-sweep":'),
+    guard.indexOf('if mode == "--negative-control-js-package-dist-kotodama-declaration-sweep":'),
+  );
+  assert.match(
+    jsPackageDistNexusDeclarationSweepBranch,
+    /nexus-app\.d\.ts[\s\S]*?""/u,
+    "JS package dist Nexus declaration sweep negative control must remove nexus-app.d.ts from the sweep",
+  );
+  assert.match(
+    jsPackageDistNexusDeclarationSweepBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist Nexus declaration sweep negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistNexusDeclarationSweepBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist Nexus declaration sweep drift was not detected"\s*\)/u,
+    "JS package dist Nexus declaration sweep negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistNexusDeclarationSweepBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist Nexus declaration sweep negative control must not unconditionally pass after run_checks",
+  );
+  const jsPackageDistKotodamaDeclarationSweepBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-package-dist-kotodama-declaration-sweep":'),
+    guard.indexOf('if mode == "--negative-control-js-dts-recursive-compact-key-package":'),
+  );
+  assert.match(
+    jsPackageDistKotodamaDeclarationSweepBranch,
+    /kotodama-compiler\.d\.ts[\s\S]*?""/u,
+    "JS package dist Kotodama declaration sweep negative control must remove kotodama-compiler.d.ts from the sweep",
+  );
+  assert.match(
+    jsPackageDistKotodamaDeclarationSweepBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS package dist Kotodama declaration sweep negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsPackageDistKotodamaDeclarationSweepBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript package dist Kotodama declaration sweep drift was not detected"\s*\)/u,
+    "JS package dist Kotodama declaration sweep negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsPackageDistKotodamaDeclarationSweepBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS package dist Kotodama declaration sweep negative control must not unconditionally pass after run_checks",
+  );
+  const jsDtsRecursiveCompactKeyPackageBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-dts-recursive-compact-key-package":'),
+    guard.indexOf('if mode == "--negative-control-python-recursive-compact-root-export":'),
+  );
+  assert.match(
+    jsDtsRecursiveCompactKeyPackageBranch,
+    /recursiveCompactKeyArtifactsArchive: BinaryLike[\s\S]*?recursiveCompactKeyArtifactsArchive\?: BinaryLike[\s\S]*?recursiveCompactVerifierKeysArchive: BinaryLike[\s\S]*?recursiveCompactVerifierKeysArchive\?: BinaryLike/u,
+    "JS TypeScript recursive compact key-package negative control must make declaration parameters optional",
+  );
+  assert.match(
+    jsDtsRecursiveCompactKeyPackageBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "JS TypeScript recursive compact key-package negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsDtsRecursiveCompactKeyPackageBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JavaScript TypeScript recursive compact key-package declaration drift was not detected"\s*\)/u,
+    "JS TypeScript recursive compact key-package negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsDtsRecursiveCompactKeyPackageBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS TypeScript recursive compact key-package negative control must not unconditionally pass after run_checks",
+  );
+  const pythonRecursiveCompactRootExportBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-recursive-compact-root-export":'),
+    guard.indexOf('if mode == "--negative-control-recursive-spend-compact-projection-surface":'),
+  );
+  assert.match(
+    pythonRecursiveCompactRootExportBranch,
+    /python\/iroha_python\/src\/iroha_python\/__init__\.py[\s\S]*?REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS[\s\S]*?updated\.replace\(f'    "\{method\}",\\n'/u,
+    "Python recursive compact root export negative control must remove root export names",
+  );
+  assert.match(
+    pythonRecursiveCompactRootExportBranch,
+    /mutated\[target\]\s*=\s*updated[\s\S]*?run_checks\(mutated\)/u,
+    "Python recursive compact root export negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    pythonRecursiveCompactRootExportBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python recursive compact root re-export drift was not detected"\s*\)/u,
+    "Python recursive compact root export negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonRecursiveCompactRootExportBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python recursive compact root export negative control must not unconditionally pass after run_checks",
   );
   const recursiveSpendCompactProjectionSurfaceBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-recursive-spend-compact-projection-surface":'),

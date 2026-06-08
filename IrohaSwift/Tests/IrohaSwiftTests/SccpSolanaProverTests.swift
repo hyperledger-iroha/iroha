@@ -7615,6 +7615,8 @@ final class SccpSolanaProverTests: XCTestCase {
 
     func testTonProverWrapsExternalProofBytes() async throws {
         var seenTonProofRequests: [TonSccpProofRequest] = []
+        let canonicalTonBundleBytes = Self.sampleTonBundleBytes()
+        let alternateTonBundleBytes = Self.sampleTonBundleBytes(finalityProof: Data([0x71, 0x73]))
         let prover = TonSccpProver { request in
             seenTonProofRequests.append(request)
             XCTAssertEqual(request.backend, sccpTonContractProofBackendV1)
@@ -7630,7 +7632,7 @@ final class SccpSolanaProverTests: XCTestCase {
                 XCTAssertEqual(request.sourceProofBytes, Data([9, 10]))
                 XCTAssertNotEqual(callbackSourceProofBytes, request.sourceProofBytes)
             }
-            XCTAssertEqual(request.bundleBytes, Data([5, 6, 7]))
+            XCTAssertEqual(request.bundleBytes, canonicalTonBundleBytes)
             return Data([1, 2, 3, 4])
         }
 
@@ -7660,13 +7662,13 @@ final class SccpSolanaProverTests: XCTestCase {
 
         let submissionInput = try TonSccpMessageBodyInput(
             proofResult: result,
-            bundleBytes: Data([5, 6, 7]),
+            bundleBytes: canonicalTonBundleBytes,
             metadataBytes: Data([8, 9]),
             queryId: 7
         )
         XCTAssertEqual(submissionInput.publicInputs, result.publicInputs)
         XCTAssertEqual(submissionInput.proofBytes, result.proofBytes)
-        XCTAssertEqual(result.bundleBytes, Data([5, 6, 7]))
+        XCTAssertEqual(result.bundleBytes, canonicalTonBundleBytes)
         XCTAssertEqual(result.sourceProofBytes, Data([9, 10]))
         XCTAssertEqual(submissionInput.statementHash, result.proofContext.statementHash)
         XCTAssertEqual(submissionInput.destinationBindingHash, result.proofContext.destinationBindingHash)
@@ -7679,7 +7681,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         let oversizedTonMessageInput = try TonSccpMessageBodyInput(
             proofResult: oversizedTonMessageResult,
-            bundleBytes: Data([5, 6, 7]),
+            bundleBytes: canonicalTonBundleBytes,
             metadataBytes: Data([8, 9])
         )
         XCTAssertThrowsError(try buildTonSccpSubmission(oversizedTonMessageInput)) { error in
@@ -7692,13 +7694,13 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertTrue(omittedSourceWrapped.sourceProofBytes.isEmpty)
         let omittedSourceSubmissionInput = try TonSccpMessageBodyInput(
             proofResult: omittedSourceResult,
-            bundleBytes: Data([5, 6, 7])
+            bundleBytes: canonicalTonBundleBytes
         )
-        XCTAssertEqual(omittedSourceSubmissionInput.bundleBytes, Data([5, 6, 7]))
+        XCTAssertEqual(omittedSourceSubmissionInput.bundleBytes, canonicalTonBundleBytes)
 
         XCTAssertThrowsError(try TonSccpMessageBodyInput(
             proofResult: result,
-            bundleBytes: Data([5, 6, 8])
+            bundleBytes: alternateTonBundleBytes
         )) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
         }
@@ -7709,7 +7711,7 @@ final class SccpSolanaProverTests: XCTestCase {
             proofBytes: result.proofBytes,
             proofBase64: result.proofBase64,
             publicInputs: result.publicInputs,
-            bundleBytes: Data([5, 6, 8]),
+            bundleBytes: alternateTonBundleBytes,
             sourceProofBytes: result.sourceProofBytes,
             proofContext: result.proofContext,
             statementHash: result.statementHash,
@@ -7723,7 +7725,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertThrowsError(try TonSccpMessageBodyInput(
             proofResult: tamperedBundleResult,
-            bundleBytes: Data([5, 6, 8])
+            bundleBytes: alternateTonBundleBytes
         )) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.requestHash"))
         }
@@ -7748,7 +7750,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertThrowsError(try TonSccpMessageBodyInput(
             proofResult: mismatchedProofBase64Result,
-            bundleBytes: Data([5, 6, 7])
+            bundleBytes: canonicalTonBundleBytes
         )) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.proofBase64"))
         }
@@ -7771,7 +7773,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertThrowsError(try TonSccpMessageBodyInput(
             proofResult: missingEnvelopeResult,
-            bundleBytes: Data([5, 6, 7])
+            bundleBytes: canonicalTonBundleBytes
         )) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("proofResult.envelopeHash"))
         }
@@ -7794,7 +7796,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertThrowsError(try TonSccpMessageBodyInput(
             proofResult: tamperedEnvelopeResult,
-            bundleBytes: Data([5, 6, 7])
+            bundleBytes: canonicalTonBundleBytes
         )) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.envelopeHash"))
         }
@@ -7821,7 +7823,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertThrowsError(try TonSccpMessageBodyInput(
             proofResult: mismatchedProofContextResult,
-            bundleBytes: Data([5, 6, 7])
+            bundleBytes: canonicalTonBundleBytes
         )) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.proofContext"))
         }
@@ -7844,7 +7846,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertThrowsError(try TonSccpMessageBodyInput(
             proofResult: wrongSourceStateVerifierResult,
-            bundleBytes: Data([5, 6, 7])
+            bundleBytes: canonicalTonBundleBytes
         )) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidHex32("proofResult.sourceStateVerifierHash"))
         }
@@ -7873,7 +7875,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertThrowsError(try TonSccpMessageBodyInput(
             proofResult: wrongDeploymentBindingResult,
-            bundleBytes: Data([5, 6, 7])
+            bundleBytes: canonicalTonBundleBytes
         )) { error in
             XCTAssertEqual(error as? TonSccpProverError, .invalidField("proofResult.sourceAdapterDeploymentBinding.targetDomain"))
         }
@@ -7963,7 +7965,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         let bindingRequest = try buildTonSccpProofRequest(TonSccpProofRequestInput(
             publicInputs: Self.sampleTonPublicInputs(),
-            bundleBytes: Data([5, 6, 7]),
+            bundleBytes: Self.sampleTonBundleBytes(),
             statementHash: String(repeating: "56", count: 32),
             destinationBindingHash: String(repeating: "78", count: 32),
             sourceStateVerifierHash: String(repeating: "cc", count: 32),
@@ -7972,7 +7974,7 @@ final class SccpSolanaProverTests: XCTestCase {
         XCTAssertEqual(bindingRequest.requestHash, request.requestHash)
         XCTAssertThrowsError(try TonSccpProofRequestInput(
             publicInputs: Self.sampleTonPublicInputs(),
-            bundleBytes: Data([5, 6, 7]),
+            bundleBytes: Self.sampleTonBundleBytes(),
             statementHash: String(repeating: "56", count: 32),
             destinationBindingHash: String(repeating: "78", count: 32),
             sourceStateVerifierHash: String(repeating: "cc", count: 32),
@@ -7996,13 +7998,13 @@ final class SccpSolanaProverTests: XCTestCase {
         ))
         XCTAssertNotEqual(sourceStateBoundRequest.requestHash, request.requestHash)
         let splitBoundaryRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
-            bundleBytes: Data([5, 6, 7]),
+            bundleBytes: Self.sampleTonBundleBytes(),
             sourceProofBytes: Data([9, 10]),
             sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
             sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
         ))
         let shiftedSplitRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
-            bundleBytes: Data([5, 6, 7, 9]),
+            bundleBytes: Self.sampleTonBundleBytes(finalityProof: Data([0x71, 0x73])),
             sourceProofBytes: Data([10]),
             sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
             sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
@@ -8092,7 +8094,7 @@ final class SccpSolanaProverTests: XCTestCase {
         }
         XCTAssertThrowsError(try buildTonSccpProofRequest(TonSccpProofRequestInput(
             publicInputs: Self.sampleTonPublicInputs(targetDomain: sccpDomainSolana),
-            bundleBytes: Data([5, 6, 7]),
+            bundleBytes: Self.sampleTonBundleBytes(),
             statementHash: String(repeating: "56", count: 32),
             destinationBindingHash: String(repeating: "78", count: 32),
             sourceStateVerifierHash: String(repeating: "cc", count: 32),
@@ -8108,17 +8110,175 @@ final class SccpSolanaProverTests: XCTestCase {
         }
     }
 
-    func testTonProofRequestHashMatchesCrossSdkVector() throws {
-        let publicInputs = TonSccpPublicInputsInput(
-            messageId: String(repeating: "11", count: 32),
-            payloadHash: String(repeating: "22", count: 32),
-            commitmentRoot: String(repeating: "33", count: 32),
-            finalityHeight: 123_456_789,
-            finalityBlockHash: String(repeating: "44", count: 32)
+    func testTonProofRequestRejectsNoncanonicalOrMismatchedBundleBytes() throws {
+        let base = Self.sampleTonProofRequestInput(
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
         )
+
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: Data([5, 6, 7]),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.version"))
+        }
+
+        let swapped = Self.sampleTonBundleFixture(amount: 43)
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: base.publicInputs,
+            bundleBytes: swapped.bundleBytes,
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes"))
+        }
+
+        var tamperedCommitment = Self.sampleTonBundleBytes()
+        tamperedCommitment[37 + 69] ^= 0x01
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: tamperedCommitment,
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.commitment"))
+        }
+
+        var tamperedRoot = Self.sampleTonBundleBytes()
+        tamperedRoot[1] ^= 0x01
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: tamperedRoot,
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.commitment_root"))
+        }
+
+        let ranges = Self.splitTestTonSccpMessageProofBundleBytes(Self.sampleTonBundleBytes())
+        let payloadRange = ranges["payload"]!
+        var payloadWithTrailingByte = payloadRange.bytes
+        payloadWithTrailingByte.append(0)
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: Self.replaceTestTonSccpMessageProofBundleVec(
+                Self.sampleTonBundleBytes(),
+                range: payloadRange,
+                replacement: payloadWithTrailingByte
+            ),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.payload"))
+        }
+
+        var unsupportedPayloadKind = payloadRange.bytes
+        unsupportedPayloadKind[unsupportedPayloadKind.startIndex] = 0xff
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: Self.replaceTestTonSccpMessageProofBundleVec(
+                Self.sampleTonBundleBytes(),
+                range: payloadRange,
+                replacement: unsupportedPayloadKind
+            ),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.payload"))
+        }
+
+        let merkleProofRange = ranges["merkleProof"]!
+        var merkleProofWithTrailingByte = merkleProofRange.bytes
+        merkleProofWithTrailingByte.append(0)
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            bundleBytes: Self.replaceTestTonSccpMessageProofBundleVec(
+                Self.sampleTonBundleBytes(),
+                range: merkleProofRange,
+                replacement: merkleProofWithTrailingByte
+            ),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("bundleBytes.merkle_proof"))
+        }
+
+        let oneStep = Self.sampleTonBundleFixture(
+            merkleProofSteps: [(Data(repeating: 0xcc, count: 32), 1)]
+        )
+        let oneStepRanges = Self.splitTestTonSccpMessageProofBundleBytes(oneStep.bundleBytes)
+        let oneStepMerkleProofRange = oneStepRanges["merkleProof"]!
+        var invalidDirection = oneStepMerkleProofRange.bytes
+        invalidDirection[4 + 32] = 2
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: oneStep.publicInputs,
+            bundleBytes: Self.replaceTestTonSccpMessageProofBundleVec(
+                oneStep.bundleBytes,
+                range: oneStepMerkleProofRange,
+                replacement: invalidDirection
+            ),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(
+                error as? TonSccpProverError,
+                .invalidField("bundleBytes.merkle_proof.steps[0].sibling_is_left")
+            )
+        }
+
+        let nonSora = Self.sampleTonBundleFixture(
+            sourceDomain: sccpDomainSolana,
+            senderCodec: 3,
+            sender: "11111111111111111111111111111111"
+        )
+        XCTAssertThrowsError(try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: nonSora.publicInputs,
+            bundleBytes: nonSora.bundleBytes,
+            sourceProofBytes: Data(),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceProofBytes"))
+        }
+
+        let nonSoraRequest = try buildTonSccpProofRequest(Self.sampleTonProofRequestInput(
+            publicInputs: nonSora.publicInputs,
+            bundleBytes: nonSora.bundleBytes,
+            sourceProofBytes: Data([9, 10]),
+            sourceAdapterDeploymentHash: String(repeating: "aa", count: 32),
+            sourceAdapterDeploymentReceiptHash: String(repeating: "bb", count: 32)
+        ))
+        let nonSoraResult = try wrapTonSccpProofResult(
+            proofBytes: Data([1, 2, 3, 4]),
+            request: nonSoraRequest
+        )
+        let strippedSourceProofResult = TonSccpProofResult(
+            version: nonSoraResult.version,
+            backend: nonSoraResult.backend,
+            proofBytes: nonSoraResult.proofBytes,
+            proofBase64: nonSoraResult.proofBase64,
+            publicInputs: nonSoraResult.publicInputs,
+            bundleBytes: nonSoraResult.bundleBytes,
+            sourceProofBytes: Data(),
+            proofContext: nonSoraResult.proofContext,
+            statementHash: nonSoraResult.statementHash,
+            destinationBindingHash: nonSoraResult.destinationBindingHash,
+            sourceStateVerifierId: nonSoraResult.sourceStateVerifierId,
+            sourceStateVerifierHash: nonSoraResult.sourceStateVerifierHash,
+            sourceAdapterDeploymentBindingHash: nonSoraResult.sourceAdapterDeploymentBindingHash,
+            sourceAdapterDeploymentBinding: nonSoraResult.sourceAdapterDeploymentBinding,
+            requestHash: nonSoraResult.requestHash,
+            envelopeHash: nonSoraResult.envelopeHash
+        )
+        XCTAssertThrowsError(try TonSccpMessageBodyInput(
+            proofResult: strippedSourceProofResult,
+            bundleBytes: nonSora.bundleBytes
+        )) { error in
+            XCTAssertEqual(error as? TonSccpProverError, .invalidField("sourceProofBytes"))
+        }
+    }
+
+    func testTonProofRequestHashMatchesCrossSdkVector() throws {
+        let publicInputs = Self.sampleTonPublicInputs()
         let request = try buildTonSccpProofRequest(TonSccpProofRequestInput(
             publicInputs: publicInputs,
-            bundleBytes: Data([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            bundleBytes: Self.sampleTonBundleBytes(),
             sourceProofBytes: Data([0x51, 0x52, 0x53]),
             statementHash: String(repeating: "55", count: 32),
             destinationBindingHash: String(repeating: "66", count: 32),
@@ -8133,12 +8293,12 @@ final class SccpSolanaProverTests: XCTestCase {
         ))
         let expectedPublicInputsBytes = Data(hexString:
             "01" +
-            String(repeating: "11", count: 32) +
-            String(repeating: "22", count: 32) +
+            "806384e356636c10ee3bbbb90674a80410a86be034616abb811586b21ac81fc4367a4f" +
+            "9061f46a282eeeda95bc68c727888bde665bd89d0ebbc6dae266e3a264" +
             "04000000" +
-            String(repeating: "33", count: 32) +
-            "15cd5b0700000000" +
-            String(repeating: "44", count: 32)
+            "377eb92928595d90759d66529f96acf34afd4ef64cd2327ab6f65876fb3cf93e" +
+            "1300000000000000" +
+            String(repeating: "aa", count: 32)
         )!
 
         XCTAssertEqual(try canonicalTonSccpPublicInputsBytes(publicInputs), expectedPublicInputsBytes)
@@ -8148,7 +8308,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertEqual(
             request.requestHash,
-            "0xb3a61f09923efd639a0263de6b45eec6ddd5de679bfaab1b6ec1c591fd1b1d1b"
+            "0x2a292741b8e8d8454699eda954592904e8260e6b8a41cc840f5d9c48732c3bbe"
         )
         let proofResult = try wrapTonSccpProofResult(
             proofBytes: Data([0x91, 0x92, 0x93, 0x94, 0x95]),
@@ -8156,7 +8316,7 @@ final class SccpSolanaProverTests: XCTestCase {
         )
         XCTAssertEqual(
             proofResult.envelopeHash,
-            "0xa2bc6697b237fd4b2dd3f60f187a184793104a99372dcdf60c7ec585ef32f5ab"
+            "0x9ed8e54d81c13a61939dedffb36c487f33d32a128ba95a0d29b33c5d25be6489"
         )
     }
 
@@ -9059,6 +9219,24 @@ final class SccpSolanaProverTests: XCTestCase {
             jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
                 destinationBindingHash: binding.hash,
                 proofArtifact: "../proof-artifact.bin"
+            ),
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifact"))
+        }
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
+                destinationBindingHash: binding.hash,
+                proofArtifact: "ipfs:proof-artifact.bin"
+            ),
+            expectedDestinationBindingHash: binding.hash
+        )) { error in
+            XCTAssertEqual(error as? EvmSccpProverError, .invalidPublicInputs("proofArtifact"))
+        }
+        XCTAssertThrowsError(try EthereumMainnetNativeEvmProverBundle(
+            jsonString: Self.sampleEthereumNativeEvmProverBundleJson(
+                destinationBindingHash: binding.hash,
+                proofArtifact: "artifacts/eth-mainnet/proof.wasm"
             ),
             expectedDestinationBindingHash: binding.hash
         )) { error in
@@ -13780,7 +13958,7 @@ final class SccpSolanaProverTests: XCTestCase {
     private static func sampleTonMessageBodyInput(
         publicInputs: TonSccpPublicInputsInput = sampleTonPublicInputs(),
         proofBytes: Data = Data([1, 2, 3, 4]),
-        bundleBytes: Data = Data([5, 6, 7]),
+        bundleBytes: Data = sampleTonBundleBytes(),
         statementHash: String = String(repeating: "bb", count: 32),
         destinationBindingHash: String = String(repeating: "56", count: 32)
     ) throws -> TonSccpMessageBodyInput {
@@ -13835,7 +14013,7 @@ final class SccpSolanaProverTests: XCTestCase {
 
     private static func sampleTonProofRequestInput(
         publicInputs: TonSccpPublicInputsInput = sampleTonPublicInputs(),
-        bundleBytes: Data = Data([5, 6, 7]),
+        bundleBytes: Data = sampleTonBundleBytes(),
         sourceProofBytes: Data = Data(),
         statementHash: String = String(repeating: "56", count: 32),
         destinationBindingHash: String = String(repeating: "78", count: 32),
@@ -14063,17 +14241,214 @@ final class SccpSolanaProverTests: XCTestCase {
     }
 
     private static func sampleTonPublicInputs(
-        payloadHash: String = String(repeating: "ee", count: 32),
+        payloadHash: String? = nil,
         targetDomain: UInt32 = sccpDomainTon
     ) -> TonSccpPublicInputsInput {
-        TonSccpPublicInputsInput(
-            messageId: String(repeating: "dd", count: 32),
-            payloadHash: payloadHash,
+        let publicInputs = sampleTonBundleFixture().publicInputs
+        return TonSccpPublicInputsInput(
+            messageId: publicInputs.messageId,
+            payloadHash: payloadHash ?? publicInputs.payloadHash,
             targetDomain: targetDomain,
-            commitmentRoot: String(repeating: "12", count: 32),
-            finalityHeight: 19,
-            finalityBlockHash: String(repeating: "aa", count: 32)
+            commitmentRoot: publicInputs.commitmentRoot,
+            finalityHeight: publicInputs.finalityHeight,
+            finalityBlockHash: publicInputs.finalityBlockHash
         )
+    }
+
+    private struct SampleTonBundleFixture {
+        let publicInputs: TonSccpPublicInputsInput
+        let bundleBytes: Data
+    }
+
+    private struct TestTonBundleVecRange {
+        let lengthOffset: Int
+        let bytesStart: Int
+        let bytesEnd: Int
+        let bytes: Data
+        let nextOffset: Int
+    }
+
+    private static func sampleTonBundleBytes(
+        sourceDomain: UInt32 = sccpDomainSora,
+        senderCodec: UInt8 = 1,
+        sender: String = "alice@sora",
+        nonce: UInt64 = 327,
+        amount: UInt64 = 42,
+        routeId: String = "sccp-ton-proof-request",
+        merkleProofSteps: [(Data, UInt8)] = [],
+        finalityProof: Data = Data([0x71, 0x72])
+    ) -> Data {
+        sampleTonBundleFixture(
+            sourceDomain: sourceDomain,
+            senderCodec: senderCodec,
+            sender: sender,
+            nonce: nonce,
+            amount: amount,
+            routeId: routeId,
+            merkleProofSteps: merkleProofSteps,
+            finalityProof: finalityProof
+        ).bundleBytes
+    }
+
+    private static func sampleTonBundleFixture(
+        sourceDomain: UInt32 = sccpDomainSora,
+        senderCodec: UInt8 = 1,
+        sender: String = "alice@sora",
+        nonce: UInt64 = 327,
+        amount: UInt64 = 42,
+        routeId: String = "sccp-ton-proof-request",
+        merkleProofSteps: [(Data, UInt8)] = [],
+        finalityProof: Data = Data([0x71, 0x72])
+    ) -> SampleTonBundleFixture {
+        var payloadBody = Data()
+        payloadBody.append(1)
+        appendTestU32Le(sourceDomain, to: &payloadBody)
+        appendTestU32Le(sccpDomainTon, to: &payloadBody)
+        appendTestU64Le(nonce, to: &payloadBody)
+        appendTestU32Le(sccpDomainSora, to: &payloadBody)
+        payloadBody.append(1)
+        appendTestBytes(Data("xor#ton".utf8), to: &payloadBody)
+        appendTestU128Le(amount, to: &payloadBody)
+        payloadBody.append(senderCodec)
+        appendTestBytes(Data(sender.utf8), to: &payloadBody)
+        payloadBody.append(4)
+        appendTestBytes(Data(("0:" + String(repeating: "12", count: 32)).utf8), to: &payloadBody)
+        payloadBody.append(1)
+        appendTestBytes(Data(routeId.utf8), to: &payloadBody)
+
+        var payloadBytes = Data([0x02])
+        payloadBytes.append(payloadBody)
+        var messageIdPreimage = Data("sccp:transfer:v1".utf8)
+        messageIdPreimage.append(payloadBody)
+        let messageId = "0x" + irohaKeccak256(messageIdPreimage).hexEncodedString()
+        var payloadHashPreimage = Data("sccp:payload:v1".utf8)
+        payloadHashPreimage.append(payloadBytes)
+        let payloadHash = "0x" + Blake2b.hash256(payloadHashPreimage).hexEncodedString()
+
+        var commitmentBytes = Data()
+        commitmentBytes.append(1)
+        commitmentBytes.append(6)
+        appendTestU32Le(sccpDomainTon, to: &commitmentBytes)
+        commitmentBytes.append(Data(hexString: String(messageId.dropFirst(2)))!)
+        commitmentBytes.append(Data(hexString: String(payloadHash.dropFirst(2)))!)
+
+        var leafPreimage = Data("sccp:hub:leaf:v1".utf8)
+        leafPreimage.append(commitmentBytes)
+        var currentRoot = Blake2b.hash256(leafPreimage)
+        var merkleProof = Data()
+        appendTestU32Le(UInt32(merkleProofSteps.count), to: &merkleProof)
+        for (sibling, siblingIsLeft) in merkleProofSteps {
+            precondition(sibling.count == 32)
+            merkleProof.append(sibling)
+            merkleProof.append(siblingIsLeft)
+            var nodePayload = Data()
+            if siblingIsLeft == 1 {
+                nodePayload.append(sibling)
+                nodePayload.append(currentRoot)
+            } else {
+                nodePayload.append(currentRoot)
+                nodePayload.append(sibling)
+            }
+            var nodePreimage = Data("sccp:hub:node:v1".utf8)
+            nodePreimage.append(nodePayload)
+            currentRoot = Blake2b.hash256(nodePreimage)
+        }
+        let commitmentRoot = "0x" + currentRoot.hexEncodedString()
+
+        var bundle = Data()
+        bundle.append(1)
+        bundle.append(currentRoot)
+        appendTestBytes(commitmentBytes, to: &bundle)
+        appendTestBytes(merkleProof, to: &bundle)
+        appendTestBytes(payloadBytes, to: &bundle)
+        appendTestBytes(finalityProof, to: &bundle)
+
+        return SampleTonBundleFixture(
+            publicInputs: TonSccpPublicInputsInput(
+                messageId: messageId,
+                payloadHash: payloadHash,
+                targetDomain: sccpDomainTon,
+                commitmentRoot: commitmentRoot,
+                finalityHeight: 19,
+                finalityBlockHash: String(repeating: "aa", count: 32)
+            ),
+            bundleBytes: bundle
+        )
+    }
+
+    private static func splitTestTonSccpMessageProofBundleBytes(_ bundleBytes: Data)
+        -> [String: TestTonBundleVecRange] {
+        var offset = 33
+        let commitment = readTestTonCanonicalVecRange(bundleBytes, offset: offset)
+        offset = commitment.nextOffset
+        let merkleProof = readTestTonCanonicalVecRange(bundleBytes, offset: offset)
+        offset = merkleProof.nextOffset
+        let payload = readTestTonCanonicalVecRange(bundleBytes, offset: offset)
+        offset = payload.nextOffset
+        let finalityProof = readTestTonCanonicalVecRange(bundleBytes, offset: offset)
+        return [
+            "commitment": commitment,
+            "merkleProof": merkleProof,
+            "payload": payload,
+            "finalityProof": finalityProof,
+        ]
+    }
+
+    private static func readTestTonCanonicalVecRange(_ bundleBytes: Data, offset: Int) -> TestTonBundleVecRange {
+        let length = Int(readTestU32Le(bundleBytes, offset: offset))
+        let start = offset + 4
+        let end = start + length
+        precondition(end <= bundleBytes.count)
+        return TestTonBundleVecRange(
+            lengthOffset: offset,
+            bytesStart: start,
+            bytesEnd: end,
+            bytes: Data(bundleBytes[start..<end]),
+            nextOffset: end
+        )
+    }
+
+    private static func replaceTestTonSccpMessageProofBundleVec(
+        _ bundleBytes: Data,
+        range: TestTonBundleVecRange,
+        replacement: Data
+    ) -> Data {
+        var out = Data(bundleBytes[..<range.lengthOffset])
+        appendTestU32Le(UInt32(replacement.count), to: &out)
+        out.append(replacement)
+        out.append(Data(bundleBytes[range.bytesEnd...]))
+        return out
+    }
+
+    private static func appendTestBytes(_ value: Data, to out: inout Data) {
+        appendTestU32Le(UInt32(value.count), to: &out)
+        out.append(value)
+    }
+
+    private static func appendTestU32Le(_ value: UInt32, to out: inout Data) {
+        out.append(UInt8(value & 0xff))
+        out.append(UInt8((value >> 8) & 0xff))
+        out.append(UInt8((value >> 16) & 0xff))
+        out.append(UInt8((value >> 24) & 0xff))
+    }
+
+    private static func appendTestU64Le(_ value: UInt64, to out: inout Data) {
+        for shift in stride(from: 0, through: 56, by: 8) {
+            out.append(UInt8((value >> UInt64(shift)) & 0xff))
+        }
+    }
+
+    private static func appendTestU128Le(_ value: UInt64, to out: inout Data) {
+        appendTestU64Le(value, to: &out)
+        appendTestU64Le(0, to: &out)
+    }
+
+    private static func readTestU32Le(_ data: Data, offset: Int) -> UInt32 {
+        var value: UInt32 = 0
+        for index in 0..<4 {
+            value |= UInt32(data[offset + index]) << UInt32(index * 8)
+        }
+        return value
     }
 
     private static func sampleGroth16ProofBytes(overrides: [Int: Data] = [:]) -> Data {

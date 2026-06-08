@@ -508,9 +508,9 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(null, 1))
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend("", 1))
+        assertEquals("checked_prefold_v1", KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName)
         assertEquals("recursive_compact_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName)
         assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName)
-        assertEquals("checked_prefold_v1", KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName)
         assertEquals(
             KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
             KagemushaRecursiveSpendProver.preferredMode(

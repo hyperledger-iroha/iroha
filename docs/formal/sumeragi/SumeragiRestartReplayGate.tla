@@ -256,8 +256,88 @@ TypeInvariant ==
   /\ tried \subseteq Candidates
   /\ \A candidate \in tried: ImplementationActions(candidate) \subseteq Actions
 
-Safety ==
+RestartReplaySnapshotValidationCases == {
+  RestoreDigestMismatch,
+  RestoreSignatureMismatch,
+  RestoreMerkleMismatch,
+  RestoreChainIdMismatch,
+  RestoreSnapshotAhead,
+  RestoreMissingOfflineKeys,
+  RestoreCompleteSnapshot
+}
+
+RestartReplayKuraParityCases == {
+  RestoreNormalMissingBlock,
+  RestoreHardForkMissingHash,
+  RestoreInteriorHashMismatch,
+  RestoreLatestHashMismatch,
+  RestoreHardForkHashMismatch,
+  RestoreHardForkMatchingHash,
+  RestoreNormalHashOnlyNoBody
+}
+
+RestartReplayLegacyManifestCases == {
+  RestoreLegacyManifestReplay,
+  RestoreLegacyManifestEmptyNoop,
+  RestoreManifestReplayFailure
+}
+
+RestartReplayWriteBackCases == {
+  WriteZeroHeightAllowed,
+  WriteStateAhead,
+  WriteLatestHashMismatch,
+  WriteAlignedPublishes
+}
+
+RestartReplayCanonicalCheckpointCases == {
+  CanonicalCommitQcIgnored,
+  CanonicalConsensusEvidenceIgnored,
+  CanonicalVrfEpochIgnored,
+  CanonicalTopologyIgnored,
+  CanonicalMvCurrentOnly,
+  CanonicalSortsKeyPolicy,
+  CanonicalKeepsWsvMutation
+}
+
+RestartReplayGroupedCases ==
+  RestartReplaySnapshotValidationCases \cup
+  RestartReplayKuraParityCases \cup
+  RestartReplayLegacyManifestCases \cup
+  RestartReplayWriteBackCases \cup
+  RestartReplayCanonicalCheckpointCases
+
+RestartReplayCaseGroupsComplete ==
+  RestartReplayGroupedCases = Candidates
+
+RestartReplayActionExactFor(cases) ==
   \A candidate \in tried:
-    ImplementationActions(candidate) = SpecActions(candidate)
+    candidate \in cases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+RestartReplaySnapshotValidationExactness ==
+  RestartReplayActionExactFor(RestartReplaySnapshotValidationCases)
+
+RestartReplayKuraParityExactness ==
+  RestartReplayActionExactFor(RestartReplayKuraParityCases)
+
+RestartReplayLegacyManifestExactness ==
+  RestartReplayActionExactFor(RestartReplayLegacyManifestCases)
+
+RestartReplayWriteBackExactness ==
+  RestartReplayActionExactFor(RestartReplayWriteBackCases)
+
+RestartReplayCanonicalCheckpointExactness ==
+  RestartReplayActionExactFor(RestartReplayCanonicalCheckpointCases)
+
+RestartReplayExactness ==
+  /\ RestartReplayCaseGroupsComplete
+  /\ RestartReplaySnapshotValidationExactness
+  /\ RestartReplayKuraParityExactness
+  /\ RestartReplayLegacyManifestExactness
+  /\ RestartReplayWriteBackExactness
+  /\ RestartReplayCanonicalCheckpointExactness
+
+Safety ==
+  RestartReplayExactness
 
 ====

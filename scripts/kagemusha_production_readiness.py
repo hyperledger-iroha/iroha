@@ -75,6 +75,9 @@ LINEAGE_PROOF_REQUIRED_TEST_LOGS = {
 EXPECTED_LINEAGE_PROOF_RESULT_PREFIX = (
     "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;"
 )
+LINEAGE_ARTIFACT_ALL_ZERO_ERROR = (
+    "must be generated lineage material, not all-zero placeholder bytes"
+)
 COMPACT_KEY_REQUIRED_ARTIFACTS = (
     "recursive-compact-len4.vk",
     "recursive-compact-len4.pk",
@@ -87,6 +90,7 @@ COMPACT_KEY_PLACEHOLDER_PREFIXES = (
     b"test recursive compact key ",
 )
 COMPACT_KEY_PLACEHOLDER_ERROR = "must be generated key material, not a placeholder fixture"
+COMPACT_KEY_ALL_ZERO_ERROR = "must be generated key material, not all-zero placeholder bytes"
 MAX_COMPACT_KEY_GENERATOR_LOG_BYTES = 1024 * 1024
 COMPACT_KEY_GENERATOR_LOG_SIZE_FIELDS = {
     "recursive-compact-len4.vk": "vk",
@@ -377,6 +381,14 @@ class DuplicateJsonKeyError(ValueError):
         super().__init__(key)
 
 
+class NonFiniteJsonConstantError(ValueError):
+    """Raised when release evidence JSON uses non-standard numeric constants."""
+
+    def __init__(self, constant: str) -> None:
+        self.constant = constant
+        super().__init__(constant)
+
+
 def _display_json_key(key: str) -> str:
     return device_lab.SECRET_PATH_REDACTION if device_lab.SECRET_RE.search(key) else key
 
@@ -390,10 +402,15 @@ def _reject_duplicate_json_object_pairs(pairs: list[tuple[str, Any]]) -> dict[st
     return item
 
 
+def _reject_nonfinite_json_constant(constant: str) -> None:
+    raise NonFiniteJsonConstantError(constant)
+
+
 def _read_json_without_duplicate_keys(path: Path) -> Any:
     return json.loads(
         path.read_text(encoding="utf-8"),
         object_pairs_hook=_reject_duplicate_json_object_pairs,
+        parse_constant=_reject_nonfinite_json_constant,
     )
 
 
@@ -447,6 +464,13 @@ def _load_json(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]
             blocker(
                 "abi6_manifest_invalid_json",
                 _duplicate_json_key_message("ABI-6 manifest", exc),
+            )
+        ]
+    except NonFiniteJsonConstantError as exc:
+        return None, [
+            blocker(
+                "abi6_manifest_invalid_json",
+                f"ABI-6 manifest is not strict JSON: non-finite constant {exc.constant} is not allowed",
             )
         ]
     if not isinstance(data, dict):
@@ -554,6 +578,13 @@ def _load_json_artifact(
         return None, [blocker(invalid_code, f"{label} is not valid JSON: {exc}")]
     except DuplicateJsonKeyError as exc:
         return None, [blocker(invalid_code, _duplicate_json_key_message(label, exc))]
+    except NonFiniteJsonConstantError as exc:
+        return None, [
+            blocker(
+                invalid_code,
+                f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed",
+            )
+        ]
     if not isinstance(data, dict):
         return None, [blocker(not_object_code, f"{label} must be a JSON object")]
     return data, []
@@ -985,6 +1016,13 @@ def validate_compact_key_artifact_content(path: Path, artifact: str) -> list[str
     except OSError:
         return [f"recursive compact key artifact {artifact} could not be read"]
     stripped = prefix.strip().lower()
+    if prefix and all(byte == 0 for byte in prefix):
+        return [
+            (
+                f"recursive compact key artifact {artifact} "
+                f"{COMPACT_KEY_ALL_ZERO_ERROR}"
+            )
+        ]
     if any(stripped.startswith(marker) for marker in COMPACT_KEY_PLACEHOLDER_PREFIXES):
         return [
             (
@@ -992,6 +1030,19 @@ def validate_compact_key_artifact_content(path: Path, artifact: str) -> list[str
                 f"{COMPACT_KEY_PLACEHOLDER_ERROR}"
             )
         ]
+    return []
+
+
+def validate_lineage_artifact_content(path: Path, artifact: str) -> list[str]:
+    """Reject obvious development placeholders for Reserved-lineage artifacts."""
+
+    try:
+        with path.open("rb") as handle:
+            prefix = handle.read(4096)
+    except OSError:
+        return [f"lineage artifact {artifact} could not be read"]
+    if prefix and all(byte == 0 for byte in prefix):
+        return [f"lineage artifact {artifact} {LINEAGE_ARTIFACT_ALL_ZERO_ERROR}"]
     return []
 
 
@@ -1210,6 +1261,12 @@ def _display_evidence_field(field: str) -> str:
     return device_lab.SECRET_PATH_REDACTION if device_lab.SECRET_RE.search(field) else field
 
 
+def _display_evidence_value(value: Any) -> Any:
+    if isinstance(value, str) and device_lab.SECRET_RE.search(value):
+        return device_lab.SECRET_PATH_REDACTION
+    return value
+
+
 def check_lineage_proof_evidence(
     path: Path,
     *,
@@ -1305,7 +1362,7 @@ def check_lineage_proof_evidence(
             )
         )
 
-    details["schema"] = evidence.get("schema")
+    details["schema"] = _display_evidence_value(evidence.get("schema"))
     details["generated_at_utc"] = None
     if evidence.get("schema") != LINEAGE_PROOF_EVIDENCE_SCHEMA:
         blockers.append(
@@ -1325,13 +1382,13 @@ def check_lineage_proof_evidence(
         )
     else:
         generated_at_raw = generated_at_text
-        details["generated_at_utc"] = generated_at_raw
+        details["generated_at_utc"] = _display_evidence_value(generated_at_raw)
         if device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at_raw) is None:
             blockers.append(
                 blocker(
                     "lineage_proof_evidence_timestamp_noncanonical",
                     "Reserved-lineage proof evidence generated_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
-                    generated_at_utc=generated_at_raw,
+                    generated_at_utc=_display_evidence_value(generated_at_raw),
                 )
             )
         generated_at, parse_blocker = parse_utc_timestamp(
@@ -1346,7 +1403,7 @@ def check_lineage_proof_evidence(
                 blocker(
                     "lineage_proof_evidence_stale",
                     "Reserved-lineage proof evidence predates the required release evidence cutoff",
-                    generated_at_utc=generated_at_raw,
+                    generated_at_utc=_display_evidence_value(generated_at_raw),
                     min_generated_at_utc=min_generated_at.isoformat().replace("+00:00", "Z"),
                 )
             )
@@ -1355,7 +1412,7 @@ def check_lineage_proof_evidence(
                 blocker(
                     "lineage_proof_evidence_future_dated",
                     "Reserved-lineage proof evidence is ahead of the release validator clock skew",
-                    generated_at_utc=generated_at_raw,
+                    generated_at_utc=_display_evidence_value(generated_at_raw),
                     max_generated_at_utc=max_generated_at.isoformat().replace("+00:00", "Z"),
                 )
             )
@@ -1395,8 +1452,8 @@ def check_lineage_proof_evidence(
                     expected=expected,
                 )
             )
-    details["record_archive_proof_runtime_keygen_env"] = evidence.get(
-        "record_archive_proof_runtime_keygen_env"
+    details["record_archive_proof_runtime_keygen_env"] = _display_evidence_value(
+        evidence.get("record_archive_proof_runtime_keygen_env")
     )
 
     circuit_ids = evidence.get("circuit_ids")
@@ -1417,7 +1474,8 @@ def check_lineage_proof_evidence(
                 )
             )
         details["circuit_ids"] = {
-            key: circuit_ids.get(key) for key in sorted(EXPECTED_LINEAGE_CIRCUIT_IDS)
+            key: _display_evidence_value(circuit_ids.get(key))
+            for key in sorted(EXPECTED_LINEAGE_CIRCUIT_IDS)
         }
         for key, expected in EXPECTED_LINEAGE_CIRCUIT_IDS.items():
             if circuit_ids.get(key) != expected:
@@ -1531,6 +1589,17 @@ def check_lineage_proof_evidence(
                     )
                 )
                 continue
+            content_errors = validate_lineage_artifact_content(artifact_path, artifact)
+            if content_errors:
+                for error in content_errors:
+                    blockers.append(
+                        blocker(
+                            "lineage_proof_evidence_artifact_placeholder",
+                            error,
+                            artifact=artifact,
+                        )
+                    )
+                continue
             if _is_lower_sha256_hex(expected_digest):
                 actual_digest, digest_errors = _sha256_file(
                     artifact_path,
@@ -1580,7 +1649,7 @@ def check_lineage_proof_evidence(
                     field=_display_evidence_field(key),
                 )
             )
-        details["tests"] = sorted(tests)
+        details["tests"] = [_display_evidence_field(key) for key in sorted(tests)]
         for key, expected_name in LINEAGE_PROOF_REQUIRED_TESTS.items():
             test = tests.get(key)
             if not isinstance(test, dict):
@@ -1813,7 +1882,7 @@ def check_compact_key_evidence(
             )
         )
 
-    details["schema"] = evidence.get("schema")
+    details["schema"] = _display_evidence_value(evidence.get("schema"))
     details["generated_at_utc"] = None
     if evidence.get("schema") != COMPACT_KEY_EVIDENCE_SCHEMA:
         blockers.append(
@@ -1833,13 +1902,13 @@ def check_compact_key_evidence(
         )
     else:
         compact_generated_at_raw = generated_at_text
-        details["generated_at_utc"] = compact_generated_at_raw
+        details["generated_at_utc"] = _display_evidence_value(compact_generated_at_raw)
         if device_lab.SIGNED_AT_UTC_RE.fullmatch(compact_generated_at_raw) is None:
             blockers.append(
                 blocker(
                     "compact_key_evidence_timestamp_noncanonical",
                     "ABI-7 recursive compact key evidence generated_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
-                    generated_at_utc=compact_generated_at_raw,
+                    generated_at_utc=_display_evidence_value(compact_generated_at_raw),
                 )
             )
         generated_at, parse_blocker = parse_utc_timestamp(
@@ -1854,7 +1923,7 @@ def check_compact_key_evidence(
                 blocker(
                     "compact_key_evidence_stale",
                     "ABI-7 recursive compact key evidence predates the required release evidence cutoff",
-                    generated_at_utc=compact_generated_at_raw,
+                    generated_at_utc=_display_evidence_value(compact_generated_at_raw),
                     min_generated_at_utc=min_generated_at.isoformat().replace("+00:00", "Z"),
                 )
             )
@@ -1863,7 +1932,7 @@ def check_compact_key_evidence(
                 blocker(
                     "compact_key_evidence_future_dated",
                     "ABI-7 recursive compact key evidence is ahead of the release validator clock skew",
-                    generated_at_utc=compact_generated_at_raw,
+                    generated_at_utc=_display_evidence_value(compact_generated_at_raw),
                     max_generated_at_utc=max_generated_at.isoformat().replace("+00:00", "Z"),
                 )
             )
@@ -1905,7 +1974,7 @@ def check_compact_key_evidence(
                     expected=expected,
                 )
             )
-        details[field] = evidence.get(field)
+        details[field] = _display_evidence_value(evidence.get(field))
 
     command_errors = validate_compact_key_command(evidence.get("command"))
     for error in command_errors:
@@ -2182,6 +2251,9 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
             (
                 "kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(",
                 "validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(",
+                "kagemusha_recursive_spend_lineage_runtime_keygen_enabled()",
+                "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED",
+                "missing compact one-hop proving key archive",
                 "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope_dispatch(",
             ),
         ),
@@ -2191,6 +2263,9 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
                 "prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes(",
                 "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_append_envelope_dispatch(",
                 "for hop_index in 1..hop_count",
+                "kagemusha_recursive_spend_lineage_runtime_keygen_enabled()",
+                "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_KEY_ARTIFACTS_REQUIRED",
+                "missing compact append proving key archive",
             ),
         ),
         (
@@ -2488,6 +2563,16 @@ def _check_android_signed_evidence_freshness(
                     "android_signed_evidence_timestamp_missing",
                     "validated Android device-lab report is missing signed evidence timestamp",
                     slot=slot_name,
+                )
+            )
+            continue
+        if device_lab.SIGNED_AT_UTC_RE.fullmatch(signed_at_text) is None:
+            blockers.append(
+                blocker(
+                    "android_signed_evidence_timestamp_noncanonical",
+                    "signed evidence artifact signed_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+                    slot=slot_name,
+                    signed_at_utc=_display_evidence_value(signed_at_text),
                 )
             )
             continue

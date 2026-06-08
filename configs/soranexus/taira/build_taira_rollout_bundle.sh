@@ -190,7 +190,8 @@ payload = {
     "required_followup": [
         "install the native Inrou prerequisites reported by configs/soranexus/taira/check_inrou_host_prereqs.sh or run the CONFIG_PROFILE=taira container image",
         "install the bundled binaries/config on each public Taira validator",
-        "render and install the shared-edge nginx config from the same validator roster before public cutover",
+        "render and install the shared-edge nginx config from the same validator roster before public cutover, preferably with "
+        "configs/soranexus/taira/install_taira_edge_nginx_conf.sh and local-roster [[soracloud_alias_routes]] entries for dedicated runtime aliases such as solswap-indexer.sora",
         "restart the validator with the shipped taira-irohad.service or equivalent",
         "run configs/soranexus/taira/check_sorafs_rollout.sh after the node is back",
         "run configs/soranexus/taira/verify_soraswap_rollout.sh after the node is back",

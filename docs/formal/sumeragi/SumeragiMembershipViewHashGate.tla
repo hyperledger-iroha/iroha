@@ -47,6 +47,28 @@ Cases == {
   EmptyPeers
 }
 
+MembershipBaseCases == {
+  BaseAB
+}
+
+MembershipContextChangeCases == {
+  ChainBCase,
+  Height6Case,
+  View3Case,
+  Epoch2Case
+}
+
+MembershipPeerOrderCases == {
+  ReorderedBA
+}
+
+MembershipPeerCardinalityCases == {
+  AddedABC,
+  DuplicateAA,
+  SingleA,
+  EmptyPeers
+}
+
 ChainA == 1
 ChainB == 2
 Height5 == 3
@@ -208,6 +230,28 @@ TypeInvariant ==
 NoBugInvariant ==
   \A c \in Cases:
     ActualPreimage(c) = SpecPreimage(c)
+
+MembershipViewHashBaseExact ==
+  \A c \in MembershipBaseCases:
+    ActualPreimage(c) = SpecPreimage(c)
+
+MembershipViewHashContextExact ==
+  \A c \in MembershipContextChangeCases:
+    ActualPreimage(c) = SpecPreimage(c)
+
+MembershipViewHashPeerOrderExact ==
+  \A c \in MembershipPeerOrderCases:
+    ActualPreimage(c) = SpecPreimage(c)
+
+MembershipViewHashPeerCardinalityExact ==
+  \A c \in MembershipPeerCardinalityCases:
+    ActualPreimage(c) = SpecPreimage(c)
+
+MembershipViewHashExactness ==
+  /\ MembershipViewHashBaseExact
+  /\ MembershipViewHashContextExact
+  /\ MembershipViewHashPeerOrderExact
+  /\ MembershipViewHashPeerCardinalityExact
 
 SafetyFast == NoBugInvariant
 

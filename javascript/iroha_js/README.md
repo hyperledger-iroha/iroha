@@ -80,9 +80,12 @@ material: JavaScript wallet code must pass it through Norito unchanged and must
 not construct, rewrite, or mutate it. The native NAPI host validates
 `vk_commitment`, `public_inputs_schema_hash`, and `domain_tag` against the exact
 previous bundle before proving or returning output bytes.
-Native append streams the previous recursive proof bytes into
-`recursive_proof_chain_digest`; SDK code must not derive or patch the
-accumulator state.
+Native append streams the previous recursive proof bytes and per-hop accumulator
+material into native-owned accumulator digests (`recursive_proof_chain_digest`,
+lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
+verifier-witness batch, transition-profile, append-opening-preflight,
+append-boundary, scalar-projection, and previous/resulting accumulator digests);
+SDK code must not derive, supply, or patch accumulator state.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -127,8 +130,9 @@ the operation-specific result schema before returning bytes to callers.
 `getPrivacyCapabilities()` reports `privacy-production-gate-v1`, keeps
 `productionReady = false`, and remains fail-closed with missing production
 gates and no audit references until real proving, verification, chain
-admission, deterministic testing, fuzzing, performance gates, and external
-audit signoff are complete.
+admission, witness privacy checks, deterministic testing, negative/adversarial
+testing, replay/nullifier rejection testing, parser/verifier fuzzing,
+performance gates, and external audit signoff are complete.
 
 JavaScript also exposes the deterministic privacy FFI status/error-code contract
 for diagnostics and cross-language parity:

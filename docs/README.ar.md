@@ -62,11 +62,11 @@ translation_last_reviewed: 2025-11-14
 ## Norito (ترميز التسلسل)
 
 Norito هو ترميز التسلسل (serialization codec) المستخدم في هذا الـ workspace.
-لا نستخدم ‎`parity-scale-codec`‎ (SCALE). عندما نقارن مع SCALE في التوثيق أو
+لا نستخدم ‎`retired codec`‎ (retired codec). عندما نقارن مع retired codec في التوثيق أو
 الاختبارات، يكون ذلك لأغراض توضيحية فقط؛ جميع المسارات الإنتاجية تستخدم
 Norito. توفّر واجهات ‎`norito::codec::{Encode, Decode}`‎ حمولة Norito بلا
 ترويسة (“bare”) من أجل تجزئة (hashing) وحجم أصغر على الشبكة — أي أن
-التنسيق يبقى Norito وليس SCALE.
+التنسيق يبقى Norito وليس retired codec.
 
 الحالة الحالية:
 
@@ -95,6 +95,6 @@ Norito. توفّر واجهات ‎`norito::codec::{Encode, Decode}`‎ حمول
   Norito أولًا.
 - يمكن للخادم أن يعيد JSON عند الطلب؛ وعندها يمكن للعميل الرجوع إلى JSON إذا
   كان ‎`content-type`‎ يساوي ‎`application/json`‎.
-- التنسيق المعتمد على الشبكة هو Norito وليس SCALE. تُستخدم واجهات
+- التنسيق المعتمد على الشبكة هو Norito وليس retired codec. تُستخدم واجهات
   ‎`norito::codec::{Encode,Decode}`‎ للنسخة “bare” بلا ترويسة.
 </div>

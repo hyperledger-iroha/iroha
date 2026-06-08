@@ -18,6 +18,12 @@ SCCP_DOMAIN_BSC = 2
 SCCP_DOMAIN_SOL = 3
 SCCP_DOMAIN_TON = 4
 SCCP_DOMAIN_TRON = 5
+SCCP_CODEC_TEXT_UTF8 = 1
+SCCP_CODEC_EVM_HEX = 2
+SCCP_CODEC_SOLANA_BASE58 = 3
+SCCP_CODEC_TON_RAW = 4
+SCCP_CODEC_TRON_BASE58CHECK = 5
+SCCP_CODEC_SORA_ASSET_ID = 6
 SCCP_ETH_MAINNET_EVM_CHAIN_ID = 1
 SCCP_ETH_MAINNET_NETWORK_ID = (
     "0x0000000000000000000000000000000000000000000000000000000000000001"
@@ -192,6 +198,15 @@ _SCCP_BSC_VALIDATOR_SET_STORAGE_VALUE_PREFIX_V1 = (
 )
 _SCCP_EVM_RECEIPT_ROOT_VALUE_MARKER_V1 = b"sccp:evm:receipt-root-value:v1"
 _SCCP_SOLANA_MESSAGE_PROOF_PREFIX_V1 = b"sccp:solana:message-proof:v1"
+_SCCP_MSG_PREFIX_ASSET_REGISTER_V1 = b"sccp:asset:register:v1"
+_SCCP_MSG_PREFIX_ROUTE_ACTIVATE_V1 = b"sccp:route:activate:v1"
+_SCCP_MSG_PREFIX_TRANSFER_V1 = b"sccp:transfer:v1"
+_SCCP_MSG_PREFIX_TOKEN_ADD_V1 = b"sccp:token:add:v1"
+_SCCP_MSG_PREFIX_TOKEN_PAUSE_V1 = b"sccp:token:pause:v1"
+_SCCP_MSG_PREFIX_TOKEN_RESUME_V1 = b"sccp:token:resume:v1"
+_SCCP_HUB_LEAF_PREFIX_V1 = b"sccp:hub:leaf:v1"
+_SCCP_HUB_NODE_PREFIX_V1 = b"sccp:hub:node:v1"
+_SCCP_PAYLOAD_HASH_PREFIX_V1 = b"sccp:payload:v1"
 _SCCP_SOLANA_TRANSACTION_STATUS_LEAF_PREFIX_V1 = (
     b"sccp:solana:transaction-status-leaf:v1"
 )
@@ -21289,6 +21304,502 @@ def build_ton_sccp_submission(input_value: Any) -> Mapping[str, Any]:
     )
 
 
+def _read_u8_at(raw: bytes, offset: int, label: str) -> int:
+    if offset + 1 > len(raw):
+        raise TypeError(f"{label} is too short")
+    return raw[offset]
+
+
+def _read_u32_le_at(raw: bytes, offset: int, label: str) -> int:
+    if offset + 4 > len(raw):
+        raise TypeError(f"{label} is too short")
+    return int.from_bytes(raw[offset : offset + 4], "little")
+
+
+def _read_u64_le_at(raw: bytes, offset: int, label: str) -> int:
+    if offset + 8 > len(raw):
+        raise TypeError(f"{label} is too short")
+    return int.from_bytes(raw[offset : offset + 8], "little")
+
+
+def _read_u128_le_at(raw: bytes, offset: int, label: str) -> int:
+    if offset + 16 > len(raw):
+        raise TypeError(f"{label} is too short")
+    return int.from_bytes(raw[offset : offset + 16], "little")
+
+
+def _read_canonical_sccp_vec(raw: bytes, offset: int, label: str) -> tuple[bytes, int]:
+    length = _read_u32_le_at(raw, offset, f"{label}.length")
+    offset += 4
+    end = offset + length
+    if end > len(raw):
+        raise TypeError(f"{label} is too short")
+    return raw[offset:end], end
+
+
+def _require_supported_sccp_bundle_domain(domain: int, label: str) -> None:
+    if domain not in (
+        SCCP_DOMAIN_SORA,
+        SCCP_DOMAIN_ETH,
+        SCCP_DOMAIN_BSC,
+        SCCP_DOMAIN_SOL,
+        SCCP_DOMAIN_TON,
+        SCCP_DOMAIN_TRON,
+    ):
+        raise TypeError(f"{label} must be a supported SCCP domain")
+
+
+def _normalize_sccp_codec_id(value: int, label: str) -> int:
+    if value not in (
+        SCCP_CODEC_TEXT_UTF8,
+        SCCP_CODEC_EVM_HEX,
+        SCCP_CODEC_SOLANA_BASE58,
+        SCCP_CODEC_TON_RAW,
+        SCCP_CODEC_TRON_BASE58CHECK,
+        SCCP_CODEC_SORA_ASSET_ID,
+    ):
+        raise TypeError(f"{label} codec is unsupported")
+    return value
+
+
+def _sccp_counterparty_account_codec(domain: int) -> int:
+    if domain == SCCP_DOMAIN_SORA:
+        return SCCP_CODEC_TEXT_UTF8
+    if domain in (SCCP_DOMAIN_ETH, SCCP_DOMAIN_BSC):
+        return SCCP_CODEC_EVM_HEX
+    if domain == SCCP_DOMAIN_SOL:
+        return SCCP_CODEC_SOLANA_BASE58
+    if domain == SCCP_DOMAIN_TON:
+        return SCCP_CODEC_TON_RAW
+    if domain == SCCP_DOMAIN_TRON:
+        return SCCP_CODEC_TRON_BASE58CHECK
+    raise TypeError("SCCP domain must be supported")
+
+
+def _sccp_message_kind_code(kind: str) -> int:
+    if kind == "Burn":
+        return 0
+    if kind == "TokenAdd":
+        return 1
+    if kind == "TokenPause":
+        return 2
+    if kind == "TokenResume":
+        return 3
+    if kind == "AssetRegister":
+        return 4
+    if kind == "RouteActivate":
+        return 5
+    if kind == "Transfer":
+        return 6
+    raise TypeError("SCCP message kind is unsupported")
+
+
+def _decode_canonical_utf8_bytes(raw: bytes, label: str) -> str:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise TypeError(f"{label} must be canonical UTF-8") from exc
+    if text.encode("utf-8") != raw:
+        raise TypeError(f"{label} must be canonical UTF-8")
+    return text
+
+
+def _decode_solana_base58_fixed_allow_zero(value: Any, label: str, byte_length: int) -> bytes:
+    raw = _decode_solana_base58(value, label)
+    if len(raw) != byte_length:
+        raise TypeError(f"{label} must decode to {byte_length} bytes")
+    return raw
+
+
+def _validate_canonical_evm_hex_address(text: str, label: str) -> None:
+    if not (
+        len(text) == 42
+        and text.startswith("0x")
+        and all(symbol in "0123456789abcdefABCDEF" for symbol in text[2:])
+    ):
+        raise TypeError(f"{label} must be a 0x-prefixed 20-byte EVM address")
+    payload = text[2:]
+    checksum = _keccak_256(payload.lower().encode("ascii"))
+    for index, char in enumerate(payload):
+        if "0" <= char <= "9":
+            continue
+        checksum_byte = checksum[index // 2]
+        checksum_nibble = checksum_byte >> 4 if index % 2 == 0 else checksum_byte & 0x0F
+        should_be_uppercase = checksum_nibble >= 8
+        if should_be_uppercase:
+            if char != char.upper():
+                raise TypeError(f"{label} must be a canonical EIP-55 EVM address")
+        elif char != char.lower():
+            raise TypeError(f"{label} must be a canonical EIP-55 EVM address")
+
+
+def _validate_canonical_sccp_codec_bytes(codec: int, raw: bytes, label: str) -> None:
+    if codec == SCCP_CODEC_TEXT_UTF8:
+        if _decode_canonical_utf8_bytes(raw, label) == "":
+            raise TypeError(f"{label} must not be empty")
+        return
+    if codec == SCCP_CODEC_EVM_HEX:
+        _validate_canonical_evm_hex_address(_decode_canonical_utf8_bytes(raw, label), label)
+        return
+    if codec == SCCP_CODEC_SOLANA_BASE58:
+        _decode_solana_base58_fixed_allow_zero(
+            _decode_canonical_utf8_bytes(raw, label),
+            label,
+            32,
+        )
+        return
+    if codec == SCCP_CODEC_TON_RAW:
+        _normalize_ton_raw_address(_decode_canonical_utf8_bytes(raw, label), label)
+        return
+    if codec == SCCP_CODEC_TRON_BASE58CHECK:
+        _tron_base58check_payload(_decode_canonical_utf8_bytes(raw, label), label)
+        return
+    if codec == SCCP_CODEC_SORA_ASSET_ID:
+        if len(raw) != 32:
+            raise TypeError(f"{label} must be 32 bytes")
+        return
+    raise TypeError(f"{label} codec is unsupported")
+
+
+def _fixed_ascii_field_is_non_empty(raw: bytes) -> bool:
+    end = raw.find(b"\x00")
+    field = raw if end == -1 else raw[:end]
+    return any(field)
+
+
+def _require_exact_payload_end(offset: int, raw: bytes, label: str) -> None:
+    if offset != len(raw):
+        raise TypeError(f"{label} must not contain trailing bytes")
+
+
+def _sccp_payload_hash(payload_bytes: bytes) -> str:
+    return _bytes_to_hex(_prefixed_blake2b(_SCCP_PAYLOAD_HASH_PREFIX_V1, payload_bytes))
+
+
+def _canonical_sccp_commitment_bytes(
+    kind: str,
+    target_domain: int,
+    message_id: str,
+    payload_hash: str,
+) -> bytes:
+    return b"".join(
+        (
+            _write_u8(1),
+            _write_u8(_sccp_message_kind_code(kind)),
+            _write_u32_le(target_domain),
+            _hex_to_bytes(message_id, "commitment.messageId", 32),
+            _hex_to_bytes(payload_hash, "commitment.payloadHash", 32),
+        )
+    )
+
+
+def _decode_canonical_sccp_bundle_payload_summary(
+    payload_bytes: bytes,
+    label: str,
+) -> Mapping[str, Any]:
+    if len(payload_bytes) < 2:
+        raise TypeError(f"{label} is too short")
+    discriminant = _read_u8_at(payload_bytes, 0, f"{label}.kind")
+    body = payload_bytes[1:]
+    version = _read_u8_at(body, 0, f"{label}.version")
+    if version != 1:
+        raise TypeError(f"{label}.version must be 1")
+    offset = 1
+
+    def read_domain(field: str) -> int:
+        nonlocal offset
+        value = _read_u32_le_at(body, offset, f"{label}.{field}")
+        offset += 4
+        _require_supported_sccp_bundle_domain(value, f"{label}.{field}")
+        return value
+
+    def read_u64(field: str) -> int:
+        nonlocal offset
+        value = _read_u64_le_at(body, offset, f"{label}.{field}")
+        offset += 8
+        return value
+
+    def read_codec(field: str) -> int:
+        nonlocal offset
+        value = _read_u8_at(body, offset, f"{label}.{field}")
+        offset += 1
+        return _normalize_sccp_codec_id(value, f"{label}.{field}")
+
+    def read_codec_value(codec: int, field: str) -> bytes:
+        nonlocal offset
+        value, offset = _read_canonical_sccp_vec(body, offset, f"{label}.{field}")
+        _validate_canonical_sccp_codec_bytes(codec, value, f"{label}.{field}")
+        return value
+
+    def message_id(prefix: bytes) -> str:
+        return _bytes_to_hex(_prefixed_keccak(prefix, body))
+
+    def summary(kind: str, source_domain: int, target_domain: int, prefix: bytes) -> Mapping[str, Any]:
+        return {
+            "kind": kind,
+            "source_domain": source_domain,
+            "target_domain": target_domain,
+            "message_id": message_id(prefix),
+            "payload_hash": _sccp_payload_hash(payload_bytes),
+        }
+
+    if discriminant == 0:
+        target_domain = read_domain("target_domain")
+        source_domain = read_domain("home_domain")
+        read_u64("nonce")
+        asset_id_codec = read_codec("asset_id_codec")
+        read_codec_value(asset_id_codec, "asset_id")
+        _read_u8_at(body, offset, f"{label}.decimals")
+        offset += 1
+        _require_exact_payload_end(offset, body, label)
+        return summary(
+            "AssetRegister",
+            source_domain,
+            target_domain,
+            _SCCP_MSG_PREFIX_ASSET_REGISTER_V1,
+        )
+
+    if discriminant == 1:
+        source_domain = read_domain("source_domain")
+        target_domain = read_domain("target_domain")
+        if source_domain == target_domain:
+            raise TypeError(f"{label}.target_domain must differ from source_domain")
+        read_u64("nonce")
+        asset_id_codec = read_codec("asset_id_codec")
+        read_codec_value(asset_id_codec, "asset_id")
+        route_id_codec = read_codec("route_id_codec")
+        read_codec_value(route_id_codec, "route_id")
+        _require_exact_payload_end(offset, body, label)
+        return summary(
+            "RouteActivate",
+            source_domain,
+            target_domain,
+            _SCCP_MSG_PREFIX_ROUTE_ACTIVATE_V1,
+        )
+
+    if discriminant == 2:
+        source_domain = read_domain("source_domain")
+        target_domain = read_domain("dest_domain")
+        if source_domain == target_domain:
+            raise TypeError(f"{label}.dest_domain must differ from source_domain")
+        read_u64("nonce")
+        read_domain("asset_home_domain")
+        asset_id_codec = read_codec("asset_id_codec")
+        read_codec_value(asset_id_codec, "asset_id")
+        amount = _read_u128_le_at(body, offset, f"{label}.amount")
+        offset += 16
+        if amount == 0:
+            raise TypeError(f"{label}.amount must be greater than zero")
+        sender_codec = read_codec("sender_codec")
+        if sender_codec != _sccp_counterparty_account_codec(source_domain):
+            raise TypeError(f"{label}.sender_codec must match source_domain")
+        read_codec_value(sender_codec, "sender")
+        recipient_codec = read_codec("recipient_codec")
+        if recipient_codec != _sccp_counterparty_account_codec(target_domain):
+            raise TypeError(f"{label}.recipient_codec must match dest_domain")
+        read_codec_value(recipient_codec, "recipient")
+        route_id_codec = read_codec("route_id_codec")
+        read_codec_value(route_id_codec, "route_id")
+        _require_exact_payload_end(offset, body, label)
+        return summary(
+            "Transfer",
+            source_domain,
+            target_domain,
+            _SCCP_MSG_PREFIX_TRANSFER_V1,
+        )
+
+    if discriminant == 3:
+        target_domain = read_domain("target_domain")
+        read_u64("nonce")
+        asset_id = body[offset : offset + 32]
+        if len(asset_id) != 32 or not any(asset_id):
+            raise TypeError(f"{label}.sora_asset_id must be non-zero")
+        offset += 32
+        _read_u8_at(body, offset, f"{label}.decimals")
+        offset += 1
+        name = body[offset : offset + 32]
+        if len(name) != 32 or not _fixed_ascii_field_is_non_empty(name):
+            raise TypeError(f"{label}.name must be non-empty")
+        offset += 32
+        symbol = body[offset : offset + 32]
+        if len(symbol) != 32 or not _fixed_ascii_field_is_non_empty(symbol):
+            raise TypeError(f"{label}.symbol must be non-empty")
+        offset += 32
+        _require_exact_payload_end(offset, body, label)
+        return summary(
+            "TokenAdd",
+            SCCP_DOMAIN_SORA,
+            target_domain,
+            _SCCP_MSG_PREFIX_TOKEN_ADD_V1,
+        )
+
+    if discriminant in (4, 5):
+        target_domain = read_domain("target_domain")
+        read_u64("nonce")
+        asset_id = body[offset : offset + 32]
+        if len(asset_id) != 32 or not any(asset_id):
+            raise TypeError(f"{label}.sora_asset_id must be non-zero")
+        offset += 32
+        _require_exact_payload_end(offset, body, label)
+        if discriminant == 4:
+            return summary(
+                "TokenPause",
+                SCCP_DOMAIN_SORA,
+                target_domain,
+                _SCCP_MSG_PREFIX_TOKEN_PAUSE_V1,
+            )
+        return summary(
+            "TokenResume",
+            SCCP_DOMAIN_SORA,
+            target_domain,
+            _SCCP_MSG_PREFIX_TOKEN_RESUME_V1,
+        )
+
+    raise TypeError(f"{label} contains unsupported SCCP payload kind")
+
+
+def _decode_canonical_sccp_bundle_commitment_summary(
+    commitment_bytes: bytes,
+    label: str,
+) -> Mapping[str, Any]:
+    if len(commitment_bytes) != 70:
+        raise TypeError(f"{label}.commitment must be 70 bytes")
+    version = _read_u8_at(commitment_bytes, 0, f"{label}.commitment.version")
+    if version != 1:
+        raise TypeError(f"{label}.commitment.version must be 1")
+    return {
+        "version": version,
+        "kind_code": _read_u8_at(commitment_bytes, 1, f"{label}.commitment.kind"),
+        "target_domain": _read_u32_le_at(
+            commitment_bytes,
+            2,
+            f"{label}.commitment.target_domain",
+        ),
+        "message_id": _bytes_to_hex(commitment_bytes[6:38]),
+        "payload_hash": _bytes_to_hex(commitment_bytes[38:70]),
+    }
+
+
+def _merkle_root_from_canonical_commitment_bytes(
+    commitment_bytes: bytes,
+    merkle_proof_bytes: bytes,
+    label: str,
+) -> str:
+    offset = 0
+    step_count = _read_u32_le_at(merkle_proof_bytes, offset, f"{label}.steps")
+    offset += 4
+    current = _prefixed_blake2b(_SCCP_HUB_LEAF_PREFIX_V1, commitment_bytes)
+    for index in range(step_count):
+        if offset + 33 > len(merkle_proof_bytes):
+            raise TypeError(f"{label}.steps[{index}] is too short")
+        sibling = merkle_proof_bytes[offset : offset + 32]
+        offset += 32
+        sibling_is_left = _read_u8_at(
+            merkle_proof_bytes,
+            offset,
+            f"{label}.steps[{index}].sibling_is_left",
+        )
+        offset += 1
+        if sibling_is_left not in (0, 1):
+            raise TypeError(f"{label}.steps[{index}].sibling_is_left must be 0 or 1")
+        current = _prefixed_blake2b(
+            _SCCP_HUB_NODE_PREFIX_V1,
+            sibling + current if sibling_is_left == 1 else current + sibling,
+        )
+    _require_exact_payload_end(offset, merkle_proof_bytes, label)
+    return _bytes_to_hex(current)
+
+
+def _decode_canonical_sccp_message_proof_bundle_summary(
+    bundle_bytes: bytes,
+    label: str,
+) -> Mapping[str, Any]:
+    offset = 0
+    version = _read_u8_at(bundle_bytes, offset, f"{label}.version")
+    offset += 1
+    if version != 1:
+        raise TypeError(f"{label}.version must be 1")
+    if offset + 32 > len(bundle_bytes):
+        raise TypeError(f"{label}.commitment_root is too short")
+    commitment_root = _bytes_to_hex(bundle_bytes[offset : offset + 32])
+    offset += 32
+    commitment_bytes, offset = _read_canonical_sccp_vec(
+        bundle_bytes,
+        offset,
+        f"{label}.commitment",
+    )
+    merkle_proof_bytes, offset = _read_canonical_sccp_vec(
+        bundle_bytes,
+        offset,
+        f"{label}.merkle_proof",
+    )
+    payload_bytes, offset = _read_canonical_sccp_vec(
+        bundle_bytes,
+        offset,
+        f"{label}.payload",
+    )
+    _finality_proof_bytes, offset = _read_canonical_sccp_vec(
+        bundle_bytes,
+        offset,
+        f"{label}.finality_proof",
+    )
+    _require_exact_payload_end(offset, bundle_bytes, label)
+
+    payload = _decode_canonical_sccp_bundle_payload_summary(
+        payload_bytes,
+        f"{label}.payload",
+    )
+    expected_commitment_bytes = _canonical_sccp_commitment_bytes(
+        payload["kind"],
+        payload["target_domain"],
+        payload["message_id"],
+        payload["payload_hash"],
+    )
+    if commitment_bytes != expected_commitment_bytes:
+        raise TypeError(f"{label}.commitment must match payload")
+    commitment = _decode_canonical_sccp_bundle_commitment_summary(
+        commitment_bytes,
+        label,
+    )
+    if commitment["kind_code"] != _sccp_message_kind_code(payload["kind"]):
+        raise TypeError(f"{label}.commitment kind must match payload")
+    expected_root = _merkle_root_from_canonical_commitment_bytes(
+        commitment_bytes,
+        merkle_proof_bytes,
+        f"{label}.merkle_proof",
+    )
+    if commitment_root != expected_root:
+        raise TypeError(f"{label}.commitment_root must match merkle proof")
+    return {
+        "source_domain": payload["source_domain"],
+        "target_domain": commitment["target_domain"],
+        "message_id": commitment["message_id"],
+        "payload_hash": commitment["payload_hash"],
+        "commitment_root": commitment_root,
+    }
+
+
+def _require_sccp_proof_request_bundle_matches_public_inputs(
+    public_inputs: Mapping[str, Any],
+    bundle_bytes: bytes,
+    source_proof_bytes: bytes,
+) -> Mapping[str, Any]:
+    summary = _decode_canonical_sccp_message_proof_bundle_summary(
+        bundle_bytes,
+        "bundleBytes",
+    )
+    if (
+        summary["target_domain"] != public_inputs["target_domain"]
+        or summary["message_id"] != public_inputs["message_id"]
+        or summary["payload_hash"] != public_inputs["payload_hash"]
+        or summary["commitment_root"] != public_inputs["commitment_root"]
+    ):
+        raise TypeError("bundleBytes must match publicInputs")
+    if summary["source_domain"] != SCCP_DOMAIN_SORA and len(source_proof_bytes) == 0:
+        raise TypeError("sourceProofBytes required for non-SORA source bundle")
+    return summary
+
+
 def build_ton_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
     """Build the deterministic request object a UI passes into a local TON prover."""
 
@@ -21320,6 +21831,11 @@ def build_ton_sccp_proof_request(input_value: Any) -> Mapping[str, Any]:
         b""
         if source_proof_input is _MISSING
         else _require_optional_nonzero_bytes(source_proof_input, "sourceProofBytes")
+    )
+    _require_sccp_proof_request_bundle_matches_public_inputs(
+        public_inputs,
+        bundle_bytes,
+        source_proof_bytes,
     )
     source_domain_input = request_optional_value(
         "sourceDomain",

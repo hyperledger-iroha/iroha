@@ -179,6 +179,7 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             ("password_xsd_unknown_secret", "xsd_unknown_secret"),
             ("%70assword_xsd_unknown_leak", "xsd_unknown_leak"),
             ("private-key_xsd_unknown_leak", "xsd_unknown_leak"),
+            ("unexpected\x1bxsd_key", "\x1b"),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -191,6 +192,29 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                 self.assertIn("contains unknown keys", message)
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_nested_control_material_in_manifest_is_rejected_without_echo(self):
+        cases = (
+            (
+                {"metadata": {"unexpected\x1bxsd_key": "redacted"}},
+                "forbidden control-bearing field",
+                "xsd_key",
+            ),
+            (
+                {"metadata": {"note": "warning \x1b[31mred"}},
+                "unsafe control characters",
+                "[31mred",
+            ),
+        )
+        for body, expected, hidden in cases:
+            with self.subTest(body=body):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    VERIFIER._check_no_secret_material(body)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn("\x1b", message)
                 self.assertNotIn(hidden, message)
 
     def test_output_cli_path_flags_reject_flag_like_values(self):
@@ -1903,6 +1927,103 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertNotIn(leaked_marker, stderr)
                     self.assertNotIn("xmllint-secret", stderr)
                     self.assertNotIn("xmllint-identifier-secret", stderr)
+
+    def test_xmllint_diagnostics_redact_control_characters_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            cases = (
+                ("failed stderr escape", 1, "", "schema validator \x1b[31mwarning"),
+                ("failed stdout nul", 1, "schema validator \x00warning", ""),
+                ("successful stderr escape", 0, "", "schema validator \x1b[31mwarning"),
+                ("successful stdout nul", 0, "schema validator \x00warning", ""),
+            )
+            for name, returncode, fake_stdout, fake_stderr in cases:
+                with self.subTest(name=name):
+                    original_which = VERIFIER.shutil.which
+                    original_run = VERIFIER._run_command_bounded
+                    VERIFIER.shutil.which = lambda command: "/usr/bin/xmllint"
+                    VERIFIER._run_command_bounded = lambda *_args, **_kwargs: (
+                        returncode,
+                        fake_stdout,
+                        False,
+                        fake_stderr,
+                        False,
+                        False,
+                    )
+                    try:
+                        rc, stdout, stderr = run_verify(
+                            ["--manifest", str(manifest_path), "--validate-xml-schema"]
+                        )
+                    finally:
+                        VERIFIER.shutil.which = original_which
+                        VERIFIER._run_command_bounded = original_run
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("xmllint output redacted: control characters", stderr)
+                    self.assertNotIn("\x1b", stderr)
+                    self.assertNotIn("\x00", stderr)
+                    self.assertNotIn("[31mwarning", stderr)
+                    self.assertNotIn("schema validator", stderr)
+
+    def test_xmllint_success_output_must_be_expected_validation_line(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            fixture_path = manifest_path.resolve().parent / "../foo_fixture.xml"
+            expected_success = f"{fixture_path} validates"
+            cases = (
+                ("allowed stderr", "", expected_success, 0, ""),
+                ("allowed stdout", expected_success, "", 0, ""),
+                ("warning stderr", "", "schema validator warning", 2, "unexpected output"),
+                ("warning stdout", "schema validator warning", "", 2, "unexpected output"),
+                (
+                    "secret stderr",
+                    "",
+                    "schema validator echoed token=xmllint-secret",
+                    2,
+                    "xmllint output redacted",
+                ),
+                (
+                    "secret identifier stdout",
+                    "schema validator echoed token-xmllint-identifier-secret",
+                    "",
+                    2,
+                    "xmllint output redacted",
+                ),
+            )
+            for name, fake_stdout, fake_stderr, expected_rc, expected_error in cases:
+                with self.subTest(name=name):
+                    original_which = VERIFIER.shutil.which
+                    original_run = VERIFIER._run_command_bounded
+                    VERIFIER.shutil.which = lambda command: "/usr/bin/xmllint"
+                    VERIFIER._run_command_bounded = lambda *_args, **_kwargs: (
+                        0,
+                        fake_stdout,
+                        False,
+                        fake_stderr,
+                        False,
+                        False,
+                    )
+                    try:
+                        rc, stdout, stderr = run_verify(
+                            ["--manifest", str(manifest_path), "--validate-xml-schema"]
+                        )
+                    finally:
+                        VERIFIER.shutil.which = original_which
+                        VERIFIER._run_command_bounded = original_run
+
+                    self.assertEqual(rc, expected_rc)
+                    if expected_rc == 0:
+                        self.assertEqual(stderr, "")
+                        self.assertNotEqual(stdout, "")
+                    else:
+                        self.assertEqual(stdout, "")
+                        self.assertIn(expected_error, stderr)
+                        self.assertNotIn("token=", stderr)
+                        self.assertNotIn("xmllint-secret", stderr)
+                        self.assertNotIn("xmllint-identifier-secret", stderr)
 
     def test_boolean_xmllint_output_limit_is_rejected(self):
         with self.assertRaisesRegex(

@@ -37,7 +37,7 @@ translator: manual
 - PQ: `pqcrypto-mldsa`、`pqcrypto-traits` — リファレンスクレートとして信頼できる。
 - TLS: `rustls`、`tokio-rustls`、`hyper-rustls` — 現代的な Rust TLS スタックの標準。
 - Noise: `snow` — 標準的な実装。
-- シリアライゼーション: `parity-scale-codec` は SCALE の標準。Serde は本番依存から削除済みで、Norito の derive／writer がすべてのランタイム経路をカバー。残存する Serde 参照は履歴ドキュメント、ガードレールスクリプト、テスト専用の許可リストのみ。
+- シリアライゼーション: `retired codec` は retired codec の標準。Serde は本番依存から削除済みで、Norito の derive／writer がすべてのランタイム経路をカバー。残存する Serde 参照は履歴ドキュメント、ガードレールスクリプト、テスト専用の許可リストのみ。
 - FFI／ネイティブライブラリ: `libsodium-sys-stable`、`openssl` — 正当だが、本番経路では OpenSSL より Rustls を優先（現行コードは既にその方針）。
 - `pprof` 0.13.0（crates.io）— 上流修正済み。公式リリースに `prost-codec` と frame-pointer を有効化した構成で利用し、旧コーデックは無効化済み。
 

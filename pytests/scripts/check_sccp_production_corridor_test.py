@@ -345,6 +345,7 @@ def test_sccp_production_corridor_kotlin_phase_covers_sccp_package() -> None:
     assert "java -version" in completed.stdout
     assert "./gradlew :core-jvm:test --console=plain --tests" in completed.stdout
     assert "org.hyperledger.iroha.sdk.sccp." in completed.stdout
+    assert "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest" in completed.stdout
     assert "SCCP production corridor dry run completed." in completed.stdout
 
 

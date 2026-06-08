@@ -27,8 +27,23 @@ def _location_block(server: str, marker: str) -> str:
     return rest[:next_location]
 
 
-def _write_roster(path: Path, *, torii_address: str = "0.0.0.0:18080", include_edge_upstreams: bool = True) -> None:
+def _write_roster(
+    path: Path,
+    *,
+    torii_address: str = "0.0.0.0:18080",
+    include_edge_upstreams: bool = True,
+    include_soracloud_alias_route: bool = False,
+) -> None:
     parts = [f'torii_address = "{torii_address}"', ""]
+    if include_soracloud_alias_route:
+        parts.extend(
+            [
+                "[[soracloud_alias_routes]]",
+                'alias = "solswap-indexer.sora"',
+                'edge_upstream = "0.0.0.0:8788"',
+                "",
+            ]
+        )
     for index in range(1, 5):
         parts.extend(
             [
@@ -212,6 +227,44 @@ def test_parse_soracloud_alias_routes_normalizes_and_rejects_unsafe_values() -> 
         raise AssertionError("accepted duplicate Soracloud alias route")
 
 
+def test_load_soracloud_alias_route_specs_from_roster(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path, include_soracloud_alias_route=True)
+
+    assert MODULE.load_soracloud_alias_route_specs(roster_path) == [
+        "solswap-indexer.sora=0.0.0.0:8788"
+    ]
+    routes = MODULE.parse_soracloud_alias_routes(
+        MODULE.load_soracloud_alias_route_specs(roster_path)
+    )
+    assert routes[0].upstream_address == "127.0.0.1:8788"
+
+
+def test_load_soracloud_alias_route_specs_rejects_bad_roster_entries(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    _write_roster(roster_path)
+    roster_text = roster_path.read_text(encoding="utf-8")
+
+    for extra, expected in (
+        ('soracloud_alias_routes = "bad"\n', "array of tables"),
+        (
+            '[[soracloud_alias_routes]]\nedge_upstream = "127.0.0.1:8788"\n',
+            "field `alias`",
+        ),
+        (
+            '[[soracloud_alias_routes]]\nalias = "solswap-indexer.sora"\n',
+            "must set `edge_upstream`",
+        ),
+    ):
+        roster_path.write_text(f"{extra}\n{roster_text}", encoding="utf-8")
+        try:
+            MODULE.load_soracloud_alias_route_specs(roster_path)
+        except ValueError as error:
+            assert expected in str(error)
+        else:  # pragma: no cover
+            raise AssertionError(f"accepted bad route entry {extra!r}")
+
+
 def test_render_edge_nginx_conf_can_pin_soracloud_alias_route_to_service_upstream() -> None:
     validators = [
         MODULE.EdgeValidator(
@@ -303,6 +356,20 @@ def test_main_writes_soracloud_alias_route(tmp_path: Path) -> None:
             "solswap-indexer.sora=0.0.0.0:8788",
         ]
     )
+
+    assert exit_code == 0
+    rendered = output_path.read_text(encoding="utf-8")
+    assert "upstream soracloud_solswap_indexer_sora_upstream {" in rendered
+    assert "server 127.0.0.1:8788;" in rendered
+    assert "server_name solswap-indexer.sora.mon.taira.sora.net;" in rendered
+
+
+def test_main_writes_soracloud_alias_route_from_roster(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    output_path = tmp_path / "taira.sora.org.conf"
+    _write_roster(roster_path, include_soracloud_alias_route=True)
+
+    exit_code = MODULE.main(["--roster", str(roster_path), "--output", str(output_path)])
 
     assert exit_code == 0
     rendered = output_path.read_text(encoding="utf-8")

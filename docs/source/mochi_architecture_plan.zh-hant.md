@@ -40,7 +40,7 @@ MOCHI 分為兩個主要 crate，位於新的 `/mochi` 目錄中（請參閱
 - 創世和密鑰材料是通過 `kagami` 調用以及用戶提供的輸入（鏈 ID、初始賬戶、資產）創建的。
 - 配置文件從 TOML 模板生成，填寫 Torii 和 P2P 端口、存儲路徑、快照設置和可信對等列表。生成的配置存儲在每個網絡工作空間目錄下。
 - 主管跟踪進程生命週期，流式傳輸日誌表面的 stdout/stderr，並輪詢 `/status`、`/metrics` 和 `/configuration` 端點的運行狀況。
-- 瘦 Torii 客戶端層包裝 HTTP 和 WebSocket 調用，盡可能依賴 Iroha Rust 客戶端包，以避免重新實現 SCALE 編碼/解碼。
+- 瘦 Torii 客戶端層包裝 HTTP 和 WebSocket 調用，盡可能依賴 Iroha Rust 客戶端包，以避免重新實現 retired codec 編碼/解碼。
 
 ## `mochi-core` 支持的用戶流程- **網絡創建嚮導**：選擇單點或四點配置文件，選擇目錄，然後調用 `kagami` 來生成身份和創世。
 - **生命週期控制**：啟動、停止、重新啟動對等點；表面實時指標；暴露日誌尾部；切換運行時配置端點（例如日誌級別）。

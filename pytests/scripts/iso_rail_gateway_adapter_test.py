@@ -159,6 +159,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("password_rail_unknown_secret", "rail_unknown_secret"),
             ("%70assword_rail_unknown_leak", "rail_unknown_leak"),
             ("private-key_rail_unknown_leak", "rail_unknown_leak"),
+            ("unexpected\x1brail_key", "\x1b"),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -171,6 +172,29 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertIn("contains unknown keys", message)
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_nested_control_material_in_sidecar_is_rejected_without_echo(self):
+        cases = (
+            (
+                {"metadata": {"unexpected\x1brail_key": "redacted"}},
+                "forbidden control-bearing field",
+                "rail_key",
+            ),
+            (
+                {"metadata": {"note": "warning \x1b[31mred"}},
+                "unsafe control characters",
+                "[31mred",
+            ),
+        )
+        for body, expected, hidden in cases:
+            with self.subTest(body=body):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    ADAPTER._check_no_secret_material(body, "sidecar")
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn("\x1b", message)
                 self.assertNotIn(hidden, message)
 
     def test_output_cli_path_flags_reject_flag_like_values(self):
@@ -1030,6 +1054,42 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             self.assertEqual(len(requests), 1)
             self.assertEqual(requests[0]["path"], "/v1/iso20022/colr007")
 
+    def test_unused_local_overrides_are_rejected(self):
+        cases = (
+            (
+                "--allow-insecure-http",
+                "--allow-insecure-http requires an http:// or local/private Torii URL",
+            ),
+            (
+                "--allow-default-profile",
+                "--allow-default-profile requires at least one sidecar without profile",
+            ),
+            (
+                "--allow-legacy-colr007",
+                "--allow-legacy-colr007 requires at least one legacy colr.007 message",
+            ),
+        )
+        for flag, message in cases:
+            with self.subTest(flag=flag):
+                with tempfile.TemporaryDirectory() as raw_inbox:
+                    inbox = Path(raw_inbox)
+                    write_message(inbox)
+
+                    rc, stdout, stderr = run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            "https://torii.bank.internal/iso",
+                            "--dry-run",
+                            flag,
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
     def test_single_message_relative_to_inbox_is_supported(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -1837,6 +1897,95 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertNotIn(hidden, receipt_text)
                     self.assertTrue(receipt_digest_matches(receipt))
 
+    def test_control_character_torii_response_preview_is_redacted(self):
+        cases = (
+            (b'{"error":"\x1b[31mrail-warning"}', "[31mrail-warning"),
+            (b'{"error":"rail\x00warning"}', "rail\\u0000warning"),
+        )
+        for body, hidden in cases:
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as raw_inbox:
+                inbox = Path(raw_inbox)
+                write_message(inbox)
+                with capture_server(status=500, body=body) as (base_url, requests):
+                    rc, _stdout, _stderr = run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )
+
+                self.assertEqual(rc, 1)
+                self.assertEqual(len(requests), 1)
+                receipts = list((inbox / "receipts").glob("*.receipt.json"))
+                self.assertEqual(len(receipts), 1)
+                receipt_text = receipts[0].read_text(encoding="utf-8")
+                receipt = json.loads(receipt_text)
+                self.assertEqual(receipt["status_code"], 500)
+                self.assertEqual(receipt["response_body_sha256"], ADAPTER.sha256_hex(body))
+                self.assertEqual(
+                    receipt["response_body_preview"],
+                    ADAPTER.REDACTED_RESPONSE_PREVIEW,
+                )
+                self.assertNotIn(hidden, receipt_text)
+                self.assertTrue(receipt_digest_matches(receipt))
+
+    def test_secret_looking_success_response_fails_before_receipt_write(self):
+        cases = (
+            (b'{"message_id":"private_key=rail-secret"}', "private_key"),
+            (b'{"message_id":"token-rail-response-secret"}', "token-rail"),
+        )
+        for body, marker in cases:
+            with self.subTest(body=body):
+                with tempfile.TemporaryDirectory() as raw_inbox:
+                    inbox = Path(raw_inbox)
+                    write_message(inbox)
+                    with capture_server(status=202, body=body) as (base_url, requests):
+                        rc, stdout, stderr = run_main(
+                            [
+                                "--inbox-dir",
+                                str(inbox),
+                                "--torii-base-url",
+                                base_url,
+                                "--allow-insecure-http",
+                            ]
+                        )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertEqual(len(requests), 1)
+                    self.assertIn(
+                        "Torii response body contains secret-looking material",
+                        stderr,
+                    )
+                    self.assertNotIn(marker, stderr)
+                    self.assertEqual(list((inbox / "receipts").glob("*.receipt.json")), [])
+
+    def test_control_character_success_response_fails_before_receipt_write(self):
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            write_message(inbox)
+            body = b'{"message_id":"\x1b[31mrail-success"}'
+            with capture_server(status=202, body=body) as (base_url, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--inbox-dir",
+                        str(inbox),
+                        "--torii-base-url",
+                        base_url,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(len(requests), 1)
+            self.assertIn("Torii response body contains unsafe control characters", stderr)
+            self.assertNotIn("[31mrail-success", stderr)
+            self.assertEqual(list((inbox / "receipts").glob("*.receipt.json")), [])
+
     def test_secret_looking_url_error_is_redacted(self):
         self.assertEqual(
             ADAPTER._receipt_error("upstream token=rail-secret"),
@@ -1856,6 +2005,10 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
         )
         self.assertEqual(
             ADAPTER._receipt_error("upstream token-rail-url-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream \x1b[31mrail-warning"),
             ADAPTER.REDACTED_ERROR,
         )
         self.assertEqual(ADAPTER._receipt_error("connection refused"), "connection refused")

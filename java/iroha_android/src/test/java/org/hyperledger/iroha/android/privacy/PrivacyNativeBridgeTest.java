@@ -80,6 +80,7 @@ public final class PrivacyNativeBridgeTest {
     assert !capabilities.hasWitnessPrivacyChecks();
     assert !capabilities.hasDeterministicTests();
     assert !capabilities.hasNegativeAdversarialTests();
+    assert !capabilities.hasReplayNullifierTests();
     assert !capabilities.hasFuzzing();
     assert !capabilities.hasParserFuzzing();
     assert !capabilities.hasVerifierFuzzing();
@@ -95,6 +96,8 @@ public final class PrivacyNativeBridgeTest {
         "witness privacy checks are incomplete");
     assert capabilities.missingProductionGates().contains(
         "negative/adversarial tests are incomplete");
+    assert capabilities.missingProductionGates().contains(
+        "replay/nullifier rejection tests are incomplete");
     assert capabilities.missingProductionGates().contains(
         "parser fuzzing gate is incomplete");
     assert capabilities.missingProductionGates().contains(
@@ -125,6 +128,7 @@ public final class PrivacyNativeBridgeTest {
         "witness privacy checks are incomplete",
         "deterministic tests are incomplete",
         "negative/adversarial tests are incomplete",
+        "replay/nullifier rejection tests are incomplete",
         "fuzzing gate is incomplete",
         "parser fuzzing gate is incomplete",
         "verifier fuzzing gate is incomplete",

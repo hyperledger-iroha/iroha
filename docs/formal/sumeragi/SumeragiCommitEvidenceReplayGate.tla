@@ -278,4 +278,34 @@ DuplicateExplicitTargetsAreDeduped ==
     /\ ImplementationReplays("duplicateVoteTargets")
     /\ TargetsAreDeduped("duplicateVoteTargets")
 
+CommitEvidenceReplayAdmissionExact ==
+  /\ ReplayMatchesSpec
+  /\ InactivePendingNeverReplays
+  /\ CooldownSuppressesReplay
+  /\ NoEvidenceNeverReplays
+  /\ RemoteTargetsRequired
+
+CommitEvidenceReplayProgressExact ==
+  /\ FirstEvidenceReplays
+  /\ ProgressReplays
+  /\ StalledPositiveEvidenceRetries
+
+CommitEvidenceReplayKindExact ==
+  /\ VoteEvidenceUsesVoteReplay
+  /\ CommitQcUsesCommitCertReplay
+  /\ PayloadFallbackNeverUsed
+
+CommitEvidenceReplayTargetExact ==
+  /\ ReplayTargetsExcludeLocal
+  /\ DuplicateExplicitTargetsAreDeduped
+
+CommitEvidenceReplayExactness ==
+  /\ CommitEvidenceReplayAdmissionExact
+  /\ CommitEvidenceReplayProgressExact
+  /\ CommitEvidenceReplayKindExact
+  /\ CommitEvidenceReplayTargetExact
+
+SafetyFast ==
+  CommitEvidenceReplayExactness
+
 ====

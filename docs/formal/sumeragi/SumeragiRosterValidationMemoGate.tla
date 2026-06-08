@@ -50,6 +50,35 @@ MemoCachesShareCapacity == 20
 
 Candidates == 1..20
 
+ConstructionCases == {NewEmpty, NewCapacity}
+
+GetTouchCases == {
+  GetMissReturnsNone,
+  GetMissPreservesOrder,
+  GetHitReturnsValue,
+  GetHitTouches,
+  TouchMovesToBack
+}
+
+InsertUpdateCases == {
+  InsertZeroCapacityNoop,
+  InsertNewUnderCap,
+  InsertNewAtCapEvictsOldest,
+  InsertExistingUpdates,
+  InsertExistingDedupsOrder
+}
+
+EvictionCases == {EvictUntilBound, EvictSkipsStaleOrder}
+
+LaneIsolationCases == {
+  CommitInsertIsolated,
+  CheckpointInsertIsolated,
+  CommitGetIsolated,
+  CheckpointGetIsolated
+}
+
+RefreshCapacityCases == {RefreshClearsMemo, MemoCachesShareCapacity}
+
 EntriesEmpty == 1
 OrderEmpty == 2
 CapacityInput == 3
@@ -225,6 +254,38 @@ TypeInvariant ==
 Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+RosterValidationMemoConstructionExact ==
+  \A c \in ConstructionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationMemoGetTouchExact ==
+  \A c \in GetTouchCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationMemoInsertUpdateExact ==
+  \A c \in InsertUpdateCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationMemoEvictionExact ==
+  \A c \in EvictionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationMemoLaneIsolationExact ==
+  \A c \in LaneIsolationCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationMemoRefreshCapacityExact ==
+  \A c \in RefreshCapacityCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterValidationMemoCacheExactness ==
+  /\ RosterValidationMemoConstructionExact
+  /\ RosterValidationMemoGetTouchExact
+  /\ RosterValidationMemoInsertUpdateExact
+  /\ RosterValidationMemoEvictionExact
+  /\ RosterValidationMemoLaneIsolationExact
+  /\ RosterValidationMemoRefreshCapacityExact
 
 BugNewNotEmpty ==
   ImplementationActions(NewEmpty) = SpecActions(NewEmpty)

@@ -472,7 +472,9 @@ HintlessBranchReturns ==
   Matches("hintless_allowed_peer")
 
 HintlessAllowArgForwarded ==
-  Matches("hintless_allowed_peer")
+  /\ Bug # "hintless_drops_allow_arg"
+  /\ ActualPayloadAllowHintlessArg("hintless_allowed_peer", "a")
+  /\ Matches("hintless_allowed_peer")
 
 RequesterRosterArgForwarded ==
   Matches("hintless_allowed_peer")
@@ -504,5 +506,4 @@ NonHintlessAllowArgForwarded ==
 ConsensusPriorityForwarded ==
   Matches("consensus_payload_companion")
 
-=============================================================================
 ====

@@ -21,7 +21,7 @@ Use o DA-3 para Nexus para remover os blobs da pista.
 Em DA-2. توضح هذه المذكرة هياكل البيانات القياسية, ووصلات خط انابيب الكتل,
 A solução de problemas Torii/RPC não está disponível para download
 المدققون على تعهدات DA اثناء فحوصات القبول او الحوكمة. جميع الحمولات مشفرة
-بـ Norito; O SCALE e o JSON são usados.
+بـ Norito; O retired codec e o JSON são usados.
 
 ## الاهداف
 

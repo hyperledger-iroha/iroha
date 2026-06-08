@@ -61,11 +61,11 @@ Ce dépôt contient la documentation des outils Iroha 2 :
 ## Norito (codec de sérialisation)
 
 Norito est le codec de sérialisation du workspace. Nous n’utilisons pas
-`parity-scale-codec` (SCALE). Lorsque la documentation ou les benchmarks
-comparent à SCALE, c’est uniquement à titre de contexte ; tous les chemins de
+`retired codec` (retired codec). Lorsque la documentation ou les benchmarks
+comparent à retired codec, c’est uniquement à titre de contexte ; tous les chemins de
 production utilisent Norito. Les APIs `norito::codec::{Encode, Decode}`
 fournissent une charge utile Norito sans en‑tête (« bare ») pour le hachage et
-l’efficacité sur le réseau : c’est toujours Norito, pas SCALE.
+l’efficacité sur le réseau : c’est toujours Norito, pas retired codec.
 
 État actuel :
 
@@ -98,4 +98,4 @@ Notes sur l’encodage du point de terminaison `/status`
   d’abord tenter un décodage Norito.
 - Les serveurs peuvent retourner du JSON sur demande ; les clients se replient
   sur JSON si le `content-type` est `application/json`.
-- Le format sur le fil est Norito, pas SCALE. Les APIs `norito::codec::{Encode,Decode}` sont utilisées pour la variante sans en‑tête.
+- Le format sur le fil est Norito, pas retired codec. Les APIs `norito::codec::{Encode,Decode}` sont utilisées pour la variante sans en‑tête.
