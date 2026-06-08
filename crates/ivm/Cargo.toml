@@ -1,5 +1,6 @@
 [package]
 name = "ivm"
+autotests = false
 version.workspace = true
 edition = "2024"
 authors = ["Iroha Contributors"]
@@ -223,3 +224,45 @@ harness = false
 name = "bench_aes128_stream"
 path = "benches/bench_aes128_stream.rs"
 harness = false
+
+# Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
+
+[[test]]
+name = "ivm_group_01"
+path = "tests/grouped/group_01.rs"
+
+[[test]]
+name = "ivm_group_02"
+path = "tests/grouped/group_02.rs"
+
+[[test]]
+name = "ivm_group_03"
+path = "tests/grouped/group_03.rs"
+
+[[test]]
+name = "ivm_group_04"
+path = "tests/grouped/group_04.rs"
+
+[[test]]
+name = "ivm_group_05"
+path = "tests/grouped/group_05.rs"
+
+[[test]]
+name = "ivm_group_06"
+path = "tests/grouped/group_06.rs"
+
+[[test]]
+name = "ivm_group_07"
+path = "tests/grouped/group_07.rs"
+
+[[test]]
+name = "ivm_group_08"
+path = "tests/grouped/group_08.rs"
+
+[[test]]
+name = "ivm_group_09"
+path = "tests/grouped/group_09.rs"
+
+[[test]]
+name = "ivm_group_10"
+path = "tests/grouped/group_10.rs"

@@ -13,6 +13,11 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- Continue reducing local/CI compile memory after the WSL cargo-test hardening:
+  `iroha_data_model` still has a single stripped-debuginfo compile phase that
+  can peak around `10 GiB` RSS, so future work should split or simplify that
+  compile surface rather than reintroducing broad Cargo parallelism or
+  one-file-one-binary integration-test discovery.
 - SoraFS/SoraNet first-release KDF identifier cleanup is complete: SoraFS
   envelopes remain V1/version 1 with the transcript-bound hybrid suite label,
   SoraNet advertises only NK2/NK3 suite IDs `0x04`/`0x05`, and old pre-release

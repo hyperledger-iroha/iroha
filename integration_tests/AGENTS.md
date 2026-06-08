@@ -34,7 +34,9 @@ These guidelines apply to the `integration_tests/` crate.
 - Always run `cargo test -p integration_tests` before sending changes. To target a subset use `cargo test -p integration_tests --test <harness> <filter> -- --nocapture`.
 - Prefer `cargo test -p integration_tests --test <harness> <filter> -- --nocapture` for targeted reruns; exact filters are module-qualified inside each grouped harness.
 - `scripts/run_full_tests.sh` now reuses the workspace-built binaries for the network suite and provisions an isolated `IROHA_TEST_NETWORK_PERMIT_DIR` unless the caller already set one.
-- For local throughput, `scripts/run_full_tests.sh --fast` uses `scripts/cargo_fast.sh`; `--fast-zero-debug` and `--fast-no-incremental` are available when you explicitly want that more aggressive mode.
+- For WSL or memory-constrained VMs, the workspace defaults to a single Cargo job, no dev/test debug symbols, no test-profile incremental cache, and one libtest thread. `scripts/run_full_tests.sh --wsl-safe` adds package-segmented fast tests, `CARGO_INCREMENTAL=0`, serialized network tests, resource snapshots, and a `MemAvailable` guard before each Cargo step.
+- Keep high-count workspace integration suites grouped through explicit `tests/grouped/*.rs` harnesses instead of restoring Cargo's automatic one-file-one-binary test discovery.
+- For local throughput, `scripts/run_full_tests.sh --fast` uses `scripts/cargo_fast.sh`; `--fast-zero-debug` and `--no-incremental` are available when you explicitly want that more aggressive mode.
 - If a test requires an external binary or script, assert its presence (e.g., via `which`) and provide a helpful error.
 
 ## Documentation

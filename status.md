@@ -2,6 +2,52 @@
 
 Last updated: 2026-06-07
 
+## 2026-06-07 WSL cargo-test root-cause reduction
+
+- Removed the default debug-symbol load from local dev/test builds by setting
+  `profile.dev.debug=0` and `profile.test.debug=0`; developers can still opt in
+  with `CARGO_PROFILE_DEV_DEBUG=line-tables-only` or
+  `CARGO_PROFILE_TEST_DEBUG=line-tables-only` when actively debugging.
+- Kept long plain `cargo test` runs conservative by default:
+  `build.jobs=1`, `RUST_TEST_THREADS=1`, and `profile.test.incremental=false`
+  prevent WSL from stacking multiple high-RSS `rustc` processes, libtest
+  thread fans, and incremental-query cache growth.
+- Disabled Cargo's automatic one-file-one-binary integration-test discovery for
+  the highest-count crates and replaced it with explicit grouped harnesses:
+  `ivm`, `norito`, `iroha_core`, `iroha_data_model`, `iroha_crypto`, and
+  `iroha_torii`. The six crates now expose `32` test targets instead of `805`,
+  while grouped coverage accounts for `797` intended scenario files with only
+  explicit feature-gated targets and fixture/helper files excluded.
+- Hardened `scripts/run_full_tests.sh --wsl-safe` so the fast workspace suite
+  runs one package at a time, sets `CARGO_INCREMENTAL=0`, serializes network
+  tests, checks `/proc/meminfo` `MemAvailable` before each Cargo step, and
+  writes memory/cgroup/disk/top-RSS snapshots to
+  `<target-dir>/run_full_tests_resources.log` by default.
+- Remaining known hotspot: `iroha_data_model` still peaks around `10 GiB` RSS
+  as a single stripped-debuginfo Rust compile on this WSL host. The current
+  fix prevents that peak from being multiplied by Cargo parallelism and
+  duplicate integration-test linking; further reduction requires splitting or
+  simplifying the data-model compile surface.
+- Validation:
+  - `cargo fmt --all`
+  - `bash -n scripts/run_full_tests.sh`
+  - `scripts/run_full_tests.sh --help`
+  - `scripts/run_full_tests.sh --wsl-safe --target-dir /tmp/iroha-run-full-tests-wsl-guard-check --min-available-mib 999999`
+    (exited `75` before starting `cargo build --workspace`)
+  - `cargo metadata --no-deps --format-version 1 | python3 -c '...'`
+    (`ivm=10`, `norito=6`, `iroha_core=6`, `iroha_data_model=3`,
+    `iroha_crypto=1`, `iroha_torii=6` test targets)
+  - Grouped coverage audit:
+    `ivm 303/303`, `norito 169/169`, `iroha_core 138/138`,
+    `iroha_data_model 60/60`, `iroha_crypto 32/32`, `iroha_torii 95/95`
+  - `CARGO_BUILD_JOBS=1 cargo test -p norito --tests --no-run`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_crypto --tests --no-run`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_data_model --tests --no-run`
+  - `CARGO_BUILD_JOBS=1 cargo test -p ivm --tests --no-run`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_core --tests --no-run`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_torii --tests --no-run`
+  - `git diff --check`
+
 ## 2026-06-07 Sumeragi commit-pipeline recovery aggregate exactness
 
 - Added `LocalCommitQcOrderingExact`, `MissingCommitQcRecoveryGateExact`,

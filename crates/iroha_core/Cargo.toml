@@ -1,5 +1,6 @@
 [package]
 name = "iroha_core"
+autotests = false
 build = "build.rs"
 
 edition.workspace = true
@@ -259,3 +260,25 @@ skip_optional_dependencies = true
 name = "kaigi_privacy"
 path = "tests/kaigi_privacy.rs"
 required-features = ["zk-tests"]
+
+# Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
+
+[[test]]
+name = "iroha_core_group_01"
+path = "tests/grouped/group_01.rs"
+
+[[test]]
+name = "iroha_core_group_02"
+path = "tests/grouped/group_02.rs"
+
+[[test]]
+name = "iroha_core_group_03"
+path = "tests/grouped/group_03.rs"
+
+[[test]]
+name = "iroha_core_group_04"
+path = "tests/grouped/group_04.rs"
+
+[[test]]
+name = "iroha_core_group_05"
+path = "tests/grouped/group_05.rs"
