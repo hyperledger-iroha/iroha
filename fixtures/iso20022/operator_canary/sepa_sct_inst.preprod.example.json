@@ -3,7 +3,7 @@
   "environment": "preprod",
   "rail": {
     "inbox_dir": "sepa-sct-inst/inbox",
-    "torii_base_url": "https://torii.sepa-sct-inst.example.invalid",
+    "torii_base_url": "https://torii.sepa-sct-inst.operator-canary.bank",
     "receipt_dir": "sepa-sct-inst/receipts/rail",
     "dry_run": false,
     "allow_default_profile": false,
@@ -15,7 +15,7 @@
   "notary": {
     "export_dir": "sepa-sct-inst/audit-export",
     "endpoints": [
-      "https://notary.sepa-sct-inst.example.invalid/iso-anchor"
+      "https://notary.sepa-sct-inst.operator-canary.bank/iso-anchor"
     ],
     "receipt_dir": "sepa-sct-inst/receipts/notary",
     "all": false,
@@ -27,6 +27,8 @@
   "verify": {
     "enabled": true,
     "include_stage_receipts": true,
+    "receipt_dirs": [],
+    "receipts": [],
     "skip_on_stage_failure": true,
     "allow_failed": false,
     "allow_insecure_http": false,

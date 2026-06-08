@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import stat
 import sys
 import tempfile
 from typing import Any
@@ -26,12 +27,18 @@ DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND = (
 )
 
 
-def _sha256_file(path: Path) -> str:
+def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:
+    file_errors = readiness.validate_lineage_local_file(path, label)
+    if file_errors:
+        return None, file_errors
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    try:
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None, [f"{label} could not be read"]
+    return digest.hexdigest(), []
 
 
 def _secret_path_error(path: str | None, label: str) -> str | None:
@@ -89,9 +96,10 @@ def build_evidence(
     errors.extend(_validate_elapsed_seconds(elapsed_seconds))
 
     artifact_digests: dict[str, str] = {}
+    artifact_sizes: dict[str, int] = {}
     for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS:
         path = artifact_dir / artifact
-        file_errors = readiness.validate_lineage_local_file(
+        digest, file_errors = _sha256_file(
             path,
             f"lineage artifact {artifact}",
         )
@@ -101,7 +109,17 @@ def build_evidence(
             else:
                 errors.extend(file_errors)
             continue
-        artifact_digests[artifact] = _sha256_file(path)
+        assert digest is not None
+        try:
+            artifact_size = path.stat().st_size
+        except OSError:
+            errors.append(f"lineage artifact {artifact} size could not be read")
+            continue
+        if artifact_size <= 0:
+            errors.append(f"lineage artifact {artifact} must be non-empty")
+            continue
+        artifact_digests[artifact] = digest
+        artifact_sizes[artifact] = artifact_size
 
     proof_log_digest, proof_log_errors = _validate_proof_log(proof_log)
     errors.extend(proof_log_errors)
@@ -122,6 +140,7 @@ def build_evidence(
             "record_archive_proof_runtime_keygen_env": "unset",
             "circuit_ids": dict(readiness.EXPECTED_LINEAGE_CIRCUIT_IDS),
             "artifacts": artifact_digests,
+            "artifact_size_bytes": artifact_sizes,
             "tests": {
                 "record_archive_proof": {
                     "name": readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"],
@@ -149,26 +168,39 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
     pre_create_dir_errors = validate_artifact_dir_path(artifact_dir)
     if pre_create_dir_errors:
         return pre_create_dir_errors
-    artifact_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return ["--artifact-dir could not be created for evidence validation"]
     post_create_dir_errors = validate_artifact_dir_path(artifact_dir)
     if post_create_dir_errors:
         return post_create_dir_errors
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=artifact_dir,
-        prefix=".lineage-proof-evidence-",
-        suffix=".json",
-        delete=False,
-    ) as handle:
-        path = Path(handle.name)
-        handle.write(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+    path: Path | None = None
     try:
-        result = readiness.check_lineage_proof_evidence(
-            path, require_canonical_filename=False
-        )
-    finally:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=artifact_dir,
+            prefix=".lineage-proof-evidence-",
+            suffix=".json",
+            delete=False,
+        ) as handle:
+            path = Path(handle.name)
+            handle.write(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return ["lineage proof evidence validation file could not be written"]
+    result = readiness.check_lineage_proof_evidence(
+        path, require_canonical_filename=False
+    )
+    try:
         path.unlink(missing_ok=True)
+    except OSError:
+        return ["lineage proof evidence validation file could not be removed"]
     return [item["message"] for item in result["blockers"]]
 
 
@@ -178,7 +210,13 @@ def validate_artifact_dir_path(artifact_dir: Path) -> list[str]:
     secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
     if secret_error is not None:
         return [secret_error]
-    if artifact_dir.is_symlink():
+    try:
+        artifact_dir_mode = artifact_dir.lstat().st_mode
+    except FileNotFoundError:
+        artifact_dir_mode = None
+    except OSError:
+        return ["--artifact-dir metadata could not be read"]
+    if artifact_dir_mode is not None and stat.S_ISLNK(artifact_dir_mode):
         return ["--artifact-dir must not be a symlink"]
     ancestor_errors = device_lab.validate_no_symlink_ancestors(
         artifact_dir,
@@ -186,8 +224,51 @@ def validate_artifact_dir_path(artifact_dir: Path) -> list[str]:
     )
     if ancestor_errors:
         return ancestor_errors
-    if artifact_dir.exists() and not artifact_dir.is_dir():
+    if artifact_dir_mode is None:
+        return []
+    if not stat.S_ISDIR(artifact_dir_mode):
         return ["--artifact-dir must be a directory"]
+    return []
+
+
+def _resolve_corridor_path(path: Path, label: str) -> tuple[Path | None, list[str]]:
+    try:
+        return path.resolve(), []
+    except OSError:
+        return None, [f"{label} could not be resolved"]
+
+
+def _same_resolved_parent(child: Path, parent: Path) -> tuple[bool | None, list[str]]:
+    child_parent, child_errors = _resolve_corridor_path(child.parent, "--proof-log parent")
+    if child_errors:
+        return None, child_errors
+    parent_resolved, parent_errors = _resolve_corridor_path(parent, "--artifact-dir")
+    if parent_errors:
+        return None, parent_errors
+    assert child_parent is not None
+    assert parent_resolved is not None
+    return child_parent == parent_resolved, []
+
+
+def validate_output_corridor(out_path: Path, artifact_dir: Path) -> list[str]:
+    """Validate that --out resolves directly under --artifact-dir."""
+
+    output_parent, output_parent_errors = _resolve_corridor_path(
+        out_path.parent,
+        "--out parent",
+    )
+    if output_parent_errors:
+        return output_parent_errors
+    artifact_dir_resolved, artifact_dir_errors = _resolve_corridor_path(
+        artifact_dir,
+        "--artifact-dir",
+    )
+    if artifact_dir_errors:
+        return artifact_dir_errors
+    assert output_parent is not None
+    assert artifact_dir_resolved is not None
+    if output_parent != artifact_dir_resolved:
+        return ["--out must be written directly under --artifact-dir"]
     return []
 
 
@@ -209,10 +290,10 @@ def validate_lineage_input_paths(artifact_dir: Path, proof_log: Path) -> list[st
     expected_proof_log_name = readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
         "record_archive_proof"
     ]
-    if (
-        proof_log.name != expected_proof_log_name
-        or proof_log.parent.resolve() != artifact_dir.resolve()
-    ):
+    same_parent, corridor_errors = _same_resolved_parent(proof_log, artifact_dir)
+    if corridor_errors:
+        return corridor_errors
+    if proof_log.name != expected_proof_log_name or not same_parent:
         return [
             "--proof-log must be written directly under --artifact-dir as "
             f"{expected_proof_log_name}"
@@ -227,34 +308,76 @@ def preflight_output_path(path: Path, label: str) -> list[str]:
     if secret_error is not None:
         return [secret_error]
     parent = path.parent
-    if parent.exists():
-        if parent.is_symlink():
-            return [f"{label} parent directory must not be a symlink"]
-        if not parent.is_dir():
-            return [f"{label} parent must be a directory"]
+    parent_exists, parent_errors = _validate_output_parent(path, label)
+    if parent_errors:
+        return parent_errors
     output_ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
         f"{label} ancestor directory",
     )
     if output_ancestor_errors:
         return output_ancestor_errors
-    if not parent.exists():
+    if not parent_exists:
         try:
             parent.mkdir(parents=True, exist_ok=True)
         except OSError:
             return [f"{label} parent directory could not be created"]
-    if path.exists():
-        if path.is_symlink():
-            return [f"{label} must not be a symlink"]
-        if not path.is_file():
-            return [f"{label} must be a regular file"]
-        try:
-            link_count = path.stat().st_nlink
-        except OSError:
-            return [f"{label} hardlink metadata could not be read"]
-        if link_count > 1:
-            return [f"{label} must not be hardlinked"]
+    parent_exists, parent_errors = _validate_output_parent(
+        path,
+        label,
+        missing_error=f"{label} parent must be a directory",
+    )
+    if parent_errors:
+        return parent_errors
+    if not parent_exists:
+        return [f"{label} parent must be a directory"]
+    output_ancestor_errors = device_lab.validate_no_symlink_ancestors(
+        path,
+        f"{label} ancestor directory",
+    )
+    if output_ancestor_errors:
+        return output_ancestor_errors
+    try:
+        output_mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} file metadata could not be read"]
+    if stat.S_ISLNK(output_mode):
+        return [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(output_mode):
+        return [f"{label} must be a regular file"]
+    try:
+        link_count = path.stat().st_nlink
+    except OSError:
+        return [f"{label} hardlink metadata could not be read"]
+    if link_count > 1:
+        return [f"{label} must not be hardlinked"]
     return []
+
+
+def _validate_output_parent(
+    path: Path,
+    label: str,
+    *,
+    missing_error: str | None = None,
+) -> tuple[bool, list[str]]:
+    """Classify an output parent without following symlink aliases."""
+
+    parent = path.parent
+    try:
+        parent_mode = parent.lstat().st_mode
+    except FileNotFoundError:
+        if missing_error is None:
+            return False, []
+        return False, [missing_error]
+    except OSError:
+        return False, [f"{label} parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_mode):
+        return True, [f"{label} parent directory must not be a symlink"]
+    if not stat.S_ISDIR(parent_mode):
+        return True, [f"{label} parent must be a directory"]
+    return True, []
 
 
 def validate_output_path(path: Path, label: str) -> list[str]:
@@ -267,7 +390,10 @@ def validate_output_path(path: Path, label: str) -> list[str]:
     if errors:
         return errors
     parent = path.parent
-    if not parent.exists():
+    parent_exists, parent_errors = _validate_output_parent(path, label)
+    if parent_errors:
+        return parent_errors
+    if not parent_exists:
         try:
             parent.mkdir(parents=True, exist_ok=True)
         except OSError:
@@ -279,7 +405,13 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     errors = validate_output_path(path, "--out")
     if errors:
         return errors
-    path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        path.write_text(
+            json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+    except OSError:
+        return ["--out could not be written"]
     return []
 
 
@@ -338,8 +470,7 @@ def main(argv: list[str] | None = None) -> int:
     proof_log = Path(args.proof_log)
     out_path = Path(args.out)
     path_errors.extend(validate_lineage_input_paths(artifact_dir, proof_log))
-    if out_path.resolve().parent != artifact_dir.resolve():
-        path_errors.append("--out must be written directly under --artifact-dir")
+    path_errors.extend(validate_output_corridor(out_path, artifact_dir))
     if out_path.name != readiness.LINEAGE_PROOF_EVIDENCE_FILENAME:
         path_errors.append(
             f"--out must be named {readiness.LINEAGE_PROOF_EVIDENCE_FILENAME}"

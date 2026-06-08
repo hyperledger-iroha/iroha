@@ -457,7 +457,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                             "--inbox-dir",
                             str(inbox),
                             "--torii-base-url",
-                            "https://torii.example",
+                            "https://torii.local-bank.bank",
                         ]
                     )
 
@@ -1596,6 +1596,12 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("https://torii.example/base;debug", False),
             ("https://torii.example?token=abc", False),
             ("https://torii.example#fragment", False),
+            ("https://torii.example", False),
+            ("https://torii.example.com", False),
+            ("https://torii.example.net/base", False),
+            ("https://torii.example.org/base", False),
+            ("https://torii.example.invalid/base", False),
+            ("https://torii.swift-cbpr-plus.operator-canary.bank/base", False),
             ("https:///v1", False),
             ("https://[::1", False),
             ("https://torii.example/iso\nbridge", False),
@@ -1639,6 +1645,8 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("http://127.0.0.1?token=abc", True),
             ("http://127.0.0.1:80", True),
             ("http://127.000.000.001", True),
+            ("http://torii.example.invalid", True),
+            ("http://torii.swift-cbpr-plus.operator-canary.bank", True),
         ]
         with tempfile.TemporaryDirectory() as raw_inbox:
             inbox = Path(raw_inbox)
@@ -1783,13 +1791,17 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
 
     def test_secret_looking_torii_response_preview_is_redacted(self):
         cases = (
-            b'{"error":"token=rail-secret"}',
-            b'{"error":"password=rail-secret"}',
-            b'{"error":"%70assword%253Drail-secret"}',
-            b'{"error":"private-key=rail-secret"}',
-            b'{"error":"Set-Cookie: rail-secret"}',
+            (b'{"error":"token=rail-secret"}', "rail-secret"),
+            (b'{"error":"password=rail-secret"}', "rail-secret"),
+            (b'{"error":"%70assword%253Drail-secret"}', "rail-secret"),
+            (b'{"error":"private-key=rail-secret"}', "rail-secret"),
+            (b'{"error":"Set-Cookie: rail-secret"}', "rail-secret"),
+            (
+                b'{"error":"token-rail-response-secret"}',
+                "rail-response-secret",
+            ),
         )
-        for body in cases:
+        for body, hidden in cases:
             with self.subTest(body=body):
                 with tempfile.TemporaryDirectory() as raw_inbox:
                     inbox = Path(raw_inbox)
@@ -1822,7 +1834,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                         receipt["response_body_preview"],
                         ADAPTER.REDACTED_RESPONSE_PREVIEW,
                     )
-                    self.assertNotIn("rail-secret", receipt_text)
+                    self.assertNotIn(hidden, receipt_text)
                     self.assertTrue(receipt_digest_matches(receipt))
 
     def test_secret_looking_url_error_is_redacted(self):
@@ -1840,6 +1852,10 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
         )
         self.assertEqual(
             ADAPTER._receipt_error("upstream private-key=rail-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream token-rail-url-secret"),
             ADAPTER.REDACTED_ERROR,
         )
         self.assertEqual(ADAPTER._receipt_error("connection refused"), "connection refused")

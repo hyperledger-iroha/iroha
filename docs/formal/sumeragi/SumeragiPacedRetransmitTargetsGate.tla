@@ -58,6 +58,35 @@ Cases == {
   DedupBeforeSortWouldDiffer
 }
 
+FailClosedCases == {
+  ZeroLimit,
+  EmptyTargets
+}
+
+PreCapPreserveCases == {
+  UnderLimitPreservesOrder,
+  EqualLimitPreservesDuplicates
+}
+
+SortDedupCases == {
+  OverLimitDedupFits,
+  OverLimitSortsBeforeTruncate,
+  DedupBeforeSortWouldDiffer
+}
+
+RotationOffsetCases == {
+  RotateByOne,
+  RotateByLast,
+  OffsetModulo,
+  HeightOffset,
+  ViewOffset
+}
+
+LimitTruncationCases == {
+  OverLimitSortsBeforeTruncate,
+  LimitOne
+}
+
 Bugs == {
   "none",
   "zero_limit_selects",
@@ -82,6 +111,12 @@ Bugs == {
 \* Output tuple: <<selected_count, first, second, third>>. Zero means absent.
 \* @type: <<Int, Int, Int, Int>>;
 Empty == <<0, 0, 0, 0>>
+
+TargetLimit(c) ==
+  CASE c = ZeroLimit -> 0
+    [] c = LimitOne -> 1
+    [] c \in PreCapPreserveCases -> 3
+    [] OTHER -> 2
 
 \* @type: <<Int, Int, Int, Int>>;
 OutSelectPeerOne == <<1, 1, 0, 0>>
@@ -177,6 +212,8 @@ ActualOutput(c) ==
          Empty
     [] OTHER -> SpecOutput(c)
 
+ActualCount(c) == ActualOutput(c)[1]
+
 Init == checked = 0
 
 Next == UNCHANGED vars
@@ -187,6 +224,59 @@ TypeInvariant ==
 
 SafetyFast ==
   \A c \in Cases: ActualOutput(c) = SpecOutput(c)
+
+PacedRetransmitFailClosedExact ==
+  \A c \in FailClosedCases:
+    /\ ActualOutput(c) = Empty
+    /\ ActualOutput(c) = SpecOutput(c)
+    /\ ActualCount(c) = 0
+
+PacedRetransmitPreCapPreservationExact ==
+  \A c \in PreCapPreserveCases:
+    /\ ActualOutput(c) = SpecOutput(c)
+    /\ ActualCount(c) <= TargetLimit(c)
+    /\ IF c = UnderLimitPreservesOrder THEN
+         ActualOutput(c) = OutUnderLimitPreserved
+       ELSE TRUE
+    /\ IF c = EqualLimitPreservesDuplicates THEN
+         ActualOutput(c) = OutEqualLimitPreserved
+       ELSE TRUE
+
+PacedRetransmitSortDedupExact ==
+  \A c \in SortDedupCases:
+    /\ ActualOutput(c) = SpecOutput(c)
+    /\ ActualOutput(c) = OutSortedPair
+    /\ ActualCount(c) <= TargetLimit(c)
+
+PacedRetransmitRotationOffsetExact ==
+  \A c \in RotationOffsetCases:
+    /\ ActualOutput(c) = SpecOutput(c)
+    /\ ActualCount(c) <= TargetLimit(c)
+    /\ ActualOutput(c) # Empty
+    /\ IF c \in {RotateByOne, ViewOffset} THEN
+         ActualOutput(c) = OutRotatedOne
+       ELSE TRUE
+    /\ IF c = RotateByLast THEN ActualOutput(c) = OutRotatedLast ELSE TRUE
+    /\ IF c \in {OffsetModulo, HeightOffset} THEN
+         ActualOutput(c) = OutOffsetThreeFour
+       ELSE TRUE
+
+PacedRetransmitLimitTruncationExact ==
+  \A c \in LimitTruncationCases:
+    /\ ActualOutput(c) = SpecOutput(c)
+    /\ ActualCount(c) = TargetLimit(c)
+    /\ IF c = LimitOne THEN ActualOutput(c) = OutLimitOnePeerThree ELSE TRUE
+    /\ IF c = OverLimitSortsBeforeTruncate THEN
+         ActualOutput(c) = OutSortedPair
+       ELSE TRUE
+
+PacedRetransmitTargetSelectionExactness ==
+  /\ SafetyFast
+  /\ PacedRetransmitFailClosedExact
+  /\ PacedRetransmitPreCapPreservationExact
+  /\ PacedRetransmitSortDedupExact
+  /\ PacedRetransmitRotationOffsetExact
+  /\ PacedRetransmitLimitTruncationExact
 
 BugZeroLimitSelects ==
   Bug # "zero_limit_selects" \/ OutSelectPeerOne = Empty

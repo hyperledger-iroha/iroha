@@ -14,7 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from typing import Any, Iterable, List
+from typing import Any, Iterable
 
 
 EXPECTED_DIRS: tuple[str, ...] = ("telemetry", "attestation", "queue", "logs")
@@ -99,6 +99,10 @@ ATTESTATION_CERTIFICATE_CHAIN_SUFFIXES = (".der", ".pem")
 MAX_ATTESTATION_CERTIFICATE_CHAIN_BYTES = 64 * 1024
 SIGNED_EVIDENCE_SIGNATURE_ALGORITHMS = {"ed25519"}
 REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 7
+ABI7_RECURSIVE_COMPACT_ONE_HOP_JNI_PROBE_STATES = {"one_hop_verified"}
+ABI7_RECURSIVE_COMPACT_MULTI_HOP_PROVER_STATES = {
+    "multi_hop_proof_composition_unavailable"
+}
 SIGNED_EVIDENCE_SLOT_STRING_FIELDS: tuple[str, ...] = (
     "slot_id",
     "device_family",
@@ -297,8 +301,43 @@ STRONGBOX_LEVELS = {"STRONGBOX", "STRONG_BOX"}
 SECRET_PATH_REDACTION = "<redacted-secret-path>"
 
 
-def _slot_files(slot_path: Path) -> set[str]:
-    if slot_path.is_symlink() or not slot_path.is_dir():
+def _slot_root_entries(slot_path: Path, errors: list[str]) -> list[Path] | None:
+    try:
+        return list(slot_path.iterdir())
+    except OSError:
+        _append_error_once(errors, "slot directory could not be listed")
+        return None
+
+
+def _record_manifest_inventory_entry(
+    slot_path: Path,
+    entry: Path,
+    files: set[str],
+    errors: list[str],
+) -> None:
+    relative = entry.relative_to(slot_path).as_posix()
+    try:
+        mode = entry.lstat().st_mode
+    except OSError:
+        _append_error_once(
+            errors,
+            f"slot artifact {_display_path(relative)} file metadata could not be read",
+        )
+        return
+    if stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+        files.add(relative)
+
+
+def _slot_files(slot_path: Path, errors: list[str] | None = None) -> set[str]:
+    slot_errors = errors if errors is not None else []
+    try:
+        slot_mode = slot_path.lstat().st_mode
+    except FileNotFoundError:
+        return set()
+    except OSError:
+        _append_error_once(slot_errors, "slot directory metadata could not be read")
+        return set()
+    if stat.S_ISLNK(slot_mode) or not stat.S_ISDIR(slot_mode):
         return set()
     if SECRET_RE.search(str(slot_path)):
         return set()
@@ -307,17 +346,28 @@ def _slot_files(slot_path: Path) -> set[str]:
     files: set[str] = set()
     for dirname in EXPECTED_DIRS + OPTIONAL_EVIDENCE_DIRS:
         dir_path = slot_path / dirname
-        if dir_path.is_symlink() or not dir_path.is_dir():
+        try:
+            dir_mode = dir_path.lstat().st_mode
+        except FileNotFoundError:
             continue
-        for entry in dir_path.rglob("*"):
-            if entry.is_file() or entry.is_symlink():
-                files.add(entry.relative_to(slot_path).as_posix())
+        except OSError:
+            _append_error_once(slot_errors, f"{dirname}/ metadata could not be read")
+            continue
+        if stat.S_ISLNK(dir_mode) or not stat.S_ISDIR(dir_mode):
+            continue
+        entries = _slot_tree_entries(dir_path, f"{dirname}/", slot_errors)
+        if entries is None:
+            continue
+        for entry in entries:
+            _record_manifest_inventory_entry(slot_path, entry, files, slot_errors)
     skipped_roots = {"sha256sum.txt", *EXPECTED_DIRS, *OPTIONAL_EVIDENCE_DIRS}
-    for entry in slot_path.iterdir():
+    root_entries = _slot_root_entries(slot_path, slot_errors)
+    if root_entries is None:
+        return files
+    for entry in root_entries:
         if entry.name in skipped_roots:
             continue
-        if entry.is_file() or entry.is_symlink():
-            files.add(entry.relative_to(slot_path).as_posix())
+        _record_manifest_inventory_entry(slot_path, entry, files, slot_errors)
     return files
 
 
@@ -326,9 +376,12 @@ def _slot_relative_symlink_ancestor(slot_path: Path, relative: str) -> str | Non
     for part in PurePosixPath(relative).parts[:-1]:
         current = current / part
         try:
-            if current.is_symlink():
-                return current.relative_to(slot_path).as_posix()
+            current_mode = current.lstat().st_mode
+        except FileNotFoundError:
+            continue
         except OSError:
+            return current.relative_to(slot_path).as_posix()
+        if stat.S_ISLNK(current_mode):
             return current.relative_to(slot_path).as_posix()
     return None
 
@@ -339,34 +392,78 @@ def validate_no_slot_symlink_artifacts(slot_path: Path, errors: list[str]) -> No
     if _reject_secret_slot_path(slot_path, errors):
         return
     for relative in ("slot.json", "sha256sum.txt"):
-        if (slot_path / relative).is_symlink():
+        path = slot_path / relative
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        except OSError:
+            _append_error_once(errors, f"{relative} file metadata could not be read")
+            continue
+        if stat.S_ISLNK(mode):
             errors.append(f"{relative} must not be a symlink")
 
     for dirname in EXPECTED_DIRS + OPTIONAL_EVIDENCE_DIRS:
         dir_path = slot_path / dirname
-        if dir_path.is_symlink():
+        try:
+            dir_mode = dir_path.lstat().st_mode
+        except FileNotFoundError:
+            continue
+        except OSError:
+            _append_error_once(errors, f"{dirname}/ metadata could not be read")
+            continue
+        if stat.S_ISLNK(dir_mode):
             errors.append(f"{dirname}/ must not be a symlink")
             continue
-        if not dir_path.exists():
+        if not stat.S_ISDIR(dir_mode):
             continue
-        for entry in dir_path.rglob("*"):
-            if entry.is_symlink():
-                relative = entry.relative_to(slot_path).as_posix()
+        entries = _slot_tree_entries(dir_path, f"{dirname}/", errors)
+        if entries is None:
+            continue
+        for entry in entries:
+            relative = entry.relative_to(slot_path).as_posix()
+            try:
+                entry_mode = entry.lstat().st_mode
+            except OSError:
+                _append_error_once(
+                    errors,
+                    f"slot artifact {_display_path(relative)} file metadata could not be read",
+                )
+                continue
+            if stat.S_ISLNK(entry_mode):
                 errors.append(
                     f"slot artifact {_display_path(relative)} must not be a symlink"
                 )
 
     skipped_roots = {"slot.json", "sha256sum.txt", *EXPECTED_DIRS, *OPTIONAL_EVIDENCE_DIRS}
-    for entry in slot_path.iterdir():
+    root_entries = _slot_root_entries(slot_path, errors)
+    if root_entries is None:
+        return
+    for entry in root_entries:
         if entry.name in skipped_roots:
             continue
-        if entry.is_symlink():
-            relative = entry.relative_to(slot_path).as_posix()
+        relative = entry.relative_to(slot_path).as_posix()
+        try:
+            entry_mode = entry.lstat().st_mode
+        except OSError:
+            _append_error_once(
+                errors,
+                f"slot artifact {_display_path(relative)} file metadata could not be read",
+            )
+            continue
+        if stat.S_ISLNK(entry_mode):
             errors.append(f"slot artifact {_display_path(relative)} must not be a symlink")
 
 
 def _reject_hardlinked_file(path: Path, label: str, errors: list[str]) -> None:
-    if path.is_symlink() or not path.is_file():
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return
+    except OSError:
+        errors.append(f"{label} file metadata could not be read")
+        return
+    if stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
         return
     try:
         link_count = path.stat().st_nlink
@@ -387,22 +484,19 @@ def validate_no_slot_hardlink_artifacts(slot_path: Path, errors: list[str]) -> N
 
     for dirname in EXPECTED_DIRS + OPTIONAL_EVIDENCE_DIRS:
         dir_path = slot_path / dirname
-        if dir_path.is_symlink() or not dir_path.exists():
+        try:
+            dir_mode = dir_path.lstat().st_mode
+        except FileNotFoundError:
             continue
-        for entry in dir_path.rglob("*"):
-            if entry.is_file() and not entry.is_symlink():
-                relative = entry.relative_to(slot_path).as_posix()
-                _reject_hardlinked_file(
-                    entry,
-                    f"slot artifact {_display_path(relative)}",
-                    errors,
-                )
-
-    skipped_roots = {"slot.json", "sha256sum.txt", *EXPECTED_DIRS, *OPTIONAL_EVIDENCE_DIRS}
-    for entry in slot_path.iterdir():
-        if entry.name in skipped_roots:
+        except OSError:
+            _append_error_once(errors, f"{dirname}/ metadata could not be read")
             continue
-        if entry.is_file() and not entry.is_symlink():
+        if stat.S_ISLNK(dir_mode) or not stat.S_ISDIR(dir_mode):
+            continue
+        entries = _slot_tree_entries(dir_path, f"{dirname}/", errors)
+        if entries is None:
+            continue
+        for entry in entries:
             relative = entry.relative_to(slot_path).as_posix()
             _reject_hardlinked_file(
                 entry,
@@ -410,14 +504,30 @@ def validate_no_slot_hardlink_artifacts(slot_path: Path, errors: list[str]) -> N
                 errors,
             )
 
+    skipped_roots = {"slot.json", "sha256sum.txt", *EXPECTED_DIRS, *OPTIONAL_EVIDENCE_DIRS}
+    root_entries = _slot_root_entries(slot_path, errors)
+    if root_entries is None:
+        return
+    for entry in root_entries:
+        if entry.name in skipped_roots:
+            continue
+        relative = entry.relative_to(slot_path).as_posix()
+        _reject_hardlinked_file(
+            entry,
+            f"slot artifact {_display_path(relative)}",
+            errors,
+        )
+
 
 def _reject_non_regular_file(path: Path, label: str, errors: list[str]) -> None:
-    if path.is_symlink() or not path.exists():
-        return
     try:
         mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return
     except OSError:
         errors.append(f"{label} file metadata could not be read")
+        return
+    if stat.S_ISLNK(mode):
         return
     if not stat.S_ISREG(mode):
         errors.append(f"{label} must be a regular file")
@@ -433,38 +543,45 @@ def validate_slot_regular_file_artifacts(slot_path: Path, errors: list[str]) -> 
 
     for dirname in EXPECTED_DIRS + OPTIONAL_EVIDENCE_DIRS:
         dir_path = slot_path / dirname
-        if dir_path.is_symlink() or not dir_path.exists():
-            continue
         try:
             mode = dir_path.lstat().st_mode
+        except FileNotFoundError:
+            continue
         except OSError:
             errors.append(f"{dirname}/ metadata could not be read")
+            continue
+        if stat.S_ISLNK(mode):
             continue
         if not stat.S_ISDIR(mode):
             errors.append(f"{dirname}/ must be a directory")
             continue
-        for entry in dir_path.rglob("*"):
-            if entry.is_symlink():
-                continue
+        entries = _slot_tree_entries(dir_path, f"{dirname}/", errors)
+        if entries is None:
+            continue
+        for entry in entries:
+            relative = entry.relative_to(slot_path).as_posix()
             try:
                 entry_mode = entry.lstat().st_mode
             except OSError:
-                relative = entry.relative_to(slot_path).as_posix()
                 errors.append(
                     f"slot artifact {_display_path(relative)} file metadata could not be read"
                 )
                 continue
+            if stat.S_ISLNK(entry_mode):
+                continue
             if stat.S_ISDIR(entry_mode):
                 continue
             if not stat.S_ISREG(entry_mode):
-                relative = entry.relative_to(slot_path).as_posix()
                 errors.append(
                     f"slot artifact {_display_path(relative)} must be a regular file"
                 )
 
     skipped_roots = {"slot.json", "sha256sum.txt", *EXPECTED_DIRS, *OPTIONAL_EVIDENCE_DIRS}
-    for entry in slot_path.iterdir():
-        if entry.name in skipped_roots or entry.is_symlink():
+    root_entries = _slot_root_entries(slot_path, errors)
+    if root_entries is None:
+        return
+    for entry in root_entries:
+        if entry.name in skipped_roots:
             continue
         _reject_non_regular_file(
             entry,
@@ -548,19 +665,32 @@ def validate_slot_ids(slot_ids: Iterable[str] | None) -> tuple[list[str] | None,
 def validate_device_lab_root_path(root: Path) -> list[str]:
     """Validate the device-lab root before slot discovery."""
 
+    _root_exists, errors = classify_device_lab_root_path(root)
+    return errors
+
+
+def classify_device_lab_root_path(root: Path) -> tuple[bool, list[str]]:
+    """Classify whether the device-lab root exists and is safe for discovery."""
+
     if SECRET_RE.search(str(root)):
-        return ["device-lab root path must not contain secret-looking material"]
-    if root.is_symlink():
-        return ["device-lab root must not be a symlink"]
+        return False, ["device-lab root path must not contain secret-looking material"]
+    try:
+        root_mode = root.lstat().st_mode
+    except FileNotFoundError:
+        root_mode = None
+    except OSError:
+        return False, ["device-lab root metadata could not be read"]
+    if root_mode is not None and stat.S_ISLNK(root_mode):
+        return True, ["device-lab root must not be a symlink"]
     errors = validate_no_symlink_ancestors(
         root,
         "device-lab root ancestor directory",
     )
     if errors:
-        return errors
-    if root.exists() and not root.is_dir():
-        return ["device-lab root must be a directory"]
-    return []
+        return root_mode is not None, errors
+    if root_mode is not None and not stat.S_ISDIR(root_mode):
+        return True, ["device-lab root must be a directory"]
+    return root_mode is not None, []
 
 
 def _reject_secret_slot_path(slot_path: Path, errors: list[str]) -> bool:
@@ -572,30 +702,58 @@ def _reject_secret_slot_path(slot_path: Path, errors: list[str]) -> bool:
     return False
 
 
+def _append_error_once(errors: list[str], message: str) -> None:
+    if message not in errors:
+        errors.append(message)
+
+
+def _slot_tree_entries(
+    dir_path: Path, label: str, errors: list[str]
+) -> list[Path] | None:
+    try:
+        return list(dir_path.rglob("*"))
+    except OSError:
+        _append_error_once(errors, f"{label} could not be listed")
+        return None
+
+
 def validate_no_symlink_ancestors(path: Path, label: str) -> list[str]:
     """Reject symlinked parent directories without leaking local paths."""
 
-    candidate = path if path.is_absolute() else Path.cwd() / path
+    if path.is_absolute():
+        candidate = path
+    else:
+        try:
+            candidate = Path.cwd() / path
+        except OSError:
+            return [f"{label} metadata could not be read"]
     errors: list[str] = []
     for ancestor in candidate.parents:
         if ancestor.is_absolute() and len(ancestor.parts) <= 2:
             continue
         try:
-            if ancestor.is_symlink():
-                errors.append(f"{label} must not be a symlink")
-                break
+            ancestor_mode = ancestor.lstat().st_mode
+        except FileNotFoundError:
+            continue
         except OSError:
             errors.append(f"{label} metadata could not be read")
             break
-        if not ancestor.exists():
-            continue
+        if stat.S_ISLNK(ancestor_mode):
+            errors.append(f"{label} must not be a symlink")
+            break
     return errors
 
 
 def _validate_manifest_slot_path(slot_path: Path) -> list[str]:
     if SECRET_RE.search(str(slot_path)):
         return ["slot path must not contain secret-looking material"]
-    if slot_path.is_symlink():
+    try:
+        slot_mode = slot_path.lstat().st_mode
+    except FileNotFoundError:
+        slot_mode = None
+    except OSError:
+        return ["slot directory metadata could not be read"]
+    if slot_mode is not None and stat.S_ISLNK(slot_mode):
         return ["slot directory must not be a symlink"]
     return validate_no_symlink_ancestors(slot_path, "slot ancestor directory")
 
@@ -609,19 +767,26 @@ def parse_sha256_manifest(slot_path: Path) -> tuple[dict[str, str], list[str]]:
         return entries, root_errors
     errors: list[str] = []
     manifest_path = slot_path / "sha256sum.txt"
-    if manifest_path.is_symlink():
-        return entries, ["sha256sum.txt must not be a symlink"]
-    if manifest_path.exists() and not manifest_path.is_file():
-        return entries, ["sha256sum.txt must be a regular file"]
-    if not manifest_path.is_file():
+    try:
+        manifest_mode = manifest_path.lstat().st_mode
+    except FileNotFoundError:
         return entries, ["missing sha256sum.txt"]
+    except OSError:
+        return entries, ["sha256sum.txt file metadata could not be read"]
+    if stat.S_ISLNK(manifest_mode):
+        return entries, ["sha256sum.txt must not be a symlink"]
+    if not stat.S_ISREG(manifest_mode):
+        return entries, ["sha256sum.txt must be a regular file"]
     try:
         if manifest_path.stat().st_nlink > 1:
             return entries, ["sha256sum.txt must not be hardlinked"]
     except OSError:
         return entries, ["sha256sum.txt hardlink metadata could not be read"]
 
-    lines = manifest_path.read_text(encoding="utf-8").splitlines()
+    try:
+        lines = manifest_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return entries, ["sha256sum.txt could not be read"]
     for line_no, raw in enumerate(lines, start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
@@ -663,6 +828,289 @@ def _has_manifest_file_shape_error(errors: list[str]) -> bool:
     )
 
 
+def _slot_artifact_lstat_mode(
+    artifact_path: Path,
+    metadata_error: str,
+) -> tuple[int | None, list[str]]:
+    try:
+        return artifact_path.lstat().st_mode, []
+    except FileNotFoundError:
+        return None, []
+    except OSError:
+        return None, [metadata_error]
+
+
+def _validate_manifest_artifact_for_digest(
+    slot_path: Path,
+    relative: str,
+) -> tuple[Path | None, list[str]]:
+    """Validate one manifest artifact immediately before hashing it."""
+
+    if SECRET_RE.search(str(slot_path)):
+        return None, ["slot path must not contain secret-looking material"]
+    if SECRET_RE.search(relative):
+        return None, ["slot artifacts must not contain secret-looking material"]
+    normalise_errors: list[str] = []
+    safe_relative = _normalise_safe_relative_path(
+        relative,
+        normalise_errors,
+        "sha256sum.txt artifact path",
+        allow_sha_manifest=True,
+    )
+    if normalise_errors:
+        return None, normalise_errors
+    assert safe_relative is not None
+    display = _display_path(safe_relative)
+    artifact_path = slot_path / safe_relative
+    if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:
+        return None, [
+            "sha256sum.txt references artifact under symlink directory "
+            f"{display}"
+        ]
+    mode, mode_errors = _slot_artifact_lstat_mode(
+        artifact_path,
+        f"sha256sum.txt references artifact file metadata could not be read {display}",
+    )
+    if mode_errors:
+        return None, mode_errors
+    if mode is None:
+        return None, [f"sha256sum.txt references missing file {display}"]
+    if stat.S_ISLNK(mode):
+        return None, [f"sha256sum.txt references symlink artifact {display}"]
+    if not stat.S_ISREG(mode):
+        return None, [f"sha256sum.txt references non-regular artifact {display}"]
+    try:
+        link_count = artifact_path.stat().st_nlink
+    except OSError:
+        return None, [
+            "sha256sum.txt references artifact with unreadable hardlink "
+            f"metadata {display}"
+        ]
+    if link_count > 1:
+        return None, [f"sha256sum.txt references hardlinked artifact {display}"]
+    return artifact_path, []
+
+
+def _manifest_artifact_sha256(
+    slot_path: Path,
+    relative: str,
+) -> tuple[str | None, list[str]]:
+    artifact_path, errors = _validate_manifest_artifact_for_digest(slot_path, relative)
+    if errors:
+        return None, errors
+    assert artifact_path is not None
+    try:
+        payload = artifact_path.read_bytes()
+    except OSError:
+        return None, [
+            "sha256sum.txt references artifact that could not be read "
+            f"{_display_path(relative)}"
+        ]
+    return hashlib.sha256(payload).hexdigest(), []
+
+
+def _validate_signed_evidence_artifact_for_digest(
+    slot_path: Path,
+    relative: str,
+) -> tuple[Path | None, list[str]]:
+    """Validate one signed-evidence artifact immediately before hashing it."""
+
+    if SECRET_RE.search(str(slot_path)):
+        return None, ["slot path must not contain secret-looking material"]
+    if SECRET_RE.search(relative):
+        return None, [
+            "signed evidence artifact digest path must not contain secret-looking material"
+        ]
+    normalise_errors: list[str] = []
+    safe_relative = _normalise_safe_relative_path(
+        relative,
+        normalise_errors,
+        "signed evidence artifact digest path",
+    )
+    if normalise_errors:
+        return None, normalise_errors
+    assert safe_relative is not None
+    display = _display_path(safe_relative)
+    artifact_path = slot_path / safe_relative
+    if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:
+        return None, [
+            "signed evidence artifact digest references artifact under "
+            f"symlink directory {display}"
+        ]
+    mode, mode_errors = _slot_artifact_lstat_mode(
+        artifact_path,
+        "signed evidence artifact digest references artifact file metadata "
+        f"could not be read {display}",
+    )
+    if mode_errors:
+        return None, mode_errors
+    if mode is None:
+        return None, [
+            "signed evidence artifact required slot artifact is missing "
+            f"{display}"
+        ]
+    if stat.S_ISLNK(mode):
+        return None, [
+            f"signed evidence artifact digest references symlink artifact {display}"
+        ]
+    if not stat.S_ISREG(mode):
+        return None, [
+            f"signed evidence artifact digest references non-regular artifact {display}"
+        ]
+    try:
+        link_count = artifact_path.stat().st_nlink
+    except OSError:
+        return None, [
+            "signed evidence artifact digest references artifact with unreadable "
+            f"hardlink metadata {display}"
+        ]
+    if link_count > 1:
+        return None, [
+            f"signed evidence artifact digest references hardlinked artifact {display}"
+        ]
+    return artifact_path, []
+
+
+def _signed_evidence_artifact_sha256(
+    slot_path: Path,
+    relative: str,
+) -> tuple[str | None, list[str]]:
+    artifact_path, errors = _validate_signed_evidence_artifact_for_digest(
+        slot_path,
+        relative,
+    )
+    if errors:
+        return None, errors
+    assert artifact_path is not None
+    try:
+        payload = artifact_path.read_bytes()
+    except OSError:
+        return None, [
+            "signed evidence artifact digest references artifact that could not be read "
+            f"{_display_path(relative)}"
+        ]
+    return hashlib.sha256(payload).hexdigest(), []
+
+
+def _validate_metadata_artifact_for_read(
+    slot_path: Path,
+    relative: str,
+    label: str,
+    missing_error: str,
+) -> tuple[Path | None, list[str]]:
+    """Validate a slot-relative metadata artifact immediately before reading it."""
+
+    if SECRET_RE.search(str(slot_path)):
+        return None, ["slot path must not contain secret-looking material"]
+    if SECRET_RE.search(relative):
+        return None, [f"{label} must not contain secret-looking material"]
+    normalise_errors: list[str] = []
+    safe_relative = _normalise_safe_relative_path(
+        relative,
+        normalise_errors,
+        label,
+    )
+    if normalise_errors:
+        return None, normalise_errors
+    assert safe_relative is not None
+    display = _display_path(safe_relative)
+    artifact_path = slot_path / safe_relative
+    if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:
+        return None, [f"{label} references artifact under symlink directory {display}"]
+    mode, mode_errors = _slot_artifact_lstat_mode(
+        artifact_path,
+        f"{label} references artifact file metadata could not be read {display}",
+    )
+    if mode_errors:
+        return None, mode_errors
+    if mode is None:
+        return None, [missing_error]
+    if stat.S_ISLNK(mode):
+        return None, [f"{label} references symlink artifact {display}"]
+    if not stat.S_ISREG(mode):
+        return None, [f"{label} references non-regular artifact {display}"]
+    try:
+        link_count = artifact_path.stat().st_nlink
+    except OSError:
+        return None, [
+            f"{label} references artifact with unreadable hardlink metadata {display}"
+        ]
+    if link_count > 1:
+        return None, [f"{label} references hardlinked artifact {display}"]
+    return artifact_path, []
+
+
+def _metadata_artifact_bytes_and_sha256(
+    slot_path: Path,
+    relative: str,
+    label: str,
+    missing_error: str,
+) -> tuple[bytes | None, str | None, list[str]]:
+    """Validate a slot.json-referenced artifact immediately before reading it."""
+
+    artifact_path, errors = _validate_metadata_artifact_for_read(
+        slot_path,
+        relative,
+        label,
+        missing_error,
+    )
+    if errors:
+        return None, None, errors
+    assert artifact_path is not None
+    try:
+        artifact_bytes = artifact_path.read_bytes()
+    except OSError:
+        return None, None, [f"{label} could not be read"]
+    return artifact_bytes, hashlib.sha256(artifact_bytes).hexdigest(), []
+
+
+def _metadata_artifact_text(
+    slot_path: Path,
+    relative: str,
+    label: str,
+    missing_error: str,
+    unreadable_error: str,
+    *,
+    decode_errors: str = "strict",
+) -> tuple[str | None, list[str]]:
+    """Validate a slot-relative text artifact immediately before reading it."""
+
+    artifact_path, errors = _validate_metadata_artifact_for_read(
+        slot_path,
+        relative,
+        label,
+        missing_error,
+    )
+    if errors:
+        return None, errors
+    assert artifact_path is not None
+    try:
+        return artifact_path.read_text(
+            encoding="utf-8",
+            errors=decode_errors,
+        ), []
+    except (OSError, UnicodeDecodeError):
+        return None, [unreadable_error]
+
+
+def _should_read_optional_text_artifact(
+    slot_path: Path,
+    relative: str,
+    label: str,
+    errors: list[str],
+) -> bool:
+    mode, mode_errors = _slot_artifact_lstat_mode(
+        slot_path / relative,
+        f"{label} file metadata could not be read",
+    )
+    if mode_errors:
+        errors.extend(mode_errors)
+        return False
+    if mode is None:
+        return False
+    return stat.S_ISLNK(mode) or stat.S_ISREG(mode)
+
+
 def verify_sha256_manifest(slot_path: Path) -> list[str]:
     """Check that sha256sum.txt exactly covers the slot artefacts."""
 
@@ -672,46 +1120,14 @@ def verify_sha256_manifest(slot_path: Path) -> list[str]:
     entries, errors = parse_sha256_manifest(slot_path)
     if _has_manifest_file_shape_error(errors):
         return errors
-    actual_files = _slot_files(slot_path)
+    actual_files = _slot_files(slot_path, errors)
 
     for relative, expected_digest in sorted(entries.items()):
-        path = slot_path / relative
-        if _slot_relative_symlink_ancestor(slot_path, relative) is not None:
-            errors.append(
-                "sha256sum.txt references artifact under symlink directory "
-                f"{_display_path(relative)}"
-            )
+        actual_digest, digest_errors = _manifest_artifact_sha256(slot_path, relative)
+        if digest_errors:
+            errors.extend(digest_errors)
             continue
-        if path.is_symlink():
-            errors.append(
-                f"sha256sum.txt references symlink artifact {_display_path(relative)}"
-            )
-            continue
-        if path.exists() and not path.is_file():
-            errors.append(
-                f"sha256sum.txt references non-regular artifact {_display_path(relative)}"
-            )
-            continue
-        if path.is_file():
-            try:
-                link_count = path.stat().st_nlink
-            except OSError:
-                errors.append(
-                    "sha256sum.txt references artifact with unreadable hardlink "
-                    f"metadata {_display_path(relative)}"
-                )
-                continue
-            if link_count > 1:
-                errors.append(
-                    f"sha256sum.txt references hardlinked artifact {_display_path(relative)}"
-                )
-                continue
-        if not path.is_file():
-            errors.append(
-                f"sha256sum.txt references missing file {_display_path(relative)}"
-            )
-            continue
-        actual_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        assert actual_digest is not None
         if actual_digest != expected_digest:
             errors.append(f"sha256sum.txt digest mismatch for {_display_path(relative)}")
 
@@ -760,14 +1176,19 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
     if json_ancestor_errors:
         errors.extend(json_ancestor_errors)
         return None
-    if path.is_symlink():
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        errors.append(f"missing {label}")
+        return None
+    except OSError:
+        errors.append(f"{label} file metadata could not be read")
+        return None
+    if stat.S_ISLNK(mode):
         errors.append(f"{label} must not be a symlink")
         return None
-    if path.exists() and not path.is_file():
+    if not stat.S_ISREG(mode):
         errors.append(f"{label} must be a regular file")
-        return None
-    if not path.is_file():
-        errors.append(f"missing {label}")
         return None
     try:
         link_count = path.stat().st_nlink
@@ -779,6 +1200,9 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
         return None
     try:
         data = _read_json_without_duplicate_keys(path)
+    except (OSError, UnicodeDecodeError):
+        errors.append(f"{label} could not be read")
+        return None
     except json.JSONDecodeError as exc:
         errors.append(f"{label} is not valid JSON: {exc}")
         return None
@@ -1213,15 +1637,22 @@ def validate_d2d_payment_transcript(
         "queue_after_sha256",
         errors,
     )
-    queue_path = slot_path / "queue" / "pending_queue.json"
-    if not queue_path.is_file():
-        errors.append("d2d payment transcript queue_after_sha256 requires queue/pending_queue.json")
-    elif queue_after_sha256 is not None:
-        actual_queue_digest = hashlib.sha256(queue_path.read_bytes()).hexdigest()
-        if queue_after_sha256 != actual_queue_digest:
-            errors.append(
-                "d2d payment transcript queue_after_sha256 must match queue/pending_queue.json"
-            )
+    _, actual_queue_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
+        slot_path,
+        "queue/pending_queue.json",
+        "d2d payment transcript queue_after_sha256",
+        "d2d payment transcript queue_after_sha256 requires queue/pending_queue.json",
+    )
+    if digest_errors:
+        errors.extend(digest_errors)
+    elif (
+        actual_queue_digest is not None
+        and queue_after_sha256 is not None
+        and queue_after_sha256 != actual_queue_digest
+    ):
+        errors.append(
+            "d2d payment transcript queue_after_sha256 must match queue/pending_queue.json"
+        )
     if (
         queue_before_sha256 is not None
         and queue_after_sha256 is not None
@@ -1260,20 +1691,25 @@ def validate_d2d_payment_transcript_binding(
         errors.append("slot.json d2d_payment_transcript_path must stay under handoff/")
         return relative, digest
 
-    transcript_path = slot_path / relative
-    if not transcript_path.is_file():
-        errors.append("slot.json d2d_payment_transcript_path must point to an existing file")
-        return None, digest
+    _, actual_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
+        slot_path,
+        relative,
+        "slot.json d2d_payment_transcript_path",
+        "slot.json d2d_payment_transcript_path must point to an existing file",
+    )
+    if digest_errors:
+        errors.extend(digest_errors)
+        return relative, None
 
     matched_digest: str | None = None
-    if digest is not None:
-        actual_digest = hashlib.sha256(transcript_path.read_bytes()).hexdigest()
+    if digest is not None and actual_digest is not None:
         if actual_digest != digest:
             errors.append(
                 "slot.json d2d_payment_transcript_sha256 does not match d2d_payment_transcript_path"
             )
         else:
             matched_digest = digest
+    transcript_path = slot_path / relative
     validate_d2d_payment_transcript(slot_path, transcript_path, metadata, errors)
     return relative, matched_digest
 
@@ -1370,20 +1806,25 @@ def validate_wallet_integrity_transcript_binding(
         errors.append("slot.json wallet_integrity_transcript_path must stay under wallet/")
         return relative, digest
 
-    transcript_path = slot_path / relative
-    if not transcript_path.is_file():
-        errors.append("slot.json wallet_integrity_transcript_path must point to an existing file")
-        return relative, digest
+    _, actual_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
+        slot_path,
+        relative,
+        "slot.json wallet_integrity_transcript_path",
+        "slot.json wallet_integrity_transcript_path must point to an existing file",
+    )
+    if digest_errors:
+        errors.extend(digest_errors)
+        return relative, None
 
     matched_digest: str | None = None
-    if digest is not None:
-        actual_digest = hashlib.sha256(transcript_path.read_bytes()).hexdigest()
+    if digest is not None and actual_digest is not None:
         if actual_digest != digest:
             errors.append(
                 "slot.json wallet_integrity_transcript_sha256 does not match wallet_integrity_transcript_path"
             )
         else:
             matched_digest = digest
+    transcript_path = slot_path / relative
     validate_wallet_integrity_transcript(transcript_path, metadata, errors)
     return relative, matched_digest
 
@@ -1493,6 +1934,9 @@ def _openssl_public_key_der(
     except subprocess.CalledProcessError:
         errors.append(f"{label} must be a valid OpenSSL public key")
         return None
+    except OSError:
+        errors.append(f"{label} OpenSSL public key command could not be run")
+        return None
     return completed.stdout
 
 
@@ -1507,7 +1951,14 @@ def _validate_public_key_path_shape(
     if SECRET_RE.search(str(public_key_path)):
         errors.append(f"{label} path must not contain secret-looking material")
         return False
-    if public_key_path.is_symlink():
+    try:
+        public_key_mode = public_key_path.lstat().st_mode
+    except FileNotFoundError:
+        public_key_mode = None
+    except OSError:
+        errors.append(f"{label} file metadata could not be read")
+        return False
+    if public_key_mode is not None and stat.S_ISLNK(public_key_mode):
         errors.append(f"{label} must not be a symlink")
         return False
     ancestor_errors = validate_no_symlink_ancestors(
@@ -1517,11 +1968,11 @@ def _validate_public_key_path_shape(
     if ancestor_errors:
         errors.extend(ancestor_errors)
         return False
-    if public_key_path.exists() and not public_key_path.is_file():
-        errors.append(f"{label} must be a regular file")
-        return False
-    if not public_key_path.is_file():
+    if public_key_mode is None:
         errors.append(f"{label} must point to an existing public key file")
+        return False
+    if not stat.S_ISREG(public_key_mode):
+        errors.append(f"{label} must be a regular file")
         return False
     try:
         link_count = public_key_path.stat().st_nlink
@@ -1566,34 +2017,46 @@ def _verify_ed25519_signature(
     errors: list[str],
     label: str = "trusted signer public key",
 ) -> None:
+    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):
+        return
     openssl = _require_openssl(errors)
     if openssl is None:
         return
-    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):
+    try:
+        with tempfile.TemporaryDirectory(prefix="iroha-kagemusha-evidence-") as temp:
+            temp_path = Path(temp)
+            payload_path = temp_path / "payload.bin"
+            signature_path = temp_path / "signature.bin"
+            try:
+                payload_path.write_bytes(payload)
+                signature_path.write_bytes(signature)
+            except OSError:
+                errors.append("signature verification staging files could not be written")
+                return
+            try:
+                completed = subprocess.run(
+                    [
+                        openssl,
+                        "pkeyutl",
+                        "-verify",
+                        "-pubin",
+                        "-inkey",
+                        str(public_key_path),
+                        "-rawin",
+                        "-in",
+                        str(payload_path),
+                        "-sigfile",
+                        str(signature_path),
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            except OSError:
+                errors.append("signature verification command could not be run")
+                return
+    except OSError:
+        errors.append("signature verification temporary directory could not be created")
         return
-    with tempfile.TemporaryDirectory(prefix="iroha-kagemusha-evidence-") as temp:
-        temp_path = Path(temp)
-        payload_path = temp_path / "payload.bin"
-        signature_path = temp_path / "signature.bin"
-        payload_path.write_bytes(payload)
-        signature_path.write_bytes(signature)
-        completed = subprocess.run(
-            [
-                openssl,
-                "pkeyutl",
-                "-verify",
-                "-pubin",
-                "-inkey",
-                str(public_key_path),
-                "-rawin",
-                "-in",
-                str(payload_path),
-                "-sigfile",
-                str(signature_path),
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
     if completed.returncode != 0:
         errors.append("signed evidence artifact signature verification failed")
 
@@ -1616,11 +2079,13 @@ def _validate_signed_at_utc(value: str | None, errors: list[str]) -> None:
         )
 
 
-def _required_signed_evidence_digest_paths(slot_path: Path) -> list[str]:
+def _required_signed_evidence_digest_paths(
+    slot_path: Path, errors: list[str] | None = None
+) -> list[str]:
     return sorted(
         {
             relative
-            for relative in _slot_files(slot_path)
+            for relative in _slot_files(slot_path, errors)
             if relative.split("/", 1)[0] in set(EXPECTED_DIRS) | {"handoff", "wallet"}
         }
         | set(REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS)
@@ -1636,7 +2101,14 @@ def validate_required_kagemusha_slot_artifact_shapes(
         return
     for relative in REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS:
         artifact_path = slot_path / relative
-        if not artifact_path.is_file():
+        mode, mode_errors = _slot_artifact_lstat_mode(
+            artifact_path,
+            f"required slot artifact metadata could not be read {relative}",
+        )
+        if mode_errors:
+            errors.extend(mode_errors)
+            continue
+        if mode is None or stat.S_ISLNK(mode) or not stat.S_ISREG(mode):
             continue
         try:
             artifact_size = artifact_path.stat().st_size
@@ -1677,14 +2149,25 @@ def _validate_required_telemetry_artifact(slot_path: Path, errors: list[str]) ->
 
 
 def _validate_required_status_artifact(slot_path: Path, errors: list[str]) -> None:
-    status_path = slot_path / "telemetry" / "status.ndjson"
-    if not status_path.is_file():
+    if not _should_read_optional_text_artifact(
+        slot_path,
+        "telemetry/status.ndjson",
+        "telemetry/status.ndjson",
+        errors,
+    ):
         return
-    try:
-        lines = status_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        errors.append("telemetry/status.ndjson could not be read")
+    text, read_errors = _metadata_artifact_text(
+        slot_path,
+        "telemetry/status.ndjson",
+        "telemetry/status.ndjson",
+        "telemetry/status.ndjson required artifact is missing",
+        "telemetry/status.ndjson could not be read",
+    )
+    if read_errors:
+        errors.extend(read_errors)
         return
+    assert text is not None
+    lines = text.splitlines()
 
     saw_record = False
     saw_ok = False
@@ -1726,14 +2209,25 @@ def _validate_required_status_artifact(slot_path: Path, errors: list[str]) -> No
 
 
 def _validate_required_runtime_log_artifact(slot_path: Path, errors: list[str]) -> None:
-    log_path = slot_path / "logs" / "runtime.log"
-    if not log_path.is_file():
+    if not _should_read_optional_text_artifact(
+        slot_path,
+        "logs/runtime.log",
+        "logs/runtime.log",
+        errors,
+    ):
         return
-    try:
-        text = log_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        errors.append("logs/runtime.log could not be read")
+    text, read_errors = _metadata_artifact_text(
+        slot_path,
+        "logs/runtime.log",
+        "logs/runtime.log",
+        "logs/runtime.log required artifact is missing",
+        "logs/runtime.log could not be read",
+        decode_errors="replace",
+    )
+    if read_errors:
+        errors.extend(read_errors)
         return
+    assert text is not None
     if KAGEMUSHA_RUNTIME_LOG_COMPLETE_MARKER not in text:
         errors.append("logs/runtime.log must contain Kagemusha device-lab completion marker")
     for marker in KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS:
@@ -1861,7 +2355,7 @@ def validate_signed_evidence_artifact(
 
     validate_required_kagemusha_slot_artifact_shapes(slot_path, errors)
 
-    required_paths = _required_signed_evidence_digest_paths(slot_path)
+    required_paths = _required_signed_evidence_digest_paths(slot_path, errors)
     required_path_set = set(required_paths)
     for raw_relative in digests:
         if not isinstance(raw_relative, str):
@@ -1891,14 +2385,14 @@ def validate_signed_evidence_artifact(
                 f"[{_display_path(relative)}] must be lowercase sha256 hex"
             )
             continue
-        artifact_path = slot_path / relative
-        if not artifact_path.is_file():
-            errors.append(
-                "signed evidence artifact required slot artifact is missing "
-                f"{_display_path(relative)}"
-            )
+        actual_digest, digest_errors = _signed_evidence_artifact_sha256(
+            slot_path,
+            relative,
+        )
+        if digest_errors:
+            errors.extend(digest_errors)
             continue
-        actual_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+        assert actual_digest is not None
         if digest != actual_digest:
             errors.append(
                 f"signed evidence artifact digest mismatch for {_display_path(relative)}"
@@ -1992,19 +2486,22 @@ def validate_kagemusha_production_metadata(
                 "slot.json attestation_certificate_chain_path must stay under attestation/"
             )
         else:
-            chain_path = slot_path / chain_relative
-            if not chain_path.is_file():
-                errors.append(
-                    "slot.json attestation_certificate_chain_path must point to an existing file"
+            chain_bytes, actual_chain_digest, digest_errors = (
+                _metadata_artifact_bytes_and_sha256(
+                    slot_path,
+                    chain_relative,
+                    "slot.json attestation_certificate_chain_path",
+                    "slot.json attestation_certificate_chain_path must point to an existing file",
                 )
-            else:
-                chain_bytes = chain_path.read_bytes()
+            )
+            if digest_errors:
+                errors.extend(digest_errors)
+            elif chain_bytes is not None and actual_chain_digest is not None:
                 _validate_attestation_certificate_chain_artifact(
                     chain_relative,
                     chain_bytes,
                     errors,
                 )
-                actual_chain_digest = hashlib.sha256(chain_bytes).hexdigest()
                 if chain_digest is not None:
                     if actual_chain_digest != chain_digest:
                         errors.append(
@@ -2033,11 +2530,15 @@ def validate_kagemusha_production_metadata(
             "slot.json offline_wallet_apk_path",
         )
     if apk_relative is not None:
-        apk_path = slot_path / apk_relative
-        if not apk_path.is_file():
-            errors.append("slot.json offline_wallet_apk_path must point to an existing file")
-        elif apk_digest is not None:
-            actual_apk_digest = hashlib.sha256(apk_path.read_bytes()).hexdigest()
+        _, actual_apk_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
+            slot_path,
+            apk_relative,
+            "slot.json offline_wallet_apk_path",
+            "slot.json offline_wallet_apk_path must point to an existing file",
+        )
+        if digest_errors:
+            errors.extend(digest_errors)
+        elif apk_digest is not None and actual_apk_digest is not None:
             if actual_apk_digest != apk_digest:
                 errors.append(
                     "slot.json offline_wallet_apk_sha256 does not match offline_wallet_apk_path"
@@ -2089,13 +2590,13 @@ def validate_kagemusha_production_metadata(
     _require_status(
         metadata,
         "abi7_recursive_compact_jni_probe",
-        {"unavailable", "fail_closed"},
+        ABI7_RECURSIVE_COMPACT_ONE_HOP_JNI_PROBE_STATES,
         errors,
     )
     _require_status(
         metadata,
         "abi7_recursive_compact_prover_state",
-        {"unavailable", "proof_composition_unavailable", "fail_closed"},
+        ABI7_RECURSIVE_COMPACT_MULTI_HOP_PROVER_STATES,
         errors,
     )
     if family is not None and minimum_os is not None:
@@ -2139,35 +2640,46 @@ def validate_kagemusha_production_metadata(
         artifact_root_ok = False
     if artifact_relative is not None and artifact_root_ok:
         artifact_path = slot_path / artifact_relative
-        if not artifact_path.is_file():
+        _, actual_digest, digest_errors = _metadata_artifact_bytes_and_sha256(
+            slot_path,
+            artifact_relative,
+            "slot.json signed_evidence_artifact_path",
+            "slot.json signed_evidence_artifact_path must point to an existing file",
+        )
+        if digest_errors:
+            errors.extend(digest_errors)
+        elif (
+            actual_digest is not None
+            and digest is not None
+            and SHA256_HEX_RE.fullmatch(digest)
+            and actual_digest != digest
+        ):
             errors.append(
-                "slot.json signed_evidence_artifact_path must point to an existing file"
+                "slot.json signed_evidence_artifact_sha256 does not match signed_evidence_artifact_path"
             )
-        elif digest is not None and SHA256_HEX_RE.fullmatch(digest):
-            actual_digest = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
-            if actual_digest != digest:
-                errors.append(
-                    "slot.json signed_evidence_artifact_sha256 does not match signed_evidence_artifact_path"
+        elif (
+            actual_digest is not None
+            and digest is not None
+            and SHA256_HEX_RE.fullmatch(digest)
+        ):
+            details["signed_evidence_artifact_sha256"] = digest
+            signed_evidence_details = validate_signed_evidence_artifact(
+                slot_path,
+                artifact_path,
+                metadata,
+                trusted_signer_public_keys,
+                errors,
+            )
+            signed_at_utc = signed_evidence_details.get("signed_at_utc")
+            if isinstance(signed_at_utc, str):
+                details["signed_at_utc"] = signed_at_utc
+            signer_public_key_sha256 = signed_evidence_details.get(
+                "signer_public_key_sha256"
+            )
+            if signer_public_key_sha256 is not None:
+                details["signed_evidence_signer_public_key_sha256"] = (
+                    signer_public_key_sha256
                 )
-            else:
-                details["signed_evidence_artifact_sha256"] = digest
-                signed_evidence_details = validate_signed_evidence_artifact(
-                    slot_path,
-                    artifact_path,
-                    metadata,
-                    trusted_signer_public_keys,
-                    errors,
-                )
-                signed_at_utc = signed_evidence_details.get("signed_at_utc")
-                if isinstance(signed_at_utc, str):
-                    details["signed_at_utc"] = signed_at_utc
-                signer_public_key_sha256 = signed_evidence_details.get(
-                    "signer_public_key_sha256"
-                )
-                if signer_public_key_sha256 is not None:
-                    details["signed_evidence_signer_public_key_sha256"] = (
-                        signer_public_key_sha256
-                    )
 
     commands = metadata.get("raw_test_commands")
     if not isinstance(commands, list) or not commands:
@@ -2211,7 +2723,21 @@ def scan_slot(
             "kagemusha": {"required": require_kagemusha_production_evidence},
         }
 
-    if slot_path.is_symlink():
+    try:
+        slot_mode = slot_path.lstat().st_mode
+    except FileNotFoundError:
+        slot_mode = None
+    except OSError:
+        return {
+            "slot": slot_label,
+            "status": "error",
+            "errors": ["slot directory metadata could not be read"],
+            "present": present,
+            "file_counts": file_counts,
+            "kagemusha": {"required": require_kagemusha_production_evidence},
+        }
+
+    if slot_mode is not None and stat.S_ISLNK(slot_mode):
         return {
             "slot": slot_label,
             "status": "error",
@@ -2221,7 +2747,21 @@ def scan_slot(
             "kagemusha": {"required": require_kagemusha_production_evidence},
         }
 
-    if slot_path.parent.is_symlink():
+    try:
+        parent_mode = slot_path.parent.lstat().st_mode
+    except FileNotFoundError:
+        parent_mode = None
+    except OSError:
+        return {
+            "slot": slot_label,
+            "status": "error",
+            "errors": ["slot parent directory metadata could not be read"],
+            "present": present,
+            "file_counts": file_counts,
+            "kagemusha": {"required": require_kagemusha_production_evidence},
+        }
+
+    if parent_mode is not None and stat.S_ISLNK(parent_mode):
         return {
             "slot": slot_label,
             "status": "error",
@@ -2245,7 +2785,7 @@ def scan_slot(
             "kagemusha": {"required": require_kagemusha_production_evidence},
         }
 
-    if not slot_path.is_dir():
+    if slot_mode is None or not stat.S_ISDIR(slot_mode):
         return {
             "slot": slot_label,
             "status": "error",
@@ -2261,18 +2801,30 @@ def scan_slot(
 
     for dirname in EXPECTED_DIRS:
         dir_path = slot_path / dirname
-        exists = dir_path.is_dir()
-        present[dirname] = exists
-        if not exists:
+        directory_present, directory_missing = _slot_expected_directory_present(
+            dir_path,
+            dirname,
+            errors,
+        )
+        present[dirname] = directory_present
+        if directory_missing:
             errors.append(f"missing {dirname}/ directory")
+        if not directory_present:
             continue
-        count = sum(1 for entry in dir_path.rglob("*") if entry.is_file())
+        entries = _slot_tree_entries(dir_path, f"{dirname}/", errors)
+        if entries is None:
+            continue
+        count = _slot_regular_file_count(slot_path, entries, errors)
         file_counts[dirname] = count
         if count == 0:
             errors.append(f"{dirname}/ contains no files")
 
     sha_path = slot_path / "sha256sum.txt"
-    present["sha256sum.txt"] = sha_path.is_file()
+    present["sha256sum.txt"] = _slot_regular_file_present(
+        sha_path,
+        "sha256sum.txt",
+        errors,
+    )
     errors.extend(verify_sha256_manifest(slot_path))
 
     kagemusha: dict[str, Any] = {"required": require_kagemusha_production_evidence}
@@ -2295,11 +2847,85 @@ def scan_slot(
     }
 
 
-def discover_slots(root: Path, slot_ids: Iterable[str] | None) -> List[Path]:
+def _slot_expected_directory_present(
+    dir_path: Path,
+    dirname: str,
+    errors: list[str],
+) -> tuple[bool, bool]:
+    """Return whether an expected slot directory is usable and whether it is missing."""
+
+    try:
+        dir_mode = dir_path.lstat().st_mode
+    except FileNotFoundError:
+        return False, True
+    except OSError:
+        _append_error_once(errors, f"{dirname}/ metadata could not be read")
+        return False, False
+    if stat.S_ISLNK(dir_mode) or not stat.S_ISDIR(dir_mode):
+        return False, False
+    return True, False
+
+
+def _slot_regular_file_count(
+    slot_path: Path,
+    entries: list[Path],
+    errors: list[str],
+) -> int:
+    """Count regular slot artifact files without following aliases."""
+
+    count = 0
+    for entry in entries:
+        relative = entry.relative_to(slot_path).as_posix()
+        try:
+            entry_mode = entry.lstat().st_mode
+        except OSError:
+            _append_error_once(
+                errors,
+                f"slot artifact {_display_path(relative)} file metadata could not be read",
+            )
+            continue
+        if stat.S_ISREG(entry_mode):
+            count += 1
+    return count
+
+
+def _slot_regular_file_present(path: Path, label: str, errors: list[str]) -> bool:
+    """Return whether a slot artifact leaf is a regular file without following aliases."""
+
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return False
+    except OSError:
+        _append_error_once(errors, f"{label} file metadata could not be read")
+        return False
+    return stat.S_ISREG(mode)
+
+
+def discover_slots(
+    root: Path, slot_ids: Iterable[str] | None
+) -> tuple[list[Path], list[str]]:
     """List slot directories under the given root."""
     if slot_ids is not None:
-        return [root / slot for slot in slot_ids]
-    return [p for p in root.iterdir() if p.is_dir()]
+        return [root / slot for slot in slot_ids], []
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return [], ["device-lab root could not be listed"]
+    slots: list[Path] = []
+    errors: list[str] = []
+    for entry in entries:
+        try:
+            entry_mode = entry.lstat().st_mode
+        except OSError:
+            _append_error_once(
+                errors,
+                "device-lab slot directory metadata could not be read",
+            )
+            continue
+        if stat.S_ISDIR(entry_mode) or stat.S_ISLNK(entry_mode):
+            slots.append(entry)
+    return slots, errors
 
 
 def build_summary(
@@ -2351,35 +2977,77 @@ def validate_summary_output_path(path: Path, label: str) -> list[str]:
 
     if SECRET_RE.search(str(path)):
         return [f"{label} must not contain secret-looking material"]
+    parent = path.parent
+    parent_exists, parent_errors = _validate_summary_output_parent(path, label)
+    if parent_errors:
+        return parent_errors
     ancestor_errors = validate_no_symlink_ancestors(
         path,
         f"{label} ancestor directory",
     )
     if ancestor_errors:
         return ancestor_errors
-    parent = path.parent
-    if parent.exists():
-        if parent.is_symlink():
-            return [f"{label} parent directory must not be a symlink"]
-        if not parent.is_dir():
-            return [f"{label} parent must be a directory"]
-    else:
+    if not parent_exists:
         try:
             parent.mkdir(parents=True, exist_ok=True)
         except OSError:
             return [f"{label} parent directory could not be created"]
-    if path.exists() or path.is_symlink():
-        if path.is_symlink():
-            return [f"{label} must not be a symlink"]
-        if not path.is_file():
-            return [f"{label} must be a regular file"]
-        try:
-            link_count = path.stat().st_nlink
-        except OSError:
-            return [f"{label} hardlink metadata could not be read"]
-        if link_count > 1:
-            return [f"{label} must not be hardlinked"]
+    parent_exists, parent_errors = _validate_summary_output_parent(
+        path,
+        label,
+        missing_error=f"{label} parent must be a directory",
+    )
+    if parent_errors:
+        return parent_errors
+    if not parent_exists:
+        return [f"{label} parent must be a directory"]
+    ancestor_errors = validate_no_symlink_ancestors(
+        path,
+        f"{label} ancestor directory",
+    )
+    if ancestor_errors:
+        return ancestor_errors
+    try:
+        output_mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} file metadata could not be read"]
+    if stat.S_ISLNK(output_mode):
+        return [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(output_mode):
+        return [f"{label} must be a regular file"]
+    try:
+        link_count = path.stat().st_nlink
+    except OSError:
+        return [f"{label} hardlink metadata could not be read"]
+    if link_count > 1:
+        return [f"{label} must not be hardlinked"]
     return []
+
+
+def _validate_summary_output_parent(
+    path: Path,
+    label: str,
+    *,
+    missing_error: str | None = None,
+) -> tuple[bool, list[str]]:
+    """Classify a scanner summary output parent without following aliases."""
+
+    parent = path.parent
+    try:
+        parent_mode = parent.lstat().st_mode
+    except FileNotFoundError:
+        if missing_error is None:
+            return False, []
+        return False, [missing_error]
+    except OSError:
+        return False, [f"{label} parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_mode):
+        return True, [f"{label} parent directory must not be a symlink"]
+    if not stat.S_ISDIR(parent_mode):
+        return True, [f"{label} parent must be a directory"]
+    return True, []
 
 
 def write_summary(path: Path, summary: dict) -> list[str]:
@@ -2454,12 +3122,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     root = Path(args.root)
-    root_errors = validate_device_lab_root_path(root)
+    root_exists, root_errors = classify_device_lab_root_path(root)
     if root_errors:
         for error in root_errors:
             print(f"[device-lab] {error}", file=sys.stderr)
         return 1
-    if not root.exists():
+    if not root_exists:
         if args.allow_missing_root:
             print("[device-lab] root missing; skipping")
             return 0
@@ -2472,7 +3140,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[device-lab] {error}", file=sys.stderr)
         return 1
 
-    slot_paths = discover_slots(root, slot_ids)
+    slot_paths, discovery_errors = discover_slots(root, slot_ids)
+    if discovery_errors:
+        for error in discovery_errors:
+            print(f"[device-lab] {error}", file=sys.stderr)
+        return 1
     if not slot_paths:
         if args.require_slot:
             print("[device-lab] no slots found under root", file=sys.stderr)

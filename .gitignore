@@ -115,6 +115,11 @@ local.properties
 **/local.properties
 gradle-app.setting
 java/iroha_android/.gradle-home/
+
+# Taira operator-local runtime inputs; keep populated copies out of public repos.
+configs/soranexus/taira/validator_roster.local.toml
+configs/soranexus/taira/validator_secrets.local.toml
+
 .target_small/
 target-sm/
 /Library/

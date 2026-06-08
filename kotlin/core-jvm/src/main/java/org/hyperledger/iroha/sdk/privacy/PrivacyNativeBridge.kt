@@ -121,22 +121,26 @@ class PrivacyNativeBridge private constructor() {
             if (output == null) {
                 throw IllegalStateException("$label returned no output")
             }
-            if (output.isEmpty()) {
-                throw IllegalStateException("$label returned empty output")
+            try {
+                if (output.isEmpty()) {
+                    throw IllegalStateException("$label returned empty output")
+                }
+                if (output.size > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
+                    throw IllegalStateException("$label returned oversized output")
+                }
+                if (!isValidPrivacyNoritoArchive(output)) {
+                    throw IllegalStateException("$label returned invalid Norito V1 archive")
+                }
+                if (!hasNonEmptyPrivacyNoritoPayload(output)) {
+                    throw IllegalStateException("$label returned empty privacy result payload")
+                }
+                if (!hasPrivacyNoritoSchema(output, expectedSchemaByte)) {
+                    throw IllegalStateException("$label returned unexpected privacy result schema")
+                }
+                return output.copyOf()
+            } finally {
+                output.fill(0)
             }
-            if (output.size > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
-                throw IllegalStateException("$label returned oversized output")
-            }
-            if (!isValidPrivacyNoritoArchive(output)) {
-                throw IllegalStateException("$label returned invalid Norito V1 archive")
-            }
-            if (!hasNonEmptyPrivacyNoritoPayload(output)) {
-                throw IllegalStateException("$label returned empty privacy result payload")
-            }
-            if (!hasPrivacyNoritoSchema(output, expectedSchemaByte)) {
-                throw IllegalStateException("$label returned unexpected privacy result schema")
-            }
-            return output.copyOf()
         }
 
         private fun loadLibrary(): Boolean =
@@ -166,20 +170,24 @@ class PrivacyNativeBridge private constructor() {
         internal fun returnsOutputProbe(
             expectedSchemaByte: Int,
             probe: () -> ByteArray?,
-        ): Boolean =
+        ): Boolean {
             try {
-                val output = probe()
-                output != null &&
-                    output.isNotEmpty() &&
-                    output.size <= PRIVACY_NATIVE_ARCHIVE_MAX_BYTES &&
-                    isValidPrivacyNoritoArchive(output) &&
-                    hasNonEmptyPrivacyNoritoPayload(output) &&
-                    hasPrivacyNoritoSchema(output, expectedSchemaByte)
+                val output = probe() ?: return false
+                try {
+                    return output.isNotEmpty() &&
+                        output.size <= PRIVACY_NATIVE_ARCHIVE_MAX_BYTES &&
+                        isValidPrivacyNoritoArchive(output) &&
+                        hasNonEmptyPrivacyNoritoPayload(output) &&
+                        hasPrivacyNoritoSchema(output, expectedSchemaByte)
+                } finally {
+                    output.fill(0)
+                }
             } catch (_: RuntimeException) {
-                false
+                return false
             } catch (_: LinkageError) {
-                false
+                return false
             }
+        }
 
         internal fun isValidPrivacyNoritoArchive(output: ByteArray?): Boolean {
             if (

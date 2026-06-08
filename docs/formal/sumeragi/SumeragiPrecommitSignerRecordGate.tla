@@ -39,6 +39,37 @@ Cases == {
   "npos_oob_signer"
 }
 
+PermissionedCases == {
+  "permissioned_valid_snapshot_input",
+  "permissioned_below_quorum",
+  "permissioned_len_one"
+}
+
+CommonRejectCases == {
+  "empty_topology",
+  "invalid_bitmap",
+  "empty_aggregate"
+}
+
+NposStakeCases == {
+  "npos_valid",
+  "npos_missing_snapshot",
+  "npos_below_stake",
+  "npos_snapshot_error",
+  "npos_oob_signer"
+}
+
+SnapshotPolicyCases == {
+  "permissioned_valid_snapshot_input",
+  "npos_valid"
+}
+
+AcceptedMetadataCases == {
+  "permissioned_valid_snapshot_input",
+  "permissioned_len_one",
+  "npos_valid"
+}
+
 Mode(c) ==
   IF c \in {
     "npos_valid",
@@ -217,6 +248,33 @@ SpecOutputAnchors ==
 
 SafetyFast ==
   \A c \in Cases: ActualOutput(c) = SpecOutput(c)
+
+PrecommitSignerPermissionedExact ==
+  \A c \in PermissionedCases:
+    ActualOutput(c) = SpecOutput(c)
+
+PrecommitSignerCommonRejectExact ==
+  \A c \in CommonRejectCases:
+    ActualOutput(c) = SpecOutput(c)
+
+PrecommitSignerNposStakeExact ==
+  \A c \in NposStakeCases:
+    ActualOutput(c) = SpecOutput(c)
+
+PrecommitSignerSnapshotPolicyExact ==
+  \A c \in SnapshotPolicyCases:
+    ActualOutput(c) = SpecOutput(c)
+
+PrecommitSignerOutputMetadataExact ==
+  \A c \in AcceptedMetadataCases:
+    ActualOutput(c) = SpecOutput(c)
+
+PrecommitSignerRecordExactness ==
+  /\ PrecommitSignerPermissionedExact
+  /\ PrecommitSignerCommonRejectExact
+  /\ PrecommitSignerNposStakeExact
+  /\ PrecommitSignerSnapshotPolicyExact
+  /\ PrecommitSignerOutputMetadataExact
 
 BugDropPermissionedValid ==
   ActualOutput("permissioned_valid_snapshot_input") =

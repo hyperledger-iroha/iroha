@@ -40,7 +40,7 @@ Quraşdırma və istifadə təlimatları üçün [MOCHI Quickstart](mochi/quicks
 - Yaradılış və əsas material `kagami` çağırışları vasitəsilə istifadəçi tərəfindən təqdim edilən daxiletmələrlə (zəncir identifikatoru, ilkin hesablar, aktivlər) yaradılır.
 - Konfiqurasiya faylları Torii və P2P portlarını, saxlama yollarını, anlıq görüntü parametrlərini və etibarlı həmyaşıd siyahılarını dolduraraq TOML şablonlarından yaradılır. Yaradılmış konfiqurasiyalar hər bir şəbəkə iş sahəsi kataloqunun altında saxlanılır.
 - Nəzarətçi proseslərin həyat dövrlərini izləyir, log səthləri üçün stdout/stderr axınları aparır və sağlamlıq üçün `/status`, `/metrics` və `/configuration` son nöqtələrini sorğulayır.
-- Nazik Torii müştəri təbəqəsi HTTP və WebSocket zənglərini əhatə edir, mümkün olduğu yerlərdə SCALE kodlaşdırma/deşifrəni təkrar tətbiq etməmək üçün Iroha Rust müştəri qutularına söykənir.
+- Nazik Torii müştəri təbəqəsi HTTP və WebSocket zənglərini əhatə edir, mümkün olduğu yerlərdə retired codec kodlaşdırma/deşifrəni təkrar tətbiq etməmək üçün Iroha Rust müştəri qutularına söykənir.
 
 ## `mochi-core` tərəfindən dəstəklənən istifadəçi axınları- **Şəbəkə Yaratma Sihirbazı**: tək və ya dörd həmyaşıdlı profili seçin, kataloqları seçin və şəxsiyyətlər və genezis yaratmaq üçün `kagami`-ə zəng edin.
 - **Lifecycle Controls**: start, stop, restart həmyaşıdları; səth canlı ölçüləri; log quyruqlarını ifşa etmək; iş vaxtı konfiqurasiyasının son nöqtələrini dəyişdirin (məsələn, log səviyyələri).

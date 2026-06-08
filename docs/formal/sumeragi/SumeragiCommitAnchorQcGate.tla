@@ -199,6 +199,21 @@ NoBugInvariant ==
   /\ PruneMatchesLockChange
   /\ StatusMatchesFinalSelections
 
+CommitAnchorSelectionExact ==
+  /\ HighestSelectionMatchesSpec
+  /\ LockedSelectionMatchesSpec
+
+CommitAnchorPruneExact ==
+  PruneMatchesLockChange
+
+CommitAnchorStatusPublicationExact ==
+  StatusMatchesFinalSelections
+
+CommitAnchorQcPromotionExactness ==
+  /\ CommitAnchorSelectionExact
+  /\ CommitAnchorPruneExact
+  /\ CommitAnchorStatusPublicationExact
+
 SafetyFast == NoBugInvariant
 
 BugHighestRegressesToIncoming == NoBugInvariant

@@ -21,7 +21,7 @@ records d'enregistrement et de DA-2 pour les blobs d'enregistrement et d'enregis
 structures de données canoniques, crochets de pipeline de bloc, preuves de clients légers, ici
 Torii/RPC surfaces pour l'admission et la gouvernance
 vérifie les engagements du DA پر بھروسہ کرنے سے پہلے لازمی ہیں۔ Charges utiles تمام
-Code codé en Norito SCALE et JSON ad hoc
+Code codé en Norito retired codec et JSON ad hoc
 
 ## مقاصد
 

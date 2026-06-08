@@ -17,11 +17,11 @@ translator: machine-google-reviewed
 
 በዚህ ፕሮጀክት ላይ ሁሉም ጉልህ ለውጦች በዚህ ፋይል ውስጥ ይመዘገባሉ.
 
-## [ያልተለቀቀ]- የ SCALE ሺም ጣል ያድርጉ; `norito::codec` አሁን በቤተኛ Norito ተከታታይነት ተተግብሯል።
-- የ`parity_scale_codec` አጠቃቀሞችን በ `norito::codec` በሳጥኖች ውስጥ ይተኩ።
+## [ያልተለቀቀ]- የ retired codec ሺም ጣል ያድርጉ; `norito::codec` አሁን በቤተኛ Norito ተከታታይነት ተተግብሯል።
+- የ`retired_codec` አጠቃቀሞችን በ `norito::codec` በሳጥኖች ውስጥ ይተኩ።
 -የመሳሪያ ስራን ወደ ቤተኛ Norito ተከታታይነት ማዛወር ጀምር።
-- የቀረውን `parity-scale-codec` ጥገኝነት ከስራ ቦታ አስወግድ ቤተኛ Norito ተከታታይ።
-- የቀረውን የ SCALE የባህርይ መገለጫዎችን በቤተኛ I18NT0000022X ትግበራዎች ይተኩ እና የተሻሻለውን የኮዴክ ሞጁል እንደገና ይሰይሙ።
+- የቀረውን `retired codec` ጥገኝነት ከስራ ቦታ አስወግድ ቤተኛ Norito ተከታታይ።
+- የቀረውን የ retired codec የባህርይ መገለጫዎችን በቤተኛ I18NT0000022X ትግበራዎች ይተኩ እና የተሻሻለውን የኮዴክ ሞጁል እንደገና ይሰይሙ።
 - `iroha_config_base_derive` እና `iroha_futures_derive` ወደ `iroha_derive` በባህሪ-የተከለሉ ማክሮዎች ያዋህዱ።
 - *(መልቲሲግ)* የባለብዙ ሲግ ባለስልጣናት ቀጥተኛ ፊርማዎችን በተረጋጋ የስህተት ኮድ/ምክንያት ውድቅ ያድርጉ፣ ባለብዙ ሲግ ቲቲኤል ካፕዎችን በጎጆ ማሰራጫዎች ላይ ያስፈጽሙ እና ከማቅረቡ በፊት በCLI ውስጥ ላዩን TTL ካፕ (የኤስዲኬ ፓሪቲ በመጠባበቅ ላይ)።
 - FFI የሥርዓት ማክሮዎችን ወደ `iroha_ffi` ይውሰዱ እና `iroha_ffi_derive` ሣጥን ያስወግዱ።
@@ -242,7 +242,7 @@ translator: machine-google-reviewed
 - TransactionValue ወደ ኮሚትድ ግብይት (#4610) እንደገና ይሰይሙ
 - የግል መለያዎችን በመታወቂያ (#4411) ያረጋግጡ
 - ለግል ቁልፎች መልቲሃሽ ቅርጸት ይጠቀሙ (#4541)
- - `parity_scale_decoder` ወደ `norito_cli` እንደገና ሰይም
+ - `legacy_codec_decoder` ወደ `norito_cli` እንደገና ሰይም
 - ብሎኮችን ወደ Set B validators ላክ
 - `Role` ግልፅ አድርግ (#4886)
 - ከራስጌ (#4890) የብሎክ ሃሽ ያውጡ
@@ -1153,7 +1153,7 @@ translator: machine-google-reviewed
 - hyperledger # 2309: በ CI ውስጥ የዶክ ሙከራዎችን እንደገና አንቃ።
 - hyperledger#2165 codecov install አስወግድ።
 - ከአሁኑ ተጠቃሚዎች ጋር ግጭቶችን ለመከላከል ወደ አዲስ መያዣ ይውሰዱ።
- - hyperledger # 2158 አሻሽል `parity_scale_codec` እና ሌሎች ጥገኞች። (Norito ኮድ)
+ - hyperledger # 2158 አሻሽል `retired_codec` እና ሌሎች ጥገኞች። (Norito ኮድ)
 - ግንባታን ያስተካክሉ።
 - hyperledger # 2461 አሻሽል iroha2 CI.
 - `syn` ያዘምኑ።

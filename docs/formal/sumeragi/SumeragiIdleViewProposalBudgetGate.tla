@@ -334,7 +334,46 @@ RetrySuppressorsStayQuiet ==
     /\ ~retry_requested
     /\ ~retry_after_proposal
 
+IdleViewProposalBudgetPreserveEligibilityExact ==
+  /\ CasePartitionExact
+  /\ PreserveMatchesSpec
+  /\ AllowedDueProposalPreservesBudget
+  /\ NoQueueModeFlipCommitOrEarlyDeadlineDoNotPreserve
+
+IdleViewProposalBudgetPacingExact ==
+  AllowedDueProposalPreservesBudget
+
+IdleViewProposalBudgetHardStopExact ==
+  HardBackpressureDoesNotPreserveBudget
+
+IdleViewProposalBudgetEffectsExact ==
+  /\ IdleRepairDeferralMatchesSpec
+  /\ ProposalSlotReservationMatchesSpec
+  /\ PreserveDefersIdleRepairAndReservesProposal
+  /\ NoPreserveDoesNotReserveProposal
+
+IdleViewProposalBudgetRetryExact ==
+  /\ RetryMatchesSpec
+  /\ RetryOrderingMatchesSpec
+  /\ RetryOnlyAfterSkippedDueProposalWithEmptyFrontier
+  /\ RetryRequiresSkippedProposal
+  /\ RetryRequiresQueuedWork
+  /\ RetryRequiresEmptyFrontier
+  /\ RetryRequiresNoCommitInflight
+  /\ RetryRunsAfterProposalHandling
+  /\ RetrySuppressorsStayQuiet
+
+IdleViewProposalBudgetExactness ==
+  /\ IdleViewProposalBudgetPreserveEligibilityExact
+  /\ IdleViewProposalBudgetPacingExact
+  /\ IdleViewProposalBudgetHardStopExact
+  /\ IdleViewProposalBudgetEffectsExact
+  /\ IdleViewProposalBudgetRetryExact
+
 Safety ==
+  IdleViewProposalBudgetExactness
+
+SafetyBreakdown ==
   /\ CasePartitionExact
   /\ PreserveMatchesSpec
   /\ IdleRepairDeferralMatchesSpec

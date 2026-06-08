@@ -54,6 +54,18 @@ def oversized_json_bytes(limit):
 
 
 class IsoOperatorReceiptVerifyTest(unittest.TestCase):
+    def test_persisted_record_sources_require_records_array(self):
+        with self.assertRaisesRegex(
+            VERIFIER.ReceiptError,
+            "anchor.records must be an array",
+        ):
+            VERIFIER._verify_persisted_record_sources(
+                {},
+                None,
+                "anchor",
+                require_source_files=True,
+            )
+
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
             ("password_receipt_unknown_secret", "receipt_unknown_secret"),
@@ -227,6 +239,74 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 digest,
                 VERIFIER.sha256_hex(VERIFIER._canonical_summary_json_bytes(body)),
             )
+
+    def test_zero_record_notary_receipt_is_rejected_when_source_files_required(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            export_dir.mkdir()
+            empty_index = audit_test.with_digest(
+                {"version": 1, "record_count": 0, "records": []},
+                audit_test.ADAPTER.INDEX_DIGEST_FIELD,
+            )
+            audit_test.write_export(
+                export_dir,
+                index=empty_index,
+                store_dir=root / "store",
+                write_record_sources_flag=True,
+            )
+            anchor = json.loads(
+                (export_dir / audit_test.ADAPTER.LATEST_ANCHOR_FILE).read_text(
+                    encoding="utf-8"
+                )
+            )
+            endpoint = "http://notary.local-bank.bank/iso-anchor"
+            receipt_body = {
+                "version": VERIFIER.RECEIPT_VERSION,
+                "receipt_kind": "iso-audit-notary",
+                "published_at": "2026-06-04T00:00:00+00:00",
+                "endpoint": endpoint,
+                "endpoint_sha256": VERIFIER.sha256_hex(endpoint.encode("utf-8")),
+                "anchor_path": str(export_dir / audit_test.ADAPTER.LATEST_ANCHOR_FILE),
+                "anchor_sha256": anchor[audit_test.ADAPTER.ANCHOR_DIGEST_FIELD],
+                "index_sha256": empty_index[audit_test.ADAPTER.INDEX_DIGEST_FIELD],
+                "record_count": 0,
+                "status_code": 200,
+                "ok": True,
+                "response_body_sha256": VERIFIER.sha256_hex(b"empty"),
+                "response_body_preview": "empty",
+                "error": None,
+            }
+            receipt_body[VERIFIER.RECEIPT_DIGEST_FIELD] = VERIFIER.sha256_hex(
+                VERIFIER._canonical_json_bytes(receipt_body)
+            )
+            receipt = export_dir / "empty-notary.receipt.json"
+            receipt.write_text(
+                json.dumps(receipt_body, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(receipt),
+                    "--allow-insecure-http",
+                    "--require-source-files",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn(
+                "record_count must be positive when source files are required",
+                stderr,
+            )
+
+            rc, stdout, stderr = run_verify(
+                ["--receipt", str(receipt), "--allow-insecure-http"]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            self.assertEqual(json.loads(stdout)["receipts"][0]["record_count"], 0)
 
     def test_duplicate_receipt_paths_and_digests_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -642,6 +722,16 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     "message_type must not contain control characters",
                 ),
                 (
+                    "message type malformed",
+                    lambda body: body.update({"message_type": "PACS.002"}),
+                    "message_type must be lowercase ISO family id",
+                ),
+                (
+                    "message type unsupported",
+                    lambda body: body.update({"message_type": "zzzz.999"}),
+                    "unsupported rail message_type",
+                ),
+                (
                     "xml path whitespace",
                     lambda body: body.update({"xml_path": str(xml_path) + " "}),
                     "xml_path must not have surrounding whitespace",
@@ -830,7 +920,14 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 lambda body: body.update(
                     {"response_body_sha256": None, "response_body_preview": "accepted"}
                 ),
-                "response_body_preview requires response_body_sha256",
+                "response_body_sha256 must be recorded for HTTP response",
+            ),
+            (
+                "http_response_without_digest",
+                lambda body: body.update(
+                    {"response_body_sha256": None, "response_body_preview": None}
+                ),
+                "response_body_sha256 must be recorded for HTTP response",
             ),
             (
                 "bad_response_digest",
@@ -1030,6 +1127,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     1,
                 )
             receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            original = receipt.read_bytes()
 
             self.assertEqual(
                 run_verify(["--receipt", str(receipt), "--allow-insecure-http"])[0],
@@ -1046,6 +1144,37 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 )[0],
                 0,
             )
+
+            receipt.write_bytes(original)
+            rewrite_receipt(receipt, lambda body: body.__setitem__("error", None))
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(receipt),
+                    "--allow-insecure-http",
+                    "--allow-failed",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("failed receipt must record error", stderr)
+
+            receipt.write_bytes(original)
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update({"status_code": None, "ok": False}),
+            )
+            rc, _stdout, stderr = run_verify(
+                [
+                    "--receipt",
+                    str(receipt),
+                    "--allow-insecure-http",
+                    "--allow-failed",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("response_body_sha256 requires HTTP status_code", stderr)
 
     def test_source_payload_mismatch_is_rejected_when_required(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -1414,6 +1543,105 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
 
+    def test_source_sidecar_null_optional_metadata_is_rejected_when_required(self):
+        cases = [
+            (
+                "profile",
+                "profile",
+                ["--allow-default-profile"],
+                lambda sidecar: sidecar.pop("profile"),
+                "profile must be a non-empty string",
+            ),
+            (
+                "rail_message_id",
+                "rail_message_id",
+                [],
+                lambda sidecar: sidecar.pop("rail_message_id"),
+                "rail_message_id must be a non-empty string",
+            ),
+        ]
+        for name, field, verify_flags, prepare_sidecar, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_inbox:
+                inbox = Path(raw_inbox)
+                rail_test.write_message(inbox)
+                sidecar_path = inbox / "rail-status.xml.json"
+                sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+                prepare_sidecar(sidecar)
+                sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+                with rail_test.capture_server() as (base_url, _requests):
+                    rc, _stdout, stderr = rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                            *verify_flags,
+                        ]
+                    )
+                self.assertEqual(rc, 0, stderr)
+                receipt = next((inbox / "receipts").glob("*.receipt.json"))
+
+                sidecar[field] = None
+                sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
+                rc, _stdout, stderr = run_verify(
+                    [
+                        "--receipt",
+                        str(receipt),
+                        "--allow-insecure-http",
+                        "--require-source-files",
+                        *verify_flags,
+                    ]
+                )
+
+                self.assertEqual(rc, 2)
+                self.assertIn(expected, stderr)
+
+    def test_rail_receipt_nullable_metadata_must_be_recorded(self):
+        cases = [
+            (
+                "profile",
+                ["--allow-default-profile"],
+                lambda body: body.pop("profile"),
+                "profile must be recorded",
+            ),
+            (
+                "rail_message_id",
+                [],
+                lambda body: body.pop("rail_message_id"),
+                "rail_message_id must be recorded",
+            ),
+        ]
+        for name, verify_flags, mutate, expected in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as raw_inbox:
+                inbox = Path(raw_inbox)
+                rail_test.write_message(inbox)
+                with rail_test.capture_server() as (base_url, _requests):
+                    rc, _stdout, stderr = rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )
+                self.assertEqual(rc, 0, stderr)
+                receipt = next((inbox / "receipts").glob("*.receipt.json"))
+                rewrite_receipt(receipt, mutate)
+
+                rc, _stdout, stderr = run_verify(
+                    [
+                        "--receipt",
+                        str(receipt),
+                        "--allow-insecure-http",
+                        *verify_flags,
+                    ]
+                )
+
+                self.assertEqual(rc, 2)
+                self.assertIn(expected, stderr)
+
     def test_rail_receipt_metadata_strings_must_not_require_trimming(self):
         cases = [
             (
@@ -1589,7 +1817,12 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 else:  # pragma: no cover - guarded by the cases table.
                     raise AssertionError(name)
 
-                with patched_verifier_constant("MAX_AUDIT_EXPORT_JSON_BYTES", limit):
+                constant = (
+                    "MAX_PERSISTED_RECORD_JSON_BYTES"
+                    if name == "record_source"
+                    else "MAX_AUDIT_EXPORT_JSON_BYTES"
+                )
+                with patched_verifier_constant(constant, limit):
                     rc, _stdout, stderr = run_verify(
                         [
                             "--receipt",
@@ -1689,9 +1922,68 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 ),
             )
 
+        def missing_nullable_embedded_record_field(
+            receipt,
+            latest,
+            digest_anchor,
+            index_file,
+        ):
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["records"][0].pop("uetr")
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+            anchor = json.loads(latest.read_text(encoding="utf-8"))
+            anchor["audit_index"] = index
+            anchor["index_sha256"] = index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]
+            anchor = audit_test.with_digest(anchor, audit_test.ADAPTER.ANCHOR_DIGEST_FIELD)
+            anchor_text = json.dumps(anchor, indent=2) + "\n"
+            latest.write_text(anchor_text, encoding="utf-8")
+            new_digest_anchor = digest_anchor.with_name(
+                f"{index[audit_test.ADAPTER.INDEX_DIGEST_FIELD]}.notary.json"
+            )
+            new_digest_anchor.write_text(anchor_text, encoding="utf-8")
+            if new_digest_anchor != digest_anchor:
+                digest_anchor.unlink()
+            rewrite_receipt(
+                receipt,
+                lambda body: body.update(
+                    {
+                        "anchor_sha256": anchor[
+                            audit_test.ADAPTER.ANCHOR_DIGEST_FIELD
+                        ],
+                        "index_sha256": index[
+                            audit_test.ADAPTER.INDEX_DIGEST_FIELD
+                        ],
+                    }
+                ),
+            )
+
         def malformed_exported_record_field(_receipt, _latest, _digest_anchor, index_file):
             index = json.loads(index_file.read_text(encoding="utf-8"))
             index["records"][0]["updated_at_ms"] = -1
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+
+        def unsupported_exported_record_state(
+            _receipt,
+            _latest,
+            _digest_anchor,
+            index_file,
+        ):
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["records"][0]["state"] = "Settled"
+            index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+            index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
+
+        def mismatched_exported_record_state_code(
+            _receipt,
+            _latest,
+            _digest_anchor,
+            index_file,
+        ):
+            index = json.loads(index_file.read_text(encoding="utf-8"))
+            index["records"][0]["state"] = "Rejected"
+            index["records"][0]["pacs002_code"] = "ACSP"
             index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
             index_file.write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
 
@@ -1882,6 +2174,82 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 mutate,
             )
 
+        def status_history_state_code_mismatch(
+            receipt,
+            latest,
+            digest_anchor,
+            index_file,
+        ):
+            def mutate(source):
+                forged_entry = dict(source["status_history"][-1])
+                forged_entry["status"] = "Rejected"
+                forged_entry["pacs002_code"] = "ACSP"
+                source["status_history"].insert(0, forged_entry)
+
+            rewrite_digest_correct_record_source(
+                receipt,
+                latest,
+                digest_anchor,
+                index_file,
+                mutate,
+            )
+
+        def missing_persisted_record_nullable_key(
+            receipt,
+            latest,
+            digest_anchor,
+            index_file,
+        ):
+            rewrite_digest_correct_record_source(
+                receipt,
+                latest,
+                digest_anchor,
+                index_file,
+                lambda source: source.pop("detail"),
+            )
+
+        def missing_persisted_context_nullable_key(
+            receipt,
+            latest,
+            digest_anchor,
+            index_file,
+        ):
+            rewrite_digest_correct_record_source(
+                receipt,
+                latest,
+                digest_anchor,
+                index_file,
+                lambda source: source["context"].pop("ledger_id"),
+            )
+
+        def missing_persisted_metadata_nullable_key(
+            receipt,
+            latest,
+            digest_anchor,
+            index_file,
+        ):
+            rewrite_digest_correct_record_source(
+                receipt,
+                latest,
+                digest_anchor,
+                index_file,
+                lambda source: source["metadata"].pop("business_service"),
+            )
+
+        def missing_persisted_history_nullable_key(
+            receipt,
+            latest,
+            digest_anchor,
+            index_file,
+        ):
+            rewrite_digest_correct_record_source(
+                receipt,
+                latest,
+                digest_anchor,
+                index_file,
+                lambda source: source["status_history"][0].pop("reason_code"),
+            )
+
         def missing_anchor_store_dir(receipt, latest, digest_anchor, _index_file):
             anchor = json.loads(latest.read_text(encoding="utf-8"))
             anchor["store_dir"] = None
@@ -2056,9 +2424,24 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "contains unknown keys: operator_note",
             ),
             (
+                "missing_nullable_embedded_record_field",
+                missing_nullable_embedded_record_field,
+                "records[0] is missing required keys: uetr",
+            ),
+            (
                 "malformed_exported_record_field",
                 malformed_exported_record_field,
                 "updated_at_ms must be a non-negative integer",
+            ),
+            (
+                "unsupported_exported_record_state",
+                unsupported_exported_record_state,
+                "state must be Pending, Accepted, or Rejected",
+            ),
+            (
+                "mismatched_exported_record_state_code",
+                mismatched_exported_record_state_code,
+                "pacs002_code is not valid for Rejected state",
             ),
             (
                 "wrong_exported_record_filename",
@@ -2119,6 +2502,31 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 "status_history_timestamp_moves_backwards",
                 status_history_timestamp_moves_backwards,
                 "status_history[1].updated_at_ms must not move backwards",
+            ),
+            (
+                "status_history_state_code_mismatch",
+                status_history_state_code_mismatch,
+                "status_history[0].pacs002_code is not valid for Rejected status",
+            ),
+            (
+                "missing_persisted_record_nullable_key",
+                missing_persisted_record_nullable_key,
+                "is missing required keys: detail",
+            ),
+            (
+                "missing_persisted_context_nullable_key",
+                missing_persisted_context_nullable_key,
+                "context is missing required keys: ledger_id",
+            ),
+            (
+                "missing_persisted_metadata_nullable_key",
+                missing_persisted_metadata_nullable_key,
+                "metadata is missing required keys: business_service",
+            ),
+            (
+                "missing_persisted_history_nullable_key",
+                missing_persisted_history_nullable_key,
+                "status_history[0] is missing required keys: reason_code",
             ),
             (
                 "wrong_anchor_filename",
@@ -2448,6 +2856,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             summary = json.loads(stdout)
             self.assertTrue(summary["allow_default_profile"])
             self.assertIsNone(summary["receipts"][0]["profile"])
+            self.assertEqual(summary["receipts"][0]["rail_message_id"], "rail-drop-1")
 
     def test_secret_material_in_receipt_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_inbox:
@@ -2682,6 +3091,23 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("notary", "endpoint", "https://notary.example/anchor;debug", False),
             ("notary", "endpoint", "https://notary.example/anchor?debug=true", False),
             ("notary", "endpoint", "https://notary.example/anchor#fragment", False),
+            ("notary", "endpoint", "https://notary.example/anchor", False),
+            ("notary", "endpoint", "https://notary.example.com/anchor", False),
+            ("notary", "endpoint", "https://notary.example.net/anchor", False),
+            ("notary", "endpoint", "https://notary.example.org/anchor", False),
+            ("notary", "endpoint", "https://notary.example.invalid/anchor", False),
+            (
+                "notary",
+                "endpoint",
+                "https://notary.swift-cbpr-plus.operator-canary.bank/anchor",
+                False,
+            ),
+            (
+                "notary",
+                "endpoint",
+                "http://notary.swift-cbpr-plus.operator-canary.bank/anchor",
+                True,
+            ),
             ("notary", "endpoint", "https:///anchor", False),
             ("notary", "endpoint", "https://[::1", False),
             ("notary", "endpoint", "https://notary.example/anc\nhor", False),
@@ -2734,6 +3160,17 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("rail", "endpoint_url", "https://127.0.0.1.nip.io/v1/iso20022", False),
             ("rail", "endpoint_url", "https://0x7f000001/v1/iso20022", False),
             ("rail", "endpoint_url", "https://[64:ff9b::7f00:1]/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://rail.example/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://rail.example.com/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://rail.example.net/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://rail.example.org/v1/iso20022", False),
+            ("rail", "endpoint_url", "https://rail.example.invalid/v1/iso20022", False),
+            (
+                "rail",
+                "endpoint_url",
+                "https://rail.swift-cbpr-plus.operator-canary.bank/v1/iso20022",
+                False,
+            ),
             ("rail", "endpoint_url", "https://rail.example:/v1/iso20022", False),
             ("rail", "endpoint_url", "https://rail.example:0/v1/iso20022", False),
             ("rail", "endpoint_url", "https://rail.example:08443/v1/iso20022", False),
@@ -2758,6 +3195,12 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%00iso20022", True),
             ("rail", "endpoint_url", "http://127.0.0.1:8080/v1%zziso20022", True),
             ("rail", "endpoint_url", r"http://127.0.0.1:8080/v1\iso20022", True),
+            (
+                "rail",
+                "endpoint_url",
+                "http://rail.swift-cbpr-plus.operator-canary.bank/v1/iso20022",
+                True,
+            ),
             (
                 "rail",
                 "endpoint_url",

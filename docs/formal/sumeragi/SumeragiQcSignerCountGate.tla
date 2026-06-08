@@ -159,6 +159,35 @@ RawCountAnchors ==
 SafetyFast ==
   \A c \in Cases: ActualCount(c) = SpecCount(c)
 
+EmptyAndZeroByteCountExact ==
+  /\ ActualCount("empty") = SpecCount("empty")
+  /\ ActualCount("zero_byte") = SpecCount("zero_byte")
+  /\ ActualCount("three_zero_bytes") = SpecCount("three_zero_bytes")
+
+SingleBitCountExact ==
+  /\ ActualCount("low_bit") = SpecCount("low_bit")
+  /\ ActualCount("high_bit") = SpecCount("high_bit")
+
+FullByteAndPaddingCountExact ==
+  /\ ActualCount("full_byte") = SpecCount("full_byte")
+  /\ ActualCount("padding_bits") = SpecCount("padding_bits")
+
+MultiByteCountExact ==
+  /\ ActualCount("two_sparse") = SpecCount("two_sparse")
+  /\ ActualCount("three_sparse") = SpecCount("three_sparse")
+  /\ ActualCount("alternating_pair") = SpecCount("alternating_pair")
+  /\ ActualCount("two_full_bytes") = SpecCount("two_full_bytes")
+  /\ ActualCount("mixed_three") = SpecCount("mixed_three")
+
+QcSignerRawCountExactness ==
+  /\ CountWithinBitmapWidth
+  /\ RawCountAnchors
+  /\ SafetyFast
+  /\ EmptyAndZeroByteCountExact
+  /\ SingleBitCountExact
+  /\ FullByteAndPaddingCountExact
+  /\ MultiByteCountExact
+
 BugEmptyCountsOne ==
   ActualCount("empty") = SpecCount("empty")
 

@@ -120,7 +120,26 @@ BlockMessagePrioritySafetyAnchors ==
   /\ RbcPrioritySafety
   /\ ProposalAndCertificatePrioritySafety
 
-Safety == BlockMessagePrioritySafetyAnchors
+BlockMessageSyncPriorityExactness ==
+  /\ BlockSyncPrioritySafety
+
+BlockMessageVrfAndExecPriorityExactness ==
+  /\ VrfAndExecPrioritySafety
+
+BlockMessageRbcPriorityExactness ==
+  /\ RbcPrioritySafety
+
+BlockMessageProposalAndCertificatePriorityExactness ==
+  /\ ProposalAndCertificatePrioritySafety
+
+BlockMessagePriorityExactness ==
+  /\ BlockMessageSyncPriorityExactness
+  /\ BlockMessageVrfAndExecPriorityExactness
+  /\ BlockMessageRbcPriorityExactness
+  /\ BlockMessageProposalAndCertificatePriorityExactness
+  /\ BlockMessagePrioritySafetyAnchors
+
+Safety == BlockMessagePriorityExactness
 
 SafetyFast == Safety
 

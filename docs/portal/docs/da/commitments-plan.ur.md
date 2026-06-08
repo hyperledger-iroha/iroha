@@ -22,7 +22,7 @@ records شامل ہوں جو DA-2 کے ذریعے قبول شدہ blobs کو ب�
 canonical data structures، block pipeline hooks، light-client proofs، اور
 Torii/RPC surfaces کو بیان کرتی ہے جو validators کے admission یا governance
 checks میں DA commitments پر بھروسہ کرنے سے پہلے لازمی ہیں۔ تمام payloads
-Norito-encoded ہیں؛ SCALE یا ad-hoc JSON نہیں۔
+Norito-encoded ہیں؛ retired codec یا ad-hoc JSON نہیں۔
 
 ## مقاصد
 

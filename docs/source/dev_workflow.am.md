@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   ፕሮዳክሽን `serde`/`serde_json` ከ `AGENTS_BASE_REF` አንጻራዊ ይመታል። አዘጋጅ
   `SERDE_GUARD_ALLOW=1` የፍልሰት እቅድ ካስገባ በኋላ ለ CI ሙከራዎች ብቻ።
 - `make guards` የNorito ተከታታይ ፖሊሲን ያስፈጽማል፡ አዲስ ይክዳል
-  `serde`/`serde_json` አጠቃቀም፣ ad-hoc AoS ረዳቶች፣ እና SCALE ጥገኞች ውጭ
+  `serde`/`serde_json` አጠቃቀም፣ ad-hoc AoS ረዳቶች፣ እና retired codec ጥገኞች ውጭ
   የ Norito ወንበሮች (`scripts/deny_serde_json.sh`፣
   `scripts/check_no_direct_serde.sh`፣ `scripts/deny_handrolled_aos.sh`፣
-  `scripts/check_no_scale.sh`)።
+  `scripts/check_no_legacy_codec.sh`)።
 - **የፕሮክ-ማክሮ ዩአይ ፖሊሲ፡** እያንዳንዱ የፕሮክ-ማክሮ ሳጥን `trybuild` መላክ አለበት።
   መታጠቂያ (`tests/ui.rs` ከ pass/fail globs ጋር) ከ `trybuild-tests` ጀርባ
   ባህሪ. የደስተኛ መንገድ ናሙናዎችን በ `tests/ui/pass` ስር ያስቀምጡ፣ ውድቅ የተደረጉ ጉዳዮችን ስር

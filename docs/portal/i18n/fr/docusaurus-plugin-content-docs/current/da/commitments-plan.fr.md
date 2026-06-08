@@ -22,7 +22,7 @@ structures de données canoniques, les hooks du pipeline de blocs, les preuves d
 client léger, et les surfaces Torii/RPC qui doivent arriver avant que les
 les validateurs peuvent s'appuyer sur les engagements DA lors des chèques
 d'admission ou de gouvernance. Toutes les charges utiles sont encodées en Norito; pas de
-SCALE ni de JSON ad hoc.
+retired codec ni de JSON ad hoc.
 
 ## Objectifs- Porter des engagements par blob (chunk root + manifest hash + engagement KZG
   optionnel) dans chaque bloc Nexus afin que les paires puissent reconstruire

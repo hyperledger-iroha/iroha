@@ -21,7 +21,7 @@ Le DA-3 est utilisé pour Nexus pour la voie, les blobs et les blobs
 Par DA-2. توضح هذه المذكرة هياكل البيانات القياسية، ووصلات خط انابيب الكتل،
 وبرهان العملاء الخفيفين، واسطح Torii/RPC التي يجب ان تكتمل قبل ان يعتمد
 المدققون على تعهدات DA اثناء فحوصات القبول او الحوكمة. جميع الحمولات مشفرة
-Par Norito؛ Il est compatible avec SCALE et JSON.
+Par Norito؛ Il est compatible avec retired codec et JSON.
 
 ## الاهداف
 

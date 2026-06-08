@@ -17,7 +17,6 @@ use iroha_core::{
         verify_stark_fri_envelope, verify_stark_fri_envelope_with_limits,
     },
 };
-use iroha_data_model::domain::DomainId;
 use sha2::{Digest, Sha256};
 
 const MOD_P: u128 = (1u128 << 64) - (1u128 << 32) + 1;

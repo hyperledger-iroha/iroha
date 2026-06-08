@@ -54,6 +54,32 @@ Cases == {
   CompleteButNotReady
 }
 
+FailOpenGateCases == {
+  DaDisabled,
+  TimeoutBoundary,
+  LocalPayloadAvailable
+}
+
+TerminalSessionCases == {
+  NoSession,
+  InvalidSession,
+  DeliveredSession,
+  CompleteReady,
+  ZeroTotalReady
+}
+
+PendingSessionCases == {
+  TimeoutBelowPending,
+  TimeoutZeroPending,
+  PendingEntry
+}
+
+AvailabilityDeficitCases == {
+  MissingChunks,
+  NotReady,
+  CompleteButNotReady
+}
+
 DaEnabled(c) ==
   c /= DaDisabled
 
@@ -198,5 +224,52 @@ SafetyFast ==
   /\ SelectionExact
   /\ FailOpenStable
   /\ UnresolvedBlocksStable
+
+RbcAvailabilityFailOpenGateExact ==
+  \A c \in FailOpenGateCases:
+    /\ ActualUnresolved(c) = SpecUnresolved(c)
+    /\ ActualUnresolved(c) = FALSE
+    /\ IF c = DaDisabled THEN ~DaEnabled(c) ELSE TRUE
+    /\ IF c = TimeoutBoundary THEN TimedOut(c) ELSE TRUE
+    /\ IF c = LocalPayloadAvailable THEN LocalPayload(c) ELSE TRUE
+
+RbcAvailabilityTerminalSessionExact ==
+  \A c \in TerminalSessionCases:
+    /\ ActualUnresolved(c) = SpecUnresolved(c)
+    /\ ActualUnresolved(c) = FALSE
+    /\ ~PendingContains(c)
+    /\ IF c = NoSession THEN ~SessionPresent(c) ELSE TRUE
+    /\ IF c = InvalidSession THEN SessionInvalid(c) ELSE TRUE
+    /\ IF c = DeliveredSession THEN SessionDelivered(c) ELSE TRUE
+    /\ IF c = CompleteReady THEN ~SessionMissingChunks(c) /\ ReadyQuorum(c)
+       ELSE TRUE
+    /\ IF c = ZeroTotalReady THEN ~SessionMissingChunks(c) /\ ReadyQuorum(c)
+       ELSE TRUE
+
+RbcAvailabilityPendingBlocksExact ==
+  \A c \in PendingSessionCases:
+    /\ ActualUnresolved(c) = SpecUnresolved(c)
+    /\ ActualUnresolved(c) = TRUE
+    /\ PendingContains(c)
+    /\ ~TimedOut(c)
+
+RbcAvailabilityDeficitBlocksExact ==
+  \A c \in AvailabilityDeficitCases:
+    /\ ActualUnresolved(c) = SpecUnresolved(c)
+    /\ ActualUnresolved(c) = TRUE
+    /\ ~PendingContains(c)
+    /\ SessionPresent(c)
+    /\ ~SessionInvalid(c)
+    /\ ~SessionDelivered(c)
+    /\ IF c = MissingChunks THEN SessionMissingChunks(c) ELSE TRUE
+    /\ IF c \in {NotReady, CompleteButNotReady} THEN ~ReadyQuorum(c)
+       ELSE TRUE
+
+RbcAvailabilityRescheduleExactness ==
+  /\ SafetyFast
+  /\ RbcAvailabilityFailOpenGateExact
+  /\ RbcAvailabilityTerminalSessionExact
+  /\ RbcAvailabilityPendingBlocksExact
+  /\ RbcAvailabilityDeficitBlocksExact
 
 ====

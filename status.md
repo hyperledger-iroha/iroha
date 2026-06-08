@@ -2032,6 +2032,10661 @@ Last updated: 2026-06-08
     invariant rejection. Sweep logs are under
     `target/formal_sweeps/frontier_repair_view_change_{tlc,apalache}/`.
 
+## 2026-06-08 SCCP Substrate/Polkadot launch-scope note
+
+- Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+- Kept the active SCCP launch scope limited to Ethereum, BSC, Solana, TON, and
+  TRON in the public bridge-proof, backlog, and roadmap notes.
+
+## 2026-06-08 Sumeragi BlockCreated admission aggregate exactness
+
+- Split the direct `BlockCreated` payload admission model into
+  `BlockCreatedAdmissionExactness`, composing admission outcome, state
+  ownership, replay/repair, evidence/proposal-context, and commit-wakeup
+  obligations across the bounded 54-mutation model.
+- Wired `block-created-admission-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  exactness fast mode.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockCreatedAdmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-created-admission-fast`
+    (`626` states generated, `25` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-created-admission-fast`
+    (`BlockCreatedAdmissionExactness` produced `33` verification conditions;
+    the checker inspected `56` state invariants at state `0` and `34` at state
+    `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP retired platform-family launch-scope note
+
+- Retired platform-family lanes are explicitly outside SCCP launch support for
+  now.
+- Kept the active SCCP launch scope limited to Ethereum, BSC, Solana, TON, and
+  TRON in the public bridge-proof, backlog, and roadmap notes.
+
+## 2026-06-08 Sumeragi BlockCreated frontier wire aggregate exactness
+
+- Split the `BlockCreated` frontier wire/rebuild model into
+  `BlockCreatedFrontierWireExactness`, composing constructor preservation,
+  proposal/RBC frontier-info copying, generic/proposal/local wire rebuild, and
+  cached proposal rebroadcast admission anchors across the bounded 34-mutation
+  model.
+- Wired `block-created-frontier-wire-fast` to the aggregate invariant while
+  keeping `Safety` as the aggregate alias used by expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  exactness fast mode.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockCreatedFrontierWireGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-created-frontier-wire-fast`
+    (`36` states generated, `35` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-created-frontier-wire-fast`
+    (`BlockCreatedFrontierWireExactness` produced `228` verification
+    conditions; the checker inspected `463` state invariants at state `0` and
+    `1` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud uploaded-model digest sentinel rejection
+
+- Hardened uploaded-model and private execution admission so upload recipient
+  fingerprints, wrapped-key ciphertext/AAD digests, uploaded bundle roots,
+  encrypted private artifact hashes, and private execution receipt commitments
+  reject the zero prehash sentinel before consistency checks or provenance
+  processing.
+- Added focused regressions for uploaded-model recipient, wrapped-key, bundle,
+  private artifact, and private execution receipt digest fields.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model zero_prehash --lib -- --nocapture`
+    (`14` passed, `1469` filtered out)
+  - `cargo test -j 1 -p iroha_data_model uploaded_model --lib -- --nocapture`
+    (`13` passed, `1470` filtered out)
+  - `cargo test -j 1 -p iroha_data_model private_model --lib -- --nocapture`
+    (`1` passed, `1482` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_ --lib -- --nocapture`
+    (`67` passed, `1416` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`22` passed, `2315` filtered out)
+  - `cargo fmt --all -- --check`
+  - `make guards`
+
+## 2026-06-08 Sumeragi block-message wire-frame aggregate exactness
+
+- Split the cached `BlockMessageWire` model into `BlockMessageWireExactness`,
+  composing cache construction, cached/uncached serialization, frame-header
+  rejection, exact consumed-prefix accounting, trailing-byte preservation,
+  decode output, and cache preservation across the bounded 20-mutation model.
+- Wired `block-message-wire-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  exactness fast mode.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockMessageWireGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-message-wire-fast`
+    (`22` states generated, `21` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-message-wire-fast`
+    (`BlockMessageWireExactness` produced `168` verification conditions; the
+    checker inspected `343` state invariants at state `0` and `1` at state
+    `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud decryption/query digest sentinel rejection
+
+- Extended the shared Soracloud digest sentinel guard to `DecryptionRequestV1`,
+  `CiphertextInclusionProofV1`, `CiphertextQueryResultItemV1`, and
+  `CiphertextQueryResponseV1`, covering ciphertext commitments, optional
+  consent evidence, governance linkage, state-key digests, query hashes, and
+  inclusion proof leaf/anchor hashes.
+- Added negative regressions for zero-prehash placeholders in decryption
+  requests and ciphertext query responses, while preserving the
+  `FheExecutionPolicyV1` full-bootstrap field initializers that the
+  `iroha_data_model` lib and fixture targets compile through.
+- Validation:
+  - `cargo fmt --all -- --check`
+  - `cargo test -j 1 -p iroha_data_model zero_prehash --lib -- --nocapture`
+    (`14` passed, `1469` filtered out)
+  - `cargo test -j 1 -p iroha_data_model --lib`
+    (`1481` passed, `2` ignored)
+  - `cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures`
+    (`76` passed, `1` ignored)
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_torii/src/soracloud.rs`
+  - `git diff -- Cargo.lock`
+  - Clean retired-term scan across the workspace.
+
+## 2026-06-08 Sumeragi RBC compact block-message aggregate exactness
+
+- Split the RBC compact block-message helper model into
+  `BlockMessageRbcCompactExactness`, composing compact boundary admission,
+  payload field preservation, normalization/widening, and priority anchors
+  across the bounded 14-mutation model.
+- Wired `block-message-rbc-compact-fast` to the aggregate invariant while
+  keeping `Safety` as the aggregate alias used by expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  exactness fast mode.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockMessageRbcCompactGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-message-rbc-compact-fast`
+    (`16` states generated, `15` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-message-rbc-compact-fast`
+    (`BlockMessageRbcCompactExactness` produced `28` verification conditions;
+    the checker inspected `86` state invariants at state `0` and `1` at state
+    `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi block-message priority aggregate exactness
+
+- Split the block-message priority model into
+  `BlockMessagePriorityExactness`, composing block-sync/body-fetch,
+  VRF/execution-witness, RBC, and proposal/QC priority anchors across the
+  bounded 22-downgrade model.
+- Wired `block-message-priority-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  exactness fast mode.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockMessagePriorityGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-message-priority-fast`
+    (`24` states generated, `23` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-message-priority-fast`
+    (`BlockMessagePriorityExactness` produced `44` verification conditions;
+    the checker inspected `134` state invariants at state `0` and `1` at
+    state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud ciphertext-state digest sentinel rejection
+
+- Generalized the Soracloud digest sentinel guard beyond FHE-only helpers and
+  applied it to `SecretEnvelopeV1` commitments, optional AAD digests, and
+  `CiphertextStateMetadataV1` mirrored commitments.
+- Added focused regressions proving secret-envelope and ciphertext-state
+  metadata admission reject the zero prehash sentinel before encrypted state is
+  indexed or mirrored through records.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model zero_prehash --lib -- --nocapture`
+    (`7` passed, `1469` filtered out)
+  - `cargo test -j 1 -p iroha_data_model secret_envelope_validate --lib -- --nocapture`
+    (`2` passed, `1474` filtered out)
+  - `cargo test -j 1 -p iroha_data_model ciphertext_state --lib -- --nocapture`
+    (`3` passed, `1473` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_ --lib -- --nocapture`
+    (`67` passed, `1409` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`22` passed, `2315` filtered out)
+  - `cargo fmt --all -- --check`
+  - `make guards`
+
+## 2026-06-08 Sumeragi block-message height/view aggregate exactness
+
+- Split the block-message height/view model into
+  `BlockMessageHeightViewExactness`, composing no-slot exclusion,
+  slot-bearing future-window eligibility, source selection, height/view order
+  preservation, and compact chunk widening across the bounded 25-case model.
+- Wired `block-message-height-view-fast` to the aggregate invariant while
+  keeping `Safety` as the aggregate alias used by expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  exactness fast mode.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockMessageHeightViewGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-message-height-view-fast`
+    (`27` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-message-height-view-fast`
+    (`BlockMessageHeightViewExactness` produced `46` verification conditions;
+    the checker inspected `99` state invariants at state `0` and `1` at state
+    `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP Ethereum sync-committee roster readiness inventory
+
+- Promoted the Ethereum sync-committee roster source inventory into the release
+  readiness report, so exact 512-authority mainnet rosters, unit validator
+  weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee
+  payload vectors must stay pinned across public SDKs before production
+  readiness can pass.
+- Published release-bundle verification now requires the
+  `ethereum_sync_committee_roster_gate` report entry, the matching required
+  release-evidence note, and regression coverage proving missing roster markers
+  and missing report gates fail closed.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sync_committee_roster_gate or sync_committee_roster'`
+    (`3` passed, `176` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'sync_committee_roster_inventory_gate or sync_committee_roster'`
+    (`2` passed, `315` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`179` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`317` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - Clean retired-term scan across launch-scope docs and status notes.
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-08 SCCP Beacon REST execution-payload readiness inventory
+
+- Promoted the Ethereum Beacon REST execution-payload binding source inventory
+  into the release readiness report, so Beacon target-header/root/block reads,
+  light-client finality-update evidence, execution block-hash/receipts-root
+  binding, and C# SSZ root parity vectors must stay pinned before production
+  readiness can pass.
+- Published release-bundle verification now requires the
+  `ethereum_beacon_rest_execution_payload_binding_gate` report entry, the
+  matching required release-evidence note, and regression coverage proving
+  missing execution-payload markers and missing report gates fail closed.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'beacon_rest_execution_payload_binding_gate or beacon_rest_execution_payload'`
+    (`3` passed, `174` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'beacon_rest_execution_payload_binding_inventory_gate or beacon_rest_execution_payload'`
+    (`2` passed, `314` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`177` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`316` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - Clean retired-term scan across launch-scope docs and status notes.
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-08 Sumeragi block-message kind aggregate exactness
+
+- Split the block-message log/status kind model into
+  `BlockMessageKindExactness`, composing exact log/future-window labels,
+  certified-fetch subtype preservation, NewView vote/certificate bypass
+  labels, compact/full RBC chunk collapse, coarse status telemetry, and Kura
+  replica advert status omission across the bounded 29-case model.
+- Wired `block-message-kind-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  exactness fast mode.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockMessageKindGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-message-kind-fast`
+    (`31` states generated, `30` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-message-kind-fast`
+    (`BlockMessageKindExactness` produced `70` verification conditions; the
+    checker inspected `146` state invariants at state `0` and `1` at state
+    `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud FHE job input commitment sentinel rejection
+
+- Hardened `FheJobInputRefV1` validation so signed FHE job input commitments
+  reject the zero prehash sentinel before deterministic output commitment and
+  provenance derivation.
+- Added focused job-spec regression coverage for placeholder input commitments
+  while preserving the existing duplicate-input and operation-shape checks.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model fhe_job_spec_validate_rejects_zero_prehash_input_commitment_sentinel --lib -- --nocapture`
+    (`1` passed, `1473` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_job_spec --lib -- --nocapture`
+    (`12` passed, `1462` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_ --lib -- --nocapture`
+    (`67` passed, `1407` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`22` passed, `2315` filtered out)
+  - `cargo fmt --all -- --check`
+  - `make guards`
+
+## 2026-06-08 SCCP Beacon REST finalized-header readiness inventory
+
+- Promoted the Ethereum Beacon REST finalized-header shape source inventory into
+  the release readiness report, so public SDK validators and negative tests for
+  non-zero parent/state/body roots plus 96-byte finalized-header signatures must
+  stay pinned before production readiness can pass.
+- Published release-bundle verification now requires the
+  `ethereum_beacon_rest_finalized_header_shape_gate` report entry, the matching
+  required release-evidence note, and regression coverage proving missing
+  finalized-header markers and missing report gates fail closed.
+- Kept the native no-WASM readiness inventory buildable by making duplicate
+  native SDK `implementation_hash` JSON-key diagnostics explicit raw-source test
+  markers in readiness and bundle tests.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'beacon_rest_finalized_header_shape_gate or beacon_rest_header_shape'`
+    (`3` passed, `171` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'beacon_rest_finalized_header_shape_inventory_gate or beacon_rest_header_shape'`
+    (`2` passed, `311` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'native_sccp_no_wasm_readiness_gate or duplicate_native_evm_prover_sdk_artifact_keys or beacon_rest_finalized_header_shape_gate'`
+    (`5` passed, `170` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'native_no_wasm_readiness_inventory or duplicate_native_evm_prover_sdk_artifact_keys or beacon_rest_finalized_header_shape_inventory_gate or beacon_rest_header_shape'`
+    (`5` passed, `310` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`175` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`315` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`490` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - clean retired-term scan across launch-scope docs and status notes
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-08 Sumeragi classic signing-preimage aggregate exactness
+
+- Split the classic Vote/VRF signing-preimage model into
+  `ClassicSigningPreimageExactness`, composing live-state projection, domain
+  fields, vote/VRF type separation, vote subject binding, highest-QC
+  presence/body binding, VRF commit/reveal body binding, and mutable signature
+  or aggregate-certificate exclusion across the bounded four-case model.
+- Wired `classic-preimage-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  exactness fast mode.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiClassicSigningPreimageGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh classic-preimage-fast`
+    (`26` states generated, `5` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh classic-preimage-fast`
+    (`ClassicSigningPreimageExactness` produced `54` verification conditions;
+    the checker inspected `89` state invariants at state `0` and `24` at
+    state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud FHE parameter-set digest sentinel rejection
+
+- Hardened `FheParamSetV1` admission so governed BFV parameter,
+  RNS modulus-chain, and key-switch decomposition digest anchors reject the
+  zero prehash sentinel before downstream Core/Torii profile reconciliation.
+- Added data-model regression coverage for all three parameter-set digest
+  fields while reusing the shared Soracloud FHE digest sentinel guard.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model fhe_param_set_validate_rejects_zero_prehash_digest_sentinels --lib -- --nocapture`
+    (`1` passed, `1472` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_param_set_validate --lib -- --nocapture`
+    (`7` passed, `1466` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_ --lib -- --nocapture`
+    (`66` passed, `1407` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`22` passed, `2315` filtered out)
+  - `cargo fmt --all -- --check`
+  - `make guards`
+
+## 2026-06-08 Sumeragi actor-gate priority aggregate exactness
+
+- Split the actor-gate priority and fairness surface into
+  `ActorGatePriorityExactness`, composing spec projection, in-flight exclusion,
+  availability fairness, urgent/DA/regular fairness, entry/block side effects,
+  entry streaks, and drop behavior across the bounded 26-case model.
+- Wired `actor-gate-fast` to the aggregate invariant while keeping `Safety` as
+  the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and implementation-surface grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiActorGatePriorityGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh actor-gate-fast`
+    (`703` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh actor-gate-fast`
+    (`ActorGatePriorityExactness` produced `36` verification conditions; the
+    checker inspected `47` state invariants at state `0` and `41` at state
+    `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi restart replay aggregate exactness
+
+- Split the restarted-peer replay and snapshot/Kura consistency surface into
+  `RestartReplayExactness`, composing snapshot validation, Kura/hash parity,
+  legacy manifest replay, write-back, and canonical checkpoint
+  redaction/normalization checks across the bounded 28-candidate model.
+- Wired `restart-replay-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and implementation-surface grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRestartReplayGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh restart-replay-fast`
+    (`785` states generated, `29` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh restart-replay-fast`
+    (`RestartReplayExactness` produced `6` verification conditions; the
+    checker inspected `9` state invariants at state `0` and `7` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 SCCP native receipt-finality readiness inventory
+
+- Promoted the Ethereum native receipt-finality source inventory into the
+  release readiness report, so Swift, Kotlin/JVM, Java Android, and .NET
+  receipt-proof builders must retain finalized-header root, sync-committee
+  root, and Beacon-slot prerequisites before production readiness can pass.
+- Published release-bundle verification now requires the
+  `ethereum_native_receipt_finality_gate` report entry, the matching required
+  release-evidence note, and regression coverage proving missing finality
+  markers and missing report gates fail closed.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'native_receipt_finality_gate or native_receipt_finality'`
+    (`2` passed, `170` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'native_receipt_finality_inventory_gate or native_receipt_finality'`
+    (`2` passed, `310` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`172` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`312` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - retired-marker content scan across launch-scope docs and status notes
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+
+## 2026-06-08 Sumeragi post-commit cleanup aggregate exactness
+
+- Split the post-commit cleanup surface into `PostCommitCleanupExactness`,
+  composing RBC cleanup, pending-descendant handling, stale pending cleanup,
+  QC/proposal pruning, missing-request handling, vote-cache windows, slot/view
+  pruning, recovery/frontier cleanup, and validation-inflight pruning across
+  the bounded 31-candidate model.
+- Wired `post-commit-cleanup-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and implementation-surface grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPostCommitCleanupGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh post-commit-cleanup-fast`
+    (`962` states generated, `32` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh post-commit-cleanup-fast`
+    (`PostCommitCleanupExactness` produced `10` verification conditions; the
+    checker inspected `13` state invariants at state `0` and `11` at state
+    `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Soracloud FHE execution policy digest sentinel rejection
+
+- Extended Soracloud FHE digest sentinel rejection to governed execution-policy
+  digests, so policies cannot satisfy admission with the zero prehash
+  placeholder for evaluation-key, refresh-transcript, zero-refresh proof
+  statement, or full-bootstrap material proof statement digests.
+- Kept the shared proof-envelope guard field-aware so existing FHE proof
+  validators still report `statement_hash`, while policy admission reports the
+  exact policy digest field.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_rejects_zero_prehash_key_digest_sentinels --lib -- --nocapture`
+    (`1` passed, `1471` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_rejects_zero_prehash_statement_sentinels --lib -- --nocapture`
+    (`1` passed, `1470` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate --lib -- --nocapture`
+    (`8` passed, `1464` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_ --lib -- --nocapture`
+    (`65` passed, `1407` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`22` passed, `2315` filtered out)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs crates/iroha_torii/src/soracloud.rs roadmap.md status.md`
+  - `make guards`
+
+## 2026-06-08 Sumeragi native AMX ingress aggregate exactness
+
+- Split the native AMX control-plane ingress surface into
+  `NativeAmxIngressExactness`, composing request/reply, vote-admission, and
+  vote-cache deduplication/separation checks across the bounded 15-candidate
+  model.
+- Wired `native-amx-ingress-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and implementation-surface grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNativeAmxIngressGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh native-amx-ingress-fast`
+    (`278,529` states generated, `32,768` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-ingress-fast`
+    (`NativeAmxIngressExactness` produced `12` verification conditions; the
+    checker inspected `14` state invariants at state `0` and `7` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi NPoS VRF epoch-seal aggregate exactness
+
+- Split the NPoS VRF epoch-seal staging surface into
+  `NposVrfEpochSealExactness`, composing merge, staging, committed-effect,
+  activation, and effect-validation checks across the bounded 31-candidate
+  model.
+- Wired `npos-vrf-fast` to the aggregate invariant while keeping `Safety` as
+  the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and implementation-surface grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNposVrfEpochSealGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh npos-vrf-fast`
+    (`994` states generated, `32` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh npos-vrf-fast`
+    (`NposVrfEpochSealExactness` produced `13` verification conditions; the
+    checker inspected `15` state invariants at state `0` and `2` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Soracloud full-bootstrap execution verifier governance preflight
+
+- Added Core regressions pinning full-bootstrap execution proofs to governed
+  active verifier records: correctly shaped proof attachments now fail closed
+  when the governed verifier record is missing or withdrawn before backend
+  verification.
+- Hardened the Core full-bootstrap execution proof helper to rerun local FHE
+  evaluation-budget validation and require input-bound metadata cardinality to
+  match input envelopes before deriving proof statements, so extra bound
+  sidecars, operation-shape drift, and multi-input bootstrap drift fail before
+  proof verification.
+- The same helper now rejects full-bootstrap execution circuit artifacts outside
+  full-bootstrap proof context even when no execution-proof attachments are
+  supplied, so artifact-only bypass attempts fail at the proof boundary too.
+- Extended Core regressions with a full-bootstrap execution verifier-record
+  metadata drift matrix covering namespace, backend, curve, public-input schema,
+  circuit/version, gas schedule, active circuit mapping, proof byte caps, key
+  presence/length, commitment, and governed verifier-key byte binding.
+- Updated data-model full-bootstrap material statement docs to reflect current
+  Core/Torii policy recomputation while leaving audited proof-producing backend
+  and release verifier artifact rollout as remaining production work.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_data_model/src/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof --lib -- --nocapture`
+    (`12` passed, `7127` filtered out)
+
+## 2026-06-08 Sumeragi native AMX receipt validation aggregate exactness
+
+- Split the native AMX receipt-validation surface into
+  `NativeAmxReceiptValidationExactness`, composing acceptance,
+  context/presence, header, participant-leg, QC-body, validator-set, signer
+  bitmap, and quorum/signature checks across the bounded 31-candidate model.
+- Wired `native-amx-receipt-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and implementation-surface grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNativeAmxReceiptValidation.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh native-amx-receipt-fast`
+    (`994` states generated, `32` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-receipt-fast`
+    (`NativeAmxReceiptValidationExactness` produced `13` verification
+    conditions; the checker inspected `15` state invariants at state `0` and
+    `8` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Soracloud FHE proof statement sentinel rejection
+
+- Hardened Soracloud FHE proof-envelope validation so input-admission,
+  bootstrap-key, full-bootstrap material, and full-bootstrap execution proofs
+  reject the zero prehash statement sentinel before OpenVerify/STARK wrapper
+  validation or backend verifier dispatch.
+- Added shared data-model regression coverage that rewrites otherwise
+  self-consistent STARK public inputs to the zero statement sentinel for all
+  four proof classes and verifies `statement_hash` fails closed directly.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_proof_validate_rejects_zero_prehash_statement_hashes --lib -- --nocapture`
+    (`1` passed, `1469` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_ --lib -- --nocapture`
+    (`63` passed, `1407` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`22` passed, `2315` filtered out)
+
+## 2026-06-08 SCCP Ethereum no-proxy data-collection readiness inventory
+
+- Promoted the Ethereum no-proxy data-collection inventory into release
+  readiness as `ethereum_data_collection_no_proxy_gate`, so app-owned execution
+  and Beacon provider reads remain required and Torii proxy or embedded
+  HTTP-client fallbacks block `production_ready`.
+- Published release-bundle verification now requires the no-proxy
+  data-collection gate row and its required release-evidence Markdown note.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'data_collection_no_proxy_gate or data_collection_has_no_proxy or data_collection'`
+    (`3` passed, `165` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'data_collection_no_proxy_inventory_gate or data_collection_no_proxy'`
+    (`2` passed, `307` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or data_collection_no_proxy_gate or data_collection_no_proxy or data_collection_has_no_proxy or contract_smoke_eth_mainnet_network_id_gate or contract_smoke_evm_production_surface_gate or contract_smoke or ethereum_source_bridge_config_gate or source_bridge_config or ethereum_torii_pinned_message_proof_gate or torii_pinned_message_proof or ethereum_core_message_replay_guard_gate or core_message_replay_guard or ethereum_core_range_finality_binding_gate or core_range_finality_binding or ethereum_launch_policy_selector_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_gate or ethereum_evm_block_tag_metadata_gate or ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`37` passed, `131` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or data_collection_no_proxy_inventory_gate or data_collection_no_proxy or contract_smoke_eth_mainnet_network_id_inventory_gate or contract_smoke_evm_production_surface_inventory_gate or contract_smoke_eth_mainnet_network_id or contract_smoke_evm_production_surface or ethereum_source_bridge_config_inventory_gate or source_bridge_config or ethereum_torii_pinned_message_proof_inventory_gate or torii_pinned_message_proof or ethereum_core_message_replay_guard_inventory_gate or core_message_replay_guard or ethereum_core_range_finality_binding_inventory_gate or core_range_finality_binding or ethereum_launch_policy_selector_inventory_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_inventory_gate or evm_route_canary_finalized_receipt_block or ethereum_evm_block_tag_metadata_inventory_gate or evm_block_tag_metadata_sources or ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`30` passed, `279` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`168` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`309` passed)
+
+## 2026-06-08 Sumeragi native AMX routing-plan aggregate exactness
+
+- Split the native AMX routing-plan projection surface into
+  `NativeAmxRoutingPlanExactness`, composing admission, canonical participant
+  projection, role and leg projection, digest, execution-context, receipt, and
+  fail-closed resolution checks across the bounded 26-candidate model.
+- Wired `native-amx-routing-plan-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and implementation-surface grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNativeAmxRoutingPlanGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh native-amx-routing-plan-fast`
+    (`704` states generated, `27` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-routing-plan-fast`
+    (`NativeAmxRoutingPlanExactness` produced `28` verification conditions;
+    the checker inspected `30` state invariants at state `0` and `24` at
+    state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 SCCP native EVM prover root and audit schema gates
+
+- Added paired readiness-report and published-bundle negative coverage proving
+  native EVM Groth16 prover manifests reject unknown root fields, unexpected
+  `audit_hashes` entries, and missing required audit-hash roles even when the
+  manifest is rehashed.
+- Added readiness, bundle-generation, and published-bundle verifier regressions
+  proving duplicate JSON keys inside the native manifest `audit_hashes` map fail
+  closed before any last-key-wins parser could trust a forged audit hash.
+- Added readiness-report and published-bundle verifier regressions for rehashed
+  parity/self-test fixture artifacts with duplicate JSON keys inside nested SDK
+  result rows, proving overwritten `calldata_hash` and `proof_hash` evidence
+  fails before SDK row values are trusted.
+- Pinned the root/audit schema drift cases in the native no-WASM/no-remote
+  readiness inventory so future release hardening cannot silently drop those
+  checks, including nested manifest and fixture SDK-result duplicate-key
+  coverage, from the report or bundle verifier.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_native_evm_parity_fixture_sdk_result_keys or duplicate_native_evm_self_test_sdk_result_keys or native_no_wasm_readiness_inventory'`
+    (`5` passed, `476` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_native_evm_parity_fixture_sdk_result_keys or duplicate_native_evm_self_test_sdk_result_keys or duplicate_native_evm_prover_nested_json_keys or duplicate_native_evm_prover_json_keys or duplicate_native_evm_parity_fixture_keys or duplicate_native_evm_self_test_keys or unknown_root_and_audit_fields or native_evm_prover_sdk_implementation_artifact_drift or native_evm_prover_sdk_artifact_value_drift or malformed_native_evm_prover_sdk_artifacts or native_evm_fixture_malformed_sdk_result_rows or native_evm_fixture_sdk_result_missing_fields or native_evm_fixture_sdk_result_value_drift or native_no_wasm_readiness_inventory or ethereum_source_bridge_config or ethereum_route_canary_finalized_receipt_block or core_message_replay_guard'`
+    (`40` passed, `441` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`484` passed)
+
+## 2026-06-08 Soracloud FHE execution proof count preflight
+
+- Hardened Torii signed FHE job-run proof preflight so non-empty
+  full-bootstrap execution-proof vectors cannot exceed the signed parameter
+  set's slot count before Torii decodes individual proof attachments or
+  full-bootstrap circuit artifacts.
+- Added a regression proving oversized execution-proof batches fail locally as
+  `400 Bad Request` and before artifact validation, while Core remains
+  responsible for exact slot-by-slot statement-hash binding after execution.
+- Validation:
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_execution_proof_count_above_slot_count --lib -- --nocapture`
+    (`1` passed, `2334` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`22` passed, `2315` filtered out)
+
+## 2026-06-08 SCCP EVM contract-smoke readiness inventory
+
+- Promoted the EVM contract-smoke Ethereum-mainnet network-id and
+  production-surface source inventories into release readiness as
+  `contract_smoke_eth_mainnet_network_id_gate` and
+  `contract_smoke_evm_production_surface_gate`.
+- Published release-bundle verification now requires both contract-smoke gate
+  rows and the matching required release-evidence Markdown notes.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'contract_smoke_eth_mainnet_network_id_gate or contract_smoke_evm_production_surface_gate or contract_smoke'`
+    (`4` passed, `161` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'contract_smoke_eth_mainnet_network_id_inventory_gate or contract_smoke_evm_production_surface_inventory_gate or contract_smoke_eth_mainnet_network_id or contract_smoke_evm_production_surface'`
+    (`4` passed, `302` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or contract_smoke_eth_mainnet_network_id_gate or contract_smoke_evm_production_surface_gate or contract_smoke or ethereum_source_bridge_config_gate or source_bridge_config or ethereum_torii_pinned_message_proof_gate or torii_pinned_message_proof or ethereum_core_message_replay_guard_gate or core_message_replay_guard or ethereum_core_range_finality_binding_gate or core_range_finality_binding or ethereum_launch_policy_selector_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_gate or ethereum_evm_block_tag_metadata_gate or ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`34` passed, `131` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or contract_smoke_eth_mainnet_network_id_inventory_gate or contract_smoke_evm_production_surface_inventory_gate or contract_smoke_eth_mainnet_network_id or contract_smoke_evm_production_surface or ethereum_source_bridge_config_inventory_gate or source_bridge_config or ethereum_torii_pinned_message_proof_inventory_gate or torii_pinned_message_proof or ethereum_core_message_replay_guard_inventory_gate or core_message_replay_guard or ethereum_core_range_finality_binding_inventory_gate or core_range_finality_binding or ethereum_launch_policy_selector_inventory_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_inventory_gate or evm_route_canary_finalized_receipt_block or ethereum_evm_block_tag_metadata_inventory_gate or evm_block_tag_metadata_sources or ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`28` passed, `278` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`165` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`306` passed)
+
+## 2026-06-08 SCCP source-bridge config readiness inventory
+
+- Promoted the Ethereum source-bridge config source inventory into release
+  readiness as `ethereum_source_bridge_config_gate`, so bridge-address,
+  network-id, code-hash config hashing, and negative config-drift regressions
+  block `production_ready`.
+- Published release-bundle verification now requires the source-bridge config
+  gate row and its required release-evidence Markdown note.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_bridge_config_gate or source_bridge_config'`
+    (`3` passed, `157` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_bridge_config_inventory_gate or source_bridge_config'`
+    (`2` passed, `301` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or ethereum_source_bridge_config_gate or source_bridge_config or ethereum_torii_pinned_message_proof_gate or torii_pinned_message_proof or ethereum_core_message_replay_guard_gate or core_message_replay_guard or ethereum_core_range_finality_binding_gate or core_range_finality_binding or ethereum_launch_policy_selector_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_gate or ethereum_evm_block_tag_metadata_gate or ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`30` passed, `130` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or ethereum_source_bridge_config_inventory_gate or source_bridge_config or ethereum_torii_pinned_message_proof_inventory_gate or torii_pinned_message_proof or ethereum_core_message_replay_guard_inventory_gate or core_message_replay_guard or ethereum_core_range_finality_binding_inventory_gate or core_range_finality_binding or ethereum_launch_policy_selector_inventory_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_inventory_gate or evm_route_canary_finalized_receipt_block or ethereum_evm_block_tag_metadata_inventory_gate or evm_block_tag_metadata_sources or ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`24` passed, `279` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`160` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`303` passed)
+
+## 2026-06-08 Sumeragi native AMX attestation aggregate exactness
+
+- Split the native AMX proposer-side attestation surface into
+  `NativeAmxAttestationExactness`, composing request staging, receipt sealing,
+  fail-closed plan/roster/vote-set behavior, deterministic signer projection,
+  and retry/participant cache isolation across the bounded 19-candidate model.
+- Wired `native-amx-attestation-fast` to the aggregate invariant while keeping
+  the expected-failure configs on the leaf invariants for targeted diagnostics.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and implementation-surface mapping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNativeAmxAttestationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh native-amx-attestation-fast`
+    (`382` states generated, `20` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-attestation-fast`
+    (`NativeAmxAttestationExactness` produced `16` verification conditions;
+    the checker inspected `34` state invariants at state `0`, `12` at state
+    `1`, and `12` at state `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi missing-block view-change aggregate exactness
+
+- Split the missing-block view-change escalation surface into
+  `MissingBlockViewChangeExactness`, composing authority, due-window, marking,
+  clear, scheduler, and progress/backlog deferral exactness across the bounded
+  30-candidate model.
+- Wired `missing-block-view-change-fast` to the aggregate invariant while
+  keeping `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and bounded-case grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingBlockViewChangeGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-block-view-change-fast`
+    (`932` states generated, `31` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-block-view-change-fast`
+    (`MissingBlockViewChangeExactness` produced `23` verification conditions;
+    the checker inspected `25` state invariants at state `0` and `7` at
+    state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi missing-block hard-cap aggregate exactness
+
+- Split the missing-block hard-cap recovery escalation surface into
+  `MissingBlockHardCapExactness`, composing hard-cap decision matching,
+  duplicate/trigger side effects, no-actionable cleanup, and range-pull
+  non-rotation exactness across the bounded 28-candidate model.
+- Wired `missing-block-hard-cap-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and bounded-case grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingBlockHardCapGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-block-hard-cap-fast`
+    (`814` states generated, `29` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-block-hard-cap-fast`
+    (`MissingBlockHardCapExactness` produced `10` verification conditions; the
+    checker inspected `12` state invariants at state `0` and `2` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi missing-block hard-cap cleanup aggregate exactness
+
+- Split the missing-block hard-cap cleanup preservation surface into
+  `MissingBlockHardCapCleanupExactness`, composing live-frontier preservation,
+  live same-height retention, dead/future pruning, quorum-backed repair
+  retention, and evidence/owner cleanup exactness across the bounded
+  25-candidate model.
+- Wired `missing-block-hard-cap-cleanup-fast` to the aggregate invariant while
+  keeping `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and bounded-case grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingBlockHardCapCleanupGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-block-hard-cap-cleanup-fast`
+    (`652` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-block-hard-cap-cleanup-fast`
+    (`MissingBlockHardCapCleanupExactness` produced `18` verification
+    conditions; the checker inspected `20` state invariants at state `0` and
+    `2` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi missing-block fetch aggregate exactness
+
+- Split the QC-first missing-block fetch planner safety surface into
+  `MissingBlockFetchExactness`, composing fetch decision, request-state,
+  priority/retry, attempt accounting, target-selection, send/deferral, and
+  request-field exactness across the bounded 26-candidate model.
+- Wired `missing-block-fetch-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and bounded-case grouping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingBlockFetchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-block-fetch-fast`
+    (`704` states generated, `27` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-block-fetch-fast`
+    (`MissingBlockFetchExactness` produced `24` verification conditions; the
+    checker inspected `26` state invariants at state `0` and `4` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Root bincode workspace dependency removal
+
+- Removed the unused workspace-level `bincode` dependency from `Cargo.toml` so
+  first-party manifests no longer advertise a stale non-Norito binary codec.
+- Updated localized Norito benchmark notes that still described
+  `crates/norito/benches/codec.rs` as comparing against retired codec/bincode;
+  the benchmark now covers Norito encode/decode and compressed variants.
+- Validation:
+  - `rg -n "\\bbincode\\b" Cargo.toml crates integration_tests tools xtask python fuzz -g Cargo.toml`
+    produced no matches.
+  - `cargo metadata --no-deps --format-version 1` plus dependency-edge scan
+    found no first-party `bincode` dependencies.
+  - `make guards`
+  - `git diff --check -- Cargo.toml docs/source/norito_crc64_parity_bench.ja.md docs/source/norito_crc64_parity_bench.he.md roadmap.md status.md`
+  - `git diff --name-only -- Cargo.lock` produced no output.
+
+## 2026-06-08 Sumeragi Kura commit retry aggregate exactness
+
+- Split the Kura durability commit retry safety surface into
+  `KuraCommitRetryExactness`, composing Kura/state alignment, durability retry
+  and cleanup, state-commit failure handling, commit eligibility, and
+  persisted/QC-reset exactness across the bounded 23-candidate model.
+- Wired `kura-commit-fast` to the aggregate invariant while keeping `Safety`
+  as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and its implementation-surface mapping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiKuraCommitRetryGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh kura-commit-fast`
+    (`530` states generated, `24` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh kura-commit-fast`
+    (`KuraCommitRetryExactness` produced `6` verification conditions; the
+    checker inspected `9` state invariants at state `0` and `7` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi frontier-gap realignment aggregate exactness
+
+- Split the post-commit frontier-gap realignment safety surface into
+  `FrontierGapRealignExactness`, composing admission/exact-body gates,
+  committed anchor selection, target fallback/filtering, send accounting,
+  canonical window controls, and recovery metadata exactness across the
+  bounded 31-candidate model.
+- Wired `frontier-gap-realign-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and its implementation-surface mapping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierGapRealignGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-gap-realign-fast`
+    (`962` states generated, `32` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-gap-realign-fast`
+    (`FrontierGapRealignExactness` produced `7` verification conditions; the
+    checker inspected `10` state invariants at state `0` and `8` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Legacy codec guard alias coverage
+
+- Extended `scripts/tests/check_no_legacy_codec_test.py` so the retired-codec
+  guard rejects manifests that reintroduce `parity-scale-codec` through renamed
+  `package = ...` aliases at both workspace-root and nested-crate levels.
+- Validation:
+  - `python3 -m py_compile scripts/tests/check_no_legacy_codec_test.py && python3 -m pytest -q scripts/tests/check_no_legacy_codec_test.py`
+    (`5` passed)
+  - `make guards`
+
+## 2026-06-08 SCCP direct-Serde allowlist removal
+
+- Removed `iroha_sccp`'s optional `serde` feature/dependency and deleted the
+  compatibility Serde adapter surface; SCCP public payload/proof DTOs now use
+  the existing Norito JSON derives and helper codecs directly.
+- Cleared `scripts/serde_allowlist.txt`, leaving no production crate with an
+  approved direct `serde`/`serde_json` dependency path.
+- Rechecked Torii's SCCP query and bundle response paths against the
+  Norito-only SCCP crate.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-serde CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_sccp --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp --lib json -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-serde CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_torii --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_evm_destination_query_decodes_norito_json_defaults --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_burn_bundle_endpoint_roundtrips_json_and_norito --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_message_bundle_endpoint_roundtrips_json --lib -- --nocapture`
+    (`1` passed)
+  - `bash scripts/check_no_direct_serde.sh`
+  - `make guards`
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/iroha_sccp/Cargo.toml crates/iroha_sccp/src/lib.rs scripts/serde_allowlist.txt status.md roadmap.md`
+  - `git diff --name-only -- Cargo.lock` produced no output.
+
+## 2026-06-08 SCCP Torii pinned message-proof readiness inventory
+
+- Promoted the Ethereum Torii pinned message-proof inventory into the release
+  readiness `source_inventory` schema so public readback drift around unpinned
+  SCCP message records blocks `production_ready` before bundle publication.
+- Published bundle verification now requires the
+  `ethereum_torii_pinned_message_proof_gate` row plus the corresponding
+  required release-evidence Markdown note.
+- Kept the launch-scope docs explicit: retired runtime-network families remain
+  outside SCCP launch support for now.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'torii_pinned_message_proof_gate or torii_pinned_message_proof'`
+    (`2` passed, `155` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'torii_pinned_message_proof_inventory_gate or torii_pinned_message_proof'`
+    (`2` passed, `299` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or ethereum_torii_pinned_message_proof_gate or torii_pinned_message_proof or ethereum_core_message_replay_guard_gate or core_message_replay_guard or ethereum_core_range_finality_binding_gate or core_range_finality_binding or ethereum_launch_policy_selector_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_gate or ethereum_evm_block_tag_metadata_gate or ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`27` passed, `130` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or ethereum_torii_pinned_message_proof_inventory_gate or torii_pinned_message_proof or ethereum_core_message_replay_guard_inventory_gate or core_message_replay_guard or ethereum_core_range_finality_binding_inventory_gate or core_range_finality_binding or ethereum_launch_policy_selector_inventory_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_inventory_gate or evm_route_canary_finalized_receipt_block or ethereum_evm_block_tag_metadata_inventory_gate or evm_block_tag_metadata_sources or ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`22` passed, `279` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`157` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`301` passed)
+
+## 2026-06-08 SCCP core message replay readiness inventory
+
+- Promoted the Ethereum Core message replay inventory into the release
+  readiness `source_inventory` schema so pinned-record replay protection drift
+  blocks `production_ready` before bundle publication.
+- Published bundle verification now requires the
+  `ethereum_core_message_replay_guard_gate` row plus the corresponding required
+  release-evidence Markdown note.
+- Kept the launch-scope docs explicit: retired platform-family lanes remain
+  outside SCCP launch support for now.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'core_message_replay_guard_gate or core_message_replay_guard'`
+    (`2` passed, `151` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'core_message_replay_guard_inventory_gate or core_message_replay_guard'`
+    (`2` passed, `296` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or ethereum_core_message_replay_guard_gate or core_message_replay_guard or ethereum_core_range_finality_binding_gate or core_range_finality_binding or ethereum_launch_policy_selector_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_gate or ethereum_evm_block_tag_metadata_gate or ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`25` passed, `128` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or ethereum_core_message_replay_guard_inventory_gate or core_message_replay_guard or ethereum_core_range_finality_binding_inventory_gate or core_range_finality_binding or ethereum_launch_policy_selector_inventory_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_inventory_gate or evm_route_canary_finalized_receipt_block or ethereum_evm_block_tag_metadata_inventory_gate or evm_block_tag_metadata_sources or ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`20` passed, `278` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`153` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`298` passed)
+
+## 2026-06-08 Sumeragi engine certificate prefilter preservation aggregate exactness
+
+- Split the pure-engine certificate prefilter unrelated-state preservation
+  surface into `PrefilterStatePreservationExactness`, composing the
+  accepted/rejected case partition, accepted and rejected preservation of
+  committed records, Prepare-QC replay cache, pending-finality certificate
+  map, available-payload store, staged reconfiguration, all-field equality,
+  and value-domain preservation across the bounded 15-case model.
+- Wired `engine-certificate-prefilter-state-preservation-fast` to the
+  aggregate invariant while keeping `Safety` as the aggregate alias used by
+  the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and its unrelated-state preservation mapping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineCertificatePrefilterStatePreservationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-certificate-prefilter-state-preservation-fast`
+    (`278,529` states generated, `32,768` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-certificate-prefilter-state-preservation-fast`
+    (`PrefilterStatePreservationExactness` produced `27` verification
+    conditions; the checker inspected `48` state invariants at state `0` and
+    `21` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi engine certificate prefilter state aggregate exactness
+
+- Split the pure-engine certificate prefilter state-handoff safety surface into
+  `PrefilterStateExactness`, composing the accepted/rejected case partition,
+  accepted handler dispatch/state handoff, rejected no-op return behavior,
+  rejected output suppression, and value-domain preservation across the
+  bounded 22-case model.
+- Wired `engine-certificate-prefilter-state-fast` to the aggregate invariant
+  while keeping `Safety` as the aggregate alias used by the expected-failure
+  configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and its prefilter handoff mapping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineCertificatePrefilterStateGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-certificate-prefilter-state-fast`
+    (`508` states generated, `23` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-certificate-prefilter-state-fast`
+    (`PrefilterStateExactness` produced `23` verification conditions; the
+    checker inspected `54` state invariants at state `0` and `33` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi engine certificate dispatch aggregate exactness
+
+- Split the pure-engine certificate prefilter dispatch safety surface into
+  `CertificateDispatchExactness`, composing the accepted/rejected case
+  partition, full spec-handler equality, accepted Prepare/Commit/NewView
+  routing, rejected-context gates, and cross-phase dispatch exclusion across
+  the bounded 22-case model.
+- Wired `engine-certificate-dispatch-fast` to the aggregate invariant while
+  keeping `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and its case-partition mapping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineCertificateDispatchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-certificate-dispatch-fast`
+    (`508` states generated, `23` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-certificate-dispatch-fast`
+    (`CertificateDispatchExactness` produced `11` verification conditions; the
+    checker inspected `29` state invariants at state `0` and `14` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi certified-block fetch aggregate exactness
+
+- Split the direct certified-block fetch safety surface into
+  `CertifiedFetchExactness`, composing request-target selection,
+  server-side request validation, response dispatch/capping, proof/body
+  admission, and materialization/cleanup exactness across the bounded
+  36-candidate model.
+- Wired `certified-fetch-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by the expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  fast mode and its implementation-surface mapping.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCertifiedBlockFetchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh certified-fetch-fast`
+    (`1,297` states generated, `37` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh certified-fetch-fast`
+    (`CertifiedFetchExactness` produced `6` verification conditions; the
+    checker inspected `9` state invariants at state `0` and `7` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9,842` expected-failure modes, `1` scheduled/manual
+    mode, `10,347` documented modes, `499` TLC fast modes, `9,842` TLC
+    mutation modes)
+
+## 2026-06-08 SCCP core range/finality readiness inventory
+
+- Promoted the Ethereum Core range/finality binding inventory into the release
+  readiness `source_inventory` schema so outer bridge-proof range replay drift
+  blocks `production_ready` before bundle publication.
+- Published bundle verification now requires the
+  `ethereum_core_range_finality_binding_gate` row plus the corresponding
+  required release-evidence Markdown note.
+- Kept the launch-scope docs explicit: retired runtime-network families remain
+  outside SCCP launch support for now.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'core_range_finality_binding_gate or core_range_finality_binding'`
+    (`2` passed, `148` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'core_range_finality_binding_inventory_gate or core_range_finality_binding'`
+    (`2` passed, `294` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or ethereum_core_range_finality_binding_gate or core_range_finality_binding or ethereum_launch_policy_selector_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_gate or ethereum_evm_block_tag_metadata_gate or ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`23` passed, `127` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or ethereum_core_range_finality_binding_inventory_gate or core_range_finality_binding or ethereum_launch_policy_selector_inventory_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_inventory_gate or evm_route_canary_finalized_receipt_block or ethereum_evm_block_tag_metadata_inventory_gate or evm_block_tag_metadata_sources or ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`18` passed, `278` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`150` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`296` passed)
+
+## 2026-06-08 SCCP native EVM SDK row adversarial coverage
+
+- Added readiness-report and published-bundle negative coverage for malformed
+  native EVM parity/self-test SDK result rows: non-object SDK rows, missing
+  required row fields, unknown row fields, row public-signal drift, and row hash
+  value drift now remain pinned release blockers after fixture rehashing.
+- Added readiness-report and published-bundle negative coverage for malformed
+  native EVM manifest SDK artifact rows: non-object rows, unknown fields,
+  missing fields, unknown SDKs, implementation drift, and prover-artifact hash
+  drift now remain pinned release blockers before publication.
+- Added readiness-report and published-bundle negative coverage for SDK
+  implementation artifact drift: URI/drive-prefix paths and implementation
+  artifact hash mismatches now remain pinned release blockers.
+- Extended the native no-WASM readiness inventory pins so row-level SDK result
+  and SDK artifact validation cannot disappear silently.
+- Rechecked the retired launch-scope literal scan after keeping public docs and
+  tracking notes generic about unsupported runtime-network families.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover_sdk_artifact_value_drift or malformed_native_evm_prover_sdk_artifacts or native_no_wasm_readiness_inventory'`
+    (`5` passed, `453` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover_sdk_implementation_artifact_drift or native_no_wasm_readiness_inventory'`
+    (`3` passed, `460` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover_sdk_implementation_artifact_drift or native_evm_prover_sdk_artifact_value_drift or malformed_native_evm_prover_sdk_artifacts or native_evm_fixture_malformed_sdk_result_rows or native_evm_fixture_sdk_result_missing_fields or native_evm_fixture_sdk_result_value_drift or native_no_wasm_readiness_inventory or ethereum_source_bridge_config or ethereum_route_canary_finalized_receipt_block or core_message_replay_guard'`
+    (`25` passed, `438` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`463` passed)
+  - `git diff --check -- scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py roadmap.md status.md docs/source/bridge_proofs.md docs/source/engineering_backlog.md crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs`
+  - Retired launch-scope literal scan across tracked source/docs excluding
+    `target` and `Cargo.lock`
+  - `git diff -- Cargo.lock`
+
+## 2026-06-08 SCCP launch-policy selector readiness inventory
+
+- Promoted the Ethereum launch-policy selector inventory into the release
+  readiness `source_inventory` schema so ETH-only launch-policy drift blocks
+  `production_ready` before bundle publication.
+- Published bundle verification now requires the
+  `ethereum_launch_policy_selector_gate` row plus the corresponding required
+  release-evidence Markdown note.
+- Kept the launch-scope docs explicit: retired runtime-network families remain
+  outside SCCP launch support for now.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_launch_policy_selector_gate or launch_policy_selector'`
+    (`3` passed, `144` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'ethereum_launch_policy_selector_inventory_gate or launch_policy_selector'`
+    (`2` passed, `292` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or ethereum_launch_policy_selector_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_gate or ethereum_evm_block_tag_metadata_gate or ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`21` passed, `126` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or ethereum_launch_policy_selector_inventory_gate or launch_policy_selector or ethereum_route_canary_finalized_receipt_block_inventory_gate or evm_route_canary_finalized_receipt_block or ethereum_evm_block_tag_metadata_inventory_gate or evm_block_tag_metadata_sources or ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`16` passed, `278` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`147` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`294` passed)
+
+## 2026-06-08 Torii FHE job-run parameter-bound artifact preflight
+
+- Torii signed FHE job-run preflight now resolves every signed parameter-set
+  descriptor against the registered BFV profile before validating proof
+  attachments, full-bootstrap circuit artifacts, or constructing instructions.
+- The same signed preflight now runs the shared execution-policy/parameter and
+  job/policy validators, so policy linkage drift or job-shape drift fails at
+  Torii before Core instruction construction.
+- It also validates signed BFV evaluation-key and refresh-transcript digests
+  against the attached key/transcript material before proof or artifact
+  decoding, matching the Core fail-closed commitment gates.
+- The preflight also recomputes bootstrap-key and full-bootstrap material proof
+  statement digests from the signed key/transcript material, rejecting stale
+  proof-class policies before proof or artifact decoding.
+- Policy-required bootstrap-key and full-bootstrap material proof attachments
+  are checked for presence and statement-hash binding before Torii validates
+  proof envelopes or constructs Core instructions.
+- Full-bootstrap execution requests now also require signed circuit artifacts
+  and a non-empty execution-proof vector at Torii before artifact decoding or
+  Core execution.
+- Drifted parameter, policy, job, evaluation-key, transcript, or descriptor
+  fields now fail as `400 Bad Request` before proof or artifact decoding.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-torii-param-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`22` passed, `2315` filtered out)
+
+## 2026-06-08 Torii direct-Serde removal
+
+- Removed Torii's direct `serde`/`serde_json` dependencies and stopped enabling
+  the SCCP compatibility `serde` feature from `crates/iroha_torii`.
+- Moved SCCP artifact/job query parsing to `NoritoQuery` with Norito JSON
+  derives, and removed Serde derives from SCCP capability/manifest DTOs that
+  already have Norito JSON codecs.
+- Replaced tx-history JWT claim decoding and push-provider JWT claim signing
+  with explicit Norito JSON payload handling while keeping `jsonwebtoken`'s
+  cryptographic `sign`/`verify` implementation for the actual signatures.
+- Removed `crates/iroha_torii` from `scripts/serde_allowlist.txt`; the
+  remaining direct-Serde allowlist is now limited to SCCP compatibility
+  derives/adapters.
+- Validation:
+  - `make guards`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-serde CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_torii --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii tx_history_jwt_claims --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii tx_history_viewer_from_headers_rejects_bare_subject_aliases --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii sccp_evm_destination_query_decodes_norito_json_defaults --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii encode_jwt_claims_builds_verifiable_compact_token --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt --all -- --check`
+  - `bash scripts/check_no_direct_serde.sh`
+  - `git diff --check -- crates/iroha_torii/Cargo.toml crates/iroha_torii/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/push.rs scripts/serde_allowlist.txt status.md roadmap.md`
+  - `git diff --name-only -- Cargo.lock` produced no output.
+
+## 2026-06-08 SCCP native EVM fixture SDK-result container strictness
+
+- Added readiness and published-bundle regressions proving rehashed native EVM
+  parity/self-test fixture artifacts still fail when `sdk_results` is empty or
+  not a JSON object.
+- Pinned the `sdk_results must be a non-empty object` blocker text and both
+  malformed-SDK regression names in the native no-WASM/no-remote source
+  inventory guard.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_fixture_malformed_sdk_results or native_no_wasm_readiness_inventory'`
+    (`3` passed, `430` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_fixture_malformed_sdk_results or native_no_wasm_readiness_inventory or ethereum_route_canary_finalized_receipt_block'`
+    (`6` passed, `430` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`436` passed)
+
+## 2026-06-08 SCCP route-canary finalized receipt-block readiness inventory
+
+- Promoted the Ethereum route-canary finalized receipt-block inventory into the
+  release readiness `source_inventory` schema so finalized receipt-block drift
+  blocks `production_ready` before bundle publication.
+- Published bundle verification now requires the
+  `ethereum_route_canary_finalized_receipt_block_gate` row plus the
+  corresponding required release-evidence Markdown note.
+- Kept the launch-scope docs explicit: retired runtime-network families remain
+  outside SCCP launch support for now.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'route_canary_finalized_receipt_block_gate or evm_route_canary_finalized_receipt_block'`
+    (`3` passed, `141` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'ethereum_route_canary_finalized_receipt_block_inventory_gate or evm_route_canary_finalized_receipt_block'`
+    (`2` passed, `290` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or ethereum_route_canary_finalized_receipt_block_gate or ethereum_evm_block_tag_metadata_gate or ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`18` passed, `126` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or ethereum_route_canary_finalized_receipt_block_inventory_gate or evm_route_canary_finalized_receipt_block or ethereum_evm_block_tag_metadata_inventory_gate or evm_block_tag_metadata_sources or ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`14` passed, `278` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`144` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`292` passed)
+
+## 2026-06-08 Soracloud FHE policy bootstrap digest adversarial coverage
+
+- Added fixture and Norito-roundtrip regressions proving bootstrap-capable FHE
+  execution policies reject the adversarial case where both bootstrap-key and
+  full-bootstrap-material proof statement digest classes are present.
+- Covered the same nested execution-policy drift inside FHE governance bundles,
+  so defaulted decode paths cannot bypass the single-bootstrap-statement-class
+  invariant.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dm-fhe-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures fhe_execution_policy -- --nocapture`
+    (`3` passed, `74` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dm-fhe-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures fhe_governance_bundle -- --nocapture`
+    (`4` passed, `73` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dm-fhe-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --lib fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest -- --nocapture`
+    (`1` passed, `1468` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dm-fhe-policy CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --lib`
+    (`1467` passed, `2` ignored)
+
+## 2026-06-08 Iroha CLI contract manifest direct-Serde removal
+
+- Replaced the `iroha_cli` contract-app manifest Serde derives with an explicit
+  `toml::Value` decoder for `iroha.contracts.toml`, preserving defaults for
+  optional `init`, `assertions`, `profiles`, `tests`, and `smoke` sections.
+- Removed the direct `serde` dependency from `crates/iroha_cli` and removed
+  `crates/iroha_cli` from `scripts/serde_allowlist.txt`; the allowlist now only
+  tracks SCCP compatibility derives and remaining Torii extractor/OpenAPI/push
+  DTO surfaces.
+- Validation:
+  - `make guards`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli toml_to_json_value_preserves_nested_tables -- --nocapture`
+    (`1` passed in each `iroha`, `iroha3`, and `iroha_cli` binary target)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli prepare_dev_smoke_cases_validates_payloads_and_profile_defaults -- --nocapture`
+    (`1` passed in each `iroha`, `iroha3`, and `iroha_cli` binary target)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_cli dev_build_manifest_emits_interface_source_map_and_budget_sidecars -- --nocapture`
+    (`1` passed in each `iroha`, `iroha3`, and `iroha_cli` binary target)
+
+## 2026-06-08 SCCP Ethereum block-tag metadata readiness inventory
+
+- Promoted the Ethereum EVM block-tag metadata inventory into the release
+  readiness `source_inventory` schema so finalized source/destination block-tag
+  drift blocks `production_ready` before bundle publication.
+- Published bundle verification now requires the
+  `ethereum_evm_block_tag_metadata_gate` row plus the corresponding required
+  release-evidence Markdown note.
+- Kept the launch-scope docs explicit that retired platform-family lanes remain
+  outside SCCP launch support for now.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_evm_block_tag_metadata_gate or block_tag_metadata_guards'`
+    (`3` passed, `138` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'ethereum_evm_block_tag_metadata_inventory_gate or evm_block_tag_metadata_sources'`
+    (`2` passed, `288` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or ethereum_evm_block_tag_metadata_gate or ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`16` passed, `125` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or ethereum_evm_block_tag_metadata_inventory_gate or evm_block_tag_metadata_sources or ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`12` passed, `278` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`141` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`290` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP native EVM fixture SDK-row strictness
+
+- Native EVM prover parity and self-test fixture validation is now pinned with
+  adversarial readiness and bundle-verifier tests for rehashed fixture
+  artifacts that add unknown SDK result rows.
+- The no-WASM/no-remote source inventory now requires the unknown-SDK blocker
+  text and both regression test names, so future marker drift fails published
+  bundle verification.
+- Kept the launch-scope docs explicit that retired runtime-network families are
+  not supported for now while preserving the broader unsupported-family policy.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_fixture_unknown_sdk_results or native_no_wasm_readiness_inventory'`
+    (`3` passed, `425` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover or native_no_wasm_readiness_inventory or native_sccp_no_wasm_readiness_gate or ethereum_evm_source_adapter_deployment_inventory_gate'`
+    (`46` passed, `382` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`428` passed)
+
+## 2026-06-08 SCCP Ethereum live-evidence readiness inventory
+
+- Promoted the active Ethereum EVM source-live and destination-live production
+  inventories into the release-readiness `source_inventory` schema.
+- Restored the explicit SCCP launch-scope note that retired runtime-network
+  families are not supported for now.
+- Readiness reports now block `production_ready` if canonical live RPC chain
+  ids, finalized block tags, deployment receipt binding, runtime bytecode
+  hashes, route canary calldata, or proof tuple drift coverage falls out of the
+  release evidence guard.
+- Published bundle verification now requires
+  `ethereum_evm_source_live_production_gate` and
+  `ethereum_evm_live_destination_production_gate` rows plus the corresponding
+  required release-evidence Markdown note.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate'`
+    (`4` passed, `135` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate'`
+    (`2` passed, `287` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or ethereum_evm_source_live_production_gate or ethereum_evm_live_destination_production_gate or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`14` passed, `125` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or ethereum_evm_source_live_production_inventory_gate or ethereum_evm_live_destination_production_inventory_gate or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`10` passed, `279` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`139` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`289` passed)
+
+## 2026-06-08 Iroha Core STARK direct-Serde allowlist removal
+
+- Removed the direct `serde` dependency from `crates/iroha_core` and replaced
+  the STARK/FRI envelope's redundant Serde derives with the already-present
+  Norito JSON and Norito binary derives.
+- Removed `crates/iroha_core` from `scripts/serde_allowlist.txt`; the remaining
+  direct-Serde backlog is now limited to `iroha_cli`, `iroha_sccp`, and
+  `iroha_torii`.
+- Cleared a feature-enabled `zk_stark` integration-test warning by removing a
+  redundant test import.
+- Validation:
+  - `bash scripts/check_no_direct_serde.sh`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core zk_stark -- --nocapture`
+    (compile/filter pass; STARK tests are feature-gated)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark --lib synthesized_envelope -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark --lib air_envelope_verifies -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-serde CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark,zk-tests --test zk_stark stark_single_fold_roundtrip_ok_and_fail -- --nocapture`
+    (`1` passed)
+  - `make guards`
+
+## 2026-06-08 SCCP Ethereum source-adapter gate readiness inventory
+
+- Promoted the active Ethereum EVM source-adapter deployment gate inventory
+  into the release-readiness `source_inventory` schema.
+- Kept the SCCP launch-scope note explicit that retired runtime-network
+  families are not supported for now.
+- Readiness reports now block `production_ready` if the Rust
+  deployment-unblocks-production helper or its source-bridge network/config
+  binding negative tests drift out of coverage.
+- Published bundle verification now requires the
+  `ethereum_evm_source_adapter_deployment_gate` row and the corresponding
+  required release-evidence Markdown note.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_evm_source_adapter_deployment_gate'`
+    (`2` passed, `132` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate'`
+    (`2` passed, `284` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or ethereum_evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`10` passed, `124` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or ethereum_evm_source_adapter_deployment_inventory_gate or evm_source_adapter_deployment_gate or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`8` passed, `278` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`134` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`286` passed)
+
+## 2026-06-08 SCCP native no-WASM source-inventory readiness gate
+
+- Promoted the native SCCP no-WASM/no-remote source inventory from a
+  release-bundle verifier side check into the release-readiness
+  `source_inventory` schema.
+- Readiness reports now block `production_ready` when the native EVM prover
+  SDK parser, artifact verifier, self-test, browser distribution, or
+  adversarial manifest coverage inventory drifts.
+- Published bundle verification now requires the
+  `native_sccp_no_wasm_readiness_gate` row and the corresponding required
+  release-evidence Markdown note.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'native_sccp_no_wasm_readiness_gate'`
+    (`2` passed, `129` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'missing_native_sccp_no_wasm_readiness_inventory_gate'`
+    (`1` passed, `283` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_inventory or native_sccp_no_wasm_readiness_gate or public_discovery_documentation_gate or ethereum_launch_policy_documentation_gate or unready_transparent_proof_config_gate'`
+    (`8` passed, `123` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory or native_sccp_no_wasm_readiness_inventory_gate or native_no_wasm_readiness_inventory'`
+    (`6` passed, `278` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`131` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`284` passed)
+
+## 2026-06-08 Sumeragi block-sync recovery aggregate exactness
+
+- Added `BlockSyncRecoveryAdmissionExact`, `BlockSyncRecoveryAbortedExact`,
+  `BlockSyncRecoveryOwnerExact`, `BlockSyncRecoveryCommitQcRepairExact`,
+  `BlockSyncRecoveryInflightAndValidationExact`, and
+  `BlockSyncRecoveryExactness` to `SumeragiBlockSyncRecoveryGate.tla`.
+- The aggregate invariant composes admission/drop decisions,
+  aborted-placeholder handling, authoritative/passive owner behavior,
+  commit-QC evidence retention, missing-QC repair tracking, stale-inflight
+  clearing, and unvalidated-QC non-promotion for the bounded BlockSyncUpdate
+  recovery-admission model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncRecoveryGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-recovery-fast`
+    (`278529` states generated, `32768` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-recovery-fast`
+    (`33` state invariants, `NoError`, `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi commit-evidence replay aggregate exactness
+
+- Added `CommitEvidenceReplayAdmissionExact`,
+  `CommitEvidenceReplayProgressExact`, `CommitEvidenceReplayKindExact`,
+  `CommitEvidenceReplayTargetExact`, and `CommitEvidenceReplayExactness` to
+  `SumeragiCommitEvidenceReplayGate.tla`.
+- The aggregate invariant composes replay admission, evidence progress/retry,
+  vote-vs-certificate replay kind, payload-fallback exclusion,
+  local-target exclusion, and explicit-target deduplication for the bounded
+  known-block commit-evidence replay model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitEvidenceReplayGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-evidence-replay-fast`
+    (`589825` states generated, `65536` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-evidence-replay-fast`
+    (`26` state invariants, `NoError`, `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi precommit-QC view-change aggregate exactness
+
+- Added `PrecommitQcSelectionExact`, `PrecommitQcFilterFallbackExact`,
+  `PrecommitQcOrderingExact`, and `PrecommitQcViewChangeExactness` to
+  `SumeragiPrecommitQcViewChangeGate.tla`.
+- The aggregate invariant composes selection, Commit-phase filter/fallback,
+  and height/view ordering exactness for the bounded precommit-QC view-change
+  selector model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrecommitQcViewChangeGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh precommit-qc-view-change-fast`
+    (`25` states generated, `13` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-qc-view-change-fast`
+    (`20` state invariants, `NoError`, `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi highest-QC dependency deferral aggregate exactness
+
+- Added `HighestQcActionSetExact`, `HighestQcForceDecisionExact`,
+  `HighestQcNoLockLagDeferralExact`, `HighestQcLockLagRecoveryExact`,
+  `HighestQcLockRejectedSuppressionExact`,
+  `HighestQcDeferralSideEffectsExact`, and
+  `HighestQcDependencyDeferralExactness` to
+  `SumeragiHighestQcDependencyDeferralGate.tla`.
+- The aggregate invariant composes action-set equality, force-decision
+  exactness, non-lock-lag deferral, lock-lag recovery, lock-rejected
+  suppression, and deferral side-effect isolation for the bounded
+  highest-QC dependency deferral model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiHighestQcDependencyDeferralGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh highest-qc-dependency-deferral-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh highest-qc-dependency-deferral-fast`
+    (`25` state invariants, `NoError`, `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi proposal parent-resolution aggregate exactness
+
+- Added `ProposalParentSelectionExact`, `ProposalParentLookupExact`,
+  `ProposalBackupTransportExact`, and
+  `ProposalParentResolutionExactness` to
+  `SumeragiProposalParentResolutionGate.tla`.
+- The aggregate invariant composes parent selection, Kura/pending lookup and
+  overflow behavior, and inline-backup/RBC transport exactness for the
+  bounded proposal parent-resolution model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalParentResolutionGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-parent-resolution-fast`
+    (`35` states generated, `18` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-parent-resolution-fast`
+    (`26` state invariants, `NoError`, `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi round/view helper aggregate exactness
+
+- Added `RoundViewActiveHeightExact`, `RoundViewTargetExact`,
+  `RoundViewBumpExact`, `RoundViewPhaseExact`, and
+  `RoundViewHelpersExactness` to `SumeragiRoundViewHelpersGate.tla`.
+- The aggregate invariant composes active-round height derivation,
+  new-view target derivation, quorum-timeout view bump state updates, and
+  round-phase priority exactness for the bounded round/view helper model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRoundViewHelpersGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh round-view-helpers-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh round-view-helpers-fast`
+    (`44` state invariants, `NoError`, `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi timeout derivation aggregate exactness
+
+- Added `TimeoutControlCooldownExact`, `TimeoutPayloadCooldownExact`,
+  `TimeoutBackoffExact`, `TimeoutCommitPacemakerExact`,
+  `TimeoutAvailabilityExact`, `TimeoutStaleGateExact`, and
+  `TimeoutDerivationExactness` to `SumeragiTimeoutDerivationGate.tla`.
+- The aggregate invariant composes control and payload cooldown derivation,
+  quorum reschedule backoff, commit/pacemaker timeout derivation,
+  availability timeout derivation, and availability/missing-quorum/prevote
+  stale-gate preconditions for the bounded timeout helper model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTimeoutDerivationGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh timeout-derivation-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh timeout-derivation-fast`
+    (`71` state invariants, `NoError`, `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi slot tracker state aggregate exactness
+
+- Added `SlotTrackerClearExact`, `SlotTrackerAuthoritativeExact`,
+  `SlotTrackerRetainedBranchExact`, `SlotTrackerHeightLifecycleExact`,
+  `SlotTrackerProposalSeenExact`, `SlotTrackerProposalHorizonExact`, and
+  `SlotTrackerStateExactness` to `SumeragiSlotTrackerStateGate.tla`.
+- The aggregate invariant composes clear-map behavior, authoritative owner and
+  frontier metadata replacement, retained-branch refresh and seed priority,
+  height lifecycle pruning, proposal-seen exactness, and proposal-horizon
+  pruning for the bounded `SlotTrackerState` model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSlotTrackerStateGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh slot-tracker-state-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh slot-tracker-state-fast`
+    (`62` state invariants, `NoError`, `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi frontier proposal grace aggregate exactness
+
+- Added helper-specific bounded case sets plus
+  `FrontierProposalTxBudgetExact`, `FrontierProposalAssemblyExact`,
+  `FrontierProposalIngressExact`, `FrontierFullProposalGraceExact`,
+  `FrontierInitialProposalGraceExact`, `FrontierMissingQcReacquireExact`,
+  `FrontierProposalSaturatingArithmeticExact`, and
+  `FrontierProposalGraceExactness` to
+  `SumeragiFrontierProposalGraceGate.tla`.
+- The aggregate exactness family covers transaction-budget clamping,
+  assembly-window derivation, ingress-drain grace, full proposal grace, initial
+  frontier grace, missing-QC reacquire windows, and saturating arithmetic
+  anchors for the bounded exact-frontier proposal-grace model.
+- Wired the fast config to check the aggregate sub-invariants directly,
+  documented the proof surface in the formal README and roadmap, and gave the
+  proposal-grace Apalache fast mode an 8 GiB default heap while preserving
+  caller-supplied `JVM_ARGS`.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierProposalGraceGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-proposal-grace-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-proposal-grace-fast`
+    (`47` state invariants, `NoError`, `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi frontier slot helper aggregate exactness
+
+- Added `FrontierSlotBasicHelperExact`, `FrontierSlotProgressLagExact`,
+  `FrontierSlotCatchupMarkerExact`, `FrontierSlotNestedStateExact`,
+  `FrontierSlotBodyAvailableExact`, and `FrontierSlotHelpersExactness` to
+  `SumeragiFrontierSlotHelpersGate.tla`.
+- The aggregate invariant composes lag/body/local-vote/timeout helper
+  exactness, progress and lag timer updates, catch-up marker behavior,
+  nested-state completeness, and body-available transition exactness for the
+  bounded exact-frontier helper model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSlotHelpersGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-helpers-fast`
+    (`2` states generated, `1` distinct, no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-helpers-fast`
+    (`36` state invariants, `NoError`, `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi frontier slot tracker aggregate exactness
+
+- Added `FrontierSlotConstructorExact`, `FrontierSlotEvidenceExact`,
+  `FrontierSlotRepairTimeoutExact`, `FrontierSlotCrossInvariantExact`,
+  `FrontierSlotWrapperExact`, and `FrontierSlotTrackerExactness` to
+  `SumeragiFrontierSlotTrackerGate.tla`.
+- The aggregate invariant composes constructor exactness,
+  block/body/vote/QC evidence handling, authoritative repair and timeout
+  behavior, cross-cutting action invariants, and apply-wrapper slot lifecycle
+  exactness for the bounded exact-frontier FSM model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSlotTrackerGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-slot-tracker-fast`
+    (`2` states generated, `1` distinct state, `0` queued; no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-slot-tracker-fast`
+    (`91` state invariants checked; `NoError`; `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi proposal-liveness aggregate exactness
+
+- Added `ProposalLivenessTransitionExact`,
+  `ProposalLivenessNewSlotExact`, `ProposalLivenessEnsureExact`,
+  `ProposalLivenessMarkExact`, and `ProposalLivenessExactness` to
+  `SumeragiProposalLivenessGate.tla`.
+- The aggregate invariant composes proposal-liveness state transition
+  exactness, fresh-slot reset, ensure-slot behavior, and mark-state update
+  exactness for the bounded missing-QC proposal-liveness helper model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiProposalLivenessGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-liveness-fast`
+    (`2` states generated, `1` distinct state, `0` queued; no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-liveness-fast`
+    (`26` state invariants checked; `NoError`; `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi idle backlog signal aggregate exactness
+
+- Added `IdleBacklogRawSignalExact`, `IdleBacklogDerivedSignalExact`,
+  `IdleBacklogGateExact`, and `IdleBacklogSignalsExactness` to
+  `SumeragiIdleBacklogSignalsGate.tla`.
+- The aggregate invariant composes raw near-quorum signal isolation,
+  residual-derived backlog propagation, method/actor fast-timeout gate
+  agreement, and benign/closing backlog anchors for the bounded idle backlog
+  helper model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiIdleBacklogSignalsGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh idle-backlog-signals-fast`
+    (`2` states generated, `1` distinct state, `0` queued; no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh idle-backlog-signals-fast`
+    (`30` state invariants checked; `NoError`; `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi missing-QC timing aggregate exactness
+
+- Added `MissingQcIdleTimingExact`, `MissingQcStreakForcedExact`,
+  `MissingQcRotationExact`, `MissingQcArithmeticExact`, and
+  `MissingQcTimingExactness` to `SumeragiMissingQcTimingGate.tla`.
+- The aggregate invariant composes idle-round and idle-view timeout
+  derivation, missing-QC streak advancement, forced-proposal gating,
+  rotation deferral, hard-cap derivation, and saturating multiplication
+  exactness for the bounded timing helper model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingQcTimingGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-qc-timing-fast`
+    (`2` states generated, `1` distinct state, `0` queued; no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-qc-timing-fast`
+    (`51` state invariants checked; `NoError`; `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi stalled pending-frontier timeout aggregate exactness
+
+- Added `StalledPendingFrontierBacklogExact`,
+  `StalledPendingFrontierDeferredExact`,
+  `StalledPendingFrontierTimeoutCapExact`,
+  `StalledPendingFrontierArithmeticExact`,
+  `StalledPendingFrontierProjectionExact`, and
+  `StalledPendingFrontierTimeoutExactness` to
+  `SumeragiStalledPendingFrontierTimeoutGate.tla`.
+- The aggregate invariant composes recovery backlog extension, deferred-QC
+  multiplier selection, uncapped timeout selection, active block-production
+  gap capping, saturating arithmetic, and decision projection exactness for
+  the bounded frontier timeout helper model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiStalledPendingFrontierTimeoutGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stalled-pending-frontier-timeout-fast`
+    (`2` states generated, `1` distinct state, `0` queued; no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh stalled-pending-frontier-timeout-fast`
+    (`47` state invariants checked; `NoError`; `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi stalled pending-block timeout decision aggregate exactness
+
+- Added `StalledPendingTimeoutBaseNearExact`,
+  `StalledPendingTimeoutNearGateExact`,
+  `StalledPendingTimeoutRecoveryExact`,
+  `StalledPendingTimeoutClassExact`,
+  `StalledPendingTimeoutDecisionExact`, and
+  `StalledPendingTimeoutExactness` to
+  `SumeragiStalledPendingTimeoutDecisionGate.tla`.
+- The aggregate invariant composes base/near timeout selection,
+  near-quorum gate inputs, recovery backlog classification, class priority, and
+  decision projection exactness for the bounded decision helper model.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof surface in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiStalledPendingTimeoutDecisionGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stalled-pending-timeout-fast`
+    (`2` states generated, `1` distinct state, `0` queued; no errors)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh stalled-pending-timeout-fast`
+    (`56` state invariants checked; `NoError`; `EXITCODE: OK`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP native EVM fixture role separation
+
+- Removed the remaining retired-network wording requested from SCCP
+  launch-scope docs and status/roadmap notes; a full literal-term scan outside
+  ignored build artifacts now has no matches.
+- Hardened native EVM Groth16 prover readiness and release-bundle verification
+  so cross-SDK parity fixtures and native self-test fixtures reject reused
+  semantic digest roles even when every SDK row and manifest audit hash is
+  recomputed.
+- Added adversarial coverage for duplicate `native_sdk_artifacts` SDK rows, so
+  a rehashed native prover manifest cannot hide a missing SDK behind a repeated
+  SDK entry in either readiness generation or published bundle verification.
+- Added fixture-level missing-SDK coverage for native EVM parity and self-test
+  vectors, so rehashed fixture artifacts cannot omit a required SDK result row.
+- Added fixture-level public-signal coverage for native EVM parity and
+  self-test vectors, so rehashed fixture artifacts cannot shrink the signal
+  vector or replace a signal word with non-hex text while keeping SDK rows in
+  sync.
+- Aligned the strict release-bundle source-inventory schema with the
+  `native_sccp_no_wasm_readiness_gate`, and pinned the gate with readiness and
+  bundle missing-gate regressions.
+- Pinned the Ethereum EVM source-adapter deployment source-inventory gate with
+  the matching bundle missing-gate regression so ready bundle generation cannot
+  pass if that source-inventory row is absent.
+- Extended the no-WASM/readiness inventory guard to require the new role-key
+  constants, helper, duplicate-SDK marker, missing-SDK fixture tests,
+  public-signal fixture tests, and negative tests, and made readiness Markdown
+  source inventory row ordering deterministic against the sorted JSON artifact.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_fixture_public_signal_shape or native_no_wasm_readiness_inventory'`
+    (`3` passed, `417` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_fixture_missing_sdk_results or native_no_wasm_readiness_inventory'`
+    (`3` passed, `409` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_native_evm_prover_sdk_artifacts or native_no_wasm_readiness_inventory'`
+    (`3` passed, `407` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_parity_fixture_role_reuse or native_evm_self_test_role_reuse or native_no_wasm_readiness_inventory'`
+    (`5` passed, `397` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover or native_no_wasm_readiness_inventory or native_sccp_no_wasm_readiness_gate or ethereum_evm_source_adapter_deployment_inventory_gate'`
+    (`46` passed, `374` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+    (`420` passed)
+
+## 2026-06-08 Sumeragi pending fast-path timeout aggregate exactness
+
+- Added `PendingFastPathTimeoutDerivationExact`,
+  `PendingFastPathInlineFallbackExact`, and
+  `PendingFastPathTimeoutExactness` to
+  `SumeragiPendingFastPathTimeoutGate.tla`.
+- The aggregate invariant composes saturated margin subtraction, half-timeout
+  fallback, one-millisecond minimum, floor-boundary handling, large-quorum
+  margin preservation, and DA inline validation fallback exactness.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingFastPathTimeoutGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-fast-path-timeout-fast`
+    (`NoError` up to computation length `1`; `24` state invariants checked at
+    state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-fast-path-timeout-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 SoraNet relay direct-Serde allowlist removal
+
+- Removed unused direct `serde` and `serde_json` dependencies from
+  `tools/soranet-relay`; the relay configuration, guard, directory, compliance,
+  token, and operator-tool JSON paths already use `norito::json` APIs.
+- Removed `tools/soranet-relay` from `scripts/serde_allowlist.txt`, reducing
+  the remaining direct-Serde migration backlog to production crates that still
+  have active Serde surfaces.
+- Validation:
+  - `bash scripts/check_no_direct_serde.sh`
+  - `rg -n "serde_json|\bserde\b|serde::|use serde|#\[serde|derive\(serde" tools/soranet-relay/Cargo.toml tools/soranet-relay/src || true`
+  - `git diff -- Cargo.lock`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soranet-relay-serde CARGO_INCREMENTAL=0 cargo check -j 1 -p soranet-relay`
+
+## 2026-06-08 Sumeragi cached-slot timeout aggregate exactness
+
+- Added `CachedSlotTimeoutFastEligibilityExact`,
+  `CachedSlotTimeoutSelectionExact`,
+  `CachedSlotTimeoutHysteresisWaitExact`, `CachedSlotTimeoutStreakExact`,
+  and `CachedSlotTimeoutExactness` to `SumeragiCachedSlotTimeoutGate.tla`.
+- The aggregate invariant composes near-quorum fast-path eligibility,
+  shorter/base timeout selection, hysteresis wait-boundary handling, invalid
+  hysteresis suppression, saturating streak advancement, and capped
+  hysteresis-factor exactness.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCachedSlotTimeoutGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh cached-slot-timeout-fast`
+    (`NoError` up to computation length `1`; `35` state invariants checked at
+    state `0`, `22` checked at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh cached-slot-timeout-fast`
+    (`45` states generated, `23` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi idle-view proposal budget aggregate exactness
+
+- Added `IdleViewProposalBudgetPreserveEligibilityExact`,
+  `IdleViewProposalBudgetPacingExact`, `IdleViewProposalBudgetHardStopExact`,
+  `IdleViewProposalBudgetEffectsExact`, `IdleViewProposalBudgetRetryExact`,
+  and `IdleViewProposalBudgetExactness` to
+  `SumeragiIdleViewProposalBudgetGate.tla`.
+- The aggregate invariant composes proposal-budget preservation eligibility,
+  pacing-only allowance, hard-stop suppression, idle-repair/proposal-slot
+  effects, and post-proposal retry exactness.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiIdleViewProposalBudgetGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh idle-view-proposal-budget-fast`
+    (`NoError` up to computation length `1`; `30` state invariants checked at
+    state `0`, `19` checked at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh idle-view-proposal-budget-fast`
+    (`59` states generated, `30` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Norito JSON guard and SCCP/Torii serde_json removal
+
+- Replaced the retired SCALE-only guard in `make guards` with
+  `scripts/check_no_legacy_codec.sh`, covering workspace manifests for retired
+  non-Norito codec dependencies, and added pytest coverage for clean, root, and
+  nested-manifest cases.
+- Moved SCCP Torii bundle/artifact/job JSON response paths and bridge submit
+  request parsing off direct `serde_json` calls onto `norito::json` helpers.
+- Added native Norito JSON support for SCCP proof/bundle DTOs, including custom
+  externally tagged enum JSON for payload and projection shapes plus focused
+  tests for payload and normalized-codec roundtrips.
+- Added a temporary direct-Serde guard allowlist for legacy crates that still
+  require Serde while the remaining migration is tracked.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-json CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_sccp --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-json CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_torii --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-json CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp json_roundtrips -- --nocapture`
+    (`2` passed)
+  - `make guards`
+  - `python3 -m py_compile scripts/tests/check_no_legacy_codec_test.py && python3 -m pytest -q scripts/tests/check_no_legacy_codec_test.py`
+    (`3` passed)
+
+## 2026-06-08 Sumeragi post-commit pacemaker kick aggregate exactness
+
+- Added `PostCommitPacemakerKickAdmissionExact`,
+  `PostCommitPacemakerKickPacingExact`,
+  `PostCommitPacemakerKickHardStopExact`,
+  `PostCommitPacemakerKickCallbackExact`,
+  `PostCommitPacemakerKickTimestampExact`, and
+  `PostCommitPacemakerKickExactness` to
+  `SumeragiPostCommitPacemakerKickGate.tla`.
+- The aggregate invariant composes queued-work admission, pacing-only
+  allowance, hard-backpressure suppression, callback-result independence, and
+  timestamp/return consistency.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPostCommitPacemakerKickGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh post-commit-pacemaker-kick-fast`
+    (`NoError` up to computation length `1`; `23` state invariants checked at
+    state `0`, `14` checked at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh post-commit-pacemaker-kick-fast`
+    (`47` states generated, `24` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud FHE job-run proof scope preflight
+
+- Hardened Torii signed FHE job-run proof preflight so full-bootstrap material
+  proofs, execution proofs, and artifact bundles are only accepted for
+  full-bootstrap job requests backed by `FullBootstrapV1` bootstrap-key
+  material.
+- Full-bootstrap execution proofs now also require signed artifact bundle bytes
+  before Torii decodes or forwards verifier-backed proof attachments.
+- Added Torii regressions for out-of-scope full-bootstrap material proofs,
+  out-of-scope execution proofs, execution proofs without artifacts,
+  replay-shaped execution public inputs under a valid full-bootstrap request
+  shape, and malformed artifact bundles.
+- Repaired existing validation blockers in SCCP/Torii by keeping manually
+  string-encoded SCCP JSON enums out of derived JSON impls, adding explicit
+  Norito JSON tags to SCCP enums embedded in JSON-derived structs, and wrapping
+  complex `norito::json!` object values in routing helpers/tests.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-torii-proof-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`5` passed, `0` failed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-torii-proof-scope CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp --lib -- --nocapture`
+    (`255` passed, `0` failed)
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py && python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 Sumeragi commit-inflight timeout aggregate exactness
+
+- Added `CommitInflightTimeoutEligibilityExact`,
+  `CommitInflightTimeoutMarkExact`,
+  `CommitInflightTimeoutDiagnosticsExact`,
+  `CommitInflightTimeoutAttachabilityExact`,
+  `CommitInflightTimeoutNoSideEffectsExact`, and
+  `CommitInflightTimeoutExactness` to
+  `SumeragiCommitInflightTimeoutGate.tla`.
+- The aggregate invariant composes timeout eligibility, one-shot timeout-mark
+  persistence, status/warning diagnostics, inflight-result attachability, and
+  absence of recovery, view-change, commit-outcome, and pacemaker side effects.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitInflightTimeoutGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-inflight-timeout-fast`
+    (`NoError` up to computation length `1`; `45` state invariants checked at
+    state `0`, `16` checked at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-inflight-timeout-fast`
+    (`17` states generated, `9` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi commit-stage timing threshold aggregate exactness
+
+- Added `CommitStageTimingOutputExact`,
+  `CommitStageTimingZeroThresholdExact`, `CommitStageTimingBlockingExact`,
+  `CommitStageTimingStageExact`, `CommitStageTimingRecordedGateExact`, and
+  `CommitStageTimingThresholdExactness` to
+  `SumeragiCommitStageTimingThresholdGate.tla`.
+- The aggregate invariant composes slow-log output tuple equality,
+  zero-threshold suppression, blocking-total threshold inclusion,
+  observed-stage maximum thresholding, validation-substage coverage, and the
+  recorded-timing gate.
+- Wired the fast config to check the aggregate invariant directly, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitStageTimingThresholdGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-stage-timing-threshold-fast`
+    (`NoError` up to computation length `1`; `20` state invariants checked at
+    state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-stage-timing-threshold-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi commit-worker config aggregate exactness
+
+- Added `CommitWorkerConfigOutputExact`, `CommitWorkerConfigFloorExact`,
+  `CommitWorkerConfigExplicitExact`, `CommitWorkerConfigPositiveExact`, and
+  `CommitWorkerConfigExactness` to `SumeragiCommitWorkerConfigGate.tla`.
+- The aggregate invariant composes resolved output tuple equality, work/result
+  zero-capacity floors, explicit-capacity preservation, and positive resolved
+  queue-capacity exactness.
+- Wired the aggregate through `SumeragiCommitWorkerConfigGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitWorkerConfigGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-worker-config-fast`
+    (`NoError` up to computation length `1`; `45` state invariants checked at
+    state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-worker-config-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi commit-job dispatch aggregate exactness
+
+- Added `CommitJobDispatchProgressExact`,
+  `CommitJobDispatchOwnershipExact`, `CommitJobDispatchRetentionExact`,
+  `CommitJobDispatchScenarioExact`, `CommitJobDispatchStructuralExact`, and
+  `CommitJobDispatchExactness` to `SumeragiCommitJobDispatchGate.tla`.
+- The aggregate invariant composes dispatch progress, worker/inline ownership,
+  pending retention and recovery, scenario-specific behavior, and structural
+  ownership constraints.
+- Wired the aggregate through `SumeragiCommitJobDispatchGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitJobDispatchGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-job-dispatch-fast`
+    (`NoError` up to computation length `1`; `97` state invariants checked at
+    state `0`, `85` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-job-dispatch-fast`
+    (`25` states generated, `13` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP launch-scope readiness inventory gate
+
+- Added `launch_scope_constant_gate` to SCCP release-readiness
+  `source_inventory`, backed by the strict launch-scope constant scan used by
+  public release-bundle verification.
+- Production readiness now fails if the active Ethereum launch policy constants
+  or supported launch-domain set drift across Rust, all-lanes evidence, or
+  readiness tooling, and published bundle verification rejects reports that omit
+  the new gate.
+- Updated the SCCP roadmap to record that readiness source inventory now pins
+  both launch-scope constants and retired-network surface guards before
+  production reports can pass.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'launch_scope_constant_gate or missing_launch_scope_source_gate or active_launch_policy or supported_launch_scope'`
+    (`4` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'launch_scope_constant_inventory or launch_scope_inventory_gate or active_launch_policy'`
+    (`3` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`117` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`276` passed)
+
+## 2026-06-08 SCCP unready transparent-proof config inventory gate
+
+- Added `unready_transparent_proof_config_gate` to SCCP release-readiness
+  `source_inventory`, backed by the strict verifier inventory for the
+  diagnostic transparent-proof `allow_unready` configuration path.
+- Production readiness now fails if the inventory no longer proves the
+  diagnostic flag is config-owned and free of runtime environment override
+  paths, and published release-bundle verification rejects readiness reports
+  that omit the gate.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`121` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`277` passed)
+
+## 2026-06-08 SCCP native EVM prover path hardening
+
+- Hardened SCCP native EVM prover bundle path validation across the public
+  JS/browser, Swift, Kotlin/JVM, Java Android, and C# manifest parsers, plus
+  release readiness rendering, release-bundle generation, and published bundle
+  verification.
+- Native prover manifest paths now reject URI/drive-prefix style names and
+  WASM/remote-prover dependency markers in filenames, in addition to existing
+  relative-path, role-uniqueness, size, hash, duplicate-key, and payload-marker
+  checks. SDK source implementations build the forbidden marker vocabulary
+  from fragments so the native no-WASM/no-remote-prover source inventory stays
+  fail-closed without carrying raw forbidden dependency tokens in public
+  artifacts.
+- Added adversarial coverage for SDK manifest parsing, readiness reports,
+  bundle generation before copy, and verifier-time published manifest mutation,
+  and pinned the new guard in the native no-WASM source-inventory gate.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_release_bundle.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `rg -n "\bwasm\b|\bsnarkjs\b|\bremoteProver\b|\bremote prover\b|\bremote_prover\b|\bremote-prover\b|\bproverUrl\b|\bproverURL\b|\bprover_url\b|\bproverEndpoint\b|\bprover_endpoint\b|\bWebAssembly\b" javascript/iroha_js/src/sccp.js javascript/iroha_js/dist/sccp.js javascript/iroha_js/src/index.js javascript/iroha_js/dist/index.js javascript/iroha_js/index.d.ts javascript/iroha_js/package.json IrohaSwift/Sources/IrohaSwift/SccpEvmProver.swift kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/EvmSccpProver.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/EvmSccpProver.java csharp/src/Hyperledger.Iroha.Sdk/Sccp/EthereumMainnetSccp.cs python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py`
+    (no matches)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'native_evm_prover_uri_scheme_path or native_evm_prover_forbidden_path_marker'`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover_uri_scheme_path or native_evm_prover_forbidden_path_marker'`
+    (`4` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py -k 'native_evm_prover or native_no_wasm_readiness_inventory'`
+    (`41` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'native_local_prover_only or all_public_sccp_sdk_sources_are_native_local_prover_only or native_source_scan_rejects_forbidden_prover_markers'`
+    (`4` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`121` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`277` passed)
+  - `cd javascript/iroha_js && node --check src/sccp.js && node --check dist/sccp.js`
+  - `node --test javascript/iroha_js/test/package_dist.test.js`
+    (`69` passed, including the SCCP TON proof-wrapper canonical bundle path,
+    SCCP EVM-family Groth16 helpers, and browser no-WASM guards)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnetSccpFacadeRequiresChainId1AndEthTarget`
+    (`1` passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --rerun-tasks --tests 'org.hyperledger.iroha.sdk.sccp.EvmSccpProverTest.ethereumMainnetFacadeRequiresChainId1AndEthTarget' --console=plain`
+    (`BUILD SUCCESSFUL`; `7` tasks executed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests ./gradlew :core:test --rerun-tasks --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests`
+    (`BUILD SUCCESSFUL`; `7` tasks executed)
+  - C# was not rerun because `dotnet` is not installed on `PATH` and the
+    Homebrew `dotnet`/`dotnet@8` prefixes reported by `brew --prefix` are absent
+    on disk.
+
+## 2026-06-08 Sumeragi prevalidated commit artifact aggregate exactness
+
+- Added `TrustedArtifactExact`, `WitnessRootsExact`, `CommitAcceptsExact`, and
+  `PrevalidatedCommitArtifactExactness` to
+  `SumeragiPrevalidatedCommitArtifactGate.tla`.
+- The aggregate invariant composes trusted artifact subject/QC/root binding,
+  witness parent/post-state root matching, and final optimized commit
+  acceptance exactness.
+- Wired the aggregate through `SumeragiPrevalidatedCommitArtifactGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrevalidatedCommitArtifactGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh prevalidated-commit-artifact-fast`
+    (`NoError` up to computation length `1`; `11` state invariants checked at
+    state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh prevalidated-commit-artifact-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi consensus-params ingress aggregate exactness
+
+- Added `ConsensusParamsExpectedCollectorExact`,
+  `ConsensusParamsWarningsExact`, `ConsensusParamsTelemetryExact`,
+  `ConsensusParamsResultExact`, and `ConsensusParamsIngressExactness` to
+  `SumeragiConsensusParamsIngressGate.tla`.
+- The aggregate invariant composes membership/current collector-parameter
+  expectation, independent `collectors_k` and `redundant_send_r` diagnostics,
+  advertised-value telemetry, and fail-open success-result exactness.
+- Wired the aggregate through `SumeragiConsensusParamsIngressGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiConsensusParamsIngressGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh consensus-params-ingress-fast`
+    (`NoError` up to computation length `1`; `45` state invariants checked at
+    state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh consensus-params-ingress-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP retired-network readiness inventory gate
+
+- Added `retired_network_surface_gate` to SCCP release-readiness
+  `source_inventory`, backed by the strict retired-network surface scan helper
+  used by public release-bundle verification.
+- Production readiness now fails if the launch-scope no-support note or
+  retired-network active-tree guard inventory is missing, and the bundle
+  verifier rejects readiness reports that omit the new gate.
+- Cleaned the SCCP roadmap launch-scope note so it states that retired
+  runtime-network families remain outside launch support for now while the
+  production surface stays limited to ETH, BSC, Solana, TON, and TRON.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'retired_network_surface_gate or proof_request_bundle_gate_inventory or missing_sccp_proof_request_source_gate or missing_retired_network_source_gate'`
+    (`4` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory_gate or retired_network_inventory_gate or retired_network_surface_inventory'`
+    (`7` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`115` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`271` passed)
+
+## 2026-06-07 Sumeragi membership mismatch ingress aggregate exactness
+
+- Added `MembershipMismatchIngressStateExact`,
+  `MembershipMismatchIngressTelemetryExact`,
+  `MembershipMismatchIngressFailClosedExact`, and
+  `MembershipMismatchIngressExactness` to
+  `SumeragiMembershipMismatchIngressGate.tla`.
+- The aggregate invariant composes mismatch active/count state, threshold
+  warning and telemetry side effects, fail-closed drop decisions, status record
+  emission, and `membership_mismatch` status-reason exactness.
+- Wired the aggregate through `SumeragiMembershipMismatchIngressGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMembershipMismatchIngressGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh membership-mismatch-ingress-fast`
+    (`NoError` up to computation length `1`; `19` state invariants checked at
+    state `0`, `12` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh membership-mismatch-ingress-fast`
+    (`19` states generated, `19` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi membership advert aggregate exactness
+
+- Added `MembershipAdvertHashExact`, `MembershipAdvertStatusExact`,
+  `MembershipAdvertCollectorPlanExact`, `MembershipAdvertPayloadExact`, and
+  `MembershipAdvertBridgeExactness` to `SumeragiMembershipAdvertGate.tla`.
+- The aggregate invariant composes computed membership-view hash exactness,
+  operator status snapshot exactness, membership-height collector-plan lookup
+  exactness, `collectors_k` clamp behavior, `redundant_send_r` forwarding, and
+  scheduled advert membership-payload exactness.
+- Wired the aggregate through `SumeragiMembershipAdvertGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMembershipAdvertGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh membership-advert-fast`
+    (`NoError` up to computation length `1`; `71` state invariants checked at
+    state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh membership-advert-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP release/corridor broad validation
+
+- Reran the full focused Python validation suites for the SCCP production
+  corridor, release-readiness report, and release-bundle verifier after the
+  recent proof-request gate, Java Android harness, Kotlin selector, and
+  `source_inventory` schema hardening.
+- Validation:
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py`
+    (`25` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`113` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`270` passed)
+
+## 2026-06-07 Sumeragi membership mismatch status aggregate exactness
+
+- Added `MembershipMismatchSnapshotExact`,
+  `MembershipMismatchRecordRegistryExact`,
+  `MembershipMismatchRecordLastExact`, `MembershipMismatchClearExact`,
+  `MembershipMismatchResetExact`, and `MembershipMismatchStatusExactness` to
+  `SumeragiMembershipMismatchStatusGate.tla`.
+- The aggregate invariant composes snapshot tuple exposure/reset, per-peer
+  active/count/return values for records, newest last-context recording, clear
+  behavior, and reset behavior exactness.
+- Wired the aggregate through `SumeragiMembershipMismatchStatusGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMembershipMismatchStatusGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh membership-mismatch-status-fast`
+    (`NoError` up to computation length `1`; `29` state invariants checked at
+    state `0`, `26` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh membership-mismatch-status-fast`
+    (`12` states generated, `12` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP readiness source-inventory schema
+
+- Hardened `scripts/sccp_verify_release_bundle.py` so readiness
+  `source_inventory` is now schema-validated instead of merely accepted as a
+  top-level field. Strict release-bundle verification now rejects unknown
+  source-inventory gates, missing `proof_request_bundle_gate`, malformed gate
+  objects, blocked validation status, and non-empty blocker lists.
+- Added adversarial release-bundle tests that mutate a generated production
+  bundle's readiness JSON while regenerating canonical markdown/manifest hashes,
+  proving the new errors come from source-inventory structure rather than
+  incidental markdown drift.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_inventory_gate or unknown_source_inventory_gate or missing_source_inventory_gate or blocked_source_inventory_gate or malformed_source_inventory_gate'`
+    (`4` passed, `266` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'proof_request_bundle_gate'`
+    (`1` passed, `269` deselected)
+
+## 2026-06-07 Soracloud full-bootstrap artifact preflight
+
+- Hardened Core governed full-bootstrap execution verifier-key derivation so it
+  validates the entire BFV artifact bundle before decoding verifier-key
+  material. Drifted non-verifier artifacts now fail at that helper boundary
+  instead of relying on later per-slot statement hashing.
+- Added a regression for accumulator-artifact drift in governed verifier-key
+  derivation.
+- Hardened Torii signed FHE job-run proof preflight so supplied full-bootstrap
+  artifact bundles require full-bootstrap bootstrap-key material and validate
+  locally against governed material before instruction construction.
+- Added a Torii regression proving malformed but signed artifact bundles fail
+  as bad requests.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core-governed-vk CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core governed_full_bootstrap_execution_verifier_key_rejects_artifact_bundle_drift --lib -- --nocapture`
+    (`1` passed, `0` failed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-torii-proof-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_malformed_full_bootstrap_artifacts_locally --lib -- --nocapture`
+    (`1` passed, `0` failed)
+
+## 2026-06-07 SCCP Kotlin TON corridor gate
+
+- Updated `scripts/check_sccp_production_corridor.sh` so the Kotlin/JVM phase
+  keeps the broad SCCP package test selector and also emits an explicit
+  `org.hyperledger.iroha.sdk.sccp.TonSccpProverTest` selector in the same
+  Gradle invocation.
+- Tightened the Kotlin phase transcript matchers in
+  `scripts/sccp_release_readiness_report.py` and
+  `scripts/sccp_verify_release_bundle.py` so required Kotlin test-class
+  fragments must appear as exact command tokens instead of being satisfied by
+  the package wildcard alone.
+- Added readiness-report, release-bundle, and corridor dry-run adversarial
+  checks that reject Kotlin phase evidence missing the explicit TON
+  proof-request test selector.
+- Validation:
+  - `bash -n scripts/check_sccp_production_corridor.sh`
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/check_sccp_production_corridor_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `bash scripts/check_sccp_production_corridor.sh --dry-run --phase kotlin-sdk`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'kotlin_phase_covers_sccp_package or java_android'`
+    (`2` passed, `23` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'kotlin_phase_requires_ton_prover_test or kotlin_log_without_ton_prover_test or java_android_phase_requires_source_proof_harness or java_android_log_without_ton_harness'`
+    (`4` passed, `109` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'kotlin_phase_requires_ton_prover_test or kotlin_log_without_ton_prover_test or java_android_phase_requires_source_proof_harness or java_android_log_without_ton_harness'`
+    (`4` passed, `262` deselected)
+
+## 2026-06-07 Sumeragi membership-view hash aggregate exactness
+
+- Added `MembershipViewHashBaseExact`,
+  `MembershipViewHashContextExact`,
+  `MembershipViewHashPeerOrderExact`,
+  `MembershipViewHashPeerCardinalityExact`, and
+  `MembershipViewHashExactness` to `SumeragiMembershipViewHashGate.tla`.
+- The aggregate invariant composes baseline field presence and order,
+  chain/height/view/epoch context changes, peer-order preservation, and
+  peer-cardinality preservation for added, duplicate, single, and empty
+  rosters.
+- Wired the aggregate through `SumeragiMembershipViewHashGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMembershipViewHashGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh membership-view-hash-fast`
+    (`NoError` up to computation length `1`; `13` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh membership-view-hash-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP Java Android TON corridor gate
+
+- Tightened the SCCP production-corridor transcript requirements in
+  `scripts/sccp_release_readiness_report.py` and
+  `scripts/sccp_verify_release_bundle.py` so Java Android phase evidence must
+  prove `TonSccpProverTests` is present in `ANDROID_HARNESS_MAINS`, in addition
+  to the existing source-proof harness.
+- Generalized the Java Android command matcher so required SCCP harness classes
+  are matched inside the `ANDROID_HARNESS_MAINS` environment token, then added
+  readiness-report and release-bundle adversarial tests where Source and TRON
+  harnesses remain present but the TON proof-request harness is omitted.
+- Fixed strict release-bundle verification for the readiness report's
+  `source_inventory` field by allowing the field, requiring the Source
+  Inventory markdown heading, rendering the Source Inventory table in expected
+  markdown, and requiring the proof-request source-inventory release-evidence
+  sentence.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/check_sccp_production_corridor_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'java_android_phase_requires_source_proof_harness or java_android_log_without_source_harness or java_android_log_without_ton_harness'`
+    (`3` passed, `261` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'java_android_phase_requires_source_proof_harness or java_android_log_without_source_harness or java_android_log_without_ton_harness'`
+    (`3` passed, `108` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py -k 'java_android or kotlin_phase_covers_sccp_package'`
+    (`2` passed, `23` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'proof_request_bundle_gate'`
+    (`1` passed, `263` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'proof_request_bundle_gate_inventory or missing_sccp_proof_request_source_gate'`
+    (`2` passed, `109` deselected)
+
+## 2026-06-07 Sumeragi roster index projection aggregate exactness
+
+- Added `RosterIndexProjectionEmptyExact`,
+  `RosterIndexProjectionFallbackExact`,
+  `RosterIndexProjectionProviderExact`,
+  `RosterIndexManagerApplyExact`,
+  `RosterIndexProjectionManagerExact`, and
+  `RosterIndexProjectionExactness` to
+  `SumeragiRosterIndexProjectionGate.tla`.
+- The aggregate invariant composes empty-topology projection,
+  provider-missing local fallback, complete-provider sparse projection,
+  provider-overflow fail-closed behavior, manager normalization, and
+  projection-to-manager exactness.
+- Wired the aggregate through `SumeragiRosterIndexProjectionGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterIndexProjectionGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-index-projection-fast`
+    (`NoError` up to computation length `1`; `15` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-index-projection-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP packaged JS proof-request gate inventory
+
+- Extended the SCCP proof-request bundle/source-proof release inventory to pin
+  `javascript/iroha_js/dist/sccp.js` alongside `src/sccp.js`, including the
+  packaged non-SORA source-proof fail-closed condition and diagnostic.
+- Added sparse packaged-JS adversarial checks to the release-bundle and
+  readiness-report inventory tests so a built artifact that keeps the helper
+  shell but drops the `sourceProofBytes` byte-length requirement is rejected.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'proof_request_bundle_gate'`
+    (`1` passed, `262` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'proof_request_bundle_gate_inventory or missing_sccp_proof_request_source_gate'`
+    (`2` passed, `108` deselected)
+
+## 2026-06-07 SCCP proof-request inventory implementation markers
+
+- Strengthened `scripts/sccp_verify_release_bundle.py` so SCCP
+  proof-request bundle/source-proof inventory now pins the actual
+  non-SORA source-proof fail-closed implementation conditions in JavaScript,
+  Python, Swift, Kotlin/JVM, and Java Android, rather than relying only on
+  broad source-proof symbols or test names.
+- Added sparse-implementation adversarial checks to the release-bundle and
+  readiness-report tests so an implementation that keeps helper names but drops
+  the non-SORA source-proof requirement is reported as a missing source marker.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'proof_request_bundle_gate'`
+    (`1` passed, `262` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'proof_request_bundle_gate_inventory or missing_sccp_proof_request_source_gate'`
+    (`2` passed, `108` deselected)
+
+## 2026-06-07 Sumeragi BlockSyncUpdate roster hydration aggregate exactness
+
+- Added `BlockSyncUpdateRosterConstructionExact`,
+  `BlockSyncUpdateRosterPersistedLookupExact`,
+  `BlockSyncUpdateRosterHistoryLookupExact`,
+  `BlockSyncUpdateRosterShortCircuitExact`,
+  `BlockSyncUpdateRosterFallbackGateExact`,
+  `BlockSyncUpdateRosterFallbackSelectionExact`,
+  `BlockSyncUpdateRosterApplicationExact`,
+  `BlockSyncUpdateRosterStakeFillExact`, and
+  `BlockSyncUpdateRosterHydrationExactness` to
+  `SumeragiBlockSyncUpdateRosterHydrationGate.tla`.
+- The aggregate invariant composes update construction, persisted and history
+  lookup argument/order exactness, source short-circuiting, uncertified
+  fallback gating, fallback roster selection, update application, and NPoS
+  stake-fill exactness.
+- Wired the aggregate through
+  `SumeragiBlockSyncUpdateRosterHydrationGate_fast.cfg`, and documented the
+  proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncUpdateRosterHydrationGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-update-roster-fast`
+    (`NoError` up to computation length `1`; `21` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-update-roster-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP readiness report proof-request source inventory
+
+- Extended `scripts/sccp_release_readiness_report.py` so public readiness
+  reports load the release-bundle verifier's SCCP proof-request
+  bundle/source-proof gate inventory, surface it in a Source Inventory section,
+  and keep `production_ready = false` if any Rust, JavaScript, Python, Swift,
+  Kotlin/JVM, or Java Android gate marker is missing.
+- Extended `scripts/sccp_verify_release_bundle.py` so the same proof-request
+  bundle/source-proof inventory also pins the readiness-report gate and its
+  sparse-inventory/blocked-report tests.
+- Added adversarial readiness-report coverage for sparse proof-request gate
+  inventory and for otherwise-complete reports that must still fail closed when
+  the source-inventory gate reports a missing non-SORA source-proof rejection
+  marker.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'removed_retired_network_pipeline_doc_guard or removed_generic_no_support_note_guard or proof_request_bundle_gate_inventory or missing_sccp_proof_request_source_gate'`
+    (`4` passed, `106` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`110` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'proof_request_bundle_gate'`
+    (`1` passed, `262` deselected)
+
+## 2026-06-07 Sumeragi persisted roster selection aggregate exactness
+
+- Added `PersistedRosterModeTagExact`,
+  `PersistedRosterCommitJournalSourceExact`,
+  `PersistedRosterCommitJournalSelectionExact`,
+  `PersistedRosterSidecarGateExact`,
+  `PersistedRosterSidecarSelectionExact`,
+  `PersistedRosterSuccessorPreviousGateExact`,
+  `PersistedRosterPreviousEvidenceSelectionExact`,
+  `PersistedRosterNoSourceExact`, and
+  `PersistedRosterSelectionExactness` to
+  `SumeragiPersistedRosterSelectionGate.tla`.
+- The aggregate invariant composes mode-tag selection, commit-journal source
+  priority and selection/cache behavior, sidecar gating and selection/cache
+  behavior, successor previous-evidence admission, previous-evidence
+  checkpoint-only selection, and fail-closed no-source exactness.
+- Wired the aggregate through `SumeragiPersistedRosterSelectionGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPersistedRosterSelectionGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh persisted-roster-selection-fast`
+    (`NoError` up to computation length `1`; `21` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh persisted-roster-selection-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi block-sync history roster aggregate exactness
+
+- Added `BlockSyncHistoryRosterModeTagExact`,
+  `BlockSyncHistoryRosterPrecommitExact`,
+  `BlockSyncHistoryRosterArtifactHistoryExact`,
+  `BlockSyncHistoryRosterDerivationGateExact`,
+  `BlockSyncHistoryRosterDerivationFallbackExact`,
+  `BlockSyncHistoryRosterSourceExact`,
+  `BlockSyncHistoryRosterHeightViewExact`,
+  `BlockSyncHistoryRosterSelectionFallbackExact`,
+  `BlockSyncHistoryRosterStakeForwardExact`, and
+  `BlockSyncHistoryRosterExactness` to
+  `SumeragiBlockSyncHistoryRosterGate.tla`.
+- The aggregate invariant composes mode-tag selection, exact precommit history
+  filtering/selection, commit-QC and checkpoint history selection, derived-QC
+  gating, derivation fallback, source selection, roster height/view adjustment,
+  post-validation fallback, and stake-snapshot forwarding exactness.
+- Wired the aggregate through `SumeragiBlockSyncHistoryRosterGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncHistoryRosterGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-history-roster-fast`
+    (`NoError` up to computation length `1`; `23` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-history-roster-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP Swift TON proof-request bundle parity
+
+- Tightened `IrohaSwift` TON SCCP proof-request construction so Swift now
+  decodes canonical SCCP message-proof bundle bytes, recomputes the
+  commitment/Merkle root, matches the bundle summary against public inputs,
+  and requires non-empty source proof bytes for non-SORA source bundles.
+- Added Swift adversarial coverage for placeholder/noncanonical bundles,
+  mismatched public inputs, tampered commitments and roots, trailing payload
+  and Merkle bytes, invalid Merkle directions, and stripped non-SORA source
+  proofs. The release-bundle verifier now pins the Swift source and test
+  markers alongside Rust, JS, Python, Kotlin, and Java Android.
+- Validation:
+  - `swift test --filter SccpSolanaProverTests --disable-swift-testing`
+    (`81` passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'proof_request_bundle_gate'`
+    (`1` passed, `262` deselected)
+
+## 2026-06-07 Soracloud FHE native STARK envelope inert-payload gate
+
+- Tightened Soracloud FHE `OpenVerifyEnvelope` admission so the decoded
+  STARK/FRI public-input wrapper must carry non-empty, non-all-zero native
+  envelope bytes for input admission, bootstrap-key proofs, full-bootstrap
+  material proofs, and full-bootstrap execution proofs. This keeps placeholder
+  proof material out of data-model validation and Core runtime admission before
+  backend verifier dispatch.
+- Added a dedicated Core attachment decode context for full-bootstrap material
+  proofs, so material proof envelopes use their own byte cap and diagnostics
+  instead of the bootstrap-key proof context.
+- Follow-up validation cleared the strict `iroha_data_model --tests` clippy
+  blocker in the offline Kagemusha lineage artifact helpers by passing fixed
+  TLV tags by value and using descriptive verifier/proving-key names in tests.
+  The workspace formatter is unblocked after restoring the test-time scale
+  static identifier in Sumeragi test support.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-proof-zero CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model open_verify_envelope_drift --lib -- --nocapture`
+    (`4` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-proof-zero CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_proof_envelopes_reject_all_zero_native_stark_payloads --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-proof-zero CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core fhe_input_admission_envelope_rejects_noncanonical_open_verify_shape --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-proof-zero CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-proof-zero CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-proof-zero CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-proof-zero CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_data_model --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-proof-zero CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model kagemusha_lineage_key_artifact_packages_reject_profile_splices --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-native-proof-zero CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model kagemusha_recursive_spend_bridge_abi_archives_roundtrip --lib -- --nocapture`
+    (`1` passed)
+
+## 2026-06-07 Sumeragi block-sync roster evidence aggregate exactness
+
+- Added `BlockSyncRosterEvidenceMissingProofExact`,
+  `BlockSyncRosterEvidencePermissionedProofExact`,
+  `BlockSyncRosterEvidenceNposStakeExact`,
+  `BlockSyncRosterEvidenceHasRosterExact`,
+  `BlockSyncRosterEvidenceApplyCopyExact`,
+  `BlockSyncRosterEvidenceApplyClearExact`,
+  `BlockSyncRosterEvidenceApplyPreserveExact`, and
+  `BlockSyncRosterEvidenceExactness` to
+  `SumeragiBlockSyncRosterEvidenceGate.tla`.
+- The aggregate invariant composes missing-proof priority, Permissioned proof
+  admission, NPoS stake requirements, has-roster projection, roster-selection
+  copy behavior, absent-lane clearing, and unrelated-field preservation
+  exactness.
+- Wired the aggregate through `SumeragiBlockSyncRosterEvidenceGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncRosterEvidenceGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-roster-evidence-fast`
+    (`NoError` up to computation length `1`; `19` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-roster-evidence-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi block roster cache aggregate exactness
+
+- Added `BlockRosterCacheRosterKeyExact`,
+  `BlockRosterCacheSignerKeyExact`, `BlockRosterCacheSignerLifecycleExact`,
+  `BlockRosterCacheSignerLookupExact`,
+  `BlockRosterCacheSignerInsertEvictExact`,
+  `BlockRosterCacheSignerRemovalExact`,
+  `BlockRosterCacheSelectionLifecycleExact`,
+  `BlockRosterCacheSelectionLookupExact`,
+  `BlockRosterCacheSelectionInsertEvictExact`, and
+  `BlockRosterCacheExactness` to `SumeragiBlockRosterCachesGate.tla`.
+- The aggregate invariant composes roster-selection cache-key exactness, signer
+  cache-key exactness, signer-cache lifecycle, signer-cache lookup,
+  signer-cache insert/evict, signer-cache removal, roster-selection-cache
+  lifecycle, roster-selection-cache lookup, and roster-selection-cache
+  insert/evict exactness.
+- Wired the aggregate through `SumeragiBlockRosterCachesGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockRosterCachesGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-roster-caches-fast`
+    (`NoError` up to computation length `1`; `23` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-roster-caches-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP proof-request bundle gate release inventory
+
+- Extended the strict SCCP release-bundle verifier so the proof-request
+  bundle/source-proof gates are pinned across Rust, JavaScript, Python,
+  Kotlin/JVM, and Java Android test sources.
+- The inventory now requires the canonical bundle decoder, non-SORA source-proof
+  requirement, all-zero source-proof rejection, oversized source-proof bound,
+  stripped-source-proof wrapper rejection, and cross-SDK TON request vector
+  markers to remain present before a release bundle can verify.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'proof_request_bundle_gate or sccp_unready_config_only or retired_network_surface_inventory or removed_generic_no_support_note_guard or stale_retired_network_surface_allowlist'`
+    (`6` passed, `257` deselected)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes or sccp_proof_requests_reject_all_zero_source_proof_bytes'`
+    (`2` passed, `86` deselected)
+  - `node --test --test-name-pattern "TON proof requests with non-canonical|non-empty all-zero source proof bytes" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gates CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp 'rust_evm_groth16_proof_request' --lib -- --nocapture`
+    (`2` passed, `251` filtered out)
+
+## 2026-06-07 retired runtime-network wording cleanup
+
+- Removed duplicated family-specific SCCP launch-scope wording from the public
+  roadmap, status, bridge proof docs, and engineering backlog. The remaining
+  text keeps the policy generic: retired runtime-network families are outside
+  the current SCCP launch scope.
+- Validation:
+  - Retired runtime-network content scan across tracked sources, including
+    `Cargo.lock` as read-only evidence, produced no matches.
+  - Retired runtime-network filename scan produced no matches.
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-07 Sumeragi roster-artifact selection aggregate exactness
+
+- Added `RosterArtifactSelectionViewExact`,
+  `RosterArtifactSelectionAttachmentExact`,
+  `RosterArtifactSelectionCheckpointCompatibilityExact`,
+  `RosterArtifactSelectionStakePriorityExact`,
+  `RosterArtifactSelectionStakeRosterExact`,
+  `RosterArtifactSelectionCheckpointInputExact`,
+  `RosterArtifactSelectionEpochExact`,
+  `RosterArtifactSelectionGenesisStubExact`, and
+  `RosterArtifactSelectionExactness` to
+  `SumeragiRosterArtifactSelectionGate.tla`.
+- The aggregate invariant composes view selection, artifact attachment,
+  checkpoint compatibility, stake priority, stake-roster binding, checkpoint
+  validation inputs, epoch selection, and genesis-stub eligibility exactness.
+- Wired the aggregate through `SumeragiRosterArtifactSelectionGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterArtifactSelectionGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-artifact-selection-fast`
+    (`NoError` up to computation length `1`; `21` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-artifact-selection-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi core roster-validation aggregate exactness
+
+- Added `RosterValidationCoreCommitAdmissionExact`,
+  `RosterValidationCoreCommitGenesisSignatureExact`,
+  `RosterValidationCoreCommitSignerBitmapExact`,
+  `RosterValidationCoreCommitQuorumStakeExact`,
+  `RosterValidationCoreCommitBlsOutputExact`,
+  `RosterValidationCoreCheckpointAdmissionExact`,
+  `RosterValidationCoreCheckpointGenesisSignatureExact`,
+  `RosterValidationCoreCheckpointSignerBitmapExact`,
+  `RosterValidationCoreCheckpointQuorumStakeExact`,
+  `RosterValidationCoreCheckpointRootPreimageExact`,
+  `RosterValidationCoreCheckpointBlsOutputExact`, and
+  `RosterValidationCoreExactness` to
+  `SumeragiRosterValidationCoreGate.tla`.
+- The aggregate invariant composes commit admission, commit genesis/signature,
+  commit signer-bitmap, commit quorum/stake, commit BLS/output, checkpoint
+  admission, checkpoint genesis/signature, checkpoint signer-bitmap,
+  checkpoint quorum/stake, checkpoint root/preimage, and checkpoint BLS/output
+  exactness.
+- Wired the aggregate through `SumeragiRosterValidationCoreGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterValidationCoreGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-validation-core-fast`
+    (`NoError` up to computation length `1`; `27` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-core-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 BFV full-bootstrap proof-key inert-material gate
+
+- Tightened BFV full-bootstrap proof-profile validation so prover/verifier key
+  artifacts reject all-zero backend key material in addition to empty key
+  material. Artifact decode now exercises the same guard, so inert governed
+  proof keys fail before admission can treat placeholder bytes as executable
+  proof material.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-key-material CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-key-material CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_ --lib -- --nocapture`
+    (`15` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-key-material CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-proof-key-material CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --tests --no-deps -- -D warnings`
+
+## 2026-06-07 BFV full-bootstrap executable sample-switch artifact gate
+
+- Tightened BFV full-bootstrap artifact-bundle validation so the
+  `sample_extraction_key` slot must carry executable sample-extraction
+  switch-key material, not just metadata-only sample-extraction bytes. The
+  permissive metadata decoder remains available for metadata views, but bundle
+  validation and artifact-aware execution preflight now fail before arithmetic
+  when the governed artifact cannot drive the sample-switch stage.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-artifact-switch-key CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_preflight --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-artifact-switch-key CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_ --lib -- --nocapture`
+    (`15` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-artifact-switch-key CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-artifact-switch-key CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --tests --no-deps -- -D warnings`
+
+## 2026-06-07 SCCP launch-scope note
+
+- Retired runtime-network families are explicitly outside SCCP launch support for
+  now. The active SCCP launch scope remains Ethereum, BSC, Solana, TON, and
+  TRON.
+- Tightened the retired-network surface guard so the exact no-support note must
+  remain present in each public launch-scope file, rather than only being
+  allowed when present.
+- Extended the release bundle and readiness verifier inventories so that
+  note-presence guard cannot be removed without failing the strict SCCP
+  release/readiness meta-tests.
+
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'retired_network_surface or explicit_no_support_note'`
+    (`6` passed, `256` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'retired_network_surface or explicit_no_support_note'`
+    (`2` passed, `106` deselected)
+  - `git diff --check -- scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_retired_network_surface_test.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md crates/iroha_sccp/src/lib.rs`
+
+## 2026-06-08 SCCP Ethereum launch-policy doc guard
+
+- Aligned SCCP artifact and proof-job route docs with the current
+  Ethereum-mainnet active launch policy; they now describe production packaging
+  as active only for the governed Ethereum mainnet launch lane, with BSC and the
+  other supported lanes remaining behind future lane policies.
+- Removed the stale BSC-first core-admission roadmap paragraph that contradicted
+  the adjacent Ethereum-mainnet policy text.
+- Extended strict release-bundle verification so the stale
+  `BSC mainnet only when the configured BSC source-chain finality/inclusion`
+  wording is a forbidden marker in launch-policy documentation.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k ethereum_launch_policy_documentation`
+    (`1` passed, `276` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`277` passed)
+  - `rg -n "BSC mainnet only|first-release BSC mainnet lane launch policy|non-BSC source proofs" docs/source/bridge_proofs.md roadmap.md`
+    (`no matches`; exit code `1`)
+  - `git diff --check -- docs/source/bridge_proofs.md roadmap.md status.md scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+
+## 2026-06-08 SCCP readiness launch-policy documentation source gate
+
+- Added `ethereum_launch_policy_documentation_gate` to SCCP release-readiness
+  `source_inventory`, wired it to the same strict verifier helper that checks
+  active Ethereum launch-policy documentation, and made production readiness
+  fail if the docs are missing required Ethereum-mainnet wording or contain
+  stale BSC-only production-packaging text.
+- Extended strict release-bundle schema validation so public bundles must carry
+  the new readiness source gate; old readiness JSON without the gate no longer
+  verifies.
+- Added readiness and bundle negative coverage for missing/stale documentation
+  inventory and missing `ethereum_launch_policy_documentation_gate` entries.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'ethereum_launch_policy_documentation_gate or source_inventory'`
+    (`2` passed, `123` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'ethereum_launch_policy_documentation or source_inventory_gate'`
+    (`6` passed, `274` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`125` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`280` passed)
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py docs/source/bridge_proofs.md roadmap.md status.md`
+
+## 2026-06-08 SCCP readiness public discovery documentation source gate
+
+- Added `public_discovery_documentation_gate` to SCCP release-readiness
+  `source_inventory`, wired it to the strict public-discovery documentation
+  verifier helper, and made production readiness fail when public SCCP
+  discovery docs lose supported-launch-lane or verifier-target wording.
+- Extended strict release-bundle schema validation so public bundles must carry
+  the new discovery-doc readiness source gate; old readiness JSON without the
+  gate no longer verifies.
+- Added readiness and bundle negative coverage for missing public discovery
+  markers and missing `public_discovery_documentation_gate` entries.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'public_discovery_documentation_gate or source_inventory'`
+    (`2` passed, `126` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'public_discovery_documentation or source_inventory_gate'`
+    (`6` passed, `276` deselected)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`128` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`282` passed)
+  - `git diff --check -- scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py roadmap.md status.md`
+
+## 2026-06-07 SCCP V1 Norito retired-slot guard
+
+- Restored the SCCP V1 Norito enum tag gaps reserved by the retired
+  runtime-network cleanup so active EVM/TRON verifier families, destination
+  verifier plans, and local-admission submission payloads do not compact into
+  retired tags.
+- Strengthened the enum-tag regression to roundtrip every active SCCP V1 tag
+  and mutate encoded payloads so retired tags 4/5 are explicitly rejected
+  instead of silently decoding as active production surfaces.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-enum-tags CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp sccp_v1_norito_enum_indices_preserve_reserved_retired_slots --lib -- --nocapture`
+    (`1` passed)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-07 SCCP Kotlin/JVM and Java Android TON proof-request bundle gate
+
+- Mirrored the canonical TON proof-request bundle gate into the Kotlin/JVM and
+  Java Android SDKs. TON proof requests now decode canonical SCCP message bundle
+  bytes, match the decoded message id, payload hash, target domain, and
+  commitment root to transparent public inputs, and require non-SORA source
+  bundles to carry source-proof witness bytes before local prover callbacks or
+  wrapped proof-result submission.
+- Replaced placeholder TON bundle fixtures in the Kotlin/JVM and Java Android
+  tests with the shared canonical SORA -> TON bundle vector, and added negative
+  coverage for arbitrary bytes, swapped bundles, tampered commitments and
+  Merkle roots, payload and Merkle-proof trailing bytes, invalid Merkle sibling
+  direction flags, unsupported payload kinds, and stripped non-SORA source
+  proofs.
+- Validation:
+  - `git diff --check -- kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/sccp/TonSccpProver.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/TonSccpProverTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/sccp/TonSccpProver.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/TonSccpProverTests.java docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.sccp.TonSccpProverTest --console=plain --no-daemon --max-workers=1`
+    (from `kotlin`; passed)
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.TonSccpProverTests JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --no-daemon --max-workers=1`
+    (from `java/iroha_android`; passed)
+
+## 2026-06-07 SCCP Python TON proof-request bundle gate
+
+- Added a Python SDK canonical SCCP message-bundle decoder for TON proof
+  requests. The builder now validates codec/domain/payload structure,
+  recomputes the commitment and Merkle root, matches the decoded message id,
+  payload hash, target domain, and commitment root to transparent public inputs,
+  and requires non-SORA source bundles to include source-proof bytes.
+- Replaced Python TON request fixtures that used placeholder `[5, 6, 7]`
+  bundle bytes with the canonical SORA -> TON transfer bundle shared by the
+  cross-SDK vector, and added adversarial regressions for arbitrary bytes,
+  swapped bundles, tampered commitment/root bytes, and stripped non-SORA
+  source-proof bytes. The Python regression now also rejects payload sub-vector
+  trailing bytes, unsupported payload discriminants, Merkle proof trailing
+  bytes, and invalid Merkle sibling-direction flags.
+- Validation:
+  - `python3 -m py_compile python/iroha_torii_client/sccp.py python/iroha_torii_client/__init__.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'noncanonical_or_mismatched_bundle_bytes'`
+    (`1` passed, `87` deselected)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`88` passed)
+
+## 2026-06-07 BFV-RNS basis-extension corridor preflight
+
+- Added a focused `iroha_crypto` regression proving bounded-noise
+  basis-extension multiply, Galois switch, and packed rotation public entry
+  points reject too-narrow or non-prefix RNS corridors before malformed
+  ciphertext or key material can influence diagnostics.
+- Extended full-bootstrap proof-profile artifact coverage so prover/verifier
+  key role swaps fail even when the governed material digest is recomputed to
+  the swapped verifier-key envelope bytes.
+- Updated active BFV full-bootstrap comments and roadmap/backlog text so the
+  implemented artifact-aware execution path is not described as future-only;
+  the remaining work is the audited proof-producing/verifier artifact backend.
+- Extended the full-bootstrap execution proof-statement regression so statement
+  hashes explicitly bind the input ciphertext and malformed claimed inputs fail
+  before a proof statement digest is emitted.
+- Extended the same regression to prove execution proof statements also bind
+  the governed bootstrap-key metadata, preventing replay across a renamed
+  full-bootstrap key.
+- Added a Core runtime regression proving full-bootstrap execution proof
+  attachments cannot replay across exact-residual and bounded-noise admission in
+  either direction; the runtime recomputes the mode-specific statement hash and
+  rejects mismatches before backend verifier lookup.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-corridor CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bounded_noise_basis_extension_public_entrypoints_preflight_corridors_before_late_errors --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-corridor CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-corridor CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_proof_statement_binds_claim_and_artifacts --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core-bound-mode CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof_rejects_bound_mode_replay --lib -- --nocapture`
+    (`1` passed)
+
+## 2026-06-07 Sumeragi cached roster-validation aggregate exactness
+
+- Added `RosterValidationCachedCommitPrefilterExact`,
+  `RosterValidationCachedCheckpointPrefilterExact`,
+  `RosterValidationCachedEmptyAggregateExact`,
+  `RosterValidationCachedMemoKeyExact`,
+  `RosterValidationCachedMemoFlowExact`,
+  `RosterValidationCachedForwardingExact`,
+  `RosterValidationCachedPrefilterOrderExact`, and
+  `RosterValidationCachedExactness` to
+  `SumeragiRosterValidationCachedGate.tla`.
+- The aggregate invariant composes commit/checkpoint prefilters,
+  empty-aggregate bypass, memo-key construction, memo hit/miss/insert flow,
+  validation forwarding, and prefilter-order exactness for cached
+  roster-validation wrapper helpers.
+- Wired the aggregate through `SumeragiRosterValidationCachedGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterValidationCachedGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-validation-cached-fast`
+    (`NoError` up to computation length `1`; `19` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-cached-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi roster-validation memo aggregate exactness
+
+- Added `RosterValidationMemoConstructionExact`,
+  `RosterValidationMemoGetTouchExact`,
+  `RosterValidationMemoInsertUpdateExact`,
+  `RosterValidationMemoEvictionExact`,
+  `RosterValidationMemoLaneIsolationExact`,
+  `RosterValidationMemoRefreshCapacityExact`, and
+  `RosterValidationMemoCacheExactness` to
+  `SumeragiRosterValidationMemoGate.tla`.
+- The aggregate invariant composes construction, get/touch, insert/update,
+  eviction, lane-isolation, and refresh/capacity exactness for the modeled
+  `MemoCache` and two-lane `RosterValidationMemo` helper.
+- Wired the aggregate through `SumeragiRosterValidationMemoGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterValidationMemoGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-validation-memo-fast`
+    (`NoError` up to computation length `1`; `17` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-memo-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi precommit signer-record aggregate exactness
+
+- Added `PrecommitSignerPermissionedExact`,
+  `PrecommitSignerCommonRejectExact`, `PrecommitSignerNposStakeExact`,
+  `PrecommitSignerSnapshotPolicyExact`,
+  `PrecommitSignerOutputMetadataExact`, and
+  `PrecommitSignerRecordExactness` to
+  `SumeragiPrecommitSignerRecordGate.tla`.
+- The aggregate invariant composes permissioned admission, common-input
+  rejection, NPoS stake/snapshot gates, snapshot-attachment policy, and
+  output-metadata exactness for the modeled cached-QC precommit signer-record
+  helper.
+- Wired the aggregate through `SumeragiPrecommitSignerRecordGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrecommitSignerRecordGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-signer-record-fast`
+    (`NoError` up to computation length `1`; `48` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh precommit-signer-record-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi commit-QC lookup aggregate exactness
+
+- Added `CommitQcLookupCachePriorityExact`,
+  `CommitQcLookupHistoryPositiveExact`,
+  `CommitQcLookupHistoryIdentityExact`,
+  `CommitQcLookupHistoryContextExact`,
+  `CommitQcLookupHistoryAggregateExact`,
+  `CommitQcLookupAbsentHistoryExact`, and `CommitQcLookupExactness` to
+  `SumeragiCommitQcLookupGate.tla`.
+- The aggregate invariant composes cache-priority, positive-history,
+  history identity/context rejection, aggregate-signature, and absent-history
+  exactness for the modeled commit-QC cache/history lookup helpers.
+- Wired the aggregate through `SumeragiCommitQcLookupGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitQcLookupGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-qc-lookup-fast`
+    (`NoError` up to computation length `1`; `30` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-qc-lookup-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi commit-pipeline scheduling aggregate exactness
+
+- Added `CommitPipelineEntryExact`, `CommitPipelineRecoveryScopeExact`,
+  `CommitPipelineDeadlineBudgetExact`, `CommitPipelineWakeupEventExact`,
+  `CommitPipelineCandidateProgressExact`, `CommitPipelineIdleBudgetExact`, and
+  `CommitPipelineSchedulingExactness` to
+  `SumeragiCommitPipelineSchedulingGate.tla`.
+- The aggregate invariant composes pipeline entry, recovery-scope,
+  deadline/budget, wakeup/event ordering, candidate-progress, and idle-budget
+  preservation exactness for the modeled commit-pipeline scheduling helpers.
+- Wired the aggregate through `SumeragiCommitPipelineSchedulingGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitPipelineSchedulingGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-scheduling-fast`
+    (`NoError` up to computation length `1`; `66` state invariants checked)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-pipeline-scheduling-fast`
+    (`45` states generated, `23` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi Kura retry aggregate exactness
+
+- Added `KuraRetryDueExact`, `KuraRetryResetExact`,
+  `KuraRetryMaxAttemptExact`, `KuraRetryBackoffExact`,
+  `KuraRetryAbortBoundaryExact`, `KuraRetryDelayReportingExact`, and
+  `KuraRetryStateExactness` to `SumeragiKuraRetryGate.tla`.
+- The aggregate invariant composes retry-due state, reset/persisted reset,
+  max-attempt handling, exponential backoff, abort-boundary, and public
+  delay-reporting exactness for the modeled Kura retry helpers.
+- Wired the aggregate through `SumeragiKuraRetryGate_fast.cfg`, and documented
+  the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiKuraRetryGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh kura-retry-fast`
+    (`NoError` up to computation length `1`; `38` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh kura-retry-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi pending-block marker/cooldown aggregate exactness
+
+- Added `PendingBlockCommitStageMarkerExact`,
+  `PendingBlockQuorumRescheduleCooldownExact`,
+  `PendingBlockVoteBackedRescheduleExact`,
+  `PendingBlockRescheduleMarkerExact`,
+  `PendingBlockPrecommitRebroadcastExact`,
+  `PendingBlockValidationRedriveExact`, and
+  `PendingBlockMarkerCooldownExactness` to
+  `SumeragiPendingBlockMarkerGate.tla`.
+- The aggregate invariant composes commit-stage marker, quorum-reschedule
+  cooldown, vote-backed reschedule, reschedule marker, precommit rebroadcast,
+  and validation-redrive exactness for the modeled `PendingBlock` marker and
+  cooldown helpers.
+- Wired the aggregate through `SumeragiPendingBlockMarkerGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingBlockMarkerGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-block-marker-fast`
+    (`NoError` up to computation length `1`; `22` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-block-marker-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi pending-block lifecycle aggregate exactness
+
+- Added `PendingBlockConstructorExact`,
+  `PendingBlockSameSubjectReplacementExact`,
+  `PendingBlockDifferentSubjectReplacementExact`, `PendingBlockReviveExact`,
+  `PendingBlockRetireAbortExact`, `PendingBlockRetiredPayloadRefreshExact`,
+  and `PendingBlockLifecycleExactness` to
+  `SumeragiPendingBlockLifecycleGate.tla`.
+- The aggregate invariant composes constructor defaults, same-subject
+  replacement, different-subject replacement, revive, retire/abort, and
+  retired-payload refresh exactness for the modeled `PendingBlock` helper
+  contracts.
+- Wired the aggregate through `SumeragiPendingBlockLifecycleGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingBlockLifecycleGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-block-lifecycle-fast`
+    (`NoError` up to computation length `1`; `25` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-block-lifecycle-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi pending-progress accounting aggregate exactness
+
+- Added `PendingProgressTouchExact`,
+  `PendingProgressActivationWindowRefreshExact`,
+  `PendingProgressTipActivationExact`, `PendingProgressRecentWindowExact`,
+  and `PendingProgressAccountingExactness` to
+  `SumeragiPendingProgressGate.tla`.
+- The aggregate invariant composes touch output, activation-window refresh
+  output, tip-activation refresh output, and RBC recent-progress window output
+  exactness.
+- Wired the aggregate through `SumeragiPendingProgressGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPendingProgressGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-progress-fast`
+    (`NoError` up to computation length `1`; `14` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-progress-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi empty-block QC drop aggregate exactness
+
+- Added `EmptyBlockDropDecisionExact`, `EmptyBlockTelemetryExact`,
+  `EmptyBlockPendingCleanupExact`, `EmptyBlockQcCleanupExact`,
+  `EmptyBlockProposalContextCleanupExact`, `EmptyBlockVoteCleanupExact`,
+  `EmptyBlockRosterSignerCleanupExact`, and `EmptyBlockQcDropExactness` to
+  `SumeragiEmptyBlockQcDropGate.tla`.
+- The aggregate invariant composes drop/continue decisions, invalid-payload
+  accounting, pending/request/RBC cleanup, QC cache/tally cleanup,
+  proposal/hint cleanup, vote-log/validation cleanup, and roster/signer-cache
+  cleanup.
+- Wired the aggregate through `SumeragiEmptyBlockQcDropGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEmptyBlockQcDropGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh empty-block-qc-drop-fast`
+    (`NoError` up to computation length `1`; `44` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh empty-block-qc-drop-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi committed-height QC aggregate exactness
+
+- Added `CommittedHeightDecisionExact`,
+  `CommittedHeightRecordOnlyEffectsExact`, `CommittedHeightValidationExact`,
+  `CommittedHeightEvidenceExact`, and
+  `CommittedHeightQcAdmissionExactness` to
+  `SumeragiCommittedHeightQcGate.tla`.
+- The aggregate invariant composes admission decisions, drop reasons,
+  record-only side effects, divergent-commit validation context,
+  genesis-stub policy, and finality-conflict evidence exactness.
+- Wired the aggregate through `SumeragiCommittedHeightQcGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommittedHeightQcGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh committed-height-qc-fast`
+    (`NoError` up to computation length `1`; `87` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh committed-height-qc-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi commit-anchor QC aggregate exactness
+
+- Added `CommitAnchorSelectionExact`, `CommitAnchorPruneExact`,
+  `CommitAnchorStatusPublicationExact`, and
+  `CommitAnchorQcPromotionExactness` to `SumeragiCommitAnchorQcGate.tla`.
+- The aggregate invariant composes highest/locked QC selection, lock-change
+  precommit pruning, incompatible-highest realignment, and highest/locked
+  status publication exactness.
+- Wired the aggregate through `SumeragiCommitAnchorQcGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitAnchorQcGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-anchor-qc-fast`
+    (`NoError` up to computation length `1`; `25` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-anchor-qc-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP SDK TON proof-request bundle gate
+
+- Added JavaScript and Python SDK canonical SCCP message-bundle decoders for
+  TON proof requests. The builders now derive commitment fields from decoded
+  payload bytes, validate codec/domain/payload structure, check the commitment
+  and Merkle root, match the decoded message id, payload hash, target domain,
+  and commitment root to transparent public inputs, and require non-SORA source
+  bundles to include source-proof bytes.
+- Replaced TON SDK request fixtures that used placeholder `[5, 6, 7]` bundle
+  bytes with a canonical SORA -> TON transfer bundle and refreshed the
+  JavaScript/Python request hash/envelope golden vectors.
+- Added adversarial regressions for arbitrary non-canonical bundle bytes,
+  swapped canonical bundles, tampered commitment bytes, omitted non-SORA
+  source-proof bytes, forged wrapped requests with stripped source-proof bytes,
+  payload sub-vector trailing bytes, unsupported payload discriminants, Merkle
+  proof trailing bytes, and invalid Merkle sibling-direction flags.
+- Validation:
+  - `node --check javascript/iroha_js/src/sccp.js`
+  - `node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
+  - `npx eslint src/sccp.js test/sccpSolanaProver.test.js --max-warnings=0`
+    (from `javascript/iroha_js`)
+  - `npm run build:dist`
+    (from `javascript/iroha_js`)
+  - `node --test --test-name-pattern "rejects TON proof requests with non-canonical or mismatched SCCP bundle bytes" test/sccpSolanaProver.test.js`
+    (from `javascript/iroha_js`; `1` passed)
+  - `node --test --test-name-pattern "TON SCCP internal|TON proof requests|TON proof request hash|non-canonical or mismatched SCCP bundle bytes|all-zero source proof|TON proof bytes|TON, EVM, and TRON prover results|duplicate SCCP UI prover option aliases|SCCP UI provers use witness providers" javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`8` passed)
+  - `node --test javascript/iroha_js/test/sccpSolanaProver.test.js`
+    (`103` passed)
+  - `python3 -m py_compile python/iroha_torii_client/__init__.py python/iroha_torii_client/sccp.py python/iroha_torii_client/tests/sccp_test.py`
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py -k 'noncanonical_or_mismatched_bundle_bytes'`
+    (`1` passed, `87` deselected)
+  - `python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py`
+    (`88` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-enum-tags CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp sccp_v1_norito_enum_indices_preserve_reserved_retired_slots --lib -- --nocapture`
+    (`1` passed)
+
+## 2026-06-07 BFV full-bootstrap artifact-aware execution status cleanup
+
+- Updated stale `iroha_crypto` comments and test naming so the current boundary
+  is explicit: governed artifact-aware full-bootstrap execution exists for
+  exact and bounded modes, while direct no-artifact entry points remain
+  fail-closed and require callers to provide the governed artifact bundle.
+- Refined roadmap/backlog wording to keep the remaining production work focused
+  on broader BFV-RNS hardening and audited full-bootstrap prover/verifier
+  artifacts rather than an already-present artifact-aware evaluator path.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-full-bootstrap-status CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_binds_full_bootstrap_material_but_direct_execution_requires_artifacts --lib -- --nocapture`
+    (`1` passed)
+
+## 2026-06-07 Sumeragi stale-view commit-QC fetch aggregate exactness
+
+- Added `StaleViewFetchIdentityExact`, `StaleViewPendingStateGateExact`,
+  `StaleViewTipExtensionExact`, `StaleViewPositiveAdmissionExact`, and
+  `StaleViewCommitQcFetchExactness` to
+  `SumeragiStaleViewCommitQcFetchGate.tla`.
+- The aggregate invariant composes exact request identity, pending-state and
+  local-vote gates, tip-extension exactness, all-absent parent/tip acceptance,
+  and positive stale-view commit-QC fetch admission.
+- Wired the aggregate through `SumeragiStaleViewCommitQcFetchGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiStaleViewCommitQcFetchGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh stale-view-commit-qc-fetch-fast`
+    (`NoError` up to computation length `1`; `15` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stale-view-commit-qc-fetch-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi known-block commit-QC recovery aggregate exactness
+
+- Added `RecoveryRequestPlanExact`, `PendingTipExtensionExact`,
+  `StaleViewCommitQcFetchAdmissionExact`, and
+  `KnownBlockCommitQcRecoveryExactness` to
+  `SumeragiKnownBlockCommitQcRecoveryGate.tla`.
+- The aggregate invariant composes known-block commit-QC recovery request
+  planning, pending tip-extension exactness, stale-view fetch admission
+  preconditions, and override/map source independence.
+- Wired the aggregate through
+  `SumeragiKnownBlockCommitQcRecoveryGate_fast.cfg`, and documented the proof
+  in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiKnownBlockCommitQcRecoveryGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh known-block-commit-qc-recovery-fast`
+    (`NoError` up to computation length `1`; `11` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh known-block-commit-qc-recovery-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Kagemusha recursive compact height-aware Pallas preflight guard
+
+- Added core coverage for the height-aware ABI-7 recursive compact prover so
+  duplicated and reordered valid multi-hop Pallas verifier-batch archives reject
+  as record-backed preflight drift before the recursive compact unavailable
+  sentinel.
+- Pinned the height-aware duplicated/reordered markers in the recursive spend
+  policy guard, production-readiness guard, production-readiness Python fixture,
+  and JS contract meta-test. The core Pallas-count negative control now mutates
+  those height-aware cases alongside the height-unbound extra, missing,
+  duplicated, and reordered archive drift.
+- Updated the offline Kagemusha guide and roadmap to say the height-aware core
+  compact prover enforces the same duplicated/reordered preflight boundary
+  before applying the reserved multi-hop diagnostic.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha policy negative controls pin ABI-7 compact adversarial coverage"`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k abi7`
+    (`8` tests passed)
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-pallas-count`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable --lib --no-run`
+  - `git diff --check -- crates/iroha_core/src/zk.rs ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_production_readiness.sh scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py javascript/iroha_js/test/kagemushaFfiContractParity.test.js docs/source/offline_kagemusha.md roadmap.md status.md`
+
+## 2026-06-08 Kagemusha recursive compact duplicated Pallas preflight guard
+
+- Added adversarial ABI-7 recursive compact coverage for duplicated valid
+  multi-hop Pallas verifier-batch archives in core, the C bridge, JS host, and
+  Python host. A multi-hop archive with an extra duplicated valid opening now
+  rejects as record-backed preflight drift before the recursive compact
+  unavailable sentinel.
+- Pinned the duplicated-archive invariant in the recursive spend policy guard,
+  production-readiness guard, production-readiness Python fixture, and JS
+  contract meta-test. The four Pallas-count negative controls now mutate the
+  duplicated case alongside extra, missing, and reordered archive drift.
+- Updated the offline Kagemusha guide and roadmap to say duplicated or
+  reordered multi-hop Pallas archives reject before the unavailable sentinel;
+  only exactly ordered, record-bound multi-hop batches reach the reserved
+  proof-composition diagnostic.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha policy negative controls pin ABI-7 compact adversarial coverage"`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k abi7`
+    (`8` tests passed)
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-pallas-count`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-recursive-compact-pallas-count`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-pallas-count`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-pallas-count`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable --lib --no-run`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib --no-run`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_js_host kagemusha_recursive_compact_payment_token_js_host_rejects_malformed_inputs --lib --no-run`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_python_rs kagemusha_recursive_compact_python_function_rejects_malformed_record_bundle --lib --no-run`
+  - `git diff --check -- crates/iroha_core/src/zk.rs crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_production_readiness.sh scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py javascript/iroha_js/test/kagemushaFfiContractParity.test.js docs/source/offline_kagemusha.md roadmap.md status.md`
+- Validation note: plain `rustfmt` without `--edition 2024` failed on existing
+  Rust 2024 syntax before writing changes; the explicit-edition format command
+  above passed.
+
+## 2026-06-08 Kagemusha recursive compact reordered Pallas preflight guard
+
+- Added adversarial ABI-7 recursive compact coverage for reordered valid
+  multi-hop Pallas verifier-batch archives in core, the C bridge, JS host, and
+  Python host. Exactly ordered, record-bound multi-hop Pallas batches still
+  reach the reserved recursive-compact unavailable diagnostic, while reordered
+  valid archives now reject earlier as record-backed preflight drift.
+- Pinned the reordered-archive invariant in the recursive spend policy guard,
+  production-readiness guard, production-readiness Python fixture, and JS
+  contract meta-test. The four Pallas-count negative controls now also fail if
+  reordered multi-hop archives are weakened to accepted/unavailable behavior.
+- Updated the offline Kagemusha guide and roadmap to distinguish exactly
+  ordered multi-hop compact batches from reordered valid batch archives.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check -- crates/iroha_core/src/zk.rs crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_production_readiness.sh scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py javascript/iroha_js/test/kagemushaFfiContractParity.test.js docs/source/offline_kagemusha.md roadmap.md`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-open`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha policy negative controls pin ABI-7 compact adversarial coverage"`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-pallas-count`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-recursive-compact-pallas-count`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-pallas-count`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-pallas-count`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k abi7`
+    (`8` tests passed)
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable --lib --no-run`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib --no-run`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_js_host kagemusha_recursive_compact_payment_token_js_host_rejects_malformed_inputs --lib --no-run`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_python_rs kagemusha_recursive_compact_python_function_rejects_malformed_record_bundle --lib --no-run`
+  - Final `git diff --check -- ...` over the touched Kagemusha policy,
+    readiness, bridge, host, Python, JavaScript meta-test, docs, roadmap, and
+    status files.
+- Validation note: the full
+  `cargo test -p iroha_core kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable --lib -- --test-threads=1`
+  run was attempted after compile-only success, but was stopped after roughly
+  12 minutes of CPU-bound proof work; it is not recorded as a passing test.
+
+## 2026-06-08 Kagemusha recursive compact unavailable SDK classifiers
+
+- Added JS and Python SDK classifiers for reserved ABI-7 recursive compact
+  unavailability so wallet code can distinguish the two native fail-closed
+  fragments from vague proof-composition errors:
+  `KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT`,
+  `KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT`,
+  `isKagemushaRecursiveCompactUnavailable(...)`, and
+  `is_kagemusha_recursive_compact_unavailable(...)`.
+- Exported the JS helper through `src`, `dist`, browser stubs, package index,
+  and TypeScript declarations; exported the Python helper through
+  `iroha_python.kagemusha` and the top-level `iroha_python` package.
+- Pinned the classifier surface in the SDK parity guard, workflow, and JS
+  contract meta-test with
+  `--negative-control-sdk-recursive-compact-unavailable-helper`.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "browser crypto exposes native-only helpers as safe stubs" javascript/iroha_js/test/crypto.browser.test.js`
+  - `node --test --test-name-pattern "package dist entrypoint exports Kagemusha recursive spend helpers" javascript/iroha_js/test/package_dist.test.js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/kagemusha_test.py`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-recursive-compact-unavailable-helper`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+- Validation notes: `python3 -m pytest python/iroha_python/tests/kagemusha_test.py -q`
+  could not run in this shell because `pytest` is not installed; a direct
+  `PYTHONPATH=python/iroha_python/src` import smoke test is also blocked by the
+  missing local `norito` Python module. A broad
+  `node --test javascript/iroha_js/test/crypto.browser.test.js javascript/iroha_js/test/package_dist.test.js`
+  run reached this slice's Kagemusha/browser cases but failed unrelated SCCP
+  package-dist tests for missing BSC testnet native EVM prover artifacts.
+
+## 2026-06-08 Kagemusha compact key generator-log evidence binding
+
+- Hardened ABI-7 recursive compact key evidence so the packet must include
+  `generator_log_path = "recursive-compact-key-artifacts.log"` and a
+  SHA-256 digest for that captured CLI stdout log.
+- The readiness rollup now validates the generator log as a local, non-aliased
+  evidence file, requires exactly the canonical one-line
+  `recursive-compact-key-artifacts` CLI summary, and checks the logged `.vk`,
+  `.pk`, and `.record.norito` byte sizes against adjacent artifact bytes.
+- The compact key evidence helper now requires the generator log before
+  emitting `recursive-compact-key-evidence.json`, and the release bundle
+  inventory records the compact key generator log with bundle-relative path,
+  SHA-256 digest, and byte size.
+- Added adversarial tests for missing logs, digest drift, extra-line stuffing,
+  noncanonical log paths, helper-side generator-log size drift, and
+  release-bundle generator-log inventory drift. The production-readiness guard,
+  payload workflow, JavaScript meta-test, offline Kagemusha guide, Android
+  readiness guide, and roadmap now pin this generator-log binding.
+- Remaining production blockers are unchanged: real/generated ABI-7 compact key
+  artifacts and evidence, signed physical Android device-lab evidence, and
+  ABI-7 multi-hop compact proof composition.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k compact_key_evidence`
+    (`42` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k kagemusha_release_bundle`
+    (`40` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`269` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-compact-generator-log-inventory`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "Kagemusha production-readiness negative controls"`
+  - `git diff --check -- ...` over the touched Kagemusha readiness,
+    release-bundle, guard, workflow, docs, roadmap, JavaScript meta-test, and
+    status files.
+
+## 2026-06-08 Kagemusha SDK proof-chain accumulator docs guard
+
+- Documented the proof-chain accumulator boundary across Swift, JavaScript,
+  Python, Kotlin/JVM, Android Java, and C#: native append streams previous
+  recursive proof bytes into `recursive_proof_chain_digest`, and SDK code must
+  not derive or patch accumulator state.
+- Pinned that wording in `ci/check_kagemusha_recursive_spend_sdk_parity.sh`,
+  added `--negative-control-sdk-readme-proof-chain-accumulator`, wired it into
+  the payload workflow, and extended the JavaScript FFI contract parity meta-test
+  so the negative control cannot silently disappear.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- IrohaSwift/README.md kotlin/README.md java/iroha_android/README.md csharp/README.md javascript/iroha_js/README.md python/iroha_python/README.md ci/check_kagemusha_recursive_spend_sdk_parity.sh .github/workflows/pr_kagemusha_payload_bench.yml javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-proof-chain-accumulator`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-08 Kagemusha proof-chain accumulator guard
+
+- Pinned the recursive-spend accumulator proof-chain invariant in
+  `ci/check_kagemusha_recursive_spend_policy.sh`: the guard now requires the
+  data-model tests that stream previous recursive proof bytes into
+  `recursive_proof_chain_digest`, reject forged proof-chain public inputs, and
+  expose the proof-chain digest in core recursive-spend public instance values.
+- Added `--negative-control-core-proof-chain-accumulator` and wired it into the
+  Kagemusha payload workflow so CI fails if the proof-byte splice coverage is
+  weakened or removed.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-proof-chain-accumulator`
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_rejects_malformed_notes_and_lineage --lib -- --test-threads=1`
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_bundle_rejects_public_input_tampering --lib -- --test-threads=1`
+  - `cargo test -p iroha_core kagemusha_recursive_spend_instance_values_expose_proof_chain_digest --lib -- --test-threads=1`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-08 Kagemusha compact-key placeholder artifact guard
+
+- Hardened ABI-7 recursive compact key evidence so obvious plain-text
+  placeholder compact key artifacts are rejected even when the evidence JSON
+  carries matching SHA-256 digests and byte sizes.
+- The compact key evidence helper now reuses the same artifact-content validator
+  before emitting `recursive-compact-key-evidence.json`, and the release bundle
+  inventory revalidates compact key artifact content while recording
+  bundle-relative paths, digests, and sizes.
+- Added adversarial readiness, helper, and release-bundle regressions, plus
+  production-readiness negative controls for the compact-key placeholder gate
+  and the release-bundle compact-placeholder inventory hook. Updated the
+  offline Kagemusha guide, Android StrongBox readiness guide, and roadmap to
+  document that digest/size matching is not sufficient for placeholder compact
+  key fixtures.
+- Remaining production blockers are unchanged: real/generated ABI-7 compact key
+  artifacts and evidence, signed physical Android device-lab evidence, and
+  ABI-7 multi-hop compact proof composition.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k compact_key_evidence`
+    (`36` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k kagemusha_release_bundle`
+    (`39` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`262` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-placeholder-artifacts`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-compact-placeholder-inventory`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `git diff --check -- ...` over the touched Kagemusha readiness,
+    release-bundle, guard, workflow, docs, roadmap, and status files.
+
+## 2026-06-08 Kagemusha release-bundle existing-manifest verification
+
+- Added `--verify-existing` to `scripts/kagemusha_release_bundle.py` so release
+  operators can recompute local release evidence and verify an already-published
+  `dist/kagemusha-production-release-bundle.json` without rewriting `--out`.
+- The verifier preflights the existing manifest path under `--bundle-root`
+  before recomputing local release evidence, rejects malformed, non-ready,
+  blocker-bearing, unexpected-field, and secret-looking manifests, and compares
+  a stable manifest view that ignores only `generated_at_utc`; any evidence drift returns
+  `kagemusha_release_bundle_manifest_drift`.
+- Extended the release-bundle regression suite with ready-fixture verification,
+  timestamp-refresh allowance, manifest-drift rejection, unexpected-field
+  rejection, secret-material rejection, and escaped-manifest rejection before
+  readiness/evidence/device-lab scanners run.
+- Pinned the verifier in `ci/check_kagemusha_production_readiness.sh`, added a
+  `--negative-control-release-bundle-verify-existing` mutation plus a
+  `--negative-control-release-bundle-verify-existing-preflight` path-gate
+  mutation, wired those controls into the Kagemusha payload workflow, and
+  documented the verify-only command in the offline Kagemusha guide and roadmap.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 scripts/tests/kagemusha_production_readiness_test.py -k kagemusha_release_bundle`
+  - `python3 scripts/tests/kagemusha_production_readiness_test.py`
+  - `ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-verify-existing`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-verify-existing-preflight`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --check -- ...` over the touched release-bundle, readiness-test,
+    production-readiness guard, workflow, offline Kagemusha docs, roadmap, and
+    status files.
+
+## 2026-06-08 Kagemusha release-bundle section schema and atomic output
+
+- Hardened `scripts/kagemusha_release_bundle.py` so ready readiness summaries
+  are closed at the section level as well as the top level. The release bundle
+  now rejects unexpected fields inside ABI-6, ABI-7, lineage-tooling,
+  proof-evidence, compact-key, and Android device-lab sections, and rejects any
+  per-section `blockers` array in a top-level ready summary.
+- Hardened release-bundle manifest writes so `--out` is written through a
+  fsynced temporary file in the target directory, atomically replaced into
+  place, revalidated, and read back before success is reported. Replacement
+  failures preserve any existing manifest and remove the temporary output.
+- Added adversarial tests for nested summary claims, hidden section blockers,
+  atomic replace failure, and readback mismatch. The production-readiness guard
+  and payload-bench workflow now include release-bundle section-schema,
+  atomic-output, and existing-manifest verification negative controls.
+- Updated the offline Kagemusha guide, Android StrongBox readiness guide, and
+  roadmap to document section-level summary rejection, existing-manifest
+  verification, stable manifest comparison, atomic output replacement, and
+  readback verification.
+- Remaining production blockers are unchanged: real/generated ABI-7 compact key
+  artifacts and evidence, signed physical Android device-lab evidence, and
+  ABI-7 multi-hop compact proof composition.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k release_bundle`
+    (`36` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`255` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-verify-existing`
+  - `git diff --check -- ...` over the touched release-bundle, readiness-test,
+    production-readiness guard, workflow, offline Kagemusha docs, Android
+    readiness docs, roadmap, and status files.
+
+## 2026-06-08 Kagemusha release-bundle input preflight
+
+- Hardened `scripts/kagemusha_release_bundle.py` so readiness summaries,
+  Reserved-lineage proof evidence, ABI-7 compact key evidence, and Android
+  device-lab roots must resolve under `--bundle-root` before any JSON loading,
+  artifact hashing, proof-evidence validation, compact-key validation, or
+  device-lab scanning; any escaping input path now stops all release-evidence
+  scanners for that run.
+- Added adversarial release-bundle tests proving outside-root readiness payloads
+  are rejected before `_load_local_json`, and outside-root lineage/compact/device
+  lab inputs are rejected before their scanners run or secret-looking payloads
+  can be inspected.
+- Extended the production-readiness parity guard and payload-bench workflow with
+  a release-bundle input-path preflight negative control.
+- Added a release-bundle output collision guard so `--out` cannot overwrite a
+  readiness summary, evidence JSON, proof log, key artifact, or signed Android
+  evidence file that was already hash-bound into the manifest; the regression
+  asserts the original readiness summary remains unchanged.
+- Updated the offline Kagemusha guide and roadmap to document the all-or-nothing
+  input-path preflight and no-overwrite manifest output rule, with
+  production-readiness guard snippets pinning the public wording.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 scripts/tests/kagemusha_production_readiness_test.py -k kagemusha_release_bundle`
+  - `python3 scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh && ci/check_kagemusha_production_readiness.sh`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-input-path-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-scan-preflight`
+  - `ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-overwrite`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --check -- ...` over the touched release-bundle, readiness-test,
+    production-readiness guard, workflow, offline Kagemusha docs, roadmap, and
+    status files.
+
+## 2026-06-08 Kagemusha recursive spend compact projection SDK docs
+
+- Documented the recursive-spend compact projection verifier surface in the
+  Swift, Kotlin/JVM, Android Java, C#, JavaScript/Node, and Python SDK READMEs,
+  including the per-SDK availability probes, raw Norito compact-token plus
+  verifier-record inputs, local invalid-input rejection, optional height checks,
+  and native boolean receiver result.
+- Extended the central offline Kagemusha guide to state that all public SDKs now
+  expose typed projection verifier facades gated on ABI-7 compact projection
+  verifier symbols.
+- Hardened SDK parity checks and the JavaScript meta-test so README/API docs,
+  central docs, workflow negative-control wiring, and the compact projection
+  verifier documentation boundary drift together.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh && ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-compact-projection-verifier`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --check -- ...` over the touched workflow, SDK README, offline
+    Kagemusha docs, parity script, meta-test, and status files.
+
+## 2026-06-08 Kagemusha recursive spend compact projection typed SDK verifier
+
+- Added JNI exports for the recursive-spend compact projection verifier on both
+  JVM package surfaces, including explicit-height variants and malformed-input
+  probes that clear boolean output state.
+- Exposed typed projection verifier facades in Swift, Kotlin/JVM, Android Java,
+  and C#, with separate native availability probes from the bundle-projection
+  API and local validation for compact-token archives, verifier-record archives,
+  and negative JVM block heights.
+- Added Swift, Kotlin, Android Java, and C# regression coverage for malformed,
+  empty, empty-payload, oversized, unavailable-native, and boolean passthrough
+  cases; extended the recursive-spend SDK parity guard and JavaScript meta-test
+  to pin the new mobile/C# wrapper symbols and tests.
+- Validation:
+  - `cargo fmt -p connect_norito_bridge`
+  - `cargo fmt --check -p connect_norito_bridge`
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_compact_projection_verifier_ffi_rejects_malformed_inputs --lib -- --test-threads=1`
+  - `swift test --filter KagemushaRecursiveCompactPaymentTokenProverTests`
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest` from `kotlin/`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests` from `java/iroha_android/`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `git diff --check -- ...` over the touched bridge, Swift, JVM, Android,
+    C#, parity, and status files.
+- C# runtime validation remains environment-blocked because `dotnet` is not
+  installed. Android Gradle also requires JDK 21 locally; the default Java 25
+  runtime fails before project evaluation.
+
+## 2026-06-08 Kagemusha recursive spend compact projection SDK verifier
+
+- Exposed a projection-specific receiver verifier for Reserved-lineage recursive
+  spend compact tokens through the C bridge, Node N-API host, PyO3 host, and
+  JavaScript/Python package facades.
+- Added height-aware verifier entry points so activation-windowed lineage
+  verifier records can be checked with an explicit block height; unheighted
+  calls continue to reject windowed records before backend proof verification.
+- Kept malformed archives, non-lineage bindings, and verifier-record decode
+  failures classified as input errors, while preverify-clean backend failures
+  return boolean `false`.
+- Added C, Node host, PyO3 host, JavaScript facade, Python facade, browser-stub,
+  package-dist, TypeScript declaration, and SDK parity guard coverage for the
+  new projection verifier surface.
+- The typed Swift, Kotlin/JVM, Android Java, and C# follow-up surface is tracked
+  in the entry above; the existing bundle projection surface is unchanged.
+- Validation:
+  - `cargo fmt -p connect_norito_bridge -p iroha_js_host -p iroha_python_rs`
+  - `cargo fmt --check -p connect_norito_bridge -p iroha_js_host -p iroha_python_rs`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p connect_norito_bridge kagemusha_recursive_spend_compact_projection_verifier_ffi_rejects_malformed_inputs --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_js_host kagemusha_recursive_spend_compact_projection_verifier_js_host_rejects_malformed_inputs --lib -- --test-threads=1`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_python_rs kagemusha_recursive_spend_compact_projection_verifier_python_rejects_malformed_inputs --lib -- --test-threads=1`
+  - `node --test --test-name-pattern "Kagemusha recursive spend compact projection" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+  - `node --test --test-name-pattern "recursive compact|recursive spend compact|browser crypto exposes native-only helpers|package dist entrypoint exports Kagemusha recursive spend helpers" javascript/iroha_js/test/package_dist.test.js javascript/iroha_js/test/crypto.browser.test.js`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/kagemusha_test.py`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - Python pytest validation remains environment-blocked because the available
+    Python interpreter has no `pytest` module installed.
+
+## 2026-06-08 Kagemusha recursive spend compact projection token preverify
+
+- Added explicit core preverify/verify entry points for Reserved-lineage
+  recursive spend compact-token projections, including verifier-record and
+  height-windowed verifier-record helpers.
+- Kept the existing ABI-7 `kagemusha-recursive-compact-v1` compact verifier
+  closed to lineage projected tokens while allowing the new projection-specific
+  path to accept one-hop and append Reserved-lineage profiles after verifier
+  slice shape checks.
+- Hardened lineage projected-token preverification with circuit-id/profile
+  binding, verifier-key CID/opening-length checks, one-hop side scalar-column
+  equality, folded public-input hash binding, and record activation-window
+  enforcement.
+- Added adversarial core coverage for folded-projection splices after token hash
+  recomputation, one-hop side scalar-column splices, wrong one-hop/append
+  verifier records, semantic recursive proof misuse, height-unbound windowed
+  records, and append-profile projection acceptance.
+- Pinned the new surface and adversarial regression in the recursive-spend
+  policy guard, PR workflow, and JavaScript parity meta-test with a targeted
+  negative control.
+- Multi-hop compact proof composition remains fail-closed; this only opens the
+  explicit Reserved-lineage projection preverify surface.
+- Validation:
+  - `cargo fmt -p iroha_core`
+  - `cargo fmt --check -p iroha_core`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-kagemusha-target cargo test -p iroha_core kagemusha_recursive_spend_compact_projection_token_preverify_accepts_lineage_profiles --lib -- --test-threads=1`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-spend-compact-projection-token`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-08 Kagemusha JS host append-boundary duplicate-output coverage
+
+- Added a JS host regression proving `kagemushaRecursiveSpendLineageAppendBoundary`
+  rejects a decoded append transition profile whose current-hop output
+  commitments repeat after crossing the N-API archive boundary.
+- Added the focused JS host regression to the PR workflow's Rust smoke-test job
+  and pinned the command in the SDK parity guard.
+- Pinned the JS host regression in the recursive-spend policy guard and PR
+  workflow with a targeted negative control for current-hop output-set drift.
+- Multi-hop compact token proving remains fail-closed until the append verifier
+  batch is composed into the ABI-7 compact proof.
+- Validation:
+  - `cargo fmt -p iroha_js_host`
+  - `cargo fmt --check -p iroha_js_host`
+  - `cargo test -p iroha_js_host kagemusha_recursive_spend_lineage_append_boundary_rejects_duplicate_current_outputs -- --test-threads=1`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-append-boundary-current-output-set`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-test-workflow`
+
+## 2026-06-08 Kagemusha Python append-boundary duplicate-output host coverage
+
+- Added a PyO3 host regression proving `kagemusha_recursive_spend_lineage_append_boundary`
+  rejects a decoded append transition profile whose current-hop output
+  commitments repeat after crossing the Python archive boundary.
+- Added the focused PyO3 host regression to the PR workflow's Python SDK job
+  and pinned the command and ordering in the SDK parity guard.
+- Pinned the Python regression in the recursive-spend policy guard and PR
+  workflow with a targeted negative control for current-hop output-set drift.
+- Multi-hop compact token proving remains fail-closed until the append verifier
+  batch is composed into the ABI-7 compact proof.
+- Validation:
+  - `cargo fmt -p iroha_python_rs`
+  - `cargo fmt --check -p iroha_python_rs`
+  - `cargo test -p iroha_python_rs kagemusha_recursive_spend_lineage_append_boundary_python_rejects_duplicate_current_outputs -- --test-threads=1`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-append-boundary-current-output-set`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-host-test-workflow`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+
+## 2026-06-08 Kagemusha transition profile current-hop set hardening
+
+- Tightened recursive spend transition-profile validation so decoded current-hop
+  statements now reject duplicate input nullifiers, duplicate output
+  commitments, and input/output overlaps before append-boundary derivation.
+- Added adversarial accumulator/profile regressions covering initial-profile
+  duplicate inputs, initial input/output overlap, and append-profile duplicate
+  outputs.
+- Extended the native append-boundary FFI regression so a Norito-valid append
+  profile with duplicate current-hop outputs fails closed without output bytes.
+- Pinned the new current-hop set validator in the recursive-spend policy guard
+  and PR workflow with a targeted negative control.
+- Multi-hop compact token proving remains fail-closed until the append verifier
+  batch is composed into the ABI-7 compact proof.
+- Validation:
+  - `cargo fmt -p iroha_data_model && cargo fmt --check -p iroha_data_model`
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_bundle_roundtrips_and_appends_without_prior_hops -- --test-threads=1`
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_transition_profile_binds_adversarial_mutations -- --test-threads=1`
+  - `cargo test -p iroha_core kagemusha_recursive_spend_transition_preflight_matches_emitted_accumulator -- --test-threads=1`
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_transition_profile_append_ffi_binds_append_opening_preflight -- --test-threads=1`
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_lineage_append_boundary_ffi_rejects_semantic_profile_archives -- --test-threads=1`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-current-hop-sets`
+
+## 2026-06-08 Kagemusha compact key evidence helper output and validation hardening
+
+- Added compact-key evidence helper regressions proving `recursive-compact-key-evidence.json`
+  cannot be written through symlinked or dangling-symlink output leaves and that
+  post-preflight write failures return a controlled error instead of a traceback.
+- Extended the production-readiness guard and PR workflow with compact-key helper
+  output negative controls for the early output preflight and write-failure
+  handling paths, matching the lineage-proof helper guard coverage.
+- Added compact-key validation-temp regressions and negative controls for
+  artifact-dir create failures, temporary evidence write failures, and temporary
+  evidence cleanup failures before helper output can be trusted.
+- Added direct compact-key artifact-directory regressions and guard controls for
+  secret-looking artifact paths and unreadable artifact-dir metadata.
+- Added compact-key artifact hashing regressions and negative controls so
+  secret-looking, symlinked, hardlinked, and unreadable key artifacts fail before
+  evidence digests are accepted.
+- Added compact-key output-preflight regressions and guard controls for output
+  parent create failures, output file metadata failures, and output hardlink
+  metadata failures without leaking or overwriting existing evidence.
+- This does not replace the remaining external production evidence blockers:
+  real compact key artifacts/evidence, signed physical Android device-lab
+  evidence, and ABI-7 multi-hop compact proof composition remain required.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-early-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-create-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-hardlink-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-dir-create-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-read-failure`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k compact_key`
+    (`45` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`246` tests passed)
+  - `git diff --check -- scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml status.md`
+
+## 2026-06-08 Kagemusha recursive spend compact projection parity hardening
+
+- Hardened the recursive-spend compact projection SDK parity guard so it now
+  pins the new C/JNI symbol, JavaScript/Python package-root exports, Swift
+  bridge probe, browser stubs, declarations, and cross-SDK tests without relying
+  on brittle line-wrapped signatures.
+- Added the projection negative control to the PR workflow and JS parity
+  meta-test so deleting the JavaScript projection API is detected before the
+  payload benchmark runs.
+- Added Swift projection regressions for oversized bundle archives and
+  empty-payload bundle archives, matching the local validation already present
+  in the other SDK facades.
+- Remaining Kagemusha production blockers are unchanged: real compact key
+  artifacts/evidence, signed physical Android device-lab evidence, and ABI-7
+  multi-hop compact proof composition.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`27` tests passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/kagemusha_test.py`
+  - `swift test --filter KagemushaRecursiveCompactPaymentTokenProverTests`
+    (`28` tests passed)
+  - `git diff --check -- ci/check_kagemusha_recursive_spend_sdk_parity.sh .github/workflows/pr_kagemusha_payload_bench.yml javascript/iroha_js/test/kagemushaFfiContractParity.test.js python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/kagemusha_test.py IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift status.md`
+  - Scoped lockfile/native-artifact status check for `Cargo.lock`,
+    `javascript/iroha_js/package-lock.json`, `javascript/iroha_js/native`, JVM
+    lockfiles, and C# lockfiles showed no changes.
+
+## 2026-06-08 Kagemusha recursive spend compact projection SDK surface
+
+- Exposed the validated recursive-spend bundle-to-compact-token projection
+  across the native C/JNI bridge, Node N-API host, JavaScript package facade,
+  Python PyO3/facade, Swift, Kotlin/JVM, Java Android, and C# SDK surfaces.
+- Added fail-closed availability probes and host-side archive validation so
+  empty, malformed, empty-payload, and oversized bundle archives are rejected
+  before native dispatch where each SDK can validate locally.
+- Extended the JavaScript parity guard to pin the new C symbol, JNI exports,
+  JS/Python/Swift/Kotlin/Android/C# API names, browser stubs, declarations, and
+  focused tests, including malformed bundle and forged recursive-proof binding
+  checks.
+- This closes the SDK reachability gap for the canonical chain-visible compact
+  token projection. Remaining Kagemusha production blockers are unchanged:
+  real compact key artifacts/evidence, signed physical Android device-lab
+  evidence, and ABI-7 multi-hop compact proof composition.
+- Validation:
+  - `cargo fmt --all --check`
+    (latest run currently fails on unrelated formatting drift in
+    `crates/iroha_js_host/src/lib.rs`)
+  - `cargo test -p iroha_js_host kagemusha_recursive_spend_compact_projection_js_host_binds_bundle -- --test-threads=1`
+    (`1` test passed)
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_compact_projection_ffi_returns_bound_token -- --test-threads=1`
+    (`1` test passed)
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_ffi_rejects_invalid_archives_without_output -- --test-threads=1`
+    (`1` test passed)
+  - `cargo test -p iroha_python_rs kagemusha_recursive_spend_compact_projection_python_binds_bundle -- --test-threads=1`
+    (`1` test passed)
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`27` tests passed)
+  - `node --test --test-name-pattern "Kagemusha recursive spend|browser crypto exposes native-only helpers|package dist entrypoint exports Kagemusha recursive spend helpers" javascript/iroha_js/test/kagemushaRecursiveSpend.test.js javascript/iroha_js/test/crypto.browser.test.js javascript/iroha_js/test/package_dist.test.js`
+    (`26` tests passed)
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/tests/kagemusha_test.py`
+  - `swift test --filter KagemushaRecursiveCompactPaymentTokenProverTests`
+    (`26` tests passed)
+  - `./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest`
+  - `ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.offline.KagemushaRecursiveSpendProverTest JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests`
+  - Python pytest validation is environment-blocked because the available
+    Python 3.11 interpreter has no `pytest` module installed.
+  - C# xUnit validation is environment-blocked because `dotnet` is not
+    installed.
+
+## 2026-06-08 Kagemusha release bundle artifact inventory
+
+- Hardened `scripts/kagemusha_release_bundle.py` so the final production
+  manifest now inventories every packaged Reserved-lineage artifact, ABI-7
+  compact key artifact, and Reserved-lineage production proof log with
+  bundle-relative path, SHA-256 digest, and byte size.
+- The release-bundle builder rejects artifact inventory digest drift, size
+  drift, missing required entries, and artifacts outside `--bundle-root`.
+  Android signed-evidence per-slot path validation remains unchanged and still
+  revalidates scanner-returned slot names before path construction.
+- Added release-bundle coverage proving the positive manifest includes the
+  lineage artifact, compact key artifact, and proof-log inventories, plus
+  adversarial helper coverage for digest drift, size drift, and out-of-bundle
+  artifact roots. The production-readiness guard and workflow now include a
+  release-bundle artifact-inventory negative control.
+- This closes another release packaging auditability gap, but Kagemusha is
+  still not fully production-ready until real compact key artifacts/evidence,
+  signed physical Android device-lab evidence, and ABI-7 multi-hop compact
+  proof composition are available.
+- Cargo/Rust validation was deferred because active `cargo`/`rustc` processes
+  from other sessions were present and must not be interrupted or contended
+  with.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k release_bundle`
+    (`27` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`231` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-artifact-inventory`
+
+## 2026-06-08 Kagemusha release evidence artifact size binding
+
+- Hardened Reserved-lineage proof evidence and ABI-7 recursive compact key
+  evidence so both JSON packets now declare `artifact_size_bytes` for their
+  required local artifacts.
+- The readiness rollup now rejects missing, non-integer, non-positive,
+  size-mismatched, unexpected, and empty artifact size claims for
+  Reserved-lineage and compact evidence, and only reports sizes after the
+  declared size and SHA-256 digest both match adjacent local artifact bytes.
+- The lineage and compact evidence helpers now emit the size maps and reject
+  empty artifacts before writing evidence JSON. The release-bundle verifier
+  includes the lineage size map in summary-drift checks and emitted manifests.
+- This closes another evidence-integrity gap, but Kagemusha is still not fully
+  production-ready until real compact key artifacts/evidence, signed physical
+  Android device-lab evidence, and ABI-7 multi-hop compact proof composition are
+  available.
+- Cargo/Rust validation was deferred because active `cargo`/`rustc` processes
+  from other sessions were present and must not be interrupted or contended
+  with.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_evidence`
+    (`67` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k release_bundle`
+    (`24` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`228` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-size-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-size-binding`
+
+## 2026-06-08 Kagemusha compact key evidence size binding
+
+- Hardened ABI-7 recursive compact key evidence so
+  `recursive-compact-key-evidence.json` now declares `artifact_size_bytes` for
+  `recursive-compact-len4.vk`, `recursive-compact-len4.pk`, and
+  `recursive-compact-len4.record.norito`.
+- The readiness rollup now rejects missing, non-integer, non-positive,
+  size-mismatched, and unexpected compact artifact size claims, and only
+  reports compact artifact sizes after both the declared size and SHA-256 digest
+  match adjacent non-empty local artifact bytes.
+- The compact key evidence helper now emits the size map and rejects empty
+  compact key artifacts before writing evidence JSON. The production-readiness
+  guard and Kagemusha workflow now include a negative control for the
+  size-binding check.
+- This closes another compact evidence integrity gap, but Kagemusha is still not
+  fully production-ready until real compact key artifacts/evidence, signed
+  physical Android device-lab evidence, and ABI-7 multi-hop compact proof
+  composition are available.
+- Cargo/Rust validation was deferred because another `cargo test -p iroha_torii
+  durable_store_rejects_digest_correct_malformed_record_schema --lib` process
+  and its `rustc` child were active and must not be interrupted or contended
+  with.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k compact_key`
+    (`30` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`222` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-size-binding`
+
+## 2026-06-08 Kagemusha release bundle Android slot-name path guard
+
+- Hardened the Kagemusha release-bundle Android signed-evidence inventory so it
+  revalidates every scanner-returned slot name before constructing
+  bundle-relative signed-evidence paths.
+- Added adversarial coverage for forged scanner reports with parent-traversal
+  slot names and secret-looking slot names; both fail before path construction,
+  and the secret-looking slot string is not echoed.
+- This closes another manifest path-construction gap, but Kagemusha is still not
+  fully production-ready until real compact key artifacts/evidence, signed
+  physical Android device-lab evidence, and ABI-7 multi-hop compact proof
+  composition are available.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k release_bundle`
+    (`23` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`218` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift`
+
+## 2026-06-08 Kagemusha release bundle Android evidence inventory
+
+- Hardened `scripts/kagemusha_release_bundle.py` so final release manifests
+  include bundle-relative per-slot Android signed-evidence artifact paths and
+  recomputed SHA-256 digests for every scanner-validated device-lab slot.
+- The release-bundle verifier now rejects Android signed-evidence artifacts that
+  validate through the scanner but live outside `--bundle-root`, and rejects
+  any manifest inventory drift from the scanner-validated readiness summary.
+- Added adversarial coverage for copied Android device-lab evidence outside the
+  release bundle root, while the positive release-bundle test now proves every
+  manifest slot binds the expected `evidence/signed-evidence.json` path and
+  digest.
+- This closes another packaging gap, but Kagemusha is still not fully
+  production-ready until real compact key artifacts/evidence, signed physical
+  Android device-lab evidence, and ABI-7 multi-hop compact proof composition
+  are available.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k release_bundle`
+    (`21` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`216` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift`
+
+## 2026-06-08 Kagemusha release bundle repo-trust drift gate
+
+- Hardened `scripts/kagemusha_release_bundle.py` so the final Kagemusha
+  release-bundle verifier accepts `--repo-root`, recomputes the checked-in
+  ABI-6 Reserved-lineage manifest, ABI-7 recursive compact fail-closed
+  contract, and Reserved-lineage release-tooling trust roots, and rejects ready
+  summaries that drift from those recomputed repo-backed sections.
+- The release manifest now records sanitized ABI-6, ABI-7, and
+  lineage-tooling section summaries beside the hash-bound readiness summary,
+  lineage proof evidence, compact key evidence, and Android signed-evidence
+  inventory.
+- Added adversarial coverage for ABI-6 summary drift, ABI-7 summary drift,
+  lineage-tooling summary drift, wrong `--repo-root`, and secret-looking
+  `--repo-root` values without leaking the secret-looking string. The production
+  readiness source guard now pins the exact multi-section summary-drift compare
+  call and keeps the negative control effective.
+- This closes another forged-summary path in release packaging, but Kagemusha is
+  still not fully production-ready until real compact key artifacts/evidence,
+  signed physical Android device-lab evidence, and ABI-7 multi-hop compact proof
+  composition are available.
+- Cargo/Rust validation was deferred because another `cargo test -p
+  iroha_data_model` process was active and must not be interrupted or contended
+  with.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k release_bundle`
+    (`20` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`215` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift`
+
+## 2026-06-08 ISO notary exact schema gate
+
+- Hardened the ISO notary audit-index replay validators in
+  `scripts/iso_audit_notary_adapter.py` and
+  `scripts/iso_operator_receipt_verify.py` so each `records[]` entry must carry
+  the complete Torii-emitted summary key set, including nullable fields such as
+  `uetr`, before adapter publication or receipt source replay can proceed.
+- Hardened persisted notary record-source replay to require the complete
+  Torii-emitted record, context, metadata, and status-history key sets while
+  still allowing intentional JSON nulls for nullable fields.
+- Aligned persisted notary record-source replay in
+  `scripts/iso_audit_notary_adapter.py` and
+  `scripts/iso_operator_receipt_verify.py` with Torii's 1 MiB
+  persisted-record cap instead of the broader 64 MiB anchor/index JSON cap.
+- Hardened notary publication plus source-file and production-evidence replay
+  so zero-record anchors cannot satisfy persisted-source proof: the notary
+  adapter rejects `record_count = 0` before network delivery, the receipt
+  verifier rejects it when `--require-source-files` is used, the evidence gate
+  rejects compact notary receipts with non-positive `record_count`, and
+  readiness replays the same invariant as receipt metadata blockers.
+- Hardened notary audit-index record validation so both publication and receipt
+  source replay reject unsupported lifecycle states before a digest-correct
+  summary can be treated as Torii-emitted evidence.
+- Hardened notary audit-index record validation so both publication and receipt
+  source replay reject digest-correct lifecycle/pacs.002 summary mismatches, for
+  example a `Rejected` row carrying an accepting pacs.002 code.
+- Hardened persisted notary status-history verification so digest-correct record
+  sources cannot carry lifecycle/pacs.002 mismatches in historical entries while
+  still ending with a valid current status.
+- Hardened production-readiness replay of plan-only compact canary evidence:
+  plan-only summaries now keep producing production blockers with
+  explicitly recorded `receipt_summary = null` and empty `stage_windows`, while
+  forged plan-only summaries that omit or smuggle receipt summaries, or smuggle
+  execution windows, remain malformed.
+- Added archived-evidence regression coverage proving the diagnostic
+  `--allow-plan-only` path preserves the same compact replay shape with
+  `stage_windows = []`, an explicitly present `receipt_summary = null`, and no
+  direct receipt-verification archive.
+- Hardened Torii durable-store reload so digest-correct local persisted record
+  JSON must retain the complete record, context, metadata, and status-history
+  schema, including nullable fields and a non-empty status history, before the
+  record can rebuild runtime status or regenerated audit indexes.
+- Bound Torii durable-store reload to the digest-addressed record filename, so
+  a digest-correct record whose on-disk filename no longer matches its embedded
+  `message_id` is ignored and excluded from regenerated audit indexes.
+- Hardened Torii durable-store reload to require the `messages` directory and
+  each loaded record entry to be non-symlinked regular filesystem objects, so
+  symlinked record paths or symlinked record directories are not followed while
+  rebuilding runtime status.
+- Hardened Torii durable-store writes to require real final directories for
+  `messages`, local audit indexes, external audit export roots, and
+  digest-addressed external anchor directories, preventing record, index, or
+  notary preimage writes through symlinked durable-output directories.
+- Added a 1 MiB persisted-record cap before JSON parsing and before writing
+  durable record files or audit-index entries, so oversized digest-correct local
+  records cannot rebuild runtime status and runtime-generated oversized status
+  records cannot leave stale durable state.
+- Aligned Torii durable-store reload with the offline source verifiers'
+  clean-string policy: concrete persisted strings must be non-empty, unpadded,
+  and control-free while JSON null remains valid for nullable fields.
+- Added adversarial coverage for digest-correct audit indexes and persisted
+  record sources that omit nullable schema keys, both directly through the
+  notary adapter and through receipt-verifier notary source replay.
+- Added Torii adversarial coverage for digest-correct persisted records with
+  missing top-level fields, missing nested context/metadata/history fields,
+  extra fields, empty status history, malformed change-reason arrays, embedded
+  `message_id` drift, digest-addressed filename drift, and symlinked record
+  paths, symlinked `messages` directories, plus oversized digest-correct local
+  records, dirty persisted strings, and symlinked durable-output directories on
+  the persist/export side.
+- Updated the ISO roadmap/backlog/audit notes to describe the complete notary
+  audit/source schema requirements, the split notary source caps, and the
+  positive notary `record_count` requirement and state-compatible pacs.002
+  summary/status-history code requirement before publication and during
+  source-file or production-evidence replay. Remaining production blockers are
+  unchanged: real live rail/notary evidence, official trust/revocation bundles,
+  and redistributable official schema/profile coverage still need operator or
+  upstream inputs.
+- Full dependency clippy for `iroha_torii` currently stops in unrelated
+  `iroha_data_model::zk::OpenVerifyEnvelopeBounds` on
+  `clippy::struct_excessive_bools`; the Torii-local `--no-deps` clippy pass
+  succeeded.
+- Validation:
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_operator_receipt_verify.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_audit_index_records_require_nullable_summary_keys`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_notary_anchor_source_mismatches_are_rejected_when_required`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_oversized_audit_json_inputs_are_rejected_before_network_delivery`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_oversized_notary_source_json_files_are_rejected_when_required`
+    (`1` test passed)
+  - `python3 -m py_compile scripts/iso_operator_receipt_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_zero_record_notary_receipt_is_rejected_when_source_files_required`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_zero_record_anchor_is_rejected_before_network_delivery`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_unknown_or_malformed_audit_index_record_fields_are_rejected`
+    (`1` test passed, latest run 0.013s)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_tampered_persisted_record_source_is_rejected_before_network_delivery`
+    (`1` test passed, latest run 5.066s)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_notary_anchor_source_mismatches_are_rejected_when_required`
+    (`1` test passed, latest run 0.576s)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_notary_receipt_record_count_must_be_positive_for_production_evidence pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_direct_receipt_archive_must_bind_canary_receipt_metadata`
+    (`2` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_plan_only_output_records_null_receipt_summary`
+    (`1` test passed, latest run 0.006s)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_archive_receipts_must_bind_canary_receipt_metadata pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_entries_must_preserve_kind_metadata`
+    (`2` tests passed)
+  - `python3 -m py_compile scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_plan_only_evidence_reports_blockers_without_receipt_summary pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_plan_only_evidence_must_not_smuggle_receipt_summary pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_plan_only_evidence_must_record_null_receipt_summary pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_plan_only_evidence_must_not_record_stage_windows`
+    (`4` tests passed, latest run 0.065s)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test`
+    (`54` tests passed, latest run 37.560s)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test`
+    (`46` tests passed, latest run 17.541s)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test`
+    (`132` tests passed, latest run 28.120s)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (`127` tests passed, latest run 128.531s)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`589` tests passed, latest run 260.186s)
+  - `rustfmt --edition 2024 crates/iroha_torii/src/iso20022_bridge.rs`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_torii durable_store_rejects_digest_correct_malformed_record_schema --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_torii durable_store_rejects_digest_correct_message_id_filename_drift --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_torii durable_store_rejects_symlinked_record_on_reload --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_torii durable_store_rejects_symlinked_messages_dir_on_reload --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_torii durable_store_rejects_oversized_record_on_reload --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_torii durable_store_removes_oversized_record_on_persist --lib -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_torii durable_store_refuses_symlinked --lib -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_torii durable_store_ --lib -- --nocapture`
+    (`20` tests passed)
+  - `cargo clippy -p iroha_torii --lib --no-deps -- -D warnings`
+
+## 2026-06-07 Kagemusha recursive compact projection boundary
+
+- Added a data-model constructor for recursive compact token projections so a
+  folded mode-2 public-input projection and recursive proof produce a canonical
+  `KagemushaCompactPaymentToken` without routing through the legacy
+  checked-prefold compact-token validator.
+- Added recursive spend accumulator projection helpers and a validated
+  recursive spend bundle-to-compact-token conversion. This gives the multi-hop
+  Reserved-lineage append path a canonical chain-visible compact token shape
+  while the ABI-7 compact prover still keeps multi-hop proof composition
+  reserved.
+- Wired the core one-hop ABI-7 compact prover and test helper through the new
+  constructor so generated compact tokens and projection tests share the same
+  binding checks.
+- Validation:
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_data_model kagemusha_recursive_aggregation_evidence_binds_batch_preflight_digest -- --test-threads=1`
+    (`1` test passed)
+  - `cargo test -p iroha_data_model kagemusha_recursive_spend_bundle_roundtrips_and_appends_without_prior_hops -- --test-threads=1`
+    (`1` test passed)
+  - `cargo test -p iroha_core kagemusha_recursive_compact_payment_token_preverify_binds_token_shape --no-run`
+  - The runtime `iroha_core`
+    `kagemusha_recursive_compact_payment_token_preverify_binds_token_shape`
+    test was interrupted after successful compilation because it entered the
+    expensive recursive verifier-key materialization path.
+
+## 2026-06-07 Kagemusha production release-bundle verifier
+
+- Added `scripts/kagemusha_release_bundle.py` as a strict final packaging gate
+  for Kagemusha production evidence. It accepts only a ready
+  `dist/kagemusha-production-readiness.json`, recomputes the Reserved-lineage
+  proof evidence, ABI-7 compact key evidence, and Android device-lab signed
+  evidence checks, then emits
+  `dist/kagemusha-production-release-bundle.json` with bundle-relative paths and
+  SHA-256 bindings.
+- The verifier rejects blocked or drifted readiness summaries, duplicate JSON
+  keys, unexpected top-level summary fields, secret-looking paths, evidence
+  outside `--bundle-root`, missing trusted signer keys, secret-looking strings
+  anywhere inside the readiness summary, symlinked bundle roots, and symlinked
+  or hardlinked release-bundle outputs. Secret-looking trusted signer key paths
+  are rejected before key loading, and newly-created output parents are
+  revalidated before writing.
+- Added positive and adversarial release-bundle coverage to the Kagemusha
+  readiness test suite, and pinned the new script, tests, docs, workflow path,
+  and summary-drift negative control in the production-readiness source guard.
+- This closes another release-packaging gap, but the release still needs actual
+  generated compact key artifacts/evidence plus signed physical Android
+  device-lab evidence before the bundle can be produced as ready. ABI-7
+  multi-hop compact remains reserved until append-batch composition is wired.
+- Cargo/Rust validation was deferred because another `cargo test -p iroha_core`
+  process was active and must not be interrupted or contended with.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k release_bundle`
+    (`15` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`210` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift`
+
+## 2026-06-07 Kagemusha ABI-7 compact key release evidence gate
+
+- Added `scripts/kagemusha_recursive_compact_key_evidence.py` to build the
+  canonical `recursive-compact-key-evidence.json` packet for ABI-7 one-hop
+  compact key releases, binding the LEN=4 `.record.norito`, `.vk`, and `.pk`
+  artifacts by SHA-256 and the canonical key-artifact command.
+- Wired compact key evidence into the production-readiness rollup with
+  canonical filename, timestamp freshness/skew, closed-schema, scalar type,
+  command canonicality, artifact non-empty, digest drift, secret-path, symlink,
+  and hardlink checks.
+- Updated the offline Kagemusha runbook, workflow triggers, production-readiness
+  source guard, and JavaScript meta-test so compact key evidence is required
+  beside lineage proof evidence.
+- This makes the compact key release blocker explicit and machine-checked; the
+  actual generated compact key artifacts/evidence packet still have to be
+  attached by release packaging, signed physical Android device-lab evidence is
+  still external, and multi-hop ABI-7 compact remains unavailable until append
+  verifier-batch composition is wired.
+- Cargo/Rust validation was deferred because another `cargo rustc` process was
+  active in the workspace and must not be interrupted or contended with.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k compact_key`
+    (`26` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`195` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-path-aliases`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-filename`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-command-canonical`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-scalar-types`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-timestamp-raw`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-closed-schema`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`1` test passed)
+
+## 2026-06-07 Native asset-lock ISIs
+
+- Added first-class native asset-lock instructions for escrow-style conditional
+  custody: `OpenAssetLock`, `DrawdownAssetLock`, `CancelAssetLock`, and
+  `ExpireAssetLock`.
+- Generic locks now record their behavior kind, remaining amount, optional
+  release authority, optional expiry deadline, and terminal `DrawnDown` or
+  `Expired` status. Existing marketplace escrows are marked separately as
+  `Marketplace` records.
+- Lock funding moves source balances into deterministic native custody, and
+  generic asset transfer or burn instructions cannot drain recorded native
+  escrow custody accounts. Drawdown, cancellation, and expiry use the native
+  escrow custody policy instead.
+- Python transaction and Torii helpers expose the new lock instructions, with
+  finite positive amount validation before transaction construction.
+- Added unit, SDK-surface, and 4-peer localnet coverage for duplicate IDs,
+  missing accounts, non-positive amounts, insufficient balance, wrong kind,
+  wrong signer, release authority checks, overdraw, frozen custody, expiry
+  timing, closed-state replays, and direct custody-drain attempts.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `cargo test -p iroha_data_model escrow --lib` (`8` tests passed)
+  - `cargo test -p iroha_core asset_lock --lib` (`8` tests passed)
+  - `cargo test -p iroha_core escrow --lib` (`52` tests passed)
+  - `cargo check -p iroha_python_rs`
+  - `python3 -m py_compile python/iroha_python/src/iroha_python/tx.py python/iroha_python/tests/client_ledger_helpers_test.py`
+  - `VIRTUAL_ENV=/tmp/iroha-py311-asset-lock-venv PATH=/tmp/iroha-py311-asset-lock-venv/bin:$PATH maturin develop --skip-install --manifest-path iroha_python_rs/Cargo.toml`
+  - `PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src /tmp/iroha-py311-asset-lock-venv/bin/python -m pytest -q python/iroha_python/tests/client_ledger_helpers_test.py -k asset_lock`
+    (`14` tests passed)
+  - `cargo test -p integration_tests --test core_api native_escrow::native_asset_lock_flow_on_multi_peer_network -- --nocapture`
+    (`1` localnet test passed)
+
+## 2026-06-07 Kagemusha ABI-7 compact verifier proof-size floor
+
+- Added `KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES` and wired the ABI-7
+  compact verifier dispatch to reject tiny inner Halo2 IPA proof payloads after
+  ZK1 public-instance parsing but before compact verifier-key construction.
+- Updated the core and C-bridge shape-valid dummy-proof fixtures to assert that
+  their 64-byte placeholder proof bodies exercise that proof-size floor, keeping
+  the one-hop preverify/adversarial coverage lightweight while preserving real
+  backend verification for valid proof material.
+- Refreshed the Android StrongBox device matrix and offline Kagemusha docs so
+  ABI-7 is described as one-hop proof-capable with packaged artifacts, while
+  multi-hop compact remains unavailable until append-batch composition is wired.
+- Tightened the Android device-lab production slot schema so
+  `abi7_recursive_compact_jni_probe` must be `one_hop_verified` and
+  `abi7_recursive_compact_prover_state` must be
+  `multi_hop_proof_composition_unavailable`; old unavailable-only compact
+  evidence is now rejected by focused regressions.
+- Remaining production blockers are unchanged: signed physical Android
+  device-lab evidence is still absent from this workspace, packaged compact
+  one-hop proving-key artifacts still need release evidence for
+  runtime-disabled builds, and multi-hop ABI-7 compact remains unavailable until
+  the append verifier batch is composed into the compact proof.
+- Cargo build/test validation was deferred because other Rust build processes
+  were active in the workspace and must not be interrupted or contended with.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs crates/connect_norito_bridge/src/lib.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs crates/connect_norito_bridge/src/lib.rs`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`169` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k recursive_compact`
+    (`2` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`328` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-matrix`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-core-contract-open`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-bridge-unavailable-mapping`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-offline-doc-one-hop-boundary`
+
+## 2026-06-07 Kagemusha ABI-7 compact key-artifact CLI surface
+
+- Added `iroha app zk kagemusha recursive-compact-key-artifacts` to generate
+  the ABI-7 one-hop LEN=4 recursive compact verifier key, packaged compact
+  proving-key archive, and optional governance/WSV verifier record for
+  `kagemusha-recursive-compact-v1`.
+- Added lightweight CLI unit coverage that rejects adversarial lineage verifier
+  keys and empty verifier-key bytes before they can be packaged as ABI-7
+  recursive compact verifier records.
+- Renamed the ABI-7 production-readiness summary state from the stale
+  `fail_closed` label to `one_hop_wired_multi_hop_reserved`, and fixed the
+  corresponding unit test so it checks the temporary marker repo before cleanup.
+- Updated `docs/source/offline_kagemusha.md` with the compact key-artifact
+  release command and pinned the new CLI/doc surface in the Kagemusha
+  production-readiness and recursive-spend policy requirements.
+- The focused Rust CLI unit test now passes for the adversarial compact
+  verifier-record packaging cases, including lineage verifier-key spoofing and
+  empty verifier-key bytes.
+- Remaining production blockers are unchanged: signed physical Android
+  device-lab evidence is still absent from this workspace, the generated compact
+  one-hop proving-key artifacts still need release evidence for
+  runtime-disabled builds, and multi-hop ABI-7 compact remains unavailable until
+  the append verifier batch is composed into the compact proof.
+- Validation:
+  - `cargo fmt -p iroha_cli --check`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`169` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-release-tooling`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `CARGO_BUILD_JOBS=1 cargo test -p iroha_cli kagemusha_recursive_compact_record_from_existing_vk_bytes_rejects_adversarial_inputs -- --test-threads=1`
+    (`1` focused test passed across the `iroha`, `iroha3`, and `iroha_cli` test
+    binaries)
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries|recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`2` tests passed)
+
+## 2026-06-07 Kagemusha ABI-7 compact offline doc readiness boundary
+
+- Updated `docs/source/offline_kagemusha.md` so the public architecture doc no
+  longer describes ABI-7 recursive compact as globally fail-closed: it now
+  states that one-hop `kagemusha-recursive-compact-v1` proving is wired when
+  the packaged compact one-hop proving-key archive and verifier-slice evidence
+  are present, while missing packaged key and multi-hop verifier-batch cases
+  stay reserved ABI-7 state.
+- Updated the production-readiness document requirements and workflow command
+  inventory to require that one-hop/multi-hop boundary, then added a dedicated
+  negative control for the offline doc ABI-7 boundary.
+- Extended the JavaScript production-readiness meta-test to pin the new
+  negative-control mode, workflow invocation, and mutation body.
+- Corrected the readiness helper's human-facing ABI-7 launch-boundary wording
+  and updated the Python unit negative test so it removes the currently guarded
+  `verify_backend()` dispatch marker instead of the older `false` return marker.
+- Remaining production blockers are unchanged: signed physical Android
+  device-lab evidence is still absent from this workspace, packaged compact
+  one-hop proving-key artifacts still need release evidence for
+  runtime-disabled builds, and multi-hop ABI-7 compact remains unavailable until
+  the append verifier batch is composed into the compact proof.
+- Validation:
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`169` tests passed)
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-offline-doc-one-hop-boundary`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `rg -n "public compact proving|receiver-side verification fail closed|receiver verification fail closed|fail closed until the compact proof|compact token proof composes|ABI 7 keeps the reserved|ABI-7 compact-token symbols remain source-stable but fail closed|ABI-7 recursive compact-token symbols remain fail-closed" docs IrohaSwift java kotlin csharp javascript python ci scripts`
+    (no matches)
+
+## 2026-06-07 Kagemusha ABI-7 compact SDK README boundary
+
+- Updated the Swift, Java Android, Kotlin/JVM, C#, JavaScript, and Python SDK
+  READMEs so ABI-7 `recursive_compact_v1` no longer reads as globally disabled:
+  each SDK now documents the one-hop LEN=4 compact-token proof path behind the
+  packaged compact one-hop proving-key archive, while keeping missing packaged
+  key and multi-hop verifier-batch cases as reserved ABI-7 state.
+- Expanded the SDK parity README guard from Java/Kotlin-only coverage to all six
+  SDK READMEs, with per-language API, availability-gate, and error/classifier
+  requirements for the recursive compact prover/verifier surface.
+- Pinned the README negative control in the JavaScript meta-test so the guard
+  must mutate the ABI-7 reserved-state wording and validate the mutated text
+  snapshot before it can pass.
+- Remaining production blockers are unchanged: signed physical Android
+  device-lab evidence is still absent from this workspace, packaged compact
+  one-hop proving-key artifacts still need release evidence for
+  runtime-disabled builds, and multi-hop ABI-7 compact remains unavailable until
+  the append verifier batch is composed into the compact proof.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-recursive-compact-unavailable`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha ABI-7 compact policy meta-coverage guard
+
+- Added a JavaScript meta-test that pins the recursive compact policy
+  negative-control inventory, workflow invocations, mutation bodies, and
+  mutated-text validation for ABI-7 core, C bridge, Node host, and Python host
+  adversarial coverage.
+- The pinned modes cover compact-token public-instance row shape, Pallas opening
+  count, CID-spoofed verifier keys, forged verifier-key hashes, and host
+  multi-row public-instance rejection before soft invalid/unavailable handling.
+- Added a companion JavaScript meta-test for the production-readiness ABI-7
+  launch-boundary negative controls, covering the compact multi-hop
+  fail-closed gate, one-hop compact core contract marker, and bridge unavailable
+  error mapping.
+- Remaining production blockers are unchanged: signed physical Android
+  device-lab evidence is still absent from this workspace, packaged compact
+  one-hop proving-key artifacts still need release evidence for
+  runtime-disabled builds, and multi-hop ABI-7 compact remains unavailable until
+  the append verifier batch is composed into the compact proof.
+- Validation:
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin ABI-7 compact adversarial coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-public-instance-shape`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-bridge-recursive-compact-pallas-count`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-recursive-compact-public-instance-shape`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-recursive-compact-vk-hash`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin native host archive caps|recursive Kagemusha policy negative controls pin ABI-7 compact adversarial coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`2` tests passed)
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-open`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-core-contract-open`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-bridge-unavailable-mapping`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `node --test --test-name-pattern "Kagemusha production readiness negative controls pin ABI-7 compact launch boundaries|recursive Kagemusha policy negative controls pin ABI-7 compact adversarial coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`2` tests passed)
+
+## 2026-06-07 Kagemusha ABI-7 one-hop compact token path
+
+- Replaced the ABI-7 recursive compact verifier key with the production LEN=4
+  one-hop verifier-slice key for `kagemusha-recursive-compact-v1`, and added the
+  matching compact proving-key derivation path.
+- Wired record-backed one-hop Pallas opening archives through compact token
+  proof generation, including hop-bound verifier preflight, scalar-projection
+  binding, folded public-input projection, and compact verifier-key/hash
+  preverification. Multi-hop compact archives still return
+  `KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE`.
+- Updated compact token preverification and backend dispatch so one-hop compact
+  envelopes must expose the semantic recursive public-input prefix plus the
+  one-hop verifier-slice scalar-projection side column; semantic compact-CID
+  envelopes and malformed verifier-slice shapes reject before backend
+  verification.
+- Updated the native bridge one-hop compact fixtures so shape-valid dummy
+  compact tokens return a soft invalid verifier result while malformed compact
+  tokens still hard-fail.
+- Remaining production blockers: signed physical Android device-lab evidence is
+  still absent from this workspace, packaged compact one-hop proving-key
+  artifacts still need release evidence for runtime-disabled production builds,
+  and multi-hop ABI-7 compact remains unavailable until the append verifier
+  batch is composed into the compact proof.
+- Validation so far:
+  - `CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target cargo test -p iroha_core --lib --no-run`
+    (passed)
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs crates/connect_norito_bridge/src/lib.rs crates/iroha_js_host/src/lib.rs python/iroha_python/iroha_python_rs/src/lib.rs`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target cargo test -p iroha_core kagemusha_recursive_compact_payment_token_preverify_binds_token_shape --lib -- --test-threads=1 --nocapture`
+    was started before the final guard/fixture edits and was still running
+    without diagnostics when this status entry was refreshed; it was left
+    untouched per the no-kill process constraint.
+
+## 2026-06-07 Kagemusha recursive compact windowed-record bridge guard
+
+- Added focused native bridge regressions for ABI-7 recursive compact proof
+  generation where verifier records carrying activation/withdraw height windows
+  must hard-fail as `ERR_KAGEMUSHA_PROVE` before the fail-closed unavailable
+  classifier can mask the unsupported height-aware path.
+- Verified the stale native output contract for that branch by requiring the
+  windowed-record bundle failure to clear both the output pointer and output
+  length.
+- Pinned the bridge behavior in the SDK parity guard with a recursive compact
+  verifier-surface needle and extended the JavaScript parity meta-test so the
+  negative control mutates and validates the windowed-record hard-fail string.
+- Wired the focused windowed-record bridge regression into the Kagemusha native
+  bridge workflow and parity workflow checker, including a negative-control
+  mutation for the dedicated CI command and an order check that keeps the fast
+  windowed-record guard ahead of the heavyweight recursive compact adversarial
+  test.
+- Remaining production blockers are unchanged: signed physical Android
+  device-lab evidence still has to be attached, packaged compact one-hop
+  proving-key artifacts need release evidence for runtime-disabled builds, and
+  multi-hop ABI-7 recursive compact remains fail-closed until the append
+  verifier batch is composed before receiver default SDK selection.
+- Validation:
+  - `cargo fmt -p connect_norito_bridge --check`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `node --test --test-name-pattern "recursive Kagemusha SDK parity negative controls fail when drift is undetected" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_rejects_windowed_records_before_unavailable --lib -- --test-threads=1`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-test-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-windowed-record-order-workflow`
+
+## 2026-06-07 Kagemusha one-hop verifier-slice evidence binding
+
+- Extended the record-backed LEN=4 one-hop verifier-slice evidence regression
+  so it now rejects proof-count, verifier-witness profile, Pallas parameter
+  fingerprint, fixed-window schedule digest, shared-table manifest digest,
+  opening-length, table-base, and hop-bound witness-batch digest splices before
+  the evidence can be trusted by receiver admission.
+- Extended the proof-derived open-envelope evidence regression with a Pallas
+  parameter-fingerprint splice so the open-envelope path cannot reuse otherwise
+  valid table-base/opening metadata against different verifier parameters.
+- Pinned the new adversarial coverage in both the recursive-spend policy guard
+  and production-readiness guard, and added a workflow-enforced negative
+  control for the one-hop verifier-slice evidence-binding strings.
+- Remaining production blockers are unchanged: signed physical Android
+  device-lab evidence still has to be attached, packaged compact one-hop
+  proving-key artifacts need release evidence for runtime-disabled builds, and
+  multi-hop ABI-7 recursive compact remains fail-closed until the append
+  verifier batch is composed before receiver default SDK selection.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-one-hop-verifier-slice-evidence-binding`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-kagemusha-target RUSTFLAGS='-A missing-copy-implementations' cargo test -p iroha_core kagemusha_verified_recursive_aggregation_evidence_from_pallas --lib -- --test-threads=1`
+    (`4` tests passed)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-policy-negative-controls-workflow`
+  - `git diff --check -- .github/workflows/pr_kagemusha_payload_bench.yml ci/check_kagemusha_recursive_spend_policy.sh ci/check_kagemusha_production_readiness.sh crates/iroha_core/src/zk.rs docs/source/offline_kagemusha.md roadmap.md status.md`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/zk.rs`
+
+## 2026-06-07 Kagemusha core IPA generator-fold policy guard
+
+- Pinned the non-native Vesta IPA accumulator generator-fold regressions in the
+  recursive-spend policy guard, covering the direct G-fold splice plus native,
+  shared-table, batch, and shared-table batch H-fold splice test names and the
+  `accumulator G fold mismatch` / `accumulator H fold mismatch` rejection
+  needles.
+- Added `--negative-control-core-vesta-ipa-h-fold` and
+  `--negative-control-core-vesta-ipa-g-fold`, then wired both into the
+  Kagemusha payload workflow so source drift that removes the fold regressions
+  or fold-specific rejection needles is caught before the main policy guard.
+- Added a JavaScript parity meta-test that pins the new policy negative-control
+  inventory entries, workflow invocations, and mutated-text snapshot behavior.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-vesta-ipa-h-fold`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-vesta-ipa-g-fold`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-policy-negative-controls-workflow`
+  - `node --test --test-name-pattern "recursive Kagemusha policy negative controls pin core Vesta IPA fold coverage" javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
+    (`1` test passed)
+
+## 2026-06-07 Kagemusha helper direct preflight closure
+
+- Replaced the remaining `Path.is_symlink()` preflight in
+  `_slot_relative_symlink_ancestor(...)` with `lstat()` plus
+  `stat.S_ISLNK(...)`, preserving fail-closed handling for unreadable
+  slot-relative ancestor metadata.
+- Added a manifest-artifact digest regression that makes `Path.is_symlink()`
+  raise on an intermediate `logs/` directory and verifies digest validation
+  still succeeds via the `lstat()` path.
+- Pinned the final helper branch in the readiness guard and PR workflow with
+  `--negative-control-android-device-lab-relative-ancestor-is-symlink-preflight`.
+- Confirmed the Kagemusha helper preflight scan now returns no direct
+  `.exists()`, `.is_dir()`, `.is_symlink()`, or `.is_file()` calls across
+  `scripts/check_android_device_lab_slot.py`,
+  `scripts/sign_android_device_lab_evidence.py`,
+  `scripts/kagemusha_lineage_proof_evidence.py`, and
+  `scripts/kagemusha_production_readiness.py`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k relative_ancestor_is_symlink_preflight`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-relative-ancestor-is-symlink-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`327` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`169` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `rg -n "\.exists\(|\.is_dir\(|\.is_symlink\(|\.is_file\(" scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/sign_android_device_lab_evidence.py scripts/check_android_device_lab_slot.py`
+    (no matches)
+
+## 2026-06-07 Kagemusha Android root presence preflight hardening
+
+- Added `classify_device_lab_root_path(...)` so the Android scanner and
+  production-readiness rollup reuse the same `lstat()` result for root safety
+  errors and missing-root decisions instead of calling `Path.exists()`.
+- Preserved existing missing-root behavior: scanner `--allow-missing-root`
+  still skips cleanly, and the rollup still reports
+  `android_device_lab_root_missing` without leaking the local root path.
+- Added scanner and rollup regressions that make `Path.exists()` raise for a
+  missing device-lab root, and pinned both code paths in the readiness guard and
+  PR workflow with
+  `--negative-control-android-device-lab-main-root-exists-preflight` and
+  `--negative-control-android-device-lab-rollup-root-exists-preflight`.
+- Aligned the existing bridge empty-nested-Pallas assertion string with the
+  recursive-spend policy guard’s required phrase so that adjacent bridge
+  hardening remains covered by static policy checks.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k missing_root_exists_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k missing_android_root_uses_lstat_before_exists_preflight`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-main-root-exists-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-rollup-root-exists-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`326` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`169` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_ffi_rejects_empty_nested_pallas_archives_without_output --lib -- --test-threads=1`
+    (`1` test passed after waiting for the existing Cargo artifact lock)
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha recursive spend bridge zero-envelope guard
+
+- Expanded the native recursive spend nested-Pallas bridge regression so
+  well-formed Norito archives containing zero `OpenVerifyEnvelope` items reject
+  for init, append, transition-profile init/append, and lineage-witness helper
+  entry points without returning stale output buffers.
+- Added a recursive spend SDK parity content check for the zero-envelope branch
+  in the Rust C bridge contract.
+- Added `--negative-control-native-bridge-zero-envelope-pallas-guard` and wired
+  it into the Kagemusha payload workflow plus the JavaScript parity meta-test,
+  so the branch is protected by both the normal parity guard and a source-drift
+  negative control.
+- Validation:
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_ffi_rejects_empty_nested_pallas_archives_without_output --lib -- --test-threads=1`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard`
+  - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "recursive Kagemusha SDK parity negative controls"`
+    (`24` tests passed)
+
+## 2026-06-07 Kagemusha shared Android ancestor preflight hardening
+
+- Hardened `validate_no_symlink_ancestors(...)` so scanner, signer, readiness,
+  and lineage helper ancestor checks classify each ancestor with `lstat()`
+  instead of direct `Path.is_symlink()` or `Path.exists()` preflights.
+- Preserved missing-ancestor handling with explicit `FileNotFoundError` skips,
+  and kept summary-output parent metadata failures reported through the more
+  specific `--json-out parent directory metadata could not be read` path.
+- Added adversarial regressions for ancestor metadata failures plus
+  `Path.is_symlink()` and `Path.exists()` reintroduction; pinned the branches in
+  the readiness guard and PR workflow with
+  `--negative-control-android-device-lab-ancestor-metadata-failure`,
+  `--negative-control-android-device-lab-ancestor-is-symlink-preflight`, and
+  `--negative-control-android-device-lab-ancestor-exists-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k validate_no_symlink_ancestors`
+    (`4` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-ancestor-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-ancestor-is-symlink-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-ancestor-exists-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`325` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`168` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha recursive compact bridge archive caps
+
+- Added explicit C bridge regressions for ABI-7 recursive compact prover input
+  bounds so an oversized record-bundle length or oversized Pallas
+  open-envelope length each rejects with `ERR_KAGEMUSHA_PROVE` and clears stale
+  output pointers and lengths independently.
+- Pinned the new stale-output checks in the recursive spend SDK parity audit
+  under the Rust recursive compact verifier contract and added an ABI-7
+  verifier-surface negative-control mutation for the record-bundle branch.
+- Validation:
+  - `cargo test -p connect_norito_bridge kagemusha_compact_ffi_rejects_oversized_lengths_without_output --lib -- --test-threads=1`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface`
+
+## 2026-06-07 Kagemusha Android scanner discovery preflight hardening
+
+- Hardened automatic Android device-lab slot discovery so root entries are
+  classified with `lstat()` instead of a direct `Path.is_dir()` preflight.
+- Preserved symlinked slot entries in discovery output so `scan_slot(...)`
+  rejects them fail-closed as symlinked slot directories instead of silently
+  omitting them from inventory.
+- Added adversarial regressions for `Path.is_dir()` reintroduction, unreadable
+  slot-entry metadata, and symlinked-slot preservation; pinned both discovery
+  failure branches in the readiness guard and PR workflow with
+  `--negative-control-android-device-lab-discover-slots-is-dir-preflight` and
+  `--negative-control-android-device-lab-discover-slots-entry-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k discover_slots`
+    (`4` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-discover-slots-is-dir-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-discover-slots-entry-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`323` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`168` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha shared-table IPA wrapper H-fold guard
+
+- Added a direct shared-table recursive verifier regression for Pallas IPA
+  witness translation that splices the first H-generator fold to `params.u()`
+  and requires the native preflight to reject it with an accumulator H-fold
+  mismatch before a shared-table circuit can be built.
+- This complements the existing native single-witness H-fold guard plus normal
+  and shared-table batch preflight H-fold regressions by pinning the
+  production shared-table `try_from_pallas_verifier_witness(...)` wrapper
+  itself.
+- Routed the native single-witness H-fold regression through
+  `try_from_pallas_verifier_witness(...)` as well, matching its production
+  wrapper name instead of stopping at the lower-level preflight helper.
+- Validation:
+  - `cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table_from_pallas_witness_rejects_h_generator_fold_splice --lib -- --test-threads=1`
+    (`1` test passed)
+  - `cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_h_generator_fold_splice --lib -- --test-threads=1`
+    (`1` test passed)
+
+## 2026-06-07 Kagemusha Android scanner inventory preflight hardening
+
+- Hardened `scan_slot(...)` expected-directory inventory so top-level
+  `telemetry/`, `attestation/`, `queue/`, and `logs/` presence is classified
+  with `lstat()` instead of a direct `Path.is_dir()` preflight.
+- Hardened scanner file-count and `sha256sum.txt` presence reporting so
+  recursive artifact counts and manifest presence only use lstat-confirmed
+  regular files instead of `Path.is_file()`.
+- Added adversarial regressions for expected-directory presence, unreadable
+  expected-directory metadata, recursive file counting, and `sha256sum.txt`
+  presence, and pinned the branches in the readiness guard plus PR workflow
+  with
+  `--negative-control-android-device-lab-scan-slot-expected-dir-is-dir-preflight`,
+  `--negative-control-android-device-lab-scan-slot-artifact-count-is-file-preflight`,
+  and `--negative-control-android-device-lab-scan-slot-sha-is-file-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k scan_slot_uses_lstat_before_expected_directory_is_dir_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k scan_slot_reports_expected_directory_metadata_failure_before_is_dir_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k scan_slot_counts_artifacts_with_lstat_before_is_file_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k scan_slot_sha_presence_uses_lstat_before_is_file_preflight`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scan-slot-expected-dir-is-dir-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scan-slot-artifact-count-is-file-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-scan-slot-sha-is-file-preflight`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`320` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`168` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha IPA accumulator H-fold adversarial coverage
+
+- Added a focused negative regression for the Pallas IPA verifier accumulator
+  preflight so an `h_after` generator-fold splice is rejected with
+  `accumulator H fold mismatch`, matching the existing G-fold splice coverage.
+- Added the matching batch-preflight regression so the same H-fold splice in a
+  later witness fails as `batch witness 1 failed preflight` before the witness
+  can be aggregated into the recursive compact batch digest.
+- Added the same later-witness H-fold splice regression for the shared-table
+  batch preflight, covering the production-oriented fixed-window table profile.
+- This pins both generator-fold branches in the ABI-7 recursive compact
+  accumulator preflight while the full compact proof-composition path remains
+  reserved.
+- Validation:
+  - `cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_h_generator_fold_splice --lib -- --test-threads=1`
+    (`1` test passed)
+  - `cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_h_generator_fold_splice --lib -- --test-threads=1`
+    (`1` test passed)
+  - `cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_shared_table_batch_preflight_rejects_h_generator_fold_splice --lib -- --test-threads=1`
+    (`1` test passed)
+  - `cargo fmt --all --check`
+
+## 2026-06-07 Kagemusha Android scanner json-out parent hardening
+
+- Hardened `scripts/check_android_device_lab_slot.py` so direct scanner
+  `--json-out` summary validation classifies output parents with `lstat()`
+  instead of direct `Path.exists()`/`Path.is_symlink()`/`Path.is_dir()`
+  preflights.
+- Added `_validate_summary_output_parent(...)` to preserve missing-parent
+  creation and post-create rechecks while reporting unreadable parent metadata
+  as `--json-out parent directory metadata could not be read`.
+- Added direct and writer regressions for the scanner summary output parent
+  path, and pinned the branch in the readiness guard plus PR workflow with
+  `--negative-control-android-device-lab-json-output-parent-is-dir-preflight`
+  and
+  `--negative-control-android-device-lab-json-output-parent-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k validate_summary_output_path_uses_lstat_before_parent_is_dir_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k validate_summary_output_path_rejects_parent_metadata_failure`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k write_summary_uses_lstat_before_parent_is_dir_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k write_summary_rejects_parent_metadata_failure_before_write`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-is-dir-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-create-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-post-create-parent-preflight`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`316` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`168` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha readiness summary output-parent hardening
+
+- Hardened `validate_summary_output_path(...)` so `--summary-out` parents are
+  classified with `lstat()` instead of direct
+  `Path.is_symlink()`/`Path.exists()`/`Path.is_dir()` preflights.
+- Added `_validate_summary_output_parent(...)` to preserve missing-parent
+  creation and post-create checks while reporting unreadable parent metadata as
+  the structured `kagemusha_summary_out_path_invalid` blocker
+  `--summary-out parent directory metadata could not be read`.
+- Added adversarial direct and writer regressions for the summary output parent
+  path, and pinned the branch in the readiness guard plus PR workflow with
+  `--negative-control-kagemusha-readiness-summary-output-parent-is-dir-preflight`
+  and
+  `--negative-control-kagemusha-readiness-summary-output-parent-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k validate_summary_output_path_uses_lstat_before_parent_is_dir_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k validate_summary_output_path_rejects_parent_metadata_failure`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k write_summary_uses_lstat_before_parent_is_dir_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k write_summary_rejects_parent_metadata_failure_before_write`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-is-dir-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-ancestor`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-create-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-create-parent-preflight`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`168` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`312` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage proof-helper output-parent hardening
+
+- Hardened `scripts/kagemusha_lineage_proof_evidence.py` so
+  `preflight_output_path(...)` and `validate_output_path(...)` classify `--out`
+  parents with `lstat()` instead of direct `Path.exists()`/`Path.is_dir()`
+  preflights.
+- Added `_validate_output_parent(...)` to preserve missing-parent creation and
+  post-create rechecks while reporting unreadable parent metadata as
+  `--out parent directory metadata could not be read`.
+- Added adversarial proof-helper regressions for preflight and validator
+  entrypoints, and pinned the branch in the readiness guard plus PR workflow
+  with
+  `--negative-control-lineage-proof-helper-output-parent-is-dir-preflight` and
+  `--negative-control-lineage-proof-helper-output-parent-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_output_preflight_uses_lstat_before_parent_is_dir_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_output_preflight_rejects_parent_metadata_failure_before_write`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_output_validator_uses_lstat_before_parent_is_dir_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_output_validator_rejects_parent_metadata_failure_before_write`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-parent-is-dir-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-parent-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-parent-create-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-post-create-parent-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-validate-parent-create-failure`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`164` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`312` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha signer output-parent preflight hardening
+
+- Hardened the Android signed-evidence helper so signer-controlled output
+  parents are classified with `lstat()` before write preflight or read-back
+  digest preflight uses parent state.
+- Added `_validate_json_output_parent(...)` to preserve the existing
+  missing-parent create/read-back behavior while reporting unreadable parent
+  metadata as `signed evidence output path parent directory metadata could not
+  be read` instead of letting a `Path.is_dir()` preflight hide the condition.
+- Added adversarial signer regressions for write and digest paths, and pinned
+  the branch in the readiness guard plus PR workflow with
+  `--negative-control-android-device-lab-signing-helper-output-parent-is-dir-preflight`
+  and
+  `--negative-control-android-device-lab-signing-helper-output-parent-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_write_json_uses_lstat_before_parent_is_dir_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_write_json_rejects_parent_metadata_failure_before_write`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_output_digest_uses_lstat_before_parent_is_dir_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_output_digest_rejects_parent_metadata_failure_before_read`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-is-dir-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-ancestor`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-post-create-parent-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-parent-missing`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`312` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`160` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Reserved-lineage rollup is_file preflight hardening
+
+- Removed the redundant lineage proof artifact `Path.is_file()` preflight after
+  the lstat-backed local-file validator, so artifact evidence hashing now relies
+  on the same symlink, hardlink, non-regular, and unreadable-metadata checks as
+  the proof-evidence helper.
+- Derived proof-log missing versus unreadable state from
+  `validate_lineage_proof_log(...)` errors instead of a separate
+  `Path.is_file()` classification, preserving fail-closed reporting for
+  unreadable `record-archive-proof.log` metadata.
+- Added adversarial regressions for both branches and pinned them in the
+  readiness guard plus PR workflow with
+  `--negative-control-lineage-proof-artifact-is-file-preflight` and
+  `--negative-control-lineage-proof-log-is-file-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_evidence_uses_local_file_validation_before_artifact_is_file_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_evidence_uses_log_validation_before_is_file_preflight`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-is-file-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-is-file-preflight`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`160` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`308` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha required text-artifact preflight hardening
+
+- Hardened required `telemetry/status.ndjson` and `logs/runtime.log` text reads
+  so direct validation classifies the artifact leaf with `lstat()` before any
+  `Path.is_file()` preflight.
+- Added `_should_read_optional_text_artifact(...)` to preserve missing and
+  non-regular skip behavior for optional text reads while reporting unreadable
+  leaf metadata and still letting symlinked regular-looking artifacts fail in
+  the existing metadata-artifact reader.
+- Added adversarial direct regressions that force `Path.is_file()` and
+  `Path.lstat()` failures for both required text artifacts, and pinned the
+  branches in the production-readiness guard plus PR workflow with
+  `--negative-control-android-device-lab-required-status-is-file-preflight` and
+  `--negative-control-android-device-lab-required-runtime-log-is-file-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k required_status_artifact_uses_lstat_before_is_file_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k required_runtime_log_uses_lstat_before_is_file_preflight`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-status-is-file-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-runtime-log-is-file-preflight`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`308` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha signed-evidence binding preflight hardening
+
+- Hardened the `slot.json signed_evidence_artifact_path` binding so production
+  metadata validation reads and hashes the artifact through the existing
+  lstat-backed metadata-artifact helper before comparing the claimed digest.
+- This removes the direct `Path.is_file()` preflight from the signed-evidence
+  binding, so unreadable artifact metadata is reported as
+  `slot.json signed_evidence_artifact_path references artifact file metadata
+  could not be read ...` instead of being flattened into a missing-file result.
+- Added an adversarial direct regression that forces `Path.is_file()` and
+  `Path.lstat()` failures for `evidence/signed-evidence.json`, and pinned the
+  branch in the production-readiness guard plus PR workflow with
+  `--negative-control-android-device-lab-signed-evidence-artifact-is-file-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k production_metadata_uses_lstat_before_signed_evidence_is_file_preflight`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-is-file-preflight`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`306` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha required-artifact preflight hardening
+
+- Hardened `validate_required_kagemusha_slot_artifact_shapes(...)` so required
+  slot artifacts are classified with `lstat()` before the validator decides
+  whether to skip sizing, preventing `Path.is_file()` from masking unreadable
+  metadata on direct helper calls.
+- Hardened the D2D payment transcript queue binding so
+  `queue/pending_queue.json` is validated through the existing lstat-backed
+  artifact digest helper instead of a preceding `is_file()` check.
+- Added adversarial direct tests that force `Path.is_file()` and `Path.lstat()`
+  failures for `queue/pending_queue.json`, and pinned both branches in the
+  production-readiness guard plus PR workflow with
+  `--negative-control-android-device-lab-d2d-queue-is-file-preflight` and
+  `--negative-control-android-device-lab-required-artifact-is-file-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k d2d_transcript_uses_lstat_before_queue_is_file_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k required_artifact_shapes_uses_lstat_before_is_file_preflight`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-d2d-queue-is-file-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-artifact-is-file-preflight`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`305` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha artifact directory preflight hardening
+
+- Hardened direct hardlink and regular-file artifact validators so artifact
+  directories are classified with `lstat()` before any `exists()` preflight can
+  hide unreadable metadata or raise outside the validator.
+- Hardened the regular-file validator's nested artifact walk so every nested
+  artifact is classified with `lstat()` before any `is_symlink()` preflight.
+  Missing and symlinked paths keep their existing skip behavior for this
+  validator, while unreadable metadata remains the structured
+  `{label} metadata could not be read` or `{label} file metadata could not be
+  read` error.
+- Added adversarial direct tests that force `Path.exists()` and
+  `Path.is_symlink()` failures on artifact directories and nested artifacts, and
+  pinned the branches in the production-readiness guard plus PR workflow with
+  `--negative-control-android-device-lab-hardlink-artifact-directory-exists-preflight`,
+  `--negative-control-android-device-lab-slot-directory-exists-preflight`, and
+  `--negative-control-android-device-lab-slot-artifact-symlink-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k hardlink_artifact_validator_uses_lstat_before_directory_exists_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_regular_artifact_validator_uses_lstat_before_directory_exists_preflight`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_regular_artifact_validator_uses_lstat_before_nested_symlink_preflight`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-hardlink-artifact-directory-exists-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-directory-exists-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-artifact-symlink-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-directory-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-artifact-file-metadata-failure`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`303` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha SDK/runtime validation sweep
+
+- Re-ran the expected Kagemusha JavaScript, Python, and native bridge validation
+  lanes after the SDK/doc parity updates.
+- The Python SDK runner rebuilt the PyO3 extension in release mode, then passed
+  the full Kagemusha Python test selection.
+- Validation:
+  - `bash ci/check_kagemusha_recursive_spend_js_sdk.sh`
+    (`31` passed, `93` skipped)
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh`
+    (`577` passed)
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib -- --test-threads=1`
+    (`1` passed)
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_lineage_witness_ffi_rejects_invalid_inputs_without_output --lib -- --test-threads=1`
+    (`1` passed)
+
+## 2026-06-07 Kagemusha symlink validator metadata hardening
+
+- Hardened `validate_no_slot_symlink_artifacts(...)` so direct symlink checks
+  classify slot metadata leaves, artifact directories, nested artifacts, and
+  extra root artifacts with `lstat()` before alias classification.
+- Missing paths keep their existing skip behavior, symlink blockers keep their
+  existing messages, and unreadable metadata now reports structured
+  `{label} metadata could not be read` / `{label} file metadata could not be
+  read` errors instead of being treated as not-symlink.
+- Added adversarial direct coverage for slot metadata, artifact directory, and
+  nested artifact metadata failures, and pinned the branches in the
+  production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-symlink-artifact-leaf-metadata-failure`,
+  `--negative-control-android-device-lab-symlink-artifact-directory-metadata-failure`,
+  and
+  `--negative-control-android-device-lab-symlink-artifact-nested-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_symlink_artifact_validator_reports`
+    (`3` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-symlink-artifact-leaf-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-symlink-artifact-directory-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-symlink-artifact-nested-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-symlink-artifacts`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`300` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha regular-file validator metadata hardening
+
+- Hardened `_reject_non_regular_file(...)` so direct slot regular-file artifact
+  validation classifies leaves with `lstat()` before any `exists()` or
+  symlink-style preflight can mask unreadable metadata or raise outside the
+  validator.
+- Missing and symlinked leaves keep the existing no-op behavior for this
+  regular-file validator, while unreadable metadata remains the structured
+  `{label} file metadata could not be read` error.
+- Added adversarial coverage that forces `Path.exists()` and `Path.lstat()` to
+  fail on `slot.json`, and pinned the branch in the production-readiness guard
+  and PR workflow with
+  `--negative-control-android-device-lab-slot-regular-file-exists-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_regular_artifact_validator_uses_lstat_before_exists_preflight`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-regular-file-exists-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-regular-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-regular-file-artifacts`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`297` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha slot-file inventory metadata hardening
+
+- Hardened `_slot_files(...)` so callers that pass an error list receive
+  structured metadata errors when the slot root or an expected/optional artifact
+  directory cannot be classified before manifest inventory discovery.
+- Missing, non-directory, symlinked, and secret-looking slot roots still return
+  an empty inventory without traversal; unreadable slot-root metadata no longer
+  silently collapses into the same empty-inventory result for verifier and
+  signer manifest callers that collect errors, and unreadable artifact
+  directories now report `{dirname}/ metadata could not be read`.
+- Added adversarial direct coverage and pinned the branches in the
+  production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-slot-files-root-metadata-failure` and
+  `--negative-control-android-device-lab-slot-files-directory-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_files_reports_slot_metadata_failure_without_omission`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_files_reports_artifact_directory_metadata_failure_without_omission`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-root-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-directory-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-direct-root-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-direct-symlink-directory`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`296` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha scan-slot metadata hardening
+
+- Hardened `scan_slot(...)` so explicit Android device-lab slot roots and their
+  parent directories are classified with `lstat()` before ancestor checks,
+  directory traversal, manifest parsing, or production evidence validation.
+- Unreadable slot root metadata now fails closed with
+  `slot directory metadata could not be read`, and unreadable parent metadata
+  fails closed with `slot parent directory metadata could not be read`; missing
+  slots, secret-looking slot names, and symlink blockers keep their existing
+  behavior.
+- Added adversarial `scan_slot(...)` coverage and pinned the branches in the
+  production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-slot-metadata-failure` and
+  `--negative-control-android-device-lab-slot-parent-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k scan_slot_rejects_slot`
+    (`2` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-parent-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-dir-symlink`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-parent-symlink`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`294` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha manifest slot-root metadata hardening
+
+- Hardened the Android device-lab SHA-256 manifest parser/verifier boundary so
+  direct `parse_sha256_manifest(...)` and `verify_sha256_manifest(...)` calls
+  classify the supplied slot root with `lstat()` before reading
+  `sha256sum.txt` or discovering slot artifacts.
+- Unreadable direct manifest slot-root metadata now fails closed with
+  `slot directory metadata could not be read`; secret-looking slot paths,
+  missing slots, symlinked slot roots, and symlinked ancestors keep their
+  existing structured behavior.
+- Added parser/verifier adversarial coverage and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-manifest-slot-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_metadata_failure_before_parse`
+    (`2` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-slot-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-slot-root-symlink`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-slot-ancestor-symlink`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`292` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha signer slot metadata hardening
+
+- Hardened `scripts/sign_android_device_lab_evidence.py` so signer-controlled
+  slot paths are classified with `lstat()` before metadata loads, artifact
+  digest collection, or SHA-256 manifest rewrites.
+- Unreadable slot directory metadata now fails closed with
+  `slot directory metadata could not be read`, and unreadable slot parent
+  metadata fails closed with `slot parent directory metadata could not be read`;
+  existing secret-path, symlink, ancestor, and missing-slot blockers keep their
+  existing messages.
+- Factored the signer metadata-loader and manifest-rewrite path checks through a
+  shared `_validate_slot_path_boundary(...)` helper, added adversarial CLI and
+  direct manifest-rewrite coverage, and pinned the branches in the
+  production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-signing-helper-slot-metadata-failure`
+  and
+  `--negative-control-android-device-lab-signing-helper-slot-parent-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_directory_metadata_failure`
+    (`2` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_parent_metadata_failure`
+    (`2` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-parent-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-ancestor-symlink`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-slot-secret-paths`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-slot-secret-paths`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`290` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android root metadata hardening
+
+- Hardened `validate_device_lab_root_path(...)` so existing Android device-lab
+  `--root` paths are classified with `lstat()` before slot discovery.
+- Existing device-lab roots whose metadata cannot be read now fail closed with
+  `device-lab root metadata could not be read`; missing roots remain routed to
+  the existing discovery blocker, and symlink/non-directory roots keep their
+  structured messages.
+- Added adversarial direct no-leak coverage and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-root-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'root_validator_rejects_metadata_failure_directly_without_leak'`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-direct-secret-paths`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`286` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha recursive-spend policy negative-control audit
+
+- Audited the recursive-spend policy guard's dispatch negative controls.
+- Retargeted the shared ABI-6 archive fixture negative control to mutate the
+  current checked-in archive SHA-256 digest, so fixture digest drift is detected
+  instead of failing during negative-control setup.
+- Validation:
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-shared-archive-fixture`
+  - full dispatch sweep of all `74` policy `--negative-control-*` modes
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+
+## 2026-06-07 Kagemusha repo-root metadata hardening
+
+- Hardened `validate_repo_root_path(...)` so existing `--repo-root` trust roots
+  are classified with `lstat()` before checked-in ABI/source trust roots are
+  resolved.
+- Existing repo roots whose metadata cannot be read now fail closed with the
+  normalized `kagemusha_repo_root_path_invalid` blocker
+  `--repo-root metadata could not be read`; missing, symlinked, and non-directory
+  roots keep their existing structured blockers.
+- Added adversarial direct no-leak coverage and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-kagemusha-readiness-repo-root-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'validate_repo_root_rejects_metadata_failure_directly_without_leak'`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-repo-root-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-repo-root-direct-secret-paths`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`158` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`285` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha SDK parity negative-control audit
+
+- Audited the recursive-spend SDK parity guard after the production-readiness
+  negative-control hardening pass.
+- Confirmed the parity harness rejects drift across JavaScript/Node/browser,
+  Python, Swift, Kotlin/JVM, Java Android, C#, workflow wiring, native bridge
+  ABI probes, lineage key packages, lineage witness availability, archive copy
+  boundaries, recursive compact verifier surfaces, and SDK README contracts.
+- Added and pinned the offline Kagemusha documentation boundary that includes
+  C# in the all-SDK fail-closed native-output behavior.
+- Validation:
+  - full extracted sweep of all `114` SDK parity `--negative-control-*` modes
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-native-output-csharp`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage artifact-dir metadata hardening
+
+- Hardened `validate_artifact_dir_path(...)` in the Reserved-lineage proof
+  evidence helper so existing `--artifact-dir` paths are classified with
+  `lstat()` before corridor checks, artifact hashing, or evidence writes.
+- Existing artifact directories whose metadata cannot be read now fail closed
+  with `--artifact-dir metadata could not be read`; missing artifact dirs remain
+  creatable after ancestor validation, and symlink/non-directory blockers keep
+  their existing messages.
+- Added adversarial unit coverage and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-lineage-proof-helper-direct-artifact-dir-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'lineage_proof_artifact_dir_validator_rejects_metadata_failure_directly'`
+    (`1` test passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-artifact-dir-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-artifact-dir-secret-paths`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`157` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`285` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha production-readiness negative-control audit
+
+- Completed a full audit of the production-readiness negative-control harness and
+  tightened stale or overbroad requirements so drift is pinned to the exact
+  guarded branches instead of matching nearby duplicate strings.
+- Hardened the guard coverage for Android device-lab manifest/artifact reads,
+  signer output preflights, JSON/summary output metadata, signer key paths,
+  lineage local-file validation, lineage direct hash helpers, lineage evidence
+  artifact preflights, helper output ancestor checks, and helper output
+  metadata/read failure paths.
+- Refreshed the later 262-mode dispatch list so the slot metadata,
+  Android JSON summary-output post-create parent, signed-evidence manifest slot
+  secret-path, readiness summary-output ancestor, and lineage proof-helper
+  output ancestor negative controls mutate the current function-scoped source
+  contracts rather than stale or duplicate snippets.
+- Kept the operator documentation aligned with the guarded wording for
+  symlink-ancestor output aliases.
+- Validation:
+  - full extracted sweep of all `262` production-readiness
+    `--negative-control-*` modes
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`157` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`285` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android manifest file metadata hardening
+
+- Hardened `parse_sha256_manifest(...)` so the `sha256sum.txt` manifest leaf is
+  classified with `lstat()` before manifest bytes are read.
+- Existing manifests whose metadata cannot be read now fail closed with
+  `sha256sum.txt file metadata could not be read`, while missing, symlinked,
+  non-regular, and hardlinked manifest leaves keep their existing structured
+  blockers.
+- Added adversarial unit coverage and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-manifest-file-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'parse_sha256_manifest_rejects_file_metadata_failure_before_read'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`285` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`156` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android JSON output file metadata hardening
+
+- Hardened `scripts/check_android_device_lab_slot.py` summary output preflight
+  so existing `--json-out` leaves are classified with `lstat()` before scanner
+  JSON writes.
+- Existing JSON summary output leaves whose metadata cannot be read now fail
+  closed with `--json-out file metadata could not be read`, while missing
+  outputs remain creatable and symlink/hardlink blockers keep their existing
+  messages.
+- Added adversarial unit coverage and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-json-output-file-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'write_summary_rejects_file_metadata_failure_before_write'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`284` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`156` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha readiness summary output file metadata hardening
+
+- Hardened `validate_summary_output_path(...)` so existing `--summary-out`
+  leaves are classified with `lstat()` before readiness summary JSON writes.
+- Existing summary output leaves whose metadata cannot be read now fail closed
+  with `--summary-out file metadata could not be read`, while missing outputs
+  remain creatable and dangling symlinks continue to report
+  `--summary-out must not be a symlink`.
+- Added adversarial unit coverage and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-kagemusha-readiness-summary-output-file-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'write_summary_rejects_file_metadata_failure_before_write'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-dangling-alias`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-regular-file`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`156` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`283` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage proof output file metadata hardening
+
+- Hardened `preflight_output_path(...)` in the Reserved-lineage proof evidence
+  helper so existing `--out` leaves are classified with `lstat()` before any
+  evidence writes.
+- Existing output leaves whose metadata cannot be read now fail closed with
+  `--out file metadata could not be read`, while missing outputs remain
+  creatable and dangling symlinks continue to report `--out must not be a symlink`.
+- Added adversarial unit coverage and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-lineage-proof-helper-output-file-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'lineage_proof_output_preflight_rejects_file_metadata_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-dangling-alias`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`155` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`283` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage local file metadata hardening
+
+- Hardened and pinned `validate_lineage_local_file(...)` so lineage evidence
+  artifacts and production proof logs fail closed when local leaf metadata
+  cannot be read before digesting or text reads.
+- Added PR workflow coverage for
+  `--negative-control-lineage-proof-local-file-metadata-failure`, repaired the
+  adjacent lineage hardlink metadata negative control, and scoped the release
+  JSON and lineage `lstat()` guard snippets so identical branches cannot satisfy
+  each other accidentally.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_readiness_sha256_file_rejects_file_metadata_failure_directly scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_readiness_sha256_file_rejects_hardlink_metadata_failure_directly scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_release_local_json_validator_rejects_file_metadata_failure_before_parse`
+    (`3` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-hardlink-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-file-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`154` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`283` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha source marker file metadata hardening
+
+- Hardened `validate_repo_source_marker_file(...)` so ABI-7 and
+  Reserved-lineage checked-in source marker leaves are checked with `lstat()`
+  before marker text reads.
+- Existing marker files whose metadata cannot be read now fail closed with
+  `<label> file metadata could not be read` instead of being misclassified as
+  missing, non-regular, hardlinked, or unreadable source text.
+- Added a focused adversarial regression and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-kagemusha-readiness-source-marker-file-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k repo_source_marker_text_rejects_file_metadata_failure_before_read`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`283` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`153` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha release JSON file metadata hardening
+
+- Hardened `validate_release_local_json_file(...)` so ABI-6 release manifest
+  leaves are checked with `lstat()` before JSON parsing.
+- Existing manifest files whose metadata cannot be read now fail closed with
+  `ABI-6 manifest file metadata could not be read` instead of being
+  misclassified as missing, non-regular, hardlinked, or invalid JSON.
+- Added a focused adversarial regression and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-kagemusha-readiness-release-json-file-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k release_local_json_validator_rejects_file_metadata_failure_before_parse`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`283` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`152` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha readiness summary output shape hardening
+
+- Added a direct readiness summary regression for an existing non-regular
+  `--summary-out` leaf before summary JSON writing.
+- Verified `write_summary(...)` returns the structured
+  `--summary-out must be a regular file` blocker instead of attempting to write
+  through a directory or falling into hardlink metadata checks.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-kagemusha-readiness-summary-output-regular-file`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_non_regular_output_leaf_before_write`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-regular-file`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`151` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`283` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-07 Kagemusha trusted public key metadata hardening
+
+- Hardened trusted signer public-key path validation so the public-key leaf is
+  checked with `lstat()` before OpenSSL conversion or signature verification.
+- Existing public-key files whose metadata cannot be read now fail closed with
+  `trusted signer public key file metadata could not be read` before the key can
+  be misclassified as missing, non-regular, hardlinked, or malformed OpenSSL
+  input.
+- Added a focused adversarial regression and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-public-key-file-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_openssl_public_key_der_rejects_missing_public_key_before_openssl_lookup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_openssl_public_key_der_rejects_non_regular_public_key_before_openssl_lookup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_openssl_public_key_der_rejects_file_metadata_failure_before_openssl_lookup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_trusted_signer_public_key_rejects_hardlink_metadata_failure_before_openssl`
+    (`4` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-regular-file-before-openssl`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-missing-before-openssl`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`283` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`150` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android public key invalid OpenSSL hardening
+
+- Added a direct trusted signer public-key regression for OpenSSL returning a
+  nonzero status while converting a public key to DER.
+- Verified `_openssl_public_key_der(...)` reports `trusted signer public key
+  must be a valid OpenSSL public key` distinctly from OpenSSL spawn failures.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-public-key-openssl-invalid-key`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_openssl_public_key_der_rejects_invalid_public_key_after_openssl_failure`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-openssl-invalid-key`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`283` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`150` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-07 Kagemusha Android public key shape hardening
+
+- Added direct trusted signer public-key regressions for missing and non-regular
+  public key paths before any OpenSSL lookup is allowed.
+- Verified missing public keys return `trusted signer public key must point to
+  an existing public key file` and directory paths return `trusted signer public
+  key must be a regular file`, with the OpenSSL resolver patched to fail if
+  shape validation is bypassed.
+- Refreshed the private-key shape negative controls to match the current
+  `private_key_mode = lstat().st_mode` implementation and pinned the private-key
+  file metadata branch already present in the suite.
+- Pinned the public-key branches in the production-readiness guard and PR
+  workflow with
+  `--negative-control-android-device-lab-public-key-regular-file-before-openssl`
+  and `--negative-control-android-device-lab-public-key-missing-before-openssl`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_openssl_public_key_der_rejects_missing_public_key_before_openssl_lookup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_openssl_public_key_der_rejects_non_regular_public_key_before_openssl_lookup`
+    (`2` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-regular-file-before-openssl`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-missing-before-openssl`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-regular-file-before-openssl`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-missing-before-openssl`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`281` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`150` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha signer slot artifact metadata hardening
+
+- Hardened the signed-evidence helper's per-artifact digest validator so each
+  slot-relative artifact leaf is checked with `lstat()` immediately before
+  hashing.
+- Existing artifacts whose metadata cannot be read now fail closed with
+  `slot artifact <path> file metadata could not be read` before symlink,
+  regular-file, hardlink, or byte-read checks can misclassify the artifact.
+- Added a focused adversarial regression and pinned the branch in the
+  production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-signing-helper-slot-artifact-file-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_slot_artifact_digest_rejects_file_metadata_failure_after_preflight`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-file-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`278` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`150` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android signer invalid key hardening
+
+- Added a direct signed-evidence helper regression for OpenSSL returning a
+  nonzero status while signing with an invalid Ed25519 private key.
+- Verified the helper reports `private key must be a valid OpenSSL Ed25519
+  private key` distinctly from OpenSSL spawn failures, after payload staging and
+  before any signature output is trusted.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-signing-helper-signature-invalid-private-key`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_invalid_private_key_after_openssl_failure`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-invalid-private-key`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`278` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`150` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-07 Kagemusha Android private key shape hardening
+
+- Added direct signed-evidence helper regressions for missing and non-regular
+  Ed25519 private key paths before any OpenSSL lookup is allowed.
+- Verified missing keys return `private key must point to an existing file` and
+  directory paths return `private key must be a regular file`, with the OpenSSL
+  resolver patched to fail if shape validation is bypassed.
+- Pinned both branches in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-private-key-regular-file-before-openssl`
+  and `--negative-control-android-device-lab-private-key-missing-before-openssl`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_missing_private_key_before_openssl_lookup scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_non_regular_private_key_before_openssl_lookup`
+    (`2` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-regular-file-before-openssl`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-missing-before-openssl`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`276` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`150` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-07 Kagemusha Android signer output digest shape hardening
+
+- Added signed-evidence helper regressions for digest pre-read validation when
+  the output parent is missing and when the output leaf is missing under an
+  existing parent.
+- Refreshed the production-readiness guard around the current `lstat()`-based
+  signer output validation, and pinned both output file-metadata branches with
+  executable negative controls.
+- Pinned the new digest shape branches in the guard and PR workflow with
+  `--negative-control-android-device-lab-signing-helper-output-digest-parent-missing`
+  and `--negative-control-android-device-lab-signing-helper-output-digest-leaf-missing`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_write_json_rejects_file_metadata_failure_before_write scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_output_digest_rejects_file_metadata_failure_after_write scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_output_digest_rejects_missing_parent_before_read scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_output_digest_rejects_missing_leaf_before_read`
+    (`4` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-parent-missing`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-leaf-missing`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`274` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`150` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android ancestor metadata hardening
+
+- Added adversarial coverage for the shared Android
+  `validate_no_symlink_ancestors(...)` helper when an ancestor directory's
+  symlink metadata lookup raises after path normalization succeeds.
+- Verified the helper returns the redacted
+  `<label> metadata could not be read` error without leaking local paths or
+  continuing into later filesystem checks.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-ancestor-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_validate_no_symlink_ancestors_rejects_ancestor_metadata_failure`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-ancestor-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`270` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`150` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-07 Kagemusha Android JSON loader metadata hardening
+
+- Hardened the shared Android `_load_json(...)` helper so it uses `lstat()` for
+  the JSON leaf, ignores only true missing files, and reports unreadable existing
+  leaf metadata as `<label> file metadata could not be read` before parsing or
+  duplicate-key checks.
+- Added a direct adversarial regression for JSON leaf metadata failure before the
+  loader can misclassify the artifact as missing.
+- Pinned the behavior in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-json-load-file-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k load_json_rejects_file_metadata_failure_before_missing`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-file-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`269` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`150` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage proof output validator parent-create hardening
+
+- Added TOCTOU-style adversarial coverage for Reserved-lineage proof evidence
+  `validate_output_path(...)` when the `--out` parent disappears after the
+  first preflight and the validator's second `mkdir` fails.
+- Verified the validator returns the structured
+  `--out parent directory could not be created` error without writing evidence
+  bytes or recreating the output path after the failure.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-lineage-proof-helper-output-validate-parent-create-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_output_validator_rejects_parent_create_failure_after_preflight`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-validate-parent-create-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`269` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`150` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+
+## 2026-06-07 Kagemusha Android digest artifact metadata hardening
+
+- Hardened Android digest-time slot artifact validation with a shared
+  `_slot_artifact_lstat_mode(...)` helper so manifest digests, slot metadata
+  artifact digests, and signed-evidence artifact digests distinguish missing
+  files from unreadable leaf metadata before symlink, non-regular, hardlink, or
+  read checks.
+- Added adversarial direct regressions for file metadata failures in:
+  - `_manifest_artifact_sha256(...)`
+  - `_metadata_artifact_bytes_and_sha256(...)`
+  - `_signed_evidence_artifact_sha256(...)`
+- Pinned the behavior in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-digest-artifact-file-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k manifest_artifact_digest_rejects_file_metadata_failure -k metadata_artifact_digest_rejects_file_metadata_failure -k signed_evidence_artifact_digest_rejects_file_metadata_failure`
+    (`3` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-digest-artifact-file-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`268` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`149` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage proof output parent-create hardening
+
+- Added adversarial coverage for Reserved-lineage proof evidence `--out`
+  preflight when the output parent directory is missing and `mkdir` fails.
+- Verified `preflight_output_path(...)` returns the structured
+  `--out parent directory could not be created` error before writing evidence
+  bytes or creating a partial output path.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-lineage-proof-helper-output-parent-create-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_output_preflight_rejects_parent_create_failure_before_write`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-parent-create-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`268` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`149` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha source marker hardlink metadata hardening
+
+- Added adversarial coverage for repo source marker validation when a checked-in
+  marker file passes file-shape preflight until the hardlink metadata
+  `stat().st_nlink` read fails.
+- Verified `_repo_source_marker_text(...)` returns the structured
+  `Reserved-lineage release-tooling marker file hardlink metadata could not be read`
+  error before reading source marker text or leaking local paths.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-kagemusha-readiness-source-marker-hardlink-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'repo_source_marker_text_rejects_hardlink_metadata_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`265` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`148` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+
+## 2026-06-07 Kagemusha release JSON hardlink metadata hardening
+
+- Added adversarial coverage for release JSON file validation when an ABI-6
+  manifest passes file-shape preflight until the hardlink metadata
+  `stat().st_nlink` read fails.
+- Verified `validate_release_local_json_file(...)` returns the structured
+  `ABI-6 manifest hardlink metadata could not be read` error before attempting
+  to parse malformed JSON or leaking local paths.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'release_local_json_validator_rejects_hardlink_metadata_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`265` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`147` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+
+## 2026-06-07 Kagemusha Android hardlink validator metadata hardening
+
+- Hardened direct Android hardlink artifact validation so `_reject_hardlinked_file(...)`
+  uses `lstat()` first, ignores only missing files, and reports unreadable
+  existing-file metadata as `<label> file metadata could not be read` before
+  hardlink checks.
+- Added a direct adversarial regression for nested slot artifact metadata failure
+  in `validate_no_slot_hardlink_artifacts(...)`.
+- Pinned the behavior in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-hardlink-artifact-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_hardlink_artifact_validator_reports_file_metadata_failure`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-hardlink-artifact-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`265` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`146` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage local hardlink metadata hardening
+
+- Added adversarial coverage for shared lineage local-file validation when a
+  local lineage artifact passes file-shape preflight until the hardlink metadata
+  `stat().st_nlink` read fails.
+- Verified `readiness._sha256_file(...)` returns the structured
+  `lineage rollup artifact hardlink metadata could not be read` error before
+  hashing bytes.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-lineage-proof-local-hardlink-metadata-failure`.
+- Repaired the Android hardlink helper so missing optional slot files are still
+  ignored before `lstat()` while existing-file metadata failures remain
+  guarded by `--negative-control-android-device-lab-hardlink-artifact-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'lineage_readiness_sha256_file_rejects_hardlink_metadata_failure'`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'checked_in_sample_slot_passes_default_validation'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-local-hardlink-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-hardlink-artifact-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`265` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`146` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+
+## 2026-06-07 Kagemusha Android manifest inventory metadata hardening
+
+- Hardened Android slot manifest inventory discovery so `_slot_files(...)`
+  classifies entries with explicit `lstat()` and reports unreadable artifact
+  metadata as `slot artifact <path> file metadata could not be read` instead of
+  silently omitting files from `sha256sum.txt` coverage.
+- Added a direct adversarial regression that simulates nested artifact metadata
+  failure during slot-file discovery.
+- Pinned the behavior in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-slot-files-artifact-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k slot_files_reports_artifact_metadata_failure_without_omission`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-files-artifact-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`264` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`146` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage proof output hardlink metadata hardening
+
+- Added adversarial coverage for the Reserved-lineage proof evidence helper
+  when an existing `--out` file passes output preflight until the hardlink
+  metadata `stat().st_nlink` read fails.
+- Verified `preflight_output_path(...)` returns the structured
+  `--out hardlink metadata could not be read` error without overwriting the
+  existing evidence file.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-lineage-proof-helper-output-hardlink-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'lineage_proof_output_preflight_rejects_hardlink_metadata_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`263` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`145` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+
+## 2026-06-07 Kagemusha Android ancestor cwd hardening
+
+- Hardened shared Android path-ancestor validation so relative helper inputs
+  catch `Path.cwd()` failures and return `<label> metadata could not be read`
+  instead of tracebacking while checking symlink-free ancestors.
+- Added a direct adversarial regression for
+  `validate_no_symlink_ancestors(...)` with a simulated cwd failure.
+- Pinned the behavior in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-ancestor-cwd-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k validate_no_symlink_ancestors_rejects_cwd_failure`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-ancestor-cwd-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`263` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`144` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha signer output digest hardlink metadata hardening
+
+- Added adversarial coverage for the Android signed-evidence helper when the
+  signed-evidence output exists but the digest preflight hardlink metadata
+  `stat().st_nlink` read fails.
+- Verified `_output_file_sha256(...)` returns the structured
+  `signed evidence output path hardlink metadata could not be read` error
+  before reading or hashing the output bytes.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'signer_output_digest_rejects_hardlink_metadata_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`263` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`144` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py status.md`
+
+## 2026-06-07 Kagemusha signer output hardlink metadata hardening
+
+- Added adversarial coverage for the Android signed-evidence helper when an
+  existing signed-evidence output file passes preflight until the hardlink
+  metadata `stat().st_nlink` read fails.
+- Verified `_write_json(...)` returns the structured
+  `signed evidence output path hardlink metadata could not be read` error
+  without overwriting the existing output file.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-signing-helper-output-hardlink-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'signer_write_json_rejects_hardlink_metadata_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`261` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`144` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py status.md`
+
+## 2026-06-07 Kagemusha readiness repo-root resolve hardening
+
+- Hardened `scripts/kagemusha_production_readiness.py` so the CLI catches
+  `--repo-root` `Path.resolve()` failures and emits the structured
+  `kagemusha_repo_root_path_invalid` blocker `--repo-root could not be resolved`
+  before expanding relative lab or lineage evidence paths.
+- Added an adversarial CLI regression that monkeypatches repo-root resolution to
+  fail and proves the readiness summary is blocked without a traceback or raw
+  path leak.
+- Pinned the behavior in the production-readiness guard and PR workflow with
+  `--negative-control-kagemusha-readiness-repo-root-resolve-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k main_rejects_repo_root_resolve_failure_without_traceback`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-repo-root-resolve-failure`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`144` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`261` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android manifest hardlink metadata hardening
+
+- Added adversarial coverage for Android device-lab `sha256sum.txt` parsing
+  when the manifest passes file-shape preflight until the hardlink metadata
+  `stat().st_nlink` read fails.
+- Verified `parse_sha256_manifest(...)` returns the structured
+  `sha256sum.txt hardlink metadata could not be read` error before parsing or
+  echoing malformed manifest content.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-manifest-hardlink-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'parse_sha256_manifest_rejects_hardlink_metadata_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`260` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`143` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py status.md`
+
+## 2026-06-07 Kagemusha signer output resolve hardening
+
+- Hardened `scripts/sign_android_device_lab_evidence.py` so absolute
+  signed-evidence output normalization catches `Path.resolve()` failures for the
+  output path or slot root and returns the structured
+  `signed evidence output path could not be resolved` blocker before creating or
+  writing output files.
+- Added adversarial direct tests for output-path and slot-path resolver failures
+  in `_normalise_output_path(...)`.
+- Pinned the behavior in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-signing-helper-output-resolve-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_output_normalise_rejects_output_resolve_failure -k signer_output_normalise_rejects_slot_resolve_failure`
+    (`2` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-resolve-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`259` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`143` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android JSON output hardlink metadata hardening
+
+- Added adversarial coverage for the Android device-lab JSON summary writer
+  when an existing `--json-out` file passes output preflight until the hardlink
+  metadata `stat().st_nlink` read fails.
+- Verified `write_summary(...)` returns the structured
+  `--json-out hardlink metadata could not be read` error without overwriting
+  the existing summary file.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-json-output-hardlink-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'write_summary_rejects_hardlink_metadata_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`259` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`143` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py status.md`
+
+## 2026-06-07 Kagemusha readiness summary hardlink metadata hardening
+
+- Added adversarial coverage for the Kagemusha production readiness summary
+  writer when an existing `--summary-out` file passes output preflight until
+  the hardlink metadata `stat().st_nlink` read fails.
+- Verified `write_summary(...)` returns the structured
+  `--summary-out hardlink metadata could not be read` blocker without
+  overwriting the existing summary file.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'write_summary_rejects_hardlink_metadata_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`256` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`143` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+
+## 2026-06-07 Kagemusha lineage proof corridor resolver hardening
+
+- Hardened `scripts/kagemusha_lineage_proof_evidence.py` so proof-log and
+  output corridor checks catch `Path.resolve()` failures and return structured
+  `--proof-log parent`, `--out parent`, or `--artifact-dir` resolution blockers
+  instead of raw resolver exceptions.
+- Added adversarial direct tests for proof-log parent resolution failure,
+  output parent resolution failure, and artifact-dir resolution failure before
+  any lineage proof evidence output is written.
+- Pinned the behavior in the production-readiness guard and PR workflow with:
+  - `--negative-control-lineage-proof-helper-input-corridor-resolve-failure`
+  - `--negative-control-lineage-proof-helper-output-corridor-resolve-failure`
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_output_corridor_rejects_parent_resolve_failure -k lineage_proof_output_corridor_rejects_artifact_dir_resolve_failure -k lineage_proof_input_validator_rejects_parent_resolve_failure`
+    (`3` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-input-corridor-resolve-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-corridor-resolve-failure`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`143` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`256` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android JSON output write failure hardening
+
+- Added adversarial coverage for the Android device-lab JSON summary writer
+  when the final `--json-out` write fails after output path preflight passes.
+- Verified `write_summary(...)` returns the structured
+  `--json-out could not be written` error without leaving a summary file.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-json-output-write-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'write_summary_rejects_write_failure_after_preflight'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-write-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`256` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`142` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py status.md`
+
+## 2026-06-07 Kagemusha readiness summary parent creation hardening
+
+- Added adversarial coverage for the Kagemusha production readiness summary
+  writer when a missing `--summary-out` parent directory cannot be created.
+- Verified `write_summary(...)` returns the structured
+  `--summary-out parent directory could not be created` blocker before writing
+  the summary JSON.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-kagemusha-readiness-summary-output-parent-create-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'write_summary_rejects_parent_create_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-parent-create-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`255` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`139` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+
+## 2026-06-07 Kagemusha Android signer output parent creation hardening
+
+- Added adversarial coverage for the Android signed-evidence helper when a
+  missing signed-evidence output parent directory cannot be created.
+- Verified `_write_json(...)` returns the structured
+  `signed evidence output path parent directory could not be created` error
+  before writing `signed-evidence.json`.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-signing-helper-output-parent-create-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'signer_write_json_rejects_parent_create_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-create-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`255` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`138` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py status.md`
+
+## 2026-06-07 Kagemusha Android JSON output parent creation hardening
+
+- Added adversarial coverage for the Android device-lab JSON summary writer
+  when a missing `--json-out` parent directory cannot be created.
+- Verified `write_summary(...)` returns the structured
+  `--json-out parent directory could not be created` error before writing the
+  summary file.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-json-output-parent-create-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'write_summary_rejects_parent_create_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-parent-create-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`254` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`137` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py status.md`
+
+## 2026-06-07 Kagemusha output parent post-create preflight hardening
+
+- Hardened Android device-lab JSON summary writes, Android signed-evidence
+  helper writes, Kagemusha production readiness summary writes, and the
+  Reserved-lineage proof evidence helper's direct output preflight so missing
+  output parents are rechecked for symlinked parents/ancestors immediately after
+  creation and before success or bytes are returned.
+- Added adversarial tests that monkeypatch parent creation to install a
+  directory symlink, proving summary and signed-evidence writers fail closed
+  before following the late-created alias.
+- Pinned all four branches in the production-readiness guard and PR workflow
+  with:
+  - `--negative-control-android-device-lab-json-output-post-create-parent-preflight`
+  - `--negative-control-android-device-lab-signing-helper-output-post-create-parent-preflight`
+  - `--negative-control-kagemusha-readiness-summary-output-post-create-parent-preflight`
+  - `--negative-control-lineage-proof-helper-output-post-create-parent-preflight`
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_write_json_rechecks_parent_after_create_before_write -k write_summary_rechecks_parent_after_create_before_write`
+    (`2` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k write_summary_rechecks_parent_after_create_before_write`
+    (`1` test passed)
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_output_preflight_rechecks_parent_after_create`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-post-create-parent-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-post-create-parent-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-create-parent-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-post-create-parent-preflight`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`255` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`139` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha proof-log metadata hardening
+
+- Added adversarial readiness coverage for `validate_lineage_proof_log(...)`
+  when the production proof log passes local-file preflight but the subsequent
+  size `stat()` fails.
+- Verified the rollup helper returns the structured
+  `production proof log metadata could not be read` error before hashing or
+  parsing the proof log.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-lineage-proof-log-metadata-read-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'lineage_proof_log_rejects_metadata_read_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-metadata-read-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`253` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`137` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py status.md`
+
+## 2026-06-07 Kagemusha Android signer artifact metadata hardening
+
+- Added adversarial coverage for the signed-evidence helper's slot artifact
+  digest preflight when `stat().st_nlink` fails after symlink, regular-file,
+  and missing-file checks pass.
+- Verified `_slot_artifact_sha256(...)` returns the structured
+  `slot artifact logs/runtime.log hardlink metadata could not be read` error
+  before hashing the artifact.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-signing-helper-slot-artifact-hardlink-metadata-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'slot_artifact_digest_rejects_hardlink_metadata_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`251` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`135` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py status.md`
+
+## 2026-06-07 Kagemusha Android slot artifact metadata hardening
+
+- Added adversarial scanner coverage for slot artifact metadata read races in
+  regular-file validation: `slot.json` file `lstat()` failure, required
+  directory `lstat()` failure, and nested artifact `lstat()` failure now all
+  assert structured errors instead of falling through silently.
+- Added required-artifact shape coverage that forces a size `stat()` failure on
+  `telemetry/status.ndjson` and asserts the scanner reports
+  `required slot artifact metadata could not be read telemetry/status.ndjson`.
+- Pinned the branches in the production-readiness guard and PR workflow with:
+  - `--negative-control-android-device-lab-slot-regular-file-metadata-failure`
+  - `--negative-control-android-device-lab-slot-directory-metadata-failure`
+  - `--negative-control-android-device-lab-slot-artifact-file-metadata-failure`
+  - `--negative-control-android-device-lab-required-artifact-metadata-failure`
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'metadata_failure'`
+    (`6` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-regular-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-directory-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-artifact-file-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-artifact-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`250` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`135` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py status.md`
+
+## 2026-06-07 Kagemusha source-marker decode hardening
+
+- Hardened `scripts/kagemusha_production_readiness.py` so checked-in ABI-7 and
+  Reserved-lineage release-tooling source-marker reads convert non-UTF-8 marker
+  bytes into their existing structured unreadable blockers instead of raising a
+  raw `UnicodeDecodeError`.
+- Added direct helper, ABI-7 rollup, and Reserved-lineage release-tooling
+  regressions that inject invalid UTF-8 bytes and assert the readiness report
+  stays redacted and structured.
+- Pinned the behavior in the production-readiness guard and PR workflow with:
+  - `--negative-control-kagemusha-readiness-source-marker-non-utf8-read`
+  - `--negative-control-lineage-key-release-source-marker-non-utf8-read`
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k source_marker_text_rejects_non_utf8 -k abi7_fail_closed_rejects_non_utf8 -k lineage_key_release_tooling_rejects_non_utf8`
+    (`3` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-non-utf8-read`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-non-utf8-read`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`135` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`250` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android key metadata failure hardening
+
+- Added adversarial coverage for signer/verifier key hardlink metadata races:
+  trusted signer public-key validation and private-key signing validation now
+  have tests that force the final `stat().st_nlink` read to fail after earlier
+  path-shape checks pass.
+- Verified both paths return structured errors without reaching OpenSSL:
+  `trusted signer public key hardlink metadata could not be read` and `private
+  key hardlink metadata could not be read`.
+- Pinned the branches in the production-readiness guard and PR workflow with:
+  - `--negative-control-android-device-lab-public-key-hardlink-metadata-failure`
+  - `--negative-control-android-device-lab-private-key-hardlink-metadata-failure`
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'hardlink_metadata_failure'`
+    (`2` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-hardlink-metadata-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-hardlink-metadata-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`246` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`132` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py status.md`
+
+## 2026-06-07 Kagemusha dangling output symlink hardening
+
+- Hardened the Android device-lab signing helper, Reserved-lineage proof
+  evidence helper, and production readiness rollup so output preflight rejects
+  dangling symlink leaves before creating parents or writing JSON/manifest bytes.
+- Added adversarial regressions for signed-evidence manifest writes, lineage
+  proof evidence writes, and readiness summary writes that prove dangling output
+  aliases fail before their targets can be created.
+- Pinned all three branches in the production-readiness guard and PR workflow
+  with:
+  - `--negative-control-android-device-lab-signing-helper-dangling-output-alias`
+  - `--negative-control-kagemusha-readiness-summary-output-dangling-alias`
+  - `--negative-control-lineage-proof-helper-output-dangling-alias`
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k dangling_symlinked_manifest_leaf`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k dangling_symlinked_output_leaf -k dangling_symlinked_summary_out`
+    (`2` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-dangling-output-alias`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-dangling-alias`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-dangling-alias`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`246` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`132` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android OpenSSL tempdir failure hardening
+
+- Hardened the Android device-lab signed-evidence verifier so OpenSSL payload
+  staging reports `signature verification temporary directory could not be
+  created` when the temporary directory cannot be allocated, without falling
+  through to subprocess execution or leaking a traceback.
+- Hardened the signed-evidence helper so Ed25519 signing reports `signature
+  temporary directory could not be created` before payload staging when its
+  signing scratch directory cannot be allocated.
+- Added adversarial verifier and signer tests that force
+  `TemporaryDirectory(...)` to fail after fixture setup and assert the
+  structured error branches run before staging or OpenSSL invocation.
+- Pinned both branches in the production-readiness guard and PR workflow with:
+  - `--negative-control-android-device-lab-signature-verify-tempdir-failure`
+  - `--negative-control-android-device-lab-signing-helper-signature-tempdir-failure`
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'tempdir_failure'`
+    (`2` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-tempdir-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-tempdir-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-staging-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-staging-write-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`244` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`132` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+
+## 2026-06-07 Kagemusha Android top-level slot listing hardening
+
+- Hardened `scripts/check_android_device_lab_slot.py` so top-level slot artifact
+  enumeration uses a guarded helper and returns `slot directory could not be
+  listed` on post-preflight `slot_path.iterdir()` failures. Manifest
+  verification, symlink/hardlink/regular-file validators, and signed-evidence
+  digest-path derivation now all surface that structured blocker.
+- Hardened `scripts/sign_android_device_lab_evidence.py` so manifest rewrite
+  and signing-helper preflight propagate `_slot_files(..., errors)` failures
+  before hashing artifacts or replacing `sha256sum.txt`.
+- Added adversarial tests that force top-level slot listing failures after
+  normal fixture setup for `_slot_files(...)`, all three artifact-shape
+  validators, `verify_sha256_manifest(...)`, required signed-evidence digest
+  path derivation, and signer manifest rewrite.
+- Pinned the branches in the production-readiness guard and PR workflow with:
+  - `--negative-control-android-device-lab-slot-top-level-listing-failure`
+  - `--negative-control-android-device-lab-signing-helper-slot-listing-failure`
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k top_level_listing_failure -k artifact_shape_validators_report_top_level_listing_failure`
+    (`5` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-top-level-listing-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-listing-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`241` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`130` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android slot traversal read-failure hardening
+
+- Added a shared slot subtree listing helper in
+  `scripts/check_android_device_lab_slot.py` so required/optional slot directory
+  traversal failures return structured `{dir}/ could not be listed` errors
+  instead of raw `OSError` tracebacks.
+- Reused the helper across slot file discovery, symlink/hardlink/regular-file
+  validators, and required directory file counts. `_slot_files(...)` now
+  propagates traversal errors to callers that pass an error list.
+- Added an adversarial scan-slot test that forces `logs/` traversal to fail
+  after slot path validation and verifies the scanner reports a structured
+  error without traceback output.
+- Pinned the branch in the production-readiness guard and PR workflow with
+  `--negative-control-android-device-lab-slot-directory-traversal-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'directory_traversal_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-directory-traversal-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`241` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`130` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha Android root discovery read-failure hardening
+
+- Hardened `scripts/check_android_device_lab_slot.py` slot discovery so a
+  post-validation `root.iterdir()` failure returns `device-lab root could not be
+  listed` instead of raising a raw filesystem exception.
+- Updated `scripts/kagemusha_production_readiness.py` to propagate scanner
+  discovery failures as `android_device_lab_root_unreadable` readiness blockers.
+- Added direct scanner tests plus a readiness rollup test that force root
+  listing to fail after root path validation.
+- Pinned both layers in the production-readiness guard and PR workflow with:
+  - `--negative-control-android-device-lab-root-discovery-read-failure`
+  - `--negative-control-kagemusha-readiness-android-root-discovery-read-failure`
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/kagemusha_production_readiness.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'root_list'`
+    (`2` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'android_root_discovery_failure'`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-discovery-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-android-root-discovery-read-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`235` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`130` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha ABI-7 fail-closed contract gate hardening
+
+- Tightened `scripts/kagemusha_production_readiness.py` so ABI-7 recursive
+  compact readiness validates concrete Rust function bodies instead of loose
+  source markers. The rollup now requires the compact record preflight,
+  core prove/preverify/verify entry points, record-aware variants, and C bridge
+  wrappers to preserve unavailable returns, soft-invalid verify results, and
+  the distinct recursive-compact-unavailable bridge mapping. The lightweight
+  source scanner ignores ordinary strings, raw strings, raw byte strings,
+  comments, char literals, and lifetimes while matching function braces.
+- Added adversarial unit coverage for Rust body extraction, the positive strict
+  ABI-7 fail-closed fixture, a reopened preverify contract, a verifier returning
+  true, and a bridge mapping that collapses unavailable into generic proof
+  failure. Updated the Android-report redaction test double to match the current
+  `_slot_reports(...) -> (reports, blockers)` helper contract.
+- Pinned the branches in the production-readiness guard and PR workflow with:
+  - `--negative-control-abi7-core-contract-open`
+  - `--negative-control-abi7-bridge-unavailable-mapping`
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`130` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-core-contract-open`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-abi7-bridge-unavailable-mapping`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha OpenSSL spawn-failure hardening
+
+- Hardened Android signed-evidence OpenSSL execution so public-key DER
+  conversion, signature verification, and signature generation report structured
+  spawn-failure errors if `subprocess.run(...)` raises after OpenSSL discovery.
+- Added adversarial tests that mock `_require_openssl(...)` success and then
+  force `subprocess.run(...)` to raise `OSError` for each OpenSSL path.
+- Pinned the branches in the production-readiness guard and PR workflow with:
+  - `--negative-control-android-device-lab-public-key-openssl-spawn-failure`
+  - `--negative-control-android-device-lab-signature-verify-spawn-failure`
+  - `--negative-control-android-device-lab-signing-helper-signature-spawn-failure`
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'spawn_failure'`
+    (`3` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-openssl-spawn-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-spawn-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-spawn-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`233` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`124` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage evidence validation temp-file hardening
+
+- Hardened `scripts/kagemusha_lineage_proof_evidence.py`
+  `validate_evidence_document(...)` so artifact-directory creation failures,
+  validation temp-file write failures, and validation temp-file cleanup failures
+  return structured blocker messages instead of raw `OSError` tracebacks.
+- Added direct adversarial tests that force each temp-file lifecycle failure
+  after path preflight, including cleanup of a temp file created before a
+  simulated write failure.
+- Pinned the branches in the production-readiness guard and PR workflow with:
+  - `--negative-control-lineage-proof-helper-validation-dir-create-failure`
+  - `--negative-control-lineage-proof-helper-validation-temp-write-failure`
+  - `--negative-control-lineage-proof-helper-validation-temp-cleanup-failure`
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_evidence_document_validator_rejects_artifact_dir_create_failure_after_preflight -k lineage_proof_evidence_document_validator_rejects_temp_write_failure_after_preflight -k lineage_proof_evidence_document_validator_rejects_temp_cleanup_failure`
+    (`3` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-dir-create-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`124` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha OpenSSL staging write-failure hardening
+
+- Hardened Android signed-evidence signature verification and signing helpers so
+  temporary OpenSSL staging-file write failures become structured errors instead
+  of raw `OSError` tracebacks.
+- Added adversarial unit tests that force `payload.bin` staging writes to fail
+  before OpenSSL can run for both verification and signing.
+- Pinned both guarded branches with:
+  - `--negative-control-android-device-lab-signature-verify-staging-write-failure`
+  - `--negative-control-android-device-lab-signing-helper-signature-staging-write-failure`
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k 'staging_write_failure'`
+    (`2` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-staging-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-staging-write-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`230` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`121` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha readiness summary write-failure guard
+
+- Pinned the existing readiness rollup `write_summary(...)` fail-closed
+  `--summary-out could not be written` branch in the production-readiness guard
+  and workflow.
+- Added `--negative-control-kagemusha-readiness-summary-output-write-failure`
+  so the guard rejects removal of structured summary write-failure handling.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k write_summary_rejects_write_failure_after_preflight`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`121` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage evidence output write-failure guard
+
+- Pinned the existing `scripts/kagemusha_lineage_proof_evidence.py`
+  `write_evidence(...)` fail-closed `--out could not be written` branch in the
+  production-readiness guard and workflow.
+- Added `--negative-control-lineage-proof-helper-output-write-failure` so the
+  guard rejects removal of the structured output write-failure handling.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_write_evidence_rejects_write_failure_after_preflight`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`121` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha signer write-failure hardening
+
+- Hardened `scripts/sign_android_device_lab_evidence.py` so signer-controlled
+  JSON and text writes return structured `{label} could not be written` errors
+  after output path preflight instead of surfacing write-time `OSError`
+  tracebacks.
+- Added direct adversarial tests that monkeypatch the already-preflighted output
+  path to fail during `write_text(...)` for signed-evidence JSON and
+  `sha256sum.txt` manifest writes.
+- Fixed the signature-output read-failure test fixture so its neutral signer key
+  filename reaches the mocked signature read path instead of tripping the
+  secret-looking private-key path gate.
+- Pinned both guarded write branches in the production-readiness guard with:
+  - `--negative-control-android-device-lab-signing-helper-json-write-failure`
+  - `--negative-control-android-device-lab-signing-helper-text-write-failure`
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_write_json_rejects_write_failure_after_preflight -k signer_write_text_rejects_write_failure_after_preflight`
+    (`2` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k sign_ed25519_rejects_signature_read_failure_after_openssl`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`228` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-json-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha signer signature read-failure hardening
+
+- Hardened `scripts/sign_android_device_lab_evidence.py` so a read-time failure
+  on the temporary OpenSSL `signature.bin` output appends the structured
+  `signature output could not be read` error instead of surfacing an `OSError`.
+- Added a signer-helper adversarial unit test that mocks a successful OpenSSL
+  signing call and then forces the temporary signature read to fail.
+- Pinned the guarded branch with
+  `--negative-control-android-device-lab-signing-helper-signature-read-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k sign_ed25519_rejects_signature_read_failure_after_openssl`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-read-failure`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`228` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`119` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Offline V2 issuer version and IVM default entrypoint guard
+
+- Aligned Torii Offline V2 key-certificate response JSON with the shared
+  chain-admissible certificate version while keeping legacy structured
+  redemption JSON version `2` normalized to model version `1`.
+- Raw self-describing IVM transactions without `contract_entrypoint` now resolve
+  public `main` before execution and enforce its embedded permission; generic
+  non-contract raw IVM remains unclassified.
+- Access derivation now defaults only to `main` for no-selector contract hints,
+  avoiding fallback to `hajimari` or a sole arbitrary entrypoint.
+- Validation:
+  - `cargo test -p iroha_core contract_dispatch_context --lib -- --nocapture`
+  - `cargo test -p iroha_core select_entrypoint_defaults_only_to_public_main --lib -- --nocapture`
+  - `cargo test -p iroha_core ivm_access_uses_manifest_entrypoint_hints_when_present --lib -- --nocapture`
+  - `cargo test -p iroha_core contract_entrypoint_permission_accepts_direct_and_role_grants --lib -- --nocapture`
+  - `cargo test -p iroha_torii redeem_route_accepts_legacy_structured_certificate_json_version_two --lib -- --nocapture`
+  - `cargo test -p iroha_torii verified_attestation_canonicalizes_certificate_key_bytes --lib -- --nocapture`
+  - `swift test --filter OfflineNoteV2Tests` from `IrohaSwift/`
+
+## 2026-06-07 Kagemusha lineage SHA-256 read-failure hardening
+
+- Hardened the readiness rollup and `scripts/kagemusha_lineage_proof_evidence.py`
+  direct SHA-256 helpers so read-time `OSError` failures become structured
+  `could not be read` blockers after local-file preflight.
+- Added adversarial tests that monkeypatch already-preflighted lineage artifacts
+  to fail during byte streaming without leaking tracebacks.
+- Pinned the guarded branches with
+  `--negative-control-lineage-proof-readiness-direct-hash-read-failure` and
+  `--negative-control-lineage-proof-helper-direct-hash-read-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k 'sha256_file_rejects_read_failure'`
+    (`2` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-direct-hash-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-read-failure`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`119` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`225` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha signer digest read-failure hardening
+
+- Hardened `scripts/sign_android_device_lab_evidence.py` so signed-evidence
+  output digest reads and slot-artifact digest reads fail closed as structured
+  validation errors after path, symlink, hardlink, and regular-file preflights.
+- Added direct signer-helper adversarial tests that simulate `read_bytes()`
+  failures after preflight for the signed-evidence output digest and slot
+  artifact digest paths.
+- Pinned both guarded signer read branches in the production-readiness guard
+  with:
+  - `--negative-control-android-device-lab-signing-helper-output-digest-read-failure`
+  - `--negative-control-android-device-lab-signing-helper-slot-artifact-read-failure`
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_output_digest_rejects_read_failure_after_preflight -k signer_slot_artifact_digest_rejects_read_failure_after_preflight`
+    (`2` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`225` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`117` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha artifact byte-read failure hardening
+
+- Hardened Android device-lab digest helpers so manifest artifacts,
+  signed-evidence `artifact_digests`, and slot-metadata referenced artifacts
+  convert read-time `OSError` failures into structured validation errors after
+  path, symlink, hardlink, and regular-file preflights.
+- Added direct adversarial tests that monkeypatch the already preflighted
+  target file to fail during `read_bytes()`, covering manifest, metadata, and
+  signed-evidence digest paths.
+- Pinned the three guarded byte-read branches in the production-readiness guard
+  with:
+  - `--negative-control-android-device-lab-manifest-artifact-read-failure`
+  - `--negative-control-android-device-lab-metadata-artifact-read-failure`
+  - `--negative-control-android-device-lab-signed-evidence-artifact-read-failure`
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k read_failure_after_preflight`
+    (`3` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`223` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`117` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha manifest read-failure hardening
+
+- Hardened Android device-lab `parse_sha256_manifest(...)` so unreadable or
+  non-UTF-8 `sha256sum.txt` manifests fail closed as
+  `sha256sum.txt could not be read` after slot path, symlink, and hardlink
+  checks instead of surfacing a traceback.
+- Added direct adversarial coverage for invalid UTF-8 manifest bytes and pinned
+  the guarded read branch in the production-readiness guard with
+  `--negative-control-android-device-lab-manifest-read-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k parse_sha256_manifest_rejects_non_utf8_bytes_without_traceback`
+    (`1` test passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`220` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`117` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha readiness JSON read-failure hardening
+
+- Hardened `scripts/kagemusha_production_readiness.py` so unreadable or
+  non-UTF-8 ABI-6 manifest and Reserved-lineage proof-evidence JSON files fail
+  closed with structured rollup blockers instead of tracebacks.
+- Added adversarial coverage for invalid UTF-8 release JSON inputs and pinned the
+  behavior in the production-readiness guard with
+  `--negative-control-kagemusha-readiness-json-read-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k non_utf8`
+    (`2` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`220` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`117` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-json-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha JSON loader read-failure hardening
+
+- Hardened the shared Android device-lab `_load_json(...)` helper so unreadable
+  or non-UTF-8 JSON artifacts fail closed as structured `{label} could not be
+  read` errors after path-shape validation instead of surfacing a traceback.
+- Added direct adversarial coverage for invalid UTF-8 JSON bytes and pinned the
+  behavior in the production-readiness guard with
+  `--negative-control-android-device-lab-json-load-read-failure`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k load_json`
+    (`3` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`219` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`115` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha proof-log text read preflight
+
+- Added `_lineage_local_text(...)` in
+  `scripts/kagemusha_production_readiness.py` and routed
+  `validate_lineage_proof_log(...)` through it after digest calculation, so the
+  captured production proof log is revalidated immediately before marker text is
+  decoded.
+- Direct helper coverage now rejects symlinked and hardlinked proof logs before
+  forged marker text can satisfy the single-test production proof-log checks.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-lineage-proof-log-text-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_local_text -k lineage_proof_log_rejects_secret_path_before_digest -k lineage_proof_evidence_rejects_symlinked_local_proof_log_file`
+    (`4` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`115` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-text-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha source-marker text read preflight
+
+- Added `_repo_source_marker_text(...)` in
+  `scripts/kagemusha_production_readiness.py` so checked-in ABI-7 fail-closed
+  and Reserved-lineage release-tooling marker files are revalidated immediately
+  before marker text is read.
+- Routed `check_abi7_fail_closed(...)` and
+  `check_lineage_key_release_tooling(...)` through the helper while preserving
+  existing shape, missing, and unreadable blocker codes.
+- Added direct adversarial coverage for symlinked and hardlinked source-marker
+  text reads before external marker text can satisfy readiness.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-kagemusha-readiness-source-marker-read-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k repo_source_marker_text`
+    (`2` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k repo_source_marker_text -k abi7_fail_closed_rejects_symlinked_source_marker_file -k lineage_key_release_tooling_rejects_hardlinked_marker_file`
+    (`4` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`113` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-read-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha SDK parity meta-guard hardening
+
+- Tightened the JavaScript Kagemusha parity meta-test so the native-bridge
+  workflow negative control must mutate the empty nested-Pallas bridge test
+  command, not only list the negative-control mode.
+- Broadened the cross-SDK availability-probe markers to pin the lineage witness
+  native probes alongside transition-profile and append-boundary probes for
+  JavaScript source/dist, Python, Swift, Android Java, Kotlin/JVM, and C#.
+- Tightened the shell SDK parity guard so Swift, C#, Java/Kotlin availability
+  checks must call both lineage witness native probes. Added Swift, C#,
+  Kotlin/JVM, and Android Java negative controls that independently mutate the
+  init-result and append-result probe calls and must be rejected.
+- Validation:
+  - `node --test test/kagemushaFfiContractParity.test.js`
+    (`24` tests passed)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-lineage-witness-availability-probe`
+    (expected rejection)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-jvm-lineage-witness-append-availability-probe`
+    (expected rejection)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-lineage-witness-availability-probe`
+    (expected rejection)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-android-lineage-witness-append-availability-probe`
+    (expected rejection)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-test-workflow`
+    (expected rejection)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-witness-availability-probe`
+    (expected rejection)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-lineage-witness-append-availability-probe`
+    (expected rejection)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-lineage-witness-availability-probe`
+    (expected rejection)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-lineage-witness-append-availability-probe`
+    (expected rejection)
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- javascript/iroha_js/test/kagemushaFfiContractParity.test.js ci/check_kagemusha_recursive_spend_sdk_parity.sh .github/workflows/pr_kagemusha_payload_bench.yml crates/connect_norito_bridge/src/lib.rs ci/check_kagemusha_recursive_spend_policy.sh docs/source/offline_kagemusha.md roadmap.md status.md`
+  - `git diff --name-only --diff-filter=U`
+  - `git status --short -- Cargo.lock`
+
+## 2026-06-07 Kagemusha required text artifact read preflight
+
+- Hardened `scripts/check_android_device_lab_slot.py` so
+  `telemetry/status.ndjson` and `logs/runtime.log` are revalidated through the
+  slot-relative artifact path preflight immediately before text reads.
+- Direct required-artifact shape checks now reject symlinked status NDJSON and
+  hardlinked runtime logs before parsing external status records or accepting
+  marker text from aliased files.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-required-text-artifact-read-preflight`.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k required_status_artifact -k required_runtime_log`
+    (`2` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`218` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`111` tests passed)
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-digest-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-required-text-artifact-read-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - `rg -n '[ \\t]+$' scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only --diff-filter=U`
+  - `git status --short -- Cargo.lock javascript/iroha_js/package-lock.json`
+
+## 2026-06-07 Kagemusha C bridge nested Pallas preflight
+
+- Added a shared C bridge preflight for nested recursive-spend current-hop
+  Pallas open-envelope archives inside init/append request archives, covering
+  init, append, transition-profile init/append, and lineage witness helpers.
+- Updated the generic append fixture to carry matching current-hop Pallas
+  openings by default, preserving existing previous-proof and lineage
+  adversarial test boundaries after the new preflight.
+- Added an FFI regression that clears stale output pointers and returns no bytes
+  for empty nested Pallas archives, then pinned the command in the Kagemusha
+  native-bridge workflow and SDK parity guard.
+- Validation:
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_ffi_rejects_empty_nested_pallas_archives_without_output --lib -- --test-threads=1`
+    (`1` test passed)
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_append_ffi_rejects --lib -- --test-threads=1`
+    (`12` tests passed)
+  - `cargo test -p connect_norito_bridge kagemusha_recursive_spend_lineage_witness --lib -- --test-threads=1`
+    (`2` tests passed)
+
+## 2026-06-07 Kagemusha transcript artifact digest preflight
+
+- Hardened `scripts/check_android_device_lab_slot.py` so D2D handoff,
+  wallet-integrity, and `queue/pending_queue.json` transcript digest checks
+  route through the same artifact helper that revalidates the slot-relative path
+  immediately before reading bytes.
+- The transcript digest path now rejects secret-looking paths, symlink leaves,
+  symlinked artifact ancestors, hardlinks, non-regular files, missing files, and
+  secret-looking slot paths before SHA-256 comparison while preserving existing
+  transcript mismatch diagnostics.
+- Added adversarial coverage for symlinked D2D transcript paths, hardlinked
+  wallet-integrity paths, and symlinked queue artifacts before digest reads.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-transcript-artifact-digest-preflight`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k d2d_transcript_binding_rejects_symlink_path_before_digest_read -k wallet_transcript_binding_rejects_hardlink_path_before_digest_read -k d2d_transcript_rejects_symlinked_queue_before_digest_read -k production_metadata_rejects_d2d_payment_transcript_queue_splice -k production_metadata_rejects_wallet_integrity_transcript_digest_drift`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-transcript-artifact-digest-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`216` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`111` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 ISO XSD source repository placeholder gate
+
+- Hardened `scripts/iso_xsd_fixture_verify.py` so checked-in XSD schema source
+  provenance and blocked public candidate-source provenance share the same
+  canonical GitHub repository validator.
+- Source repository coordinates now reject placeholder owners or repository
+  names such as `example`, `dummy`, `fake`, `sample`, `template`, `test`,
+  `replace-before-production`, and `operator-canary.bank` forms, in addition
+  to the existing canonical URL, no-`.git`, length, commit, path, digest, and
+  restricted-terms checks.
+- Mirrored the repository-coordinate predicate in
+  `scripts/iso_production_readiness.py` so digest-correct archived XSD summaries
+  cannot bypass the direct manifest preflight by replaying placeholder schema
+  source or blocked candidate-source metadata into the aggregate release gate.
+  Readiness now also rejects secret-looking archived XSD repository coordinates
+  before normalized summary output can echo them.
+- Tightened direct XSD manifest schema paths, fixture paths, and source
+  provenance paths so identifier-style secret material such as
+  `token-...-secret` is rejected before summary emission, matching the
+  readiness replay and output-path guards.
+- Updated the XSD verifier tests so valid offline fixtures use real public
+  source coordinates and added adversarial owner/name placeholder regressions
+  for both checked-in schema sources and blocked candidate-source evidence,
+  including forged readiness-summary replay and identifier-style source/path
+  no-echo cases. Direct XSD preflight now also has explicit no-echo coverage for
+  secret-looking checked-in schema source repositories and blocked candidate
+  source repositories.
+- Added a production-readiness parity regression that compares the direct XSD
+  preflight, direct trust-bundle preflight, operator evidence replay, and final
+  readiness replay predicates for placeholder XSD repositories and trust-source
+  metadata, plus the rail, notary, canary, receipt, and evidence endpoint-host
+  predicates for reserved documentation hosts and checked-in template canary
+  hosts, so future local hardening cannot update only one layer.
+- Added a second production-readiness parity regression that pins the required
+  receipt-kind set, receipt suffix, profile/message-type regexes, supported
+  rail message-type allowlist, legacy `colr.007` classification, and
+  `colr.012` production endpoint coverage across the direct rail adapter,
+  direct receipt verifier, operator evidence replay, and final readiness
+  replay.
+- Hardened direct receipt verification, operator evidence replay, and final
+  readiness replay so rail receipt metadata with a syntactically valid but
+  unsupported `message_type` such as `zzzz.999` is rejected before forged
+  summaries can satisfy production evidence.
+- Hardened direct receipt verification so malformed archived rail
+  `message_type` family IDs such as `PACS.002` fail before the supported-type
+  allowlist, while secret-looking message-type identifiers still take the
+  existing no-echo secret-material diagnostic path first.
+- Added a production-readiness taxonomy parity regression that pins supported
+  rail/profile identifiers, profile directions, signature-policy names,
+  schema-source licenses, and profile/message regexes across XSD manifest
+  preflight, trust-bundle preflight, operator evidence replay, and final
+  readiness replay.
+- Hardened operator evidence replay and final readiness replay so unsupported
+  trust `embedded_signature_policy` values such as `diagnostic-only` are
+  rejected distinctly even when local record-only diagnostic replay is enabled.
+- Hardened compact trust-summary replay so evidence summaries now retain the
+  source trust-verifier diagnostic flags `allow_synthetic_der`,
+  `allow_record_only`, and `allow_insecure_source_url`; readiness requires those
+  booleans, blocks any true value as non-production evidence, and includes them
+  when recomputing compact `profile_json_emittable` drift.
+- Aligned local evidence diagnostic acceptance so non-emittable trust summaries
+  use their matching override (`--allow-record-only-trust`,
+  `--allow-insecure-http`, `--allow-synthetic-trust`, or
+  `--allow-missing-trust-source`) instead of requiring the synthetic-trust
+  override for record-only or insecure-source replay.
+- Narrowed `--allow-missing-trust-source` so it only permits non-emittable
+  profile JSON when a compact trust source is actually missing; present but
+  stale-under-budget source provenance still fails closed even if the missing
+  source diagnostic override is supplied.
+- Hardened evidence and final readiness replay so evidence-generated compact
+  trust profiles with explicit `source: null` are retained as diagnostic
+  evidence and reported as `trust.source_missing` blockers, while compact
+  profiles that omit the `source` key remain malformed even under
+  `--allow-missing-trust-source`.
+- Hardened final readiness replay so `receipt_verification` must be present in
+  every evidence summary; explicit `null` remains the recorded canary-stage-only
+  diagnostic shape, while omitting the key is malformed even when local
+  canary-stage-only replay is allowed.
+- Validation:
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_missing_or_partial_archive_receipt_verification_blocks_readiness`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_missing_or_partial_archive_receipt_verification_blocks_readiness pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_missing_compact_trust_source_blocks_readiness_without_malformed_abort`
+    (`2` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_missing_compact_trust_source_blocks_readiness_without_malformed_abort pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_compact_trust_source_is_required_and_rechecked_by_readiness pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_replay_profile_taxonomy_predicates_match_direct_verifiers`
+    (`3` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_missing_source_override_does_not_allow_present_stale_source_budget pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_diagnostic_trust_summary_flags_are_preserved_in_evidence pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_trust_summary_profile_emittable_must_match_source_policy`
+    (`3` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_diagnostic_trust_summary_flags_are_preserved_in_evidence pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_synthetic_record_only_and_insecure_trust_summaries_are_rejected`
+    (`2` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_diagnostic_trust_summary_flags_are_preserved_in_evidence pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_compact_trust_verifier_override_flags_block_readiness pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_replay_profile_taxonomy_predicates_match_direct_verifiers`
+    (`3` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_replay_placeholder_predicates_match_direct_verifiers`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_replay_receipt_policy_predicates_match_direct_verifiers`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_replay_profile_taxonomy_predicates_match_direct_verifiers`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_secret_looking_receipt_identifiers_are_rejected_without_echo pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_rail_receipt_required_strings_must_not_require_trimming pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_replay_receipt_policy_predicates_match_direct_verifiers`
+    (`3` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_unsupported_trust_policy_is_rejected_even_with_record_only_override pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_nonproduction_trust_policy_and_zero_pins_block_readiness pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_replay_profile_taxonomy_predicates_match_direct_verifiers`
+    (`3` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_rail_receipt_required_strings_must_not_require_trimming pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_receipt_verifier_stdout_requires_kind_specific_metadata pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_entries_must_preserve_kind_metadata pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_replay_receipt_policy_predicates_match_direct_verifiers`
+    (`4` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_secret_looking_manifest_summary_strings_are_rejected_without_echo`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
+    (`63` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_forged_xsd_schema_source_metadata_blocks_readiness pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_forged_xsd_blocked_schema_source_metadata_blocks_readiness`
+    (`2` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`286` tests passed, latest run 166.144s)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`250` tests passed, latest run 152.032s)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test`
+    (`161` tests passed, latest run 139.076s)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (`119` tests passed, latest run 123.752s)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`569` tests passed, latest run 250.781s)
+
+## 2026-06-07 ISO trust-source template and reserved host gate
+
+- Hardened trust-bundle production source checks so `dummy`, `fake`, `sample`,
+  and `template` authority/version metadata are treated as placeholder
+  provenance alongside `placeholder`, `replace-before-production`, and reserved
+  source hosts such as `.example`, `example.com`, `example.net`, `example.org`,
+  `example.invalid`, and `operator-canary.bank`.
+- Applied the predicate consistently in `scripts/iso_trust_bundle_verify.py`,
+  `scripts/iso_operator_evidence_verify.py`, and
+  `scripts/iso_production_readiness.py`, so generated summaries, archived
+  evidence replay, and aggregate readiness all refuse profile-emittable
+  production evidence that still carries template wording.
+- Added adversarial coverage for summary-only trust verification, profile JSON
+  emission refusal, evidence replay, and compact readiness replay, including
+  text markers, reserved documentation-domain hosts, and checked-in canary
+  template hosts used as forged trust-source provenance.
+- Archived canary child command endpoint replay now rejects reserved
+  documentation-domain hosts before a forged template-host canary summary can
+  satisfy production evidence verification. That rejection is unconditional for
+  reserved/template hosts, including under local `--allow-insecure-http`
+  diagnostic replay.
+- Direct rail/notary receipt endpoint verification now applies the same
+  reserved placeholder-host rejection, including `.example`, plus checked-in
+  `operator-canary.bank` template-host rejection after structural URL checks so
+  documentation-only or template endpoints cannot satisfy production receipt
+  evidence. Direct evidence archive verification inherits the same receipt
+  endpoint gate before accepting archived rail/notary receipts.
+- Live rail gateway, audit notary, and canary runbook endpoint validation now
+  apply the same reserved placeholder-host rejection before planning or network
+  delivery. Direct rail gateway and audit notary adapter invocations also reject
+  checked-in `operator-canary.bank` template hosts before network delivery. The
+  checked-in operator canary templates now use non-reserved
+  `operator-canary.bank` endpoints so template planning still exercises the
+  runbooks without relying on documentation-only hosts; non-plan canary runs
+  reject that template suffix before child execution, and archived production
+  evidence separately rejects it before accepting child-command endpoint replay.
+- Validation:
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_placeholder_source_summary_only_is_not_profile_emittable pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_profile_override_emission_rejects_local_and_placeholder_sources`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_smuggled_canary_stage_command_urls_are_rejected pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_direct_receipt_archive_verification_is_preserved pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_placeholder_trust_source_metadata_is_rejected`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_duplicate_singleton_child_command_flags_are_rejected pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_smuggled_canary_stage_command_urls_are_rejected`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_placeholder_trust_source_metadata_is_rejected`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_smuggled_receipt_endpoint_urls_are_rejected`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_direct_receipt_archive_verification_is_preserved pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_direct_receipt_archive_must_cover_canary_receipt_digests`
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_placeholder_source_summary_only_is_not_profile_emittable pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_profile_override_emission_rejects_local_and_placeholder_sources pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_placeholder_compact_trust_source_blocks_readiness`
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_torii_url_smuggling_variants_are_rejected_before_network_delivery`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_endpoint_smuggling_variants_are_rejected_before_network_delivery`
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_endpoint_urls_are_validated_before_planning pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_plan_only_redacts_token_paths_and_does_not_execute pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_checked_in_profile_runbook_templates_plan_without_network`
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_template_endpoint_hosts_are_plan_only`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_smuggled_canary_stage_command_urls_are_rejected`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_smuggled_receipt_endpoint_urls_are_rejected`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_direct_receipt_archive_rejects_template_receipt_endpoints`
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_placeholder_compact_trust_source_blocks_readiness`
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
+    (`56` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test`
+    (`51` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test`
+    (`48` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test`
+    (`42` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
+    (`59` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test`
+    (`126` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (`116` tests passed)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`561` tests passed, latest run 250.321s)
+  - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `git diff --check -- scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md fixtures/iso20022/operator_canary/README.md fixtures/iso20022/operator_canary/fedwire_funds.preprod.example.json fixtures/iso20022/operator_canary/securities_csd.preprod.example.json fixtures/iso20022/operator_canary/sepa_sct_inst.preprod.example.json fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json fixtures/iso20022/trust_bundles/README.md status.md roadmap.md`
+  - `git diff --exit-code -- Cargo.lock`
+  - `rg -n "^(<<<<<<<( |$)|=======$|>>>>>>>( |$))" scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_operator_receipt_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_production_readiness_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md fixtures/iso20022/operator_canary/README.md fixtures/iso20022/operator_canary/fedwire_funds.preprod.example.json fixtures/iso20022/operator_canary/securities_csd.preprod.example.json fixtures/iso20022/operator_canary/sepa_sct_inst.preprod.example.json fixtures/iso20022/operator_canary/swift_cbpr_plus.preprod.example.json fixtures/iso20022/trust_bundles/README.md status.md roadmap.md`
+    (no matches)
+  - `fd -H '__pycache__|.*\\.pyc' scripts pytests`
+    (no matches)
+
+## 2026-06-07 ISO blocked XSD candidate marker strength
+
+- Hardened `scripts/iso_xsd_fixture_verify.py` and
+  `scripts/iso_production_readiness.py` so blocked public XSD candidate evidence
+  must include at least one explicit redistribution or public-distribution
+  restriction marker; `swift-copyright-header` alone no longer satisfies the
+  missing-package blocker evidence contract.
+- Added adversarial manifest and readiness-replay regressions for copyright-only
+  blocked-source marker lists.
+- Validation:
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_blocked_schema_source_provenance_and_markers_are_rejected`
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_forged_xsd_blocked_schema_source_metadata_blocks_readiness`
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
+    (`63` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (`116` tests passed)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`559` tests passed, latest run 248.883s)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `git diff --check -- scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md`
+  - `git diff --exit-code -- Cargo.lock`
+  - `rg -n "^(<<<<<<<( |$)|=======$|>>>>>>>( |$))" scripts pytests docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md fixtures/iso20022/xsd`
+    (no matches)
+  - `fd -H '__pycache__|.*\\.pyc' scripts pytests`
+    (no matches)
+
+## 2026-06-07 Kagemusha metadata artifact digest preflight
+
+- Hardened `scripts/check_android_device_lab_slot.py` so `slot.json`-referenced
+  attestation-chain, offline-wallet APK, and signed-evidence artifact digests
+  route through a metadata artifact digest helper that revalidates the relative
+  path immediately before reading bytes.
+- The helper rejects secret-looking relative artifact names, symlink leaves,
+  symlinked artifact ancestors, hardlinks, non-regular files, missing files, and
+  secret-looking slot paths at the digest boundary while preserving existing
+  missing-file and digest-mismatch messages.
+- Added direct adversarial coverage for secret-looking metadata artifact paths,
+  plus product-path regressions for symlinked signed-evidence artifact digests
+  and hardlinked offline-wallet APK digest paths.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-metadata-artifact-digest-preflight`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k metadata_artifact_digest -k symlinked_signed_evidence_digest_path -k hardlinked_release_apk_digest_path -k production_metadata_rejects_release_apk_digest_drift -k production_metadata_rejects_attestation_chain_digest_drift -k production_metadata_rejects_signed_evidence_digest_drift`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-digest-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`213` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`111` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha JS lineage archive payload binding
+
+- Hardened the JavaScript Node and browser lineage key-artifact validators so
+  `lineage_proving_key_archive` exposes a checked Norito archive payload and
+  must contain both the selected lineage circuit id bytes and the stable
+  verifier-key commitment for the supplied verifier key.
+- Updated the package-dist and browser Kagemusha fixture builders to emit the
+  real lineage proving-key archive schema hash and compact Norito field layout,
+  matching the stricter product decoder instead of relying on legacy flat test
+  payloads.
+- Validation:
+  - `node --check javascript/iroha_js/src/crypto.js && node --check javascript/iroha_js/dist/crypto.js && node --check javascript/iroha_js/src/crypto.browser.js && node --check javascript/iroha_js/dist/crypto.browser.js`
+  - `node --test --test-name-pattern "Kagemusha recursive spend helpers" test/package_dist.test.js`
+  - `node --test --test-name-pattern "lineage" test/kagemushaRecursiveSpend.test.js`
+  - `node --test --test-name-pattern "Kagemusha" test/crypto.browser.test.js`
+  - `node --check javascript/iroha_js/test/package_dist.test.js && node --check javascript/iroha_js/test/crypto.browser.test.js`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha signed-evidence digest preflight
+
+- Hardened `scripts/check_android_device_lab_slot.py` so signed-evidence
+  `artifact_digests` verification routes every required slot artifact through a
+  verifier-side digest helper that revalidates the relative path immediately
+  before reading bytes.
+- The scanner-side digest helper rejects secret-looking relative artifact names,
+  symlink leaves, symlinked artifact ancestors, hardlinks, non-regular files,
+  missing files, and secret-looking slot paths at the digest boundary while
+  preserving the existing missing-required-artifact error contract.
+- Added direct adversarial coverage for secret-looking, symlinked, and
+  hardlinked signed-evidence digest inputs, plus a verifier regression that
+  mutates `logs/runtime.log` into a symlink after required-artifact preflight
+  but before signed-evidence digest verification.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-signed-evidence-artifact-digest-preflight`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signed_evidence_artifact_digest -k signed_evidence_artifact_revalidates_required_digest_before_read -k production_metadata_rejects_missing_required_slot_artifact`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-digest-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`210` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`111` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha manifest artifact digest preflight
+
+- Hardened `scripts/check_android_device_lab_slot.py` so
+  `verify_sha256_manifest(...)` routes each `sha256sum.txt` entry through a
+  per-artifact digest helper that revalidates the relative artifact path
+  immediately before reading bytes.
+- The verifier-side digest helper rejects secret-looking relative artifact
+  names, symlink leaves, symlinked artifact ancestors, hardlinks, non-regular
+  files, missing files, and secret-looking slot paths at the digest boundary.
+- Added direct adversarial coverage for secret-looking, symlinked, and
+  hardlinked manifest artifact digest inputs, plus a verifier regression that
+  mutates an artifact into a symlink after manifest parsing but before hashing.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-manifest-artifact-digest-preflight`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k manifest_artifact_digest -k verify_sha256_manifest_revalidates_artifact_before_digest`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-digest-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-verify-symlink-directory`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`206` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`111` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 ISO live adapter identifier-response redaction coverage
+
+- Added rail and notary adapter regressions proving live response previews and
+  URL-error strings with identifier-style secret markers such as
+  `token-...-secret` are redacted before receipt JSON can persist them.
+- Validation:
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_secret_looking_torii_response_preview_is_redacted pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_secret_looking_url_error_is_redacted`
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_secret_looking_remote_response_preview_is_redacted pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_secret_looking_url_error_is_redacted`
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
+    (`56` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test`
+    (`51` tests passed)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`559` tests passed, latest run 248.175s)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `git diff --check -- scripts/iso_operator_canary.py scripts/iso_xsd_fixture_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_audit_notary_adapter_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md`
+  - `git diff --exit-code -- Cargo.lock`
+  - `rg -n "^(<<<<<<<( |$)|=======$|>>>>>>>( |$))" scripts pytests docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md fixtures/iso20022/xsd`
+    (no matches)
+  - `fd -H '__pycache__|.*\\.pyc' scripts pytests`
+    (no matches)
+
+## 2026-06-07 ISO direct receipt-verifier stderr redaction
+
+- Hardened `scripts/iso_operator_evidence_verify.py` so failed direct receipt
+  verifier subprocess diagnostics redact key/value and identifier-style
+  secret-looking stderr before reporting child verifier failure detail.
+- Added adversarial coverage for `token=...` and `token-...-secret` verifier
+  stderr, proving the evidence gate reports a fixed redacted marker without
+  echoing the child output.
+- Validation:
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_failed_direct_receipt_verifier_stderr_redacts_secret_material`
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_evidence_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test`
+    (`125` tests passed)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`559` tests passed, latest run 248.175s)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `git diff --check -- scripts/iso_operator_canary.py scripts/iso_xsd_fixture_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md`
+  - `git diff --exit-code -- Cargo.lock`
+  - `rg -n "^(<<<<<<<( |$)|=======$|>>>>>>>( |$))" scripts pytests docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md fixtures/iso20022/xsd`
+    (no matches)
+  - `fd -H '__pycache__|.*\\.pyc' scripts pytests`
+    (no matches)
+
+## 2026-06-07 Kagemusha recursive spend host archive preflights
+
+- Added Node NAPI and Python PyO3 ABI-7 recursive spend host regressions that
+  reject oversized archives before Norito decode across init, append,
+  transition-profile init/append, lineage append boundary, verify, redeem, and
+  the multi-archive lineage witness init/append helpers.
+- Added a direct nested Pallas open-envelope preflight for recursive-spend
+  init/append request archives in both native hosts, so empty current-hop Pallas
+  material fails with a stable caller-input diagnostic before core prover or
+  PyO3 nested decode paths run.
+- Extended the Kagemusha policy guard to pin those recursive-spend oversized
+  host tests plus the nested-Pallas preflight, and tightened the existing
+  JavaScript/Python archive-cap negative controls so every cap-plus-one fixture
+  is weakened during drift injection.
+- Validation:
+  - `cargo test -p iroha_js_host kagemusha_recursive_spend_js_host_rejects_oversized_archives_before_decode --lib`
+    (`1` test passed)
+  - `cargo test -p iroha_python_rs kagemusha_recursive_spend_python_functions_reject_oversized_archives_before_decode --lib`
+    (`1` test passed)
+  - `cargo test -p iroha_js_host kagemusha_recursive_spend_js_host_rejects_empty_nested_pallas_archives_before_core --lib`
+    (`1` test passed)
+  - `cargo test -p iroha_python_rs kagemusha_recursive_spend_python_functions_reject_empty_nested_pallas_archives_before_core --lib`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-kagemusha-archive-cap`
+    (rejected JS host archive-cap drift)
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-kagemusha-archive-cap`
+    (rejected Python host archive-cap drift)
+  - `node --test test/kagemushaFfiContractParity.test.js` from
+    `javascript/iroha_js` (`24` tests passed)
+
+## 2026-06-07 Kagemusha signer per-artifact digest preflight
+
+- Added a per-artifact digest helper in
+  `scripts/sign_android_device_lab_evidence.py` so signed-evidence artifact
+  digests and `sha256sum.txt` rewrites revalidate each relative artifact path
+  immediately before reading bytes.
+- The helper rejects secret-looking relative artifact names, symlink leaves,
+  symlinked artifact ancestors, hardlinks, non-regular files, missing files, and
+  secret-looking slot paths at the digest boundary.
+- Added direct adversarial coverage for secret-looking, symlinked, and
+  hardlinked slot artifact digest inputs, plus a manifest rewrite regression
+  that mutates an artifact into a symlink after manifest preflight but before
+  hashing.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-signing-helper-slot-artifact-digest-preflight`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_slot_artifact_digest -k rewrite_sha256_manifest_revalidates_artifact_before_digest`
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-digest-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`202` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha signed-evidence output digest preflight
+
+- Hardened `scripts/sign_android_device_lab_evidence.py` so the signing helper
+  revalidates the written signed-evidence output as a regular non-symlink,
+  non-hardlinked file before hashing it back into `slot.json`.
+- Added direct adversarial coverage for secret-looking, symlinked, and
+  hardlinked signed-evidence output paths at digest time, plus an integration
+  regression that simulates a post-write symlink alias and proves `slot.json`
+  is not updated from that unsafe digest path.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-signing-helper-output-digest-preflight`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k signer_output_digest -k signer_helper_revalidates_output_digest`
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`198` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 Kagemusha lineage proof hash-helper path validation
+
+- Hardened both `scripts/kagemusha_production_readiness.py` and
+  `scripts/kagemusha_lineage_proof_evidence.py` so their direct
+  `_sha256_file(...)` helpers run the shared lineage local-file validator before
+  hashing proof artifacts or logs.
+- Added direct adversarial coverage for secret-looking, symlinked, and
+  hardlinked lineage artifact paths in both the production rollup and the
+  evidence helper, proving the low-level hash readers return redacted path-shape
+  errors instead of digesting aliased bytes.
+- Pinned the helper signature, validation call, tests, workflow command, and
+  `--negative-control-lineage-proof-readiness-direct-hash-shape` plus
+  `--negative-control-lineage-proof-helper-direct-hash-shape` in the Kagemusha
+  production-readiness guard.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py -k lineage_proof_sha256_file -k lineage_readiness_sha256_file`
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-direct-hash-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-shape`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`111` tests passed)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+
+## 2026-06-07 ISO canary and xmllint output redaction hardening
+
+- Hardened `scripts/iso_operator_canary.py` so ordinary runbook artifact paths
+  (`rail.inbox_dir`, `rail.message`, `rail.receipt_dir`, `notary.export_dir`,
+  `notary.receipt_dir`, `verify.receipt_dirs`, and `verify.receipts`) reject
+  secret-looking key/value and identifier-style path material before plan-only
+  summaries or child command arguments can preserve those strings.
+- Kept `rail.bearer_token_file` and `notary.bearer_token_file` as runtime
+  secret-file references so normal `secrets/*.bearer` layouts still plan, with
+  the existing planned-command redaction intact.
+- Updated the canary regressions to prove secret-looking artifact paths fail
+  without echoing the rejected segment while duplicate-path diagnostics still
+  report only field labels.
+- Hardened canary child stdout/stderr preview scanning so identifier-style
+  output such as `token-*-secret` or `cookie-*-secret` is rejected before
+  canary summaries can persist the preview.
+- Hardened `scripts/iso_xsd_fixture_verify.py` so failing `xmllint` output also
+  redacts identifier-style secret-looking strings before XML schema validation
+  diagnostics can include validator output.
+- Validation:
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_runbook_artifact_paths_reject_secret_material_without_echo pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_duplicate_runbook_paths_do_not_echo_raw_segments pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_plan_only_redacts_token_paths_and_does_not_execute`
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_secret_looking_child_output_is_rejected_before_summary_write pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_runbook_artifact_paths_reject_secret_material_without_echo`
+  - `python3 -m py_compile scripts/iso_operator_canary.py pytests/scripts/iso_operator_canary_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_canary_test`
+    (`47` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_xmllint_failure_output_redacts_secret_material_without_echo`
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
+    (`63` tests passed)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`558` tests passed, latest run 247.918s)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `git diff --check -- scripts/iso_operator_canary.py pytests/scripts/iso_operator_canary_test.py`
+  - `git diff --exit-code -- Cargo.lock`
+  - `rg -n "^(<<<<<<<( |$)|=======$|>>>>>>>( |$))" scripts pytests docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md fixtures/iso20022/xsd`
+    (no matches)
+
+## 2026-06-07 Kagemusha signature verifier key-path ordering
+
+- Reordered direct `_verify_ed25519_signature(...)` calls so signer public-key
+  path shape validation runs before OpenSSL lookup.
+- Hardened the signing helper's private/public pair validator so key-path
+  failures are preserved instead of being collapsed into a generic private/public
+  key mismatch diagnostic.
+- Added adversarial direct regressions that disable OpenSSL discovery and prove
+  secret-looking public-key paths still produce redacted key-path errors before
+  either OpenSSL diagnostics or mismatch diagnostics.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-signature-verify-key-path-before-openssl`
+  plus
+  `--negative-control-android-device-lab-private-public-pair-preserves-key-path-errors`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k verify_signature_rejects_secret_public_key_path_before_openssl_lookup`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k private_public_pair_preserves_public_key_path_error_before_mismatch`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-key-path-before-openssl`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-public-pair-preserves-key-path-errors`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`194` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`105` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - `rg -n '[ \\t]+$' scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only --diff-filter=U`
+  - `git status --short -- Cargo.lock`
+
+## 2026-06-07 Kagemusha Swift native output pre-copy cap
+
+- Swift's Darwin `NoritoNativeBridge` now routes compact-token, recursive
+  aggregation, recursive compact, recursive spend, and lineage-witness
+  Kagemusha native outputs through a shared checked copier.
+- The copier rejects declared native output lengths above
+  `KagemushaRecursiveSpendProver.nativeArchiveMaxBytes` before constructing
+  `Data`, and still frees the native pointer on both bounded-copy success and
+  over-cap rejection.
+- Added Swift pointer-level tests plus SDK parity and JS meta-test markers so
+  Kagemusha Swift output paths cannot drift back to direct `Data(bytes:)`
+  copies; the SDK parity guard now has a negative control that weakens both the
+  bridge cap and oversized-output test name to prove that drift is detected.
+- Validation:
+  - `swift test --filter KagemushaRecursiveCompactPaymentTokenProverTests`
+    from `IrohaSwift` (`22` tests passed)
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-native-output-cap`
+    (rejected Swift native output cap drift)
+  - `node --test test/kagemushaFfiContractParity.test.js` from
+    `javascript/iroha_js` (`24` tests passed)
+
+## 2026-06-07 Kagemusha Node/PyO3 host archive caps
+
+- Node NAPI and Python PyO3 recursive compact hosts now enforce the shared
+  64 MiB Kagemusha archive cap before native Norito decode for direct
+  native-host callers, including record bundle, Pallas open-envelope, and
+  compact-token verifier archives.
+- Native host encoded Kagemusha outputs are capped before returning to
+  JavaScript or Python, preserving explicit `encoded Kagemusha archive exceeds`
+  diagnostics instead of emitting over-cap buffers.
+- Added Rust host adversarial cases plus policy/SDK parity markers and CI
+  negative controls so disabling the host cap or weakening the cap-plus-one
+  test fixtures is caught by source guards; the JavaScript parity meta-test now
+  also pins those policy negative-control modes and workflow commands.
+- Validation:
+  - `cargo test -p iroha_js_host kagemusha_recursive_compact_payment_token_js_host_rejects_malformed_inputs --lib`
+    (`1` test passed)
+  - `cargo test -p iroha_python_rs kagemusha_recursive_compact_python_function_rejects_malformed_record_bundle --lib`
+    (`1` test passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-js-host-kagemusha-archive-cap`
+    (rejected JS host archive-cap drift)
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh --negative-control-python-kagemusha-archive-cap`
+    (rejected Python host archive-cap drift)
+  - `node --test test/kagemushaFfiContractParity.test.js` from
+    `javascript/iroha_js` (`23` tests passed)
+
+## 2026-06-07 Kagemusha JavaScript/Python oversized archive pre-copy guard
+
+- JavaScript/Node Kagemusha recursive spend, record-backed compact,
+  recursive aggregation, recursive compact, and verifier wrappers now route
+  caller archives through a Kagemusha-specific owned-buffer helper that checks
+  strings and ArrayBuffer views against `KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES`
+  before `Buffer.from(...)` creates an owned copy.
+- Python Kagemusha wrappers now check `memoryview(...).nbytes` for caller
+  inputs and native outputs before `tobytes()`, preserving explicit `must not
+  exceed` and `returned oversized output` diagnostics without copying over-cap
+  archives first.
+- Added JavaScript and Python adversarial tests for every recursive spend,
+  record-backed, Pallas-envelope, and recursive compact verifier input slot, and
+  extended parity/policy guards plus the SDK archive negative control to reject
+  copy-before-size-check drift.
+- Validation:
+  - `node --test test/kagemushaRecursiveSpend.test.js` from
+    `javascript/iroha_js` (`24` tests passed)
+  - `PYTHONPATH="/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python" ${TMPDIR:-/tmp}/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q python/iroha_python/tests/kagemusha_test.py -k "oversized_inputs_before_copy_and_native or oversized_memoryview_native_outputs"`
+    (`2` tests passed)
+  - `node --test test/kagemushaFfiContractParity.test.js` from
+    `javascript/iroha_js` (`22` tests passed)
+  - `bash ci/check_kagemusha_recursive_spend_python_sdk.sh`
+    (`573` tests passed)
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-archive-input-copy`
+
+## 2026-06-07 Kagemusha C# oversized archive pre-copy guard
+
+- C# Kagemusha native entrypoints now reject over-cap `ReadOnlySpan<byte>`
+  inputs before cloning them with `ToArray()`, including recursive spend
+  request/bundle/previous-witness inputs and the recursive compact verifier's
+  compact-token input.
+- Added focused C# regressions for compact-token, recursive aggregation,
+  recursive compact, recursive spend, and verifier over-cap caller inputs with
+  exact parameter-name and `must not exceed` diagnostics.
+- Pinned the pre-copy length checks and oversized-input tests in the SDK
+  parity and policy guards, and extended the C# archive negative control to
+  reject copy-before-size-check drift.
+- Validation:
+  - `bash -n ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash -n ci/check_kagemusha_recursive_spend_csharp_sdk.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-csharp-archive-copy`
+  - C# test execution was not runnable in this shell because `dotnet` is not
+    installed on `PATH`.
+
+## 2026-06-07 Kagemusha signer key path-before-OpenSSL ordering
+
+- Reordered trusted signer public-key DER extraction so public-key path shape
+  validation runs before OpenSSL lookup.
+- Reordered Android evidence signing so private-key secret/symlink/ancestor,
+  regular-file, and hardlink validation runs before OpenSSL lookup.
+- Added adversarial regressions that monkeypatch OpenSSL discovery to fail and
+  prove secret-looking public/private key paths still produce the redacted path
+  error instead of an environment-dependent OpenSSL diagnostic.
+- Pinned exact source/test/workflow coverage and added
+  `--negative-control-android-device-lab-public-key-path-before-openssl` plus
+  `--negative-control-android-device-lab-private-key-path-before-openssl`.
+- Validation:
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k trusted_signer_public_key_rejects_secret_path_before_openssl_lookup`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py -k sign_ed25519_rejects_secret_private_key_path_before_openssl_lookup`
+  - `bash -n ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-path-before-openssl`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-private-key-path-before-openssl`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`192` tests passed)
+  - `python3 -m unittest discover -s scripts/tests -p kagemusha_production_readiness_test.py`
+    (`105` tests passed)
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-workflow`
+  - `bash ci/check_kagemusha_recursive_spend_policy.sh`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `git diff --check -- scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+  - `rg -n '[ \\t]+$' scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/tests/check_android_device_lab_slot_test.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md docs/source/sdk/android/readiness/android_strongbox_device_matrix.md roadmap.md status.md`
+    (no matches)
+  - `git diff --name-only --diff-filter=U`
+  - `git status --short -- Cargo.lock`
+
+## 2026-06-07 Sumeragi commit-pipeline recovery aggregate exactness
+
+- Added `LocalCommitQcOrderingExact`, `MissingCommitQcRecoveryGateExact`,
+  `QuorumRetransmitGateExact`, and `CommitPipelineRecoveryExactness` to
+  `SumeragiCommitPipelineRecoveryGate.tla`.
+- The aggregate invariant composes local commit-QC formation/order,
+  observed-QC preservation, missing-QC recovery preconditions, and quorum
+  retransmit target exactness.
+- Wired the aggregate through `SumeragiCommitPipelineRecoveryGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitPipelineRecoveryGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-recovery-fast`
+    (`NoError` up to computation length `2`; `60` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-pipeline-recovery-fast`
+    (`61,441` states generated, `8,192` distinct states, depth `14`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Soracloud BFV proof STARK verifier fixtures
+
+- Added `zk-stark` Core positive fixtures for the Soracloud bootstrap-key,
+  full-bootstrap material, and full-bootstrap execution proof gates. The
+  execution fixture injects canonical STARK verifier-key bytes into the
+  governed full-bootstrap verifier-key artifact; all three install matching
+  active verifier records, generate backend-verified `OpenVerifyEnvelope`
+  proofs over the expected statement hashes, and verify the active paths with
+  runtime STARK guardrails enabled.
+- The verified-active tests size transaction proof quotas from the generated
+  fixture bytes so the production quota checks stay active, while the existing
+  fake-proof, metadata-drift, statement-drift, missing, surplus, and reordered
+  proof regressions continue to fail closed.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core full_bootstrap_execution --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof-zk-stark CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_execution --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof-zk-stark CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-stark accepts_verified_active_verifier --lib -- --nocapture`
+    (`3` passed)
+
+## 2026-06-07 Sumeragi commit-root consistency aggregate exactness
+
+- Added `WrongContextCannotSatisfyStakeQuorum`, `CommitRootSelectionExact`,
+  `CommitRootQuorumExact`, `CommitRootValidationExact`, and
+  `CommitRootConsistencyExactness` to `SumeragiCommitRootConsistency.tla`.
+- The aggregate invariant composes root selection/evidence exactness,
+  permissioned and NPoS quorum exactness, mixed-root rejection,
+  wrong-context signer/stake rejection, and QC root-validation exactness.
+- Wired the aggregate through both `SumeragiCommitRootConsistency_fast.cfg`
+  and the witness-constrained `SumeragiCommitRootConsistency_tlc_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitRootConsistency.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-roots-fast`
+    (`NoError` up to computation length `2`; `64` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-roots-fast`
+    (`579,626` states generated, `25` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP Rust TON proof-request source bundle gate
+
+- Hardened the Rust TON native-recursive proof-request builder and proof-result
+  canonicality check so `bundle_bytes` must decode as canonical SCCP message
+  bundle bytes and match the transparent public inputs before local proof
+  generation or wrapped result submission.
+- Non-SORA source bundles now require non-empty, nonzero source-proof witness
+  bytes on the TON request path, matching the EVM/TRON Groth16 source-bundle
+  gate. Self-consistent forged TON requests with stripped non-SORA
+  `source_proof_bytes` are rejected by the proof-result wrapper.
+- Replaced the Rust TON request hash vector fixture that used arbitrary bundle
+  bytes with a canonical SORA -> TON bundle preimage, so the request hash test
+  exercises the production bundle decoder instead of a byte-only placeholder.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `cargo fmt -p iroha_sccp -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-ton-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_proof_request_hash_uses_canonical_sccp_bundle_preimage --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-ton-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp ton_proof --lib -- --nocapture`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`6` passed)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs docs/source/bridge_proofs.md docs/source/engineering_backlog.md pytests/scripts/sccp_retired_network_surface_test.py roadmap.md scripts/sccp_verify_release_bundle.py status.md`
+
+## 2026-06-07 Sumeragi signer-index normalization aggregate exactness
+
+- Added `CanonicalNormalizationExact`, `ViewIndexNormalizationExact`,
+  `ViewSetNormalizationExact`, `RoundTripNormalizationExact`, and
+  `SignerIndexNormalizationExactness` to
+  `SumeragiSignerIndexNormalizationGate.tla`.
+- The aggregate invariant composes canonical normalization anchors,
+  canonical-to-view index lookup, canonical-set-to-view normalization,
+  round-trip preservation/filtering, and exact actual/spec result equality.
+- Wired the aggregate through `SumeragiSignerIndexNormalizationGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSignerIndexNormalizationGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh signer-index-normalization-fast`
+    (`NoError` up to computation length `1`; `88` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh signer-index-normalization-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi build-signers-bitmap aggregate exactness
+
+- Added `BitmapLengthExact`, `ZeroRosterAndAllocationExact`,
+  `SingleSignerBitExact`, `MultiSignerOrExact`,
+  `OutOfRangeAndPaddingFiltered`, `DuplicateSignerCollapsedExact`, and
+  `BuildSignersBitmapExactness` to `SumeragiBuildSignersBitmapGate.tla`.
+- The aggregate invariant composes exact bitmap length, zero-roster and
+  non-empty allocation behavior, single-signer bit placement, multi-signer OR
+  behavior, out-of-range/padding filtering, duplicate collapse, and
+  full-roster coverage.
+- Wired the aggregate through `SumeragiBuildSignersBitmapGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBuildSignersBitmapGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh build-signers-bitmap-fast`
+    (`NoError` up to computation length `1`; `46` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh build-signers-bitmap-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi QC signer bitmap/count aggregate exactness
+
+- Added `QcSignerBitmapAdmissionExactness` to
+  `SumeragiQcSignerBitmap.tla` and wired it through the fast config. The
+  aggregate composes topology-width matching, parser/spec equality,
+  voting-only quorum accounting, observer/padding rejection, out-of-bounds
+  rejection, length-mismatch rejection, and accepted-evidence exactness.
+- Added `EmptyAndZeroByteCountExact`, `SingleBitCountExact`,
+  `FullByteAndPaddingCountExact`, `MultiByteCountExact`, and
+  `QcSignerRawCountExactness` to `SumeragiQcSignerCountGate.tla`, then wired
+  them through the fast config. The aggregate composes bitmap-width bounds,
+  raw anchor counts, empty/zero-byte handling, single-bit handling,
+  full-byte/padding-bit handling, and multi-byte accumulation.
+- Documented both aggregate invariants in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcSignerBitmap.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcSignerCountGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signers-fast`
+    (`NoError` up to computation length `2`; `36` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-signer-count-fast`
+    (`NoError` up to computation length `1`; `57` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-signers-fast`
+    (`7,842,801` states generated, `2,800` distinct states, depth `2`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-signer-count-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP source-verifier unmapped-domain fail-closed
+
+- Hardened SCCP source-verifier template material and source-chain proof
+  envelope shape checks so unmapped domains cannot fall back to an empty
+  source-chain key. Template component hashes now return `None` for unmapped
+  source domains, and source-chain proof envelopes reject unknown domains
+  before comparing the chain key.
+- Added a regression covering both the direct component-hash helper and a
+  structurally valid ETH source-chain envelope mutated into an unmapped source
+  domain with an empty `source_chain`.
+- Validation:
+  - `cargo fmt -p iroha_sccp -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_verifier_component_hashes_and_envelopes_reject_unmapped_source_domains --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_chain_proof_envelope --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_verifier_material --lib -- --nocapture`
+    (`6` passed)
+
+## 2026-06-07 Sumeragi manifest-gate reschedule aggregate exactness
+
+- Added `ManifestGateEffectExact`, `ManifestGateActionExact`,
+  `ManifestGateNoTargetExact`, `PlainZeroDropCleanupExact`,
+  `VoteBackedActionExact`, `VoteBackedNoTargetExact`,
+  `AuthoritativeRotationExact`, `PassiveVoteBackedEvidenceExact`, and
+  `ManifestGateRescheduleExactness` to
+  `SumeragiManifestGateRescheduleGate.tla`.
+- The aggregate invariant composes manifest effectiveness and retention,
+  manifest action/no-target behavior, plain zero-work cleanup, vote-backed
+  action/no-target behavior, authoritative rotation admission/suppression, and
+  passive vote-backed evidence preservation.
+- Wired the aggregate through `SumeragiManifestGateRescheduleGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiManifestGateRescheduleGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh manifest-gate-reschedule-fast`
+    (`NoError` up to computation length `1`; `122` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh manifest-gate-reschedule-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi near-quorum preemptive escalation aggregate exactness
+
+- Added `NearQuorumBudgetGateExact`,
+  `NearQuorumFreshRequestSuppressionExact`,
+  `NearQuorumInflightSuppressionExact`, `NearQuorumDelegateResultExact`,
+  `NearQuorumPerTickCapExact`, `NearQuorumProgressCounterExact`, and
+  `NearQuorumPreemptiveEscalationExactness` to
+  `SumeragiNearQuorumPreemptiveEscalationGate.tla`.
+- The aggregate invariant composes exhausted-budget and missing-pending
+  fail-closed gates, fresh missing-request suppression, in-flight range-pull
+  suppression, delegate result authority, per-tick cap enforcement, and
+  progress/counter consistency.
+- Wired the aggregate through
+  `SumeragiNearQuorumPreemptiveEscalationGate_fast.cfg`, and documented the
+  proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiNearQuorumPreemptiveEscalationGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh near-quorum-preemptive-escalation-fast`
+    (`NoError` up to computation length `1`; `110` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh near-quorum-preemptive-escalation-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 WSL-safe plain cargo test defaults
+
+- Tightened the repository Cargo defaults so plain `cargo test` uses one Cargo
+  build job and sets `RUST_TEST_THREADS=1` unless the caller overrides it,
+  avoiding the default logical-CPU fan-out that can exhaust WSL and
+  memory-constrained VMs.
+- Aligned `scripts/run_full_tests.sh --wsl-safe` with the same single Cargo job
+  default and documented the override path for high-memory hosts in the
+  integration-test README.
+- Validation:
+  - `python3 -c 'import pathlib,tomllib; tomllib.loads(pathlib.Path(".cargo/config.toml").read_text()); print(".cargo/config.toml: ok")'`
+  - `bash -n scripts/run_full_tests.sh`
+
+## 2026-06-07 Sumeragi preemptive vote-backed retransmit aggregate exactness
+
+- Added `PreemptiveCandidateRejectExact`,
+  `PreemptiveCandidateAcceptExact`, `PreemptiveMissingPendingExact`,
+  `PreemptiveTargetSelectionExact`, `PreemptiveActionOutputExact`,
+  `PreemptivePendingRetentionExact`, `PreemptiveNearQuorumFlagExact`, and
+  `PreemptiveVoteBackedRetransmitExactness` to
+  `SumeragiPreemptiveVoteBackedRetransmitGate.tla`.
+- The aggregate invariant composes candidate rejection/admission,
+  missing-pending handling, vote-roster versus commit-topology target
+  selection, downstream output-based progress, pending retention, and
+  near-quorum flag exactness.
+- Wired the aggregate through
+  `SumeragiPreemptiveVoteBackedRetransmitGate_fast.cfg`, and documented the
+  proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPreemptiveVoteBackedRetransmitGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh preemptive-vote-backed-retransmit-fast`
+    (`NoError` up to computation length `1`; `108` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh preemptive-vote-backed-retransmit-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi isolated vote-backed handoff aggregate exactness
+
+- Added `IsolatedAdmissionRejectExact`, `IsolatedAdmissionAcceptExact`,
+  `IsolatedSlotValidationExact`, `IsolatedAnchorRequestExact`,
+  `IsolatedRangePullActionExact`, `IsolatedReasonLabelExact`, and
+  `IsolatedVoteBackedHandoffExactness` to
+  `SumeragiIsolatedVoteBackedHandoffGate.tla`.
+- The aggregate invariant composes admission rejection, admitted
+  recovery/body-event side effects, slot validation, anchor requests,
+  range-pull action results, and `frontier_stall_reset_fallback` reason
+  labeling.
+- Wired the aggregate through
+  `SumeragiIsolatedVoteBackedHandoffGate_fast.cfg`, and documented the proof in
+  the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiIsolatedVoteBackedHandoffGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh isolated-vote-backed-handoff-fast`
+    (`NoError` up to computation length `1`; `150` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh isolated-vote-backed-handoff-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Soracloud full-bootstrap execution proof gate
+
+- Added the canonical Soracloud BFV full-bootstrap execution proof envelope,
+  public-input schema, OpenVerify bounds, and validation rules to the data
+  model. Proof attachments must bind the canonical full-bootstrap circuit id,
+  STARK/Fri backend, statement hash, verifier-key commitment, and envelope hash.
+- Extended `RunSoracloudFheJob`, Torii job-run payloads, and signed provenance
+  with an ordered full-bootstrap execution-proof vector, so proof
+  insertion/removal is covered by the authority signature.
+- Wired Core full-bootstrap jobs to require one execution proof per output slot
+  after artifact-aware exact/bounded execution. Core derives each statement from
+  the governed public key, full-bootstrap key/material, artifact bundle,
+  input/output ciphertexts, bound mode, and input/output bounds; it then checks
+  the active Soracloud verifier-key record against the governed verifier-key
+  artifact before backend verification.
+- Added a `zk-preverify` positive regression that installs the governed
+  full-bootstrap verifier key, preloads the block-level preverified-proof cache
+  for every output-slot proof, asserts the default confidential verifier-call
+  quota admits at least one 64-slot Soracloud identifier proof batch, and proves
+  the Core verifier gate accepts the preverified active verifier path while
+  default tests still reject missing, surplus, reordered, metadata-drifted,
+  statement-drifted, and unverified fake proofs.
+- Confirmed the default confidential per-transaction verifier-call cap is `128`,
+  with the per-block cap also at `128`, so a first-run configuration admits one
+  production-shaped Soracloud BFV full-bootstrap execution proof batch without
+  an operator override.
+- Cleared current `iroha_config --tests` clippy blockers in SCCP route-manifest
+  helpers while validating the default change under `-D warnings`.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --features zk-preverify soracloud_fhe_full_bootstrap_execution_proof_accepts_preverified_active_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_config minimal_config_snapshot --test fixtures -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_config full_config_parses_fine --test fixtures -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_config --test sccp_route_manifest_aliases -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_config --tests --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --features zk-preverify --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-execution-proof CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_core --tests --features zk-preverify --no-deps -- -D warnings`
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/src/isi/soracloud.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_torii/src/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model full_bootstrap_execution --lib -- --nocapture`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core full_bootstrap_execution --lib -- --nocapture`
+    (`5` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii full_bootstrap_execution --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_data_model -p iroha_core -p iroha_torii -p iroha_sccp --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_torii --lib`
+  - Retired-network marker content scan and filename scan (`0` hits)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`5` passed)
+
+## 2026-06-07 SCCP Groth16 proof-request source bundle gate
+
+- Hardened Rust EVM/TRON Groth16 UI proof-request construction and proof-result
+  wrapping so request `bundle_bytes` must decode as canonical SCCP message
+  bundle bytes, match the transparent public inputs, and carry non-empty
+  source-proof witness bytes whenever the bundle source domain is not SORA.
+- Restored the SCCP launch-scope note: current SCCP support remains limited to
+  Ethereum, BSC, Solana, TON, and TRON; retired runtime-network families remain
+  outside the production surface.
+- Added an explicit note that retired runtime-network families remain outside
+  SCCP launch support for now.
+- Added EVM and TRON negative/adversarial regressions for omitted source-proof
+  bytes, all-zero source-proof bytes, arbitrary non-canonical bundle bytes,
+  bundle/public-input swaps, and forged self-consistent wrapped requests with
+  stripped source-proof bytes.
+- Validation:
+  - `cargo fmt -p iroha_sccp`
+  - `cargo fmt -p iroha_sccp -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp proof_requests_require_non_sora_source_proof_bytes --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp groth16_proof_request_wraps_ui_generated_proof --lib -- --nocapture`
+    (`2` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-request-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_mainnet_destination_sdk_facade_enforces_mainnet_binding_and_wraps_ui_proof --lib -- --nocapture`
+    (`1` passed)
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`6` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_guards_retired_network_surface_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_reports_sparse_retired_network_surface_inventory pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_reports_stale_retired_network_surface_allowlist pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_reports_custom_retired_network_surface_forbidden_marker`
+    (`4` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_verifier_reports_removed_retired_network_pipeline_doc_guard`
+    (`1` passed)
+  - `git diff --check -- docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md pytests/scripts/sccp_retired_network_surface_test.py scripts/sccp_verify_release_bundle.py`
+
+## 2026-06-07 Sumeragi quorum rebroadcast dispatch aggregate exactness
+
+- Added `QuorumRebroadcastLocalVoteExact`,
+  `QuorumRebroadcastFailClosedExitExact`,
+  `QuorumRebroadcastForceFanoutExact`,
+  `QuorumRebroadcastVoteReplayExact`,
+  `QuorumRebroadcastPayloadDispatchExact`,
+  `QuorumRebroadcastBlockSyncDispatchExact`,
+  `QuorumRebroadcastMarkingExact`, and
+  `QuorumRebroadcastDispatchExactness` to
+  `SumeragiQuorumRebroadcastDispatchGate.tla`.
+- The aggregate invariant composes local-vote gating, fail-closed exits, forced
+  full fanout, vote replay, payload dispatch, block-sync dispatch, and
+  precommit rebroadcast marker stamping.
+- Wired the aggregate through
+  `SumeragiQuorumRebroadcastDispatchGate_fast.cfg`, and documented the proof in
+  the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQuorumRebroadcastDispatchGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-rebroadcast-dispatch-fast`
+    (`NoError` up to computation length `1`; `138` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-rebroadcast-dispatch-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi completed quorum view-advance aggregate exactness
+
+- Added `CompletedQuorumExactSlotRouteExact`,
+  `CompletedQuorumExactFallbackExact`, `CompletedQuorumGenericRouteExact`,
+  `CompletedQuorumCurrentViewExact`, `CompletedQuorumSlotStateExact`,
+  `CompletedQuorumCauseExact`, `CompletedQuorumGenericPreservesSlotExact`, and
+  `CompletedQuorumViewAdvanceExactness` to
+  `SumeragiCompletedQuorumViewAdvanceGate.tla`.
+- The aggregate invariant composes exact slot-event routing for contiguous
+  frontier heights, no-slot/stale-slot exact fallback, generic routing for
+  non-exact heights, current-view max selection, saturated view increment,
+  timestamp updates, cause preservation, quorum-timeout rebroadcast clearing,
+  and generic slot-state preservation.
+- Wired the aggregate through
+  `SumeragiCompletedQuorumViewAdvanceGate_fast.cfg`, and documented the proof
+  in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCompletedQuorumViewAdvanceGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh completed-quorum-view-advance-fast`
+    (`NoError` up to computation length `1`; `126` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh completed-quorum-view-advance-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP retired runtime-network surface cleanup
+
+- Removed explicit retired-family names from public SCCP launch-scope notes and
+  kept roadmap wording limited to the active launch lanes plus a generic
+  retired-family exclusion.
+- Validation:
+  - Retired-network raw text scan across the active tree (no matches)
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`5` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (`373` passed)
+
+## 2026-06-07 Sumeragi vote-backed reassembly stall aggregate exactness
+
+- Added `VoteBackedHardCapExact`, `VoteBackedSlotOwnerAcceptedExact`,
+  `VoteBackedSlotOwnerRejectedExact`, `VoteBackedRecoveryOwnerExact`,
+  `VoteBackedProgressAgeExact`, `VoteBackedExpiryThresholdExact`, and
+  `VoteBackedReassemblyStallExactness` to
+  `SumeragiVoteBackedReassemblyStallGate.tla`.
+- The aggregate invariant composes exact hard-cap arithmetic, accepted and
+  rejected slot ownership, recovery-owner validation, rejected-slot recovery
+  fallback, latest-progress age selection, and no-owner/owner-below/quorum-below
+  expiry thresholds.
+- Wired the aggregate through `SumeragiVoteBackedReassemblyStallGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVoteBackedReassemblyStallGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-backed-reassembly-stall-fast`
+    (`NoError` up to computation length `1`; `94` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-backed-reassembly-stall-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP production builder source-proof gate
+
+- Hardened strict SCCP production package/proof builders so non-SORA source
+  bundles must pass the production source-proof gate before destination
+  submissions are constructed. Structural source-chain envelopes remain
+  available only through explicit diagnostic `allow_unready` paths.
+- Added a remote-to-remote ETH->BSC regression that forces the BSC manifest
+  ready flag on, proves the structural ETH source proof is not production-ready,
+  rejects strict package construction, verifies diagnostic construction still
+  works, and confirms SORA-origin BSC packages do not require a source-chain
+  proof.
+- Validation:
+  - `cargo fmt -p iroha_sccp -- --check`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-production-builder-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp production_submission_builders_reject_structural_non_sora_source_proofs --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-production-builder-gate CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp source_chain_production --lib -- --nocapture`
+    (`2` passed)
+
+## 2026-06-07 Sumeragi RBC availability reschedule aggregate exactness
+
+- Added `RbcAvailabilityFailOpenGateExact`,
+  `RbcAvailabilityTerminalSessionExact`,
+  `RbcAvailabilityPendingBlocksExact`,
+  `RbcAvailabilityDeficitBlocksExact`, and
+  `RbcAvailabilityRescheduleExactness` to
+  `SumeragiRbcAvailabilityRescheduleGate.tla`.
+- The aggregate invariant composes exact DA-disabled, timeout, local-payload,
+  absent-session, invalid-session, delivered-session, complete-ready, and
+  zero-total READY fail-open paths with pending-entry, zero-timeout pending,
+  missing-chunk, missing-READY, and complete-but-not-ready blocking paths.
+- Wired the aggregate through `SumeragiRbcAvailabilityRescheduleGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcAvailabilityRescheduleGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-fast`
+    (`NoError` up to computation length `1`; `83` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-availability-reschedule-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi quorum reschedule backoff aggregate exactness
+
+- Added `QuorumBackoffBaseZeroExact`,
+  `QuorumBackoffDeficitMultiplierExact`,
+  `QuorumBackoffStallEscalationExact`, `QuorumResendWindowExact`,
+  `QuorumFastResendPresentExact`, `QuorumFastResendRejectExact`, and
+  `QuorumRescheduleBackoffExactness` to
+  `SumeragiQuorumRescheduleBackoffGate.tla`.
+- The aggregate invariant composes exact zero-base no-op behavior, deficit
+  multiplier arithmetic, timeout-gated stall escalation boundaries,
+  one-millisecond resend-window clamping, accepted fast-resend windows, and all
+  fast-resend rejection gates.
+- Wired the aggregate through `SumeragiQuorumRescheduleBackoffGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQuorumRescheduleBackoffGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-reschedule-backoff-fast`
+    (`NoError` up to computation length `1`; `96` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-reschedule-backoff-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Soracloud full-bootstrap execution proof runtime metadata guard
+
+- Added a Core runtime adversarial regression for full-bootstrap execution
+  proofs. It verifies that missing `vk_commitment`, forged verifier-key
+  commitment, missing `envelope_hash`, and forged proof-byte envelope hashes are
+  rejected during runtime admission before verifier lookup can mask attachment
+  metadata drift.
+- Extended the Core proof-vector regression to reject surplus full-bootstrap
+  execution proofs and per-slot proof reordering before any backend verifier
+  can accept a proof for the wrong output slot.
+- Extended the Core proof-vector regression to reject bound-mode replay in both
+  directions. Exact-residual proofs are rejected under bounded-noise admission,
+  and bounded-noise proofs are rejected under exact-residual admission before
+  verifier lookup.
+- Added a data-model regression that keeps the expected execution statement hash
+  present but reshapes STARK public inputs with extra rows, extra columns, or a
+  duplicate statement. Full-bootstrap execution proof attachments must still
+  reject those wrappers before runtime admission.
+- Added Torii signed job-run preflight for verifier-backed FHE proof
+  attachments. A replay-shaped but correctly signed execution proof attachment
+  now fails locally as a bad request before instruction construction.
+- Fixed the Core bootstrap-key proof backend verifier path to decode proof
+  attachments with the bootstrap-key context instead of the full-material
+  context, restoring the dedicated label and size-cap surface for that proof
+  class.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs`
+  - `rustfmt --edition 2024 crates/iroha_torii/src/soracloud.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_sccp/src/lib.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_sccp/src/lib.rs pytests/scripts/sccp_retired_network_surface_test.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+  - `git diff --check`
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core-bound-mode CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof_rejects_bound_mode_replay --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core-proof-context CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_bootstrap_key_proof_backend_uses_bootstrap_attachment_context --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-dm-exec-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_full_bootstrap_execution_proof_validate_rejects_public_input_shape_replay --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-torii-proof-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_execution_public_input_shape_replay --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-soracloud-proof CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-core-bound-mode CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof --lib -- --nocapture`
+    (`7` passed)
+  - `git diff --name-only -- Cargo.lock` produced no output.
+  - Retired runtime-network content and filename scans produced no matches.
+
+## 2026-06-07 Sumeragi paced retransmit target aggregate exactness
+
+- Added `PacedRetransmitFailClosedExact`,
+  `PacedRetransmitPreCapPreservationExact`,
+  `PacedRetransmitSortDedupExact`, `PacedRetransmitRotationOffsetExact`,
+  `PacedRetransmitLimitTruncationExact`, and
+  `PacedRetransmitTargetSelectionExactness` to
+  `SumeragiPacedRetransmitTargetsGate.tla`.
+- The aggregate invariant composes exact zero-limit and empty-target
+  fail-closed behavior, pre-cap order and duplicate preservation, canonical
+  sort/dedup behavior, deterministic height/view offset rotation, and exact
+  post-rotation limit truncation.
+- Wired the aggregate through `SumeragiPacedRetransmitTargetsGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPacedRetransmitTargetsGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh paced-retransmit-targets-fast`
+    (`NoError` up to computation length `1`; `44` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh paced-retransmit-targets-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi retransmit backpressure aggregate exactness
+
+- Added `RetransmitQueuePressureExact`, `RetransmitRbcPressureExact`,
+  `RetransmitCombinedPressureExact`, `RetransmitTargetLimitExact`,
+  `RetransmitCooldownExact`, `RetransmitBackoffExact`,
+  `RetransmitTimeoutClampExact`, and
+  `RetransmitBackpressurePacingExactness` to
+  `SumeragiRetransmitBackpressureGate.tla`.
+- The aggregate invariant composes exact transaction-queue pressure thresholds,
+  RBC level/byte pressure, additive combined scoring, target-limit liveness
+  floors, cooldown multipliers, consensus-vs-near-quorum backoff precedence,
+  and near-quorum timeout lower/upper clamps.
+- Wired the aggregate through `SumeragiRetransmitBackpressureGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRetransmitBackpressureGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh retransmit-backpressure-fast`
+    (`NoError` up to computation length `1`; `98` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh retransmit-backpressure-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Soracloud full-bootstrap execution proof metadata guard
+
+- Added an adversarial data-model regression for
+  `SoracloudFheFullBootstrapExecutionProofV1` proving that missing
+  `vk_commitment`, missing `envelope_hash`, forged verifier-key commitment,
+  and forged proof-byte envelope hash are rejected before verifier execution.
+- Confirmed the current `FheExecutionPolicyV1` struct literals in the
+  data-model, fixture, Core, and Torii test helpers populate the
+  full-bootstrap material proof statement field, avoiding Rust struct-literal
+  default assumptions for the public field.
+- Extended the FHE job provenance payload regression so full-bootstrap
+  execution proof vector order and surplus entries change the canonical signed
+  bytes.
+- Extended the Torii FHE job-run signature payload regression so
+  full-bootstrap execution proof vector order and surplus entries also change
+  the canonical signature bytes.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_data_model/src/soracloud.rs`
+  - `rustfmt --edition 2024 crates/iroha_torii/src/soracloud.rs`
+  - `rustfmt --edition 2024 --check crates/iroha_data_model/src/soracloud.rs`
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dm-full-bootstrap-exec-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_full_bootstrap_execution_proof --lib -- --nocapture`
+    (`6` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dm-full-bootstrap-exec-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model --lib -- --nocapture`
+    (`1466` passed, `2` ignored)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dm-provenance-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_job_run_provenance_payload_binds_full_bootstrap_execution_proof_vector --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-provenance-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_signature_payload_binds_full_bootstrap_execution_proof_vector --lib -- --nocapture`
+    (`1` passed)
+
+## 2026-06-07 Sumeragi quorum retransmit target aggregate exactness
+
+- Added `QuorumRetransmitEmptyLocalExact`,
+  `QuorumRetransmitMissingTargetsExact`, `QuorumRetransmitFanoutGateExact`,
+  `QuorumRetransmitMappingFallbackExact`,
+  `QuorumRetransmitOrderDistinctExact`, and
+  `QuorumRetransmitTargetExactness` to
+  `SumeragiQuorumRetransmitTargetsGate.tla`.
+- The aggregate invariant composes exact empty/local-only exits,
+  below-quorum missing-voter targeting, near-commit full fanout, at-quorum and
+  zero-threshold full-fanout rejection, mapping-failure fallback, all-observed
+  empty targeting, local exclusion, canonical target ordering, duplicate
+  rejection, and view-mapped signer resolution.
+- Wired the aggregate through `SumeragiQuorumRetransmitTargetsGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQuorumRetransmitTargetsGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" JVM_ARGS="-Xss16m -Xmx16384m" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh quorum-retransmit-fast`
+    (`NoError` up to computation length `1`; `42` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh quorum-retransmit-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi P2P topology refresh aggregate exactness
+
+- Added `P2pRefreshDecisionExact`, `P2pRefreshAdvertisementExact`,
+  `P2pRefreshLocalRemovalExact`, `P2pRefreshIdleSkipExact`, and
+  `P2pTopologyRefreshExactness` to `SumeragiP2pTopologyRefreshGate.tla`.
+- The aggregate invariant composes exact refresh decision and `last_advertised`
+  updates, stray-count propagation, gossip and network advertisement side
+  effects, local-seen latch behavior, local-removal status, queue clearing,
+  empty/removal gossip topology, normal trusted-peer network updates, and idle
+  skip behavior for empty or unchanged clean peer sets.
+- Wired the aggregate through `SumeragiP2pTopologyRefreshGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiP2pTopologyRefreshGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh p2p-topology-refresh-fast`
+    (`NoError` up to computation length `1`; `32` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh p2p-topology-refresh-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi trusted-peer P2P topology aggregate exactness
+
+- Added `TrustedTopologyUnionExact`, `OutsidePeerFilteringExact`,
+  `TrustedObserverNonStrayExact`, `OnlineStrayOrderDuplicateExact`, and
+  `TrustedP2pTopologyExactness` to `SumeragiP2pTopologyTrustedGate.tla`.
+- The aggregate invariant composes exact world/local/trusted topology union,
+  deduplicated topology size, outside-only online-peer filtering, configured
+  trusted observer exclusion from strays, observed online order preservation,
+  and duplicate stray observation preservation.
+- Wired the aggregate through `SumeragiP2pTopologyTrustedGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiP2pTopologyTrustedGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh p2p-topology-trusted-fast`
+    (`NoError` up to computation length `1`; `13` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh p2p-topology-trusted-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi active topology-selection aggregate exactness
+
+- Added `ActiveTopologySourcePriorityExact`,
+  `ActiveTopologyOutputNormalizationExact`, `ActiveTopologyPopFilterExact`,
+  `ActiveTopologyFallbackExact`, and `ActiveTopologySelectionExactness` to
+  `SumeragiActiveTopologySelectionGate.tla`.
+- The aggregate invariant composes exact commit/world/trusted source priority,
+  BLS filtering, deduplication, canonical sorting, incomplete primary PoP-map
+  skip behavior, trusted PoP filtering, quorum-preserving complete PoP filters,
+  small-roster all-PoP threshold, large-roster two-thirds-plus-one threshold,
+  final trusted fallback, fallback PoP filtering, and empty-source behavior.
+- Wired the aggregate through `SumeragiActiveTopologySelectionGate_fast.cfg`,
+  and documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiActiveTopologySelectionGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh active-topology-selection-fast`
+    (`NoError` up to computation length `1`; `87` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh active-topology-selection-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 SCCP source-adapter proof-body checked writer
+
+- Added a fallible canonical source-adapter proof-body writer for the checked
+  SCCP encoder path. The checked path now uses explicit `u32` length-prefix
+  writes for nested proof vectors, list counts, source-state proof capsules,
+  validator/signature rosters, Solana account openings, TON config proofs, and
+  TRON header/receipt/transaction branches instead of delegating back to the
+  panic-only legacy encoder after shape preflight.
+- Added cross-lane checked-encoder tests for Ethereum, BSC, Solana, TON, and
+  TRON that require byte-for-byte compatibility with legacy canonical
+  transcripts and reject lane-specific oversized proof-body shapes through both
+  checked byte encoding and checked proof hashing.
+- The checked FastPQ context now rejects unknown source domains instead of
+  normalizing the missing chain key to an empty string. A regression covers the
+  checked context writer and `build_sccp_source_adapter_fastpq_batch`.
+- Removed mechanically duplicated Soracloud full-bootstrap execution proof
+  constants/OpenVerify helpers in `iroha_data_model` that blocked SCCP test
+  compilation before `iroha_sccp` could run.
+- Validation:
+  - `cargo fmt -p iroha_sccp -p iroha_data_model`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-proof-body-len CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp sccp_checked --lib -- --nocapture`
+    (`8` passed, `241` filtered out)
+  - `git diff --check -- crates/iroha_sccp/src/lib.rs crates/iroha_data_model/src/soracloud.rs status.md docs/source/engineering_backlog.md roadmap.md`
+
+## 2026-06-07 Sumeragi topology role-filter aggregate exactness
+
+- Added `TopologyRolePartitionExact`, `TopologyRoleSliceExact`,
+  `TopologySignatureFilterExact`, `TopologyAuditRoleRotationExact`, and
+  `TopologyRoleFilterExactness` to `SumeragiTopologyRoleFilterGate.tla`.
+- The aggregate invariant composes exact leader/validating/proxy-tail/Set B/
+  undefined role partitioning, role-slice helper projection, invalid-index
+  rejection, input-order and duplicate-signature preservation, single-peer
+  proxy-tail filtering, audit-role canonicalization/deduplication, commit-quorum
+  prefix rotation, and post-rotation role labeling.
+- Wired the aggregate through `SumeragiTopologyRoleFilterGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTopologyRoleFilterGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh topology-role-filter-fast`
+    (`NoError` up to computation length `1`; `14` state-invariant VCs loaded at
+    state `0`, `1` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh topology-role-filter-fast`
+    (`2` states generated, `2` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi topology fanout aggregate exactness
+
+- Added `RedundantSendCountExact`, `ViewChangeQuorumExact`,
+  `RedundantSendFloorExact`, `TailFanoutSelectionExact`, and
+  `TopologyFanoutHelperExactness` to `SumeragiTopologyFanoutGate.tla`.
+- The aggregate invariant composes exact redundant-send `2f + 1` count
+  derivation, zero-length handling, `u8::MAX` clamping, view-change `f + 1`
+  quorum capping, configured redundant fanout floors, tail-based fanout
+  wrapping, leader skipping, uniqueness, and non-leader fanout caps.
+- Wired the aggregate through `SumeragiTopologyFanoutGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTopologyFanoutGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh topology-fanout-fast`
+    (`NoError` up to computation length `1`; `62` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh topology-fanout-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi PRF leader/shuffle aggregate exactness
+
+- Added `PrfLeaderSelectionExact`, `PrfLeaderCycleExact`,
+  `PrfShufflePermutationExact`, `PrfWrapperCanonicalShuffleExact`, and
+  `PrfLeaderShuffleExactness` to `SumeragiPrfLeaderShuffleGate.tla`.
+- The aggregate invariant composes exact empty/single/multi-peer leader
+  selection, view-modulo leader choice, cycle periodicity/distinctness,
+  empty/single/multi-peer shuffle behavior, wrapper canonicalization and
+  deduplication, alternate-height shuffle input, and view reset.
+- Wired the aggregate through `SumeragiPrfLeaderShuffleGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrfLeaderShuffleGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh prf-leader-shuffle-fast`
+    (`NoError` up to computation length `1`; `12` state-invariant VCs loaded
+    at state `0`, `1` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh prf-leader-shuffle-fast`
+    (`3` states generated, `2` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi topology ordered-roster mutation aggregate exactness
+
+- Added `TopologyRotationExact`, `TopologyNthRotationExact`,
+  `TopologyConstructionExact`, `TopologyPeerListUpdateExact`,
+  `TopologyBlockCommitResetExact`, `TopologyCanonicalizationExact`, and
+  `TopologyOrderedRosterMutationExactness` to
+  `SumeragiTopologyMutationGate.tla`.
+- The aggregate invariant composes exact modulo rotation, forward-only
+  `nth_rotation`, deduplicating construction, peer-list updates that preserve
+  retained order and append first-seen new peers, block-commit view reset, and
+  canonical sort/dedup behavior across every bounded topology mutation case.
+- Wired the aggregate through `SumeragiTopologyMutationGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTopologyMutationGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh topology-mutation-fast`
+    (`NoError` up to computation length `1`; `15` state-invariant VCs loaded
+    at state `0`, `1` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh topology-mutation-fast`
+    (`3` states generated, `2` distinct states, depth `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi collector fanout/selection aggregate exactness
+
+- Added `QuorumProxyTailExact`, `EffectiveCollectorFanoutExact`,
+  `DefaultCollectorSelectionExact`, `FallbackCollectorSelectionExact`,
+  `PrfCollectorSelectionExact`, `DeterministicCollectorRoutingExact`, and
+  `CollectorSelectionExactness` to `SumeragiCollectorSelectionGate.tla`.
+- The aggregate invariant composes exact quorum/proxy-tail derivation, effective
+  fanout floors and caps, non-wrapping default selection, wrapping fallback
+  selection without leader/duplicates, PRF safety, and deterministic seed-based
+  source routing across every bounded collector-selection case.
+- Wired the aggregate through `Safety` and
+  `SumeragiCollectorSelectionGate_fast.cfg`, and documented the proof in the
+  formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCollectorSelectionGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh collector-selection-fast`
+    (`NoError` up to computation length `1`; `76` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh collector-selection-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi collector retry/gossip plan aggregate exactness
+
+- Added `CollectorConstructorStateExact`, `CollectorCursorReadExact`,
+  `CollectorCursorAdvanceExact`, `CollectorExhaustionExact`,
+  `CollectorGossipFallbackExact`, and `CollectorPlanRetryGossipExactness` to
+  `SumeragiCollectorPlanGate.tla`.
+- The aggregate invariant composes constructor target preservation, restored
+  sent-count capping, read-only peek behavior, exact `next()` advancement,
+  exhausted-plan no-op semantics, exhaustion equivalence, and one-shot gossip
+  fallback behavior.
+- Wired the aggregate through `Safety` and
+  `SumeragiCollectorPlanGate_fast.cfg`, and documented the proof in the formal
+  README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCollectorPlanGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh collector-plan-fast`
+    (`NoError` up to computation length `1`; `93` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh collector-plan-fast`
+    (`16` states generated, `8` distinct states, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi voting-roster support-count aggregate exactness
+
+- Added `EmptyAndZeroRosterSupportExact`, `InRangeSupportExact`,
+  `OutOfRangeSupportFiltered`, `DuplicateSupportCollapsed`, and
+  `VotingSignerSupportCountExactness` to
+  `SumeragiVotingSignerCountGate.tla`.
+- The aggregate invariant composes exact support counts with count bounds,
+  empty-set and zero-roster handling, in-range support, boundary filtering,
+  duplicate collapse, full-roster support, high-index support, and padding or
+  observer index rejection.
+- Wired the aggregate through `SumeragiVotingSignerCountGate_fast.cfg`, and
+  documented the proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVotingSignerCountGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh voting-signer-count-fast`
+    (`NoError` up to computation length `1`; `70` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh voting-signer-count-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Targeted failing-test fixes
+
+- Refreshed the Soracloud BFV shared full-bootstrap material fixture digests
+  for the current sample-extraction switch-key artifact material.
+- Kept the recursive Kagemusha final-nullifier output-collision test within
+  the 1-to-2 fold-hop output arity by reusing the existing sibling output.
+- Synced exact-frontier slot compatibility fields after deriving repair
+  targets from the active topology so retry emission sees the populated
+  leader/voter set.
+- Validation:
+  - `cargo test -p iroha_core --lib soracloud_bfv_operation_vectors -- --nocapture`
+    (`2` passed, `1` ignored)
+  - `cargo test -p iroha_core --lib kagemusha_recursive_redeem_rejects_lineage_final_nullifier_collisions_before_mint -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --lib frontier_body_repair_backfills_targets_from_active_topology_when_slot_is_unseeded -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_core --lib force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_pacemaker_attempt -- --nocapture`
+    (`1` passed)
+
+## 2026-06-07 Sumeragi QC aggregate-verification worker config aggregate exactness
+
+- Added `QcVerifyWorkerThreadsExact`, `QcVerifyWorkerQueueCapsExact`, and
+  `QcVerifyWorkerConfigExactness` to
+  `SumeragiQcVerifyWorkerConfigGate.tla`.
+- The aggregate invariant composes the full resolved worker-config tuple with
+  auto-thread derivation from observed parallelism, explicit-thread
+  preservation, zero work/result queue-cap derivation, explicit-cap
+  preservation, and positive channel-capacity floors.
+- Wired the aggregate through `SafetyFast` and
+  `SumeragiQcVerifyWorkerConfigGate_fast.cfg`, and documented the proof in the
+  formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcVerifyWorkerConfigGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-verify-worker-config-fast`
+    (`NoError` up to computation length `1`; `110` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-verify-worker-config-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi vote-verification worker config aggregate exactness
+
+- Added `VoteVerifyWorkerThreadsExact`, `VoteVerifyWorkerQueueCapsExact`, and
+  `VoteVerifyWorkerConfigExactness` to
+  `SumeragiVoteVerifyWorkerConfigGate.tla`.
+- The aggregate invariant composes the full resolved worker-config tuple with
+  auto-thread derivation from observed parallelism, explicit-thread
+  preservation, zero work/result queue-cap derivation, explicit-cap
+  preservation, and positive channel-capacity floors.
+- Wired the aggregate through `SafetyFast` and
+  `SumeragiVoteVerifyWorkerConfigGate_fast.cfg`, and documented the proof in
+  the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVoteVerifyWorkerConfigGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-verify-worker-config-fast`
+    (`NoError` up to computation length `1`; `110` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-verify-worker-config-fast`
+    (`2` states generated, `1` distinct state, depth `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi contiguous-frontier parent-QC hint retarget aggregate exactness
+
+- Added `ParentQcHintRetargetHasExactPositiveEvidence`,
+  `ParentQcHintRetargetRejectsIneligibleInputs`,
+  `ParentQcHintRetargetPreservesRewriteTargets`, and
+  `FrontierParentQcHintRetargetExactness` to
+  `SumeragiFrontierParentQcHintRetargetGate.tla`.
+- The aggregate invariant composes exact frontier-stall bypass, canonical
+  reanchor progress gating, previous-emission requirements, parent-height
+  gating, absent/same-hash hint rejection, and source/target rewrite evidence
+  so only eligible parent requests retarget to the QC hint while all ineligible
+  requests preserve the expected parent.
+- Wired the aggregate through `SafetyFast` and
+  `SumeragiFrontierParentQcHintRetargetGate_fast.cfg`, and documented the proof
+  in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierParentQcHintRetargetGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-parent-qc-hint-retarget-fast`
+    (`NoError` up to computation length `1`; `294` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-parent-qc-hint-retarget-fast`
+    (`14` states generated, `13` distinct states, depth `13`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi contiguous-frontier payload-hint aggregate exactness
+
+- Added `PayloadHintHasExactPositiveEvidence`,
+  `PayloadHintPreservesDeterministicOrdering`,
+  `PayloadHintRejectsIneligibleInputs`, and
+  `ContiguousFrontierPayloadHintExactness` to
+  `SumeragiContiguousFrontierPayloadHintGate.tla`.
+- The aggregate invariant composes deferred-QC and proposal-marker payload-hint
+  selection so exact positive evidence, Commit/Prepare/NewView ranking,
+  view/hash tie-breaks, deferred-over-marker precedence, and empty fallback are
+  preserved while wrong-height, non-actionable, and no-eligible inputs are
+  rejected together.
+- Wired the aggregate through `SafetyFast` and
+  `SumeragiContiguousFrontierPayloadHintGate_fast.cfg`, and documented the
+  proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiContiguousFrontierPayloadHintGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh contiguous-frontier-payload-hint-fast`
+    (`NoError` up to computation length `1`; `282` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh contiguous-frontier-payload-hint-fast`
+    (`15` states generated, `14` distinct states, depth `14`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi frontier sidecar expected-hash aggregate exactness
+
+- Added `SidecarExpectedHashRejectsNonExactInputs`,
+  `SidecarExpectedHashPreservesDeterministicOrdering`,
+  `SidecarExpectedHashHasExactPositiveEvidence`, and
+  `FrontierSidecarExpectedHashExactness` to
+  `SumeragiFrontierSidecarExpectedHashGate.tla`.
+- The aggregate invariant composes tracked request, deferred hint, observed
+  head, cached Prepare/Commit QC, and sidecar commit-QC expected-hash sources
+  so exact positive evidence, deterministic phase/view/hash ordering, and
+  source precedence are preserved while wrong-height, authoritative, NewView,
+  Prepare-QC, wrong-hash, and absent-QC inputs are rejected together.
+- Wired the aggregate through `SafetyFast` and
+  `SumeragiFrontierSidecarExpectedHashGate_fast.cfg`, and documented the proof
+  in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSidecarExpectedHashGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-sidecar-expected-hash-fast`
+    (`NoError` up to computation length `1`; `277` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-sidecar-expected-hash-fast`
+    (`27` states generated, `26` distinct states, depth `26`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi frontier sidecar retarget aggregate exactness
+
+- Added `SidecarRetargetRejectsNonExactInputs`,
+  `SidecarRetargetHasExactPositiveEvidence`, and
+  `FrontierSidecarRetargetExactness` to
+  `SumeragiFrontierSidecarRetargetGate.tla`.
+- The aggregate invariant composes override, stall-gate, confirmation,
+  tracked routing, untracked seed, and reacquire sidecar retarget paths so
+  positive evidence remains exact while generic, quarantined, unstalled,
+  unconfirmed, non-frontier, no-gate, same-hash, authoritative-payload, and
+  local-evidence-without-commit-QC cases are rejected together.
+- Wired the aggregate through `SafetyFast` and
+  `SumeragiFrontierSidecarRetargetGate_fast.cfg`, and documented the proof in
+  the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSidecarRetargetGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-sidecar-retarget-fast`
+    (`NoError` up to computation length `1`; `299` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-sidecar-retarget-fast`
+    (`29` states generated, `28` distinct states, depth `28`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi frontier quorum-owner cleanup aggregate exactness
+
+- Added `QuorumOwnerActionableRejectsNonExactInputs`,
+  `QuorumOwnerActionableHasExactPositiveEvidence`, and
+  `FrontierQuorumOwnerCleanupExactness` to
+  `SumeragiFrontierQuorumOwnerActionableGate.tla`.
+- The aggregate invariant composes owner, vote, dependency backlog, RBC
+  sender, missing-block, missing-commit-QC, vote-backed recovery, and cleanup
+  preservation-source evidence while rejecting wrong-view, stale, wrong-phase,
+  passive, non-frontier, stale-current-view, and no-actionable cleanup sources.
+- Wired the aggregate through `SafetyFast` and
+  `SumeragiFrontierQuorumOwnerActionableGate_fast.cfg`, and documented the
+  proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierQuorumOwnerActionableGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-quorum-owner-actionable-fast`
+    (`NoError` up to computation length `1`; `222` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-quorum-owner-actionable-fast`
+    (`22` states generated, `21` distinct states, depth `21`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi frontier reassembly activity aggregate exactness
+
+- Added `ReassemblyActivityRejectsNonExactInputs`,
+  `ReassemblyActivityHasExactPositiveEvidence`, and
+  `FrontierReassemblyActivityExactness` to
+  `SumeragiFrontierReassemblyActivityGate.tla`.
+- The aggregate invariant composes the dependency, ingress, sender,
+  validation, and deferred-update reassembly helper families so positive
+  evidence remains exact while stale, wrong-height, wrong-view, aborted,
+  non-pending, no-backlog, and no-source activity is rejected together.
+- Wired the aggregate through `SafetyFast` and
+  `SumeragiFrontierReassemblyActivityGate_fast.cfg`, and documented the proof
+  in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierReassemblyActivityGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-reassembly-activity-fast`
+    (`NoError` up to computation length `1`; `318` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-reassembly-activity-fast`
+    (`34` states generated, `33` distinct states, depth `33`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 BFV full-bootstrap executable sample-switch prefix trace
+
+- Added a governed full-bootstrap prefix trace that validates concrete artifact
+  bundles and executes coefficient-to-slot, blind-rotation, and raw
+  sample-extraction stages through exact and bounded registered RNS paths, then
+  feeds the coefficient-zero diagnostic repack through the governed
+  slot-to-coefficient transform.
+- Added deterministic exact and bounded raw-sample switch-key material,
+  owner-side secret-consistency checks, exact/bounded switch execution, and
+  public bound propagation for switching extracted samples into
+  coefficient-zero BFV ciphertexts.
+- Added artifact-aware final-output entry points for exact and bounded paths
+  that execute the governed prefix or prefix-bound propagation through
+  sample-switch and slot-to-coefficient output.
+- Threaded signed full-bootstrap artifact bundles through the Core Soracloud
+  runtime bound and execution helpers so exact/bounded full-mode jobs invoke the
+  artifact-aware crypto output path instead of only doing standalone artifact
+  preflight.
+- Restricted the legacy no-artifact Core execution helpers to unit tests; the
+  production Soracloud runtime now reaches full-bootstrap execution only through
+  the artifact-aware helper path that rejects missing governed artifacts before
+  bound propagation or ciphertext evaluation.
+- The artifact-aware final APIs now consume governed sample switch-key artifacts
+  and return the slot-to-coefficient output/bound for exact and bounded paths.
+- Direct crypto no-artifact registered entrypoints now validate the same
+  public full-bootstrap preflight, then fail with an explicit governed-artifact
+  requirement instead of the stale unavailable-evaluator error. Remaining work
+  is proof-checked artifact dispatch with the real prover/verifier backend.
+- Added exact/bounded regressions proving the prefix trace matches stage
+  baselines, the raw sample decrypts to the selected blind-rotation coefficient,
+  sample switch keys preserve only coefficient-zero plaintext, propagated bounds
+  cover each stage, valid artifact-aware final calls return the governed
+  slot-to-coefficient output/bound, and missing Galois keys fail closed.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-current CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`15` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-current CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-soracloud CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-soracloud CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core full_material --lib -- --nocapture`
+    (`6` passed)
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs status.md roadmap.md docs/source/engineering_backlog.md pytests/scripts/sccp_retired_network_surface_test.py`
+  - Retired-marker content and filename scans for the unsupported network
+    markers returned no matches outside ignored/generated paths.
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`5` passed)
+
+## 2026-06-07 Sumeragi exact-slot activity aggregate exactness
+
+- Added `SameSlotActivityRejectsNonExactInputs`,
+  `SameSlotActivityHasExactPositiveEvidence`, and
+  `FrontierSameSlotActivityExactness` to
+  `SumeragiFrontierSameSlotActivityGate.tla`.
+- The aggregate invariant composes the exact-slot activity helper families so
+  payload, ingress, vote-backed, missing-block, missing-commit-QC, and
+  missing-payload recovery activity all retain positive exact evidence while
+  stale, cross-slot, terminal, passive, body-present, no-actionable, and
+  bookkeeping-only sources are rejected together.
+- Wired the aggregate through `SafetyFast` and
+  `SumeragiFrontierSameSlotActivityGate_fast.cfg`, and documented the proof in
+  the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierSameSlotActivityGate.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-same-slot-activity-fast`
+    (`NoError` up to computation length `1`; `405` state-invariant VCs loaded)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-same-slot-activity-fast`
+    (`38` states generated, `37` distinct states, depth `37`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-07 Sumeragi committed spec-step budgeted-RBC evidence stability
+
+- Added `CommittedSpecStepPreservesBudgetedRbcEvidenceStep` /
+  `CommittedSpecStepPreservesBudgetedRbcEvidence` to the top-level Sumeragi
+  model so every committed `[Next]_vars` step preserves the roster-budgeted vote
+  counters, signed-stake accounting, latched commit evidence bounds, and
+  delivered-RBC evidence tuple.
+- The property composes the committed progress-gate quiescence theorem with the
+  budget/evidence invariants: honest and Byzantine vote counters remain within
+  roster budgets, live and latched stake evidence remain bounded and traceable,
+  and delivered RBC keeps its READY quorum, chunk coverage, header, and digest
+  evidence unchanged in the post-state.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed spec-step budgeted-RBC
+  evidence stability proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches, depth `24`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this committed spec-step
+    budgeted-RBC property; the preceding top-level fast attempts exhausted heap
+    at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi committed spec-step progress-gate quiescence
+
+- Added `CommittedSpecStepKeepsProgressActionsQuiescentStep` /
+  `CommittedSpecStepKeepsProgressActionsQuiescent` to the top-level Sumeragi
+  model so every committed `[Next]_vars` step keeps proposal, prepare, commit,
+  NewView, RBC, timeout, Byzantine-commit, and fault guards disabled in both the
+  pre-state and post-state.
+- The property composes the prior no-protocol-action closure with the disabled
+  progress-gate invariant: committed spec steps cannot execute any progress,
+  timeout, or fault action, and any non-stuttering movement remains exactly the
+  pre-GST `GstElapsed` observation.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed spec-step progress-gate
+  quiescence proof in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches, depth `24`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this committed spec-step
+    progress-gate property; the preceding top-level fast attempts exhausted heap
+    at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi committed spec-step protocol-action closure
+
+- Added `CommittedSpecStepNeverRunsProtocolActionsStep` /
+  `CommittedSpecStepNeverRunsProtocolActions` to the top-level Sumeragi model so
+  every committed `[Next]_vars` step explicitly rules out proposal, prepare,
+  commit, NewView, RBC, timeout, and Byzantine-fault actions.
+- The property ties committed non-stuttering execution to the single permitted
+  `GstElapsed` observation: after finality, `Next` is equivalent to `GstElapsed`,
+  and that transition can only flip `gst` from false to true while preserving the
+  committed-state postconditions.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed spec-step
+  no-protocol-action footprint in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches, depth `24`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this committed spec-step
+    protocol-action property; the preceding top-level fast attempts exhausted
+    heap at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi committed spec-step GST-only data change
+
+- Added `CommittedSpecStepOnlyChangesGstFlagStep` /
+  `CommittedSpecStepOnlyChangesGstFlag` to the top-level Sumeragi model so
+  every committed `[Next]_vars` step explicitly preserves all consensus, vote,
+  commit-certificate, view, and RBC artifacts.
+- The property proves the only possible non-stuttering data change after
+  finality is the pre-GST `GstElapsed` observation into committed+GST terminal
+  quiescence, where all action gates are closed in the post-state.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed spec-step GST-only
+  data-change footprint in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this committed spec-step
+    data-change property; the preceding top-level fast attempts exhausted heap
+    at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi committed spec-step finality-stack preservation
+
+- Added `CommittedSpecStepPreservesFinalityStackStep` /
+  `CommittedSpecStepPreservesFinalityStack` to the top-level Sumeragi model so
+  every committed `[Next]_vars` step explicitly preserves the complete
+  finality/certificate/live-gate/RBC evidence stack in both pre-state and
+  post-state.
+- The property composes the committed stutter/GST closure with the finality
+  stack invariants, commit-view binding, live vote/stake/RBC evidence, cleared
+  NewView handoff, and disabled progress gates.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed spec-step
+  finality-stack preservation obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this committed spec-step
+    preservation property; the preceding top-level fast attempts exhausted heap
+    at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 BFV full-bootstrap execution-prefix bounds
+
+- Added exact and bounded bound propagation for typed full-bootstrap linear
+  transforms and for the executable full-bootstrap prefix trace. The prefix
+  helper validates the governed `FullBootstrapV1` key and artifact bundle, then
+  composes coefficient-to-slot, blind-rotation, and raw sample-extraction bounds
+  for the same artifacts consumed by prefix execution.
+- Extended the prefix trace regression so exact and bounded execution validate
+  coefficient-to-slot outputs, blind-rotation outputs, and raw extracted samples
+  against propagated bounds, verify the diagnostic coefficient-zero repack
+  output, use bounded refresh material on the bounded path, and fail closed
+  when required Galois material is missing.
+- Added an explicit coefficient-zero raw-sample repack diagnostic bridge. It
+  proves the extracted raw sample can be represented in the RLWE ring at
+  coefficient zero with exact and bounded coefficient-zero bounds, and the
+  executable prefix trace now carries that diagnostic ciphertext while keeping
+  the final full-ciphertext sample key-switch/repacking stage unavailable.
+- Superseded by the later sample-switch entry: direct no-artifact registered
+  entrypoints now fail closed with an explicit governed-artifact requirement;
+  remaining work is proof-checked full-bootstrap verification and the real
+  prover/verifier backend.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-prefix-bounds CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_raw_sample_extraction_matches_source_decrypt_coefficient --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-prefix-bounds CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_prefix_trace_consumes_governed_artifacts --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-prefix-bounds CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-prefix-bounds CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-07 BFV full-bootstrap raw sample extraction
+
+- Added `BfvFullBootstrapRawExtractedSampleV1` plus exact and bounded raw
+  sample-extraction helpers and matching output-bound helpers. The primitive
+  extracts the selected RLWE coefficient into an LWE-style sample aligned with
+  `BfvSecretKey::s`, preserving the negacyclic sign convention instead of
+  pretending the current artifact can already key-switch or repack into a normal
+  two-component BFV ciphertext.
+- Added owner-side scaled decrypt and exact/bounded profile helpers for raw
+  extracted samples, then covered them with a regression that compares the raw
+  sample decrypt against the selected source BFV decrypt coefficient for both
+  exact and bounded-noise ciphertexts, and asserts the propagated raw sample
+  bounds cover the resulting owner-side profiles.
+- Remaining work: key-switch/repack the raw extracted sample into the governed
+  output ciphertext shape, wire the stage into the full-bootstrap evaluator, and
+  replace typed placeholder proof-profile material with the real prover/verifier
+  backend.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-blind-rotation-bound CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_raw_sample_extraction_matches_source_decrypt_coefficient --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-blind-rotation-bound CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-blind-rotation-bound CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-07 BFV full-bootstrap blind-rotation bound accounting
+
+- Added exact residual and bounded-noise output-bound helpers for typed
+  full-bootstrap blind rotation. The helpers validate
+  `BfvFullBootstrapBlindRotationKeyV1`, consume the governed selector schedule,
+  require matching Galois material, and propagate the same key-switch,
+  selector-mask, and accumulation bounds as the executable blind-rotation
+  helpers.
+- Extended the blind-rotation regression so the governed bound helpers match
+  the established packed `RotateLeft` bound helpers, validate the produced
+  exact and bounded ciphertexts against those bounds, and reject missing
+  Galois-key material. The complete full-bootstrap evaluator, sample extraction
+  execution, and real prover/verifier backend remain pending.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-blind-rotation-bound CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-blind-rotation-bound CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-07 BFV full-bootstrap blind-rotation execution helper
+
+- Added executable full-bootstrap blind-rotation helpers for the registered
+  exact RNS path and bounded-noise registered basis-extension RNS path. Both
+  helpers consume the governed `BfvFullBootstrapBlindRotationKeyV1` selector
+  schedule directly, validate the typed key and Galois key set, apply each
+  declared automorphism, mask with the typed selector plaintext, and accumulate
+  deterministically through the registered BFV-RNS corridor.
+- Extended the blind-rotation artifact regression so the governed-key helper is
+  byte-equivalent to the established packed `RotateLeft` implementation,
+  decrypts to the expected packed-slot rotation, covers the bounded-noise
+  registered basis-extension path, and rejects missing Galois-key material.
+  The complete full-bootstrap evaluator and real prover/verifier backend still
+  remain pending.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-blind-rotation-exec CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_blind_rotation_artifact_is_typed_and_profile_bound --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-blind-rotation-exec CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-blind-rotation-exec CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto --lib --no-deps -- -D warnings`
+
+## 2026-06-07 SCCP OpenVerify summary checked length metadata
+
+- Replaced silent `usize -> u32` saturation in SCCP transparent OpenVerify
+  proof summaries with checked conversion, so summary metadata fails closed
+  instead of clamping schema, column, word, proof, backend-proof, or auxiliary
+  lengths if any bound changes past the public `u32` metadata width.
+- Added a focused regression that accepts exact `u32::MAX` length metadata but
+  rejects the first overflowing length on 64-bit hosts, keeping the summary
+  helper aligned with the surrounding fail-closed OpenVerify wrapper policy.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-summary-len CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp transparent_fastpq_open_verify_summary --lib -- --nocapture`
+    (`5` passed, `240` filtered out)
+
+## 2026-06-07 SCCP retired runtime-network package cleanup
+
+- Restored the supported Solana Swift SCCP test helpers that were left outside
+  the test scope during the retired runtime-network cleanup, and removed the
+  duplicate Java Android identifier-normalization helper that blocked
+  compilation.
+- Completed the JavaScript package root SCCP re-export surface for the BSC
+  native EVM prover constants, validators, parsers, artifact verifiers, and
+  self-test helpers, keeping the package root aligned with the SCCP subpath.
+- Preserved the BSC testnet production artifact gate in the package-dist
+  facade test by supplying verified native prover artifacts instead of allowing
+  unaudited high-level calldata construction.
+- Clarified the SCCP launch-scope note: retired runtime-network families are
+  not supported for now and would require a new design pass before any future
+  reintroduction.
+- Added an explicit unsupported-family example note to the SCCP engineering
+  backlog while keeping active public discovery and SDK/Torii surfaces limited
+  to the supported launch lanes.
+- Tightened the retired-network surface guard so active SCCP SDK/Torii/script
+  and public launch-scope sources stay free of retired-family tokens; the
+  explicit unsupported-family examples live in the engineering backlog instead.
+  The release-bundle verifier now also pins the strict guard inventory and
+  rejects stale allowance markers.
+- Pinned the retired-network surface scan into production-corridor evidence:
+  the corridor dry-run, release-readiness report transcript requirements, and
+  release-bundle transcript requirements now all fail if the evidence-scripts
+  phase stops running `pytests/scripts/sccp_retired_network_surface_test.py`.
+  Negative readiness and bundle tests now also forge otherwise-successful
+  evidence-scripts phase logs that omit that scan and require a not-ready
+  result.
+- Extended the retired-network surface scan to cover the SCCP engineering
+  backlog as well, so unsupported-family examples remain source-escaped and
+  cannot reintroduce raw retired-family tokens into detailed backlog docs.
+- Added adversarial readiness-report and release-bundle tests proving the
+  retired-network scan cannot be satisfied by ordinary output text; it must
+  appear as a traced `+ ...` corridor command in the evidence-scripts phase.
+- Tightened the evidence-scripts transcript parser so retired-network scan
+  evidence must come from the production `python -m pytest -q ...` command
+  shape, rejecting traced commands that only echo the required test path.
+- Extended the release-readiness and release-bundle phase transcript matchers
+  to validate the actual executable shape for Rust, JS, Python, Swift, Kotlin,
+  Java Android, .NET, contract-smoke, and core-admission phases, so traced
+  `echo` commands cannot satisfy required SCCP phase evidence fragments.
+- Aligned the release-readiness phase-block parser with the bundle verifier's
+  exact line-based marker matching, so prefix aliases such as
+  `rust-sccp-forged` cannot satisfy a claimed SCCP phase artifact.
+- Hardened release-readiness and release-bundle transcript validation so
+  success markers and both phase-local/full-corridor completion sentinels must
+  come from observed output lines, not traced `+ echo ...` command lines.
+  Negative tests now cover echoed success, echoed phase completion, and echoed
+  full-corridor completion for the readiness and bundle verifier paths.
+- Corrected the retired-network scan's Kotlin SDK test root to the real
+  `src/test/kotlin` package and added a root-existence/nonempty guard so
+  missing scan roots cannot silently shrink coverage.
+- Removed the obsolete retired runtime-network lane material from the
+  `docs/source/new_pipeline*.md` pipeline docs and translations, and extended
+  the retired-network scan to cover those files so translated docs cannot
+  reintroduce the lane. The guard now asserts every translated
+  `new_pipeline*.md` document is included in the scan set.
+- Added an adversarial release-bundle verifier test that copies the
+  retired-network guard without the translated pipeline-doc coverage marker and
+  requires the strict inventory check to report the missing guard.
+- Mirrored that translated pipeline-doc guard removal case in the
+  release-readiness tests, so readiness and bundle verification both fail if
+  the strict retired-network guard stops pinning translated pipeline docs.
+- Validation:
+  - `npm run build:dist` in `javascript/iroha_js`
+  - `node --test test/package_dist.test.js test/sccpPackageExports.test.js test/sccpSolanaProver.test.js` in `javascript/iroha_js`
+  - `node --test test/sccpEthereumMainnet.test.js test/package_dist.test.js test/sccpPackageExports.test.js` in `javascript/iroha_js`
+    (`104` tests passed)
+  - `swift test --filter SccpSolanaProverTests` in `IrohaSwift`
+    (`80` tests passed)
+  - `swift test --filter SccpSolanaProverTests/testEthereumMainnet` in
+    `IrohaSwift` (`10` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew testDebugUnitTest --console=plain` in `java/iroha_android`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" ANDROID_HOME=~/Library/Android/sdk ANDROID_SDK_ROOT=~/Library/Android/sdk ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.SourceSccpProofsTests ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain --rerun-tasks` in `java/iroha_android`
+    (`BUILD SUCCESSFUL`)
+  - `CARGO_TARGET_DIR=<isolated> CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_sccp --lib`
+  - `CARGO_TARGET_DIR=<isolated> CARGO_INCREMENTAL=0 cargo check -j 1 -p iroha_torii --lib`
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_all_lanes_evidence_test.py -q`
+    (`463` tests passed)
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`5` tests passed)
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/check_sccp_production_corridor_test.py::test_sccp_production_corridor_evidence_phase_runs_retired_network_scan pytests/scripts/check_sccp_production_corridor_test.py::test_sccp_production_corridor_evidence_phase_has_no_untracked_pytests`
+    (`2` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_evidence_phase_requires_retired_network_surface_scan pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_requires_retired_network_scan_evidence pytests/scripts/sccp_release_bundle_test.py -k 'retired_network_surface'`
+    (`6` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_evidence_phase_requires_retired_network_surface_scan pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_requires_retired_network_scan_evidence pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_evidence_phase_inventory_matches_corridor_runner`
+    (`3` tests passed)
+  - `python3 -m py_compile pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_rejects_output_only_retired_network_scan_evidence pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_output_only_retired_network_scan_evidence`
+    (`2` tests passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_evidence_phase_accepts_pytest_runner_command_shape pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_rejects_output_only_retired_network_scan_evidence pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_rejects_echoed_retired_network_scan_command pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_evidence_phase_accepts_pytest_runner_command_shape pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_output_only_retired_network_scan_evidence pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_echoed_retired_network_scan_command`
+    (`6` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`99` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`255` tests passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_phase_command_matchers_accept_corridor_dry_run pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_phase_command_matchers_reject_echoed_fragments pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_rejects_echoed_js_phase_command_fragment pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_phase_command_matchers_accept_corridor_dry_run pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_phase_command_matchers_reject_echoed_fragments pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_echoed_contract_smoke_command`
+    (`6` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`102` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`258` tests passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_rejects_prefix_alias_phase_marker pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_phase_command_matchers_accept_corridor_dry_run pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_prefix_alias_phase_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_phase_command_matchers_accept_corridor_dry_run`
+    (`4` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`103` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`258` tests passed)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_rejects_command_line_only_success_marker pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_rejects_command_line_only_completion_marker pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_report_rejects_command_line_only_full_completion_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_command_line_only_success_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_command_line_only_completion_marker pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_rejects_command_line_only_full_completion_marker`
+    (`6` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`107` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`260` tests passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_verifier_reports_removed_retired_network_pipeline_doc_guard`
+    (`1` test passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py::test_release_bundle_verifier_reports_removed_retired_network_pipeline_doc_guard`
+    (`1` test passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`261` tests passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/check_sccp_production_corridor_test.py`
+    (`118` tests passed)
+  - `scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`1027` tests passed)
+  - `scripts/check_sccp_production_corridor.sh --phase evidence-scripts --dry-run`
+  - Unsupported retired-lane marker scan across active SCCP Rust, JS, Python,
+    Swift, Kotlin, and Java Android surfaces returned no matches.
+  - `git diff --check`
+
+## 2026-06-07 Sumeragi committed spec-step stutter/GST closure
+
+- Added `CommittedSpecStepStuttersOrObservesGstStep` /
+  `CommittedSpecStepStuttersOrObservesGst` to the top-level Sumeragi model so
+  committed-state spec behavior is checked as a complete stutter/GST split.
+- The property combines the pre-GST `[Next]_vars` split, the committed+GST
+  terminal stuttering theorem, and the non-stuttering GST-observation
+  exclusivity theorem: after finality, spec steps either stutter in the current
+  committed state or take `GstElapsed` into committed+GST terminal quiescence.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed spec-step closure
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this committed spec-step
+    closure property; the preceding top-level fast attempts exhausted heap at
+    `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 Sumeragi committed non-stuttering GST observation
+
+- Added `CommittedSpecNonStutteringOnlyObservesGstStep` /
+  `CommittedSpecNonStutteringOnlyObservesGst` to the top-level Sumeragi model
+  so any non-stuttering spec step after finality is checked as the pre-GST
+  `GstElapsed` observation into committed+GST terminal quiescence.
+- The property combines the committed pre-GST `[Next]_vars` split and the
+  committed+GST terminal stuttering theorem, while preserving the
+  finality/certificate/RBC stack and closing every action gate in the post-state.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed non-stuttering GST
+  observation obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this committed
+    non-stuttering property; the preceding top-level fast attempts exhausted
+    heap at `4` GiB and `12` GiB during optimization.
+
+## 2026-06-07 BFV full-bootstrap proof-profile artifact validation
+
+- Added typed full-bootstrap proof-profile payloads for the proof public-input
+  schema and prover/verifier keys. The schema now binds the canonical
+  execution proof statement hash layout, and proof keys bind the canonical
+  STARK/FRI backend, key format, circuit id, and governed schema digest while
+  rejecting empty or all-zero key material.
+- Full-bootstrap artifact bundle validation now decodes those proof-profile
+  artifacts instead of accepting opaque role/profile envelopes, and rejects
+  identical prover/verifier backend key bytes even when their outer artifacts
+  have distinct roles.
+- Updated crypto, data-model, and core Soracloud fixtures to emit typed
+  proof-profile artifacts derived from the governed public-input schema digest.
+  The executable full BFV bootstrap evaluator and real prover/verifier backend
+  implementation remain pending.
+- Validation:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-proof-profile CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-proof-profile CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_data_model fhe_job_run_provenance_payload_binds_full_bootstrap_artifact_bundle_option --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-proof-profile CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bootstrap_full_material_requires_signed_artifact_bundle_on_runtime_path --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-full-bootstrap-proof-profile CARGO_INCREMENTAL=0 cargo clippy -j 1 -p iroha_crypto -p iroha_data_model --lib --no-deps -- -D warnings`
+
+## 2026-06-07 SCCP retired runtime-network surface removal
+
+- Removed the named retired runtime-network surface from SCCP public docs,
+  roadmap/status notes, and active source comments. Public launch scope remains
+  limited to Ethereum, BSC, Solana, TON, and TRON.
+- Repaired the Swift SCCP test helper scope that had been left malformed by the
+  broad cleanup, and removed stale external-ecosystem references from audit
+  vendor examples.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_schema_derive/src/trait_bounds.rs crates/iroha_schema_gen/src/lib.rs`
+  - `swiftc -parse IrohaSwift/Sources/IrohaSwift/SccpSourceProofHashes.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift`
+  - Case-insensitive direct retired-network-name scan across the repository
+    returned no matches outside ignored build/dependency folders.
+  - Case-insensitive retired-ecosystem token scan returned no meaningful matches
+    outside ignored fixtures and package-lock data.
+  - `git diff --check`
+
+## 2026-06-07 Sumeragi committed+GST terminal spec-step stuttering
+
+- Added `CommittedGstSpecStepOnlyStuttersStep` /
+  `CommittedGstSpecStepOnlyStutters` to the top-level Sumeragi model so the
+  stuttering-closed `[Next]_vars` relation is checked explicitly from
+  committed+GST terminal states.
+- The property proves that committed+GST spec steps can only stutter while
+  preserving the complete finality/certificate/RBC stack and all disabled
+  action gates.
+- Wired the property through `Sumeragi_fast.cfg`, `Sumeragi_deep.cfg`, and
+  `Sumeragi_tlc_fast.cfg`, and documented the committed+GST terminal spec-step
+  obligation in the formal README and roadmap.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/Sumeragi.tla`
+    (`EXITCODE: OK`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast`
+    (`7799` states generated, `2338` distinct states, `15` temporal-property
+    branches)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9841` expected-failure modes, `1` scheduled/manual mode,
+    `10346` documented modes, `499` TLC fast modes, `9841` TLC mutation modes)
+  - Full Apalache model checking was not rerun for this terminal spec-step
+    property; the preceding top-level fast attempts exhausted heap at `4` GiB
+    and `12` GiB during optimization.
+
 ## 2026-06-07 Canonical-frontier reanchor runtime gate
 
 - Added focused runtime parity coverage for the
@@ -3260,7 +13915,6 @@ Last updated: 2026-06-08
     (`1` test passed)
   - `git diff --check`
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` (no output)
-
 ## 2026-06-07 Sumeragi committed pre-GST spec-step split
 
 - Added `CommittedPreGstSpecStepStuttersOrObservesGstStep` /
@@ -3474,8 +14128,51 @@ Last updated: 2026-06-08
 - Added runtime-token guard tests in Rust, Python, and JavaScript package
   surfaces so public names, generated declarations, and package artifacts fail
   if the removed lane token is reintroduced.
+- Added release-bundle verifier inventory checks for the retired-network guard
+  itself, including a negative stale-allowance marker check and evidence-phase
+  transcript coverage for the guard test.
+- Corrected the retired-network scan's Kotlin SDK test root to the real
+  `src/test/kotlin` package and added a root-existence/nonempty guard so
+  missing scan roots cannot silently shrink coverage.
+- Removed the obsolete retired runtime-network lane material from the
+  `docs/source/new_pipeline*.md` pipeline docs and translations, and extended
+  the retired-network scan to cover those files so translated docs cannot
+  reintroduce the lane. The guard now asserts every translated
+  `new_pipeline*.md` document is included in the scan set.
+- Added an adversarial release-bundle verifier test that copies the
+  retired-network guard without the translated pipeline-doc coverage marker and
+  requires the strict inventory check to report the missing guard.
+- Mirrored that translated pipeline-doc guard removal case in the
+  release-readiness tests, so readiness and bundle verification both fail if
+  the strict retired-network guard stops pinning translated pipeline docs.
 - Validation:
-  - Pending focused rerun after the already-running cargo jobs clear.
+  - `python3 -m py_compile scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`5` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`261` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py::test_release_readiness_verifier_reports_removed_retired_network_pipeline_doc_guard`
+    (`1` passed)
+  - `PYTHONPATH=scripts python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`107` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/check_sccp_production_corridor_test.py`
+    (`118` passed)
+  - `scripts/check_sccp_production_corridor.sh --phase evidence-scripts`
+    (`1027` passed)
+  - `scripts/check_sccp_production_corridor.sh --phase evidence-scripts --dry-run`
+  - `PYTHONPATH=python python3 -m pytest -q python/iroha_torii_client/tests/sccp_test.py::test_package_public_surface_excludes_removed_legacy_lane`
+    (`1` passed)
+  - `cd javascript/iroha_js && node --test --test-name-pattern "removed legacy lane" test/sccpPackageExports.test.js`
+    (`1` passed)
+  - `cd javascript/iroha_js && node --test test/package_dist.test.js test/sccpPackageExports.test.js`
+    (`77` passed)
+  - Focused retired-network-name and retired-ecosystem token scans returned no
+    matches outside ignored fixtures, generated lock data, build outputs, and
+    dependency directories.
+  - `swiftc -parse IrohaSwift/Sources/IrohaSwift/SccpSourceProofHashes.swift IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift`
+  - `git diff --check`
+  - The focused Rust cargo guard was not rerun in this pass because existing
+    cargo/rustc jobs are already active in the shared workspace.
 
 ## 2026-06-07 Sumeragi RBC delivered finality exact commit-vote action frame
 
@@ -3785,8 +14482,21 @@ Last updated: 2026-06-08
 - Refreshed the Kura/WSV audit so the long-history Kura and heavy-world WSV
   benchmark gaps, plus the remaining background-eviction retry-latency suggested
   test addition, are no longer listed as open source-coverage gaps. Fresh
-  focused Cargo validation is still pending because unrelated `cargo`/`rustc`
-  jobs are currently active in the workspace and separate `/tmp` target dirs.
+  focused Cargo validation now covers the Kura regression tests and both Kura
+  and WSV benchmark targets in the shared workspace.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kura-wsv-validation CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core --lib --no-run kura_background_eviction_retry_latency_threshold`
+    (`iroha_core` lib test binary built cleanly in `10m 24s`)
+  - Direct isolated runs from the compiled `iroha_core` test binary:
+    `store_block_schedules_background_eviction_when_budget_exceeded`,
+    `bench_eviction_helpers_seed_remote_eviction`,
+    `kura_budget_check_scales_with_pending_depth`,
+    `heavy_world_commit_bench_helper_commits_accounts`, and
+    `kura_background_eviction_retry_latency_threshold` all passed.
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kura-wsv-validation CARGO_INCREMENTAL=0 cargo bench -j 1 -p iroha_core --features bench --bench state --no-run`
+    (`state` bench executable built in `59m 11s`)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kura-wsv-validation CARGO_INCREMENTAL=0 cargo bench -j 1 -p iroha_core --features bench --bench kura --no-run`
+    (`kura` bench executable built in `42m 10s`)
 
 ## 2026-06-07 Sumeragi RBC delivered finality certified source-stack matching
 
@@ -3952,7 +14662,7 @@ Last updated: 2026-06-08
   user-prover backend rows advertise only the supported launch lanes (`eth`,
   diagnostic/backlog-only.
 - Added strict release-bundle verifier source inventory for those public
-  discovery docs, including forbidden stale markers for `sora2`,
+  discovery docs, including forbidden stale markers for `retired-runtime-lane`,
   discovery/manifests/release-surface prose.
 - Validation:
   - `python3 -m py_compile scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
@@ -4016,7 +14726,7 @@ Last updated: 2026-06-08
     exhausted heap at `4` GiB and `12` GiB during optimization.
 
 
-  blocker and return it for SORA Kusama, SORA Polkadot, and SORA2 while those
+  blocker and return it for retired runtime-network lanes while those
   scope.
 - Added release-readiness and release-bundle verifier guards proving public
   user-prover submission surfaces stay limited to `eth,bsc`, `tron`, `sol`, and
@@ -4109,8 +14819,7 @@ Last updated: 2026-06-08
   manifest publication while production source proofs stay inbound-only to
   SORA.
 - Updated native-recursive submission-package coverage so public package
-  builders exercise only supported Solana/TON manifests, while SORA Kusama,
-  SORA Polkadot, and SORA2 stop at the absent public-manifest boundary instead
+  builders exercise only supported Solana/TON manifests, while retired runtime-network lanes stop at the absent public-manifest boundary instead
   of exposing diagnostic runtime-call package surfaces.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
@@ -4121,7 +14830,7 @@ Last updated: 2026-06-08
 
 
   Torii and core SCCP packaging: Torii no longer serves the direct message
-  runtime SCALE export route, capability snapshots no longer advertise optional
+  runtime proof export route, capability snapshots no longer advertise optional
   runtime bundle fields, and SCCP active-domain maps/submission templates stay
   limited to ETH, BSC, Solana, TON, and TRON.
   JavaScript, Python, Swift, Kotlin, and Java Android SDK surfaces, including
@@ -4140,7 +14849,7 @@ Last updated: 2026-06-08
   - `bash -n scripts/check_sccp_production_corridor.sh`
   - `node --test test/sccpPackageExports.test.js` in `javascript/iroha_js` was
     also run and still fails on pre-existing BSC testnet root export and
-    runtime/SCALE surface.
+    runtime/retired codec surface.
 
 ## 2026-06-07 BFV full-bootstrap accumulator artifact validation
 
@@ -5109,7 +15818,7 @@ Last updated: 2026-06-08
   boundary on the runtime path used by `RunSoracloudFheJob`.
 - Validation:
   - `cargo fmt -p iroha_crypto -p iroha_core`
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-exec-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_binds_full_bootstrap_material_but_execution_stays_unavailable --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-exec-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_binds_full_bootstrap_material_but_direct_execution_requires_artifacts --lib -- --nocapture`
     (`1` passed, `666` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-exec-preflight CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_bootstrap_full_material --lib -- --nocapture`
     (`2` passed, `6987` filtered out)
@@ -5273,12 +15982,12 @@ Last updated: 2026-06-08
 
   so each transition decodes and binds the next authority-set payload, payload
   hash, payload-derived next-set hash, parent-set hash, transition message hash,
-  nested GRANDPA precommit hash, and transition justification hash before
+  nested finality precommit hash, and transition justification hash before
   Ed25519 signature verification.
-  GRANDPA set transitions and final termination at the adapter's declared active
-  `grandpa_set_id` and authority-set hash.
+  finality set transitions and final termination at the adapter's declared active
+  `finality_set_id` and authority-set hash.
 - Added explicit launch-scope documentation that SCCP will not support
-  SORA Kusama, SORA Polkadot, and SORA2.
+  retired runtime-network lanes.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
     (`1` passed, `255` filtered out)
@@ -6016,8 +16725,7 @@ Last updated: 2026-06-08
     (`2` states generated, `1` distinct, no errors)
 
 
-  networks for now, including Kusama, Polkadot, SORA Kusama, SORA Polkadot, and
-  SORA2. The bridge-proof docs and public roadmap keep the existing
+  networks for now, including retired runtime-network lanes. The bridge-proof docs and public roadmap keep the existing
   explicitly re-opened.
 - Validation:
   - documentation-only change
@@ -6344,7 +17052,7 @@ Last updated: 2026-06-08
   empty signer sets, signer/signature count drift, claimed total/signed stake or
   weight drift, and sub-quorum certificates before transcript hashing.
 - Added adversarial source-adapter coverage for ETH, BSC, Solana, TON, and
-  asserts that the GRANDPA justification hash fails closed instead of
+  asserts that the finality justification hash fails closed instead of
   serializing a malformed certificate transcript.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
@@ -6499,7 +17207,7 @@ Last updated: 2026-06-08
   replay shape where an otherwise valid transition could derive the active hash
   at an earlier epoch/set id.
   transcripts and final set hashes but stale `validator_epoch` /
-  `grandpa_set_id` termination; both now fail source verification.
+  `finality_set_id` termination; both now fail source verification.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-sccp-transition-epoch CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_sccp bsc_source_adapter_verifies_validator_set_transition_chain --lib -- --nocapture`
@@ -7107,7 +17815,7 @@ Last updated: 2026-06-08
   matching source-adapter deployment remain structurally inspectable for
   diagnostics, but direct production verification and bundle-level production
   extraction now fail closed while the launch scope is unsupported.
-  SORA Kusama deployment-bound evidence cannot pass direct production source
+  retired runtime-network deployment-bound evidence cannot pass direct production source
   verification even though the diagnostic structure and deployment binding still
   verify.
 - Validation:
@@ -7124,7 +17832,7 @@ Last updated: 2026-06-08
   normalized proof jobs, and `BridgeProof` conversion all reject remote domains
   outside `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, even when
   `sccp_allow_unready_transparent_proofs` is enabled for diagnostics.
-- Added an adversarial signed SORA2 bundle regression proving allow-unready
+- Added an adversarial signed retired-runtime lane bundle regression proving allow-unready
   diagnostic mode cannot emit a production-looking proof artifact, proof job, or
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs`
@@ -7139,7 +17847,7 @@ Last updated: 2026-06-08
   diagnostic material and deployment evidence remains inspectable only through
   diagnostic allow-unready runtime-call tooling while that launch scope is
   closed.
-- Added an adversarial SORA2 regression with complete source material,
+- Added an adversarial retired-runtime lane regression with complete source material,
   source-adapter deployment, destination rollout, and route allowlist evidence
   proving production artifact construction fails and the diagnostic artifact does
   not use `local_admission`.
@@ -7178,14 +17886,14 @@ Last updated: 2026-06-08
   - `CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core writer_loop_records_periodic_fsync_failure_without_panic --lib -- --nocapture`
     (`1` passed, `6967` filtered out)
 
-## 2026-06-06 SCCP Torii runtime SCALE launch-scope gate
+## 2026-06-06 SCCP Torii runtime proof launch-scope gate
 
-- Hardened Torii's direct SCCP runtime SCALE envelope export so it rejects any
+- Hardened Torii's direct SCCP runtime proof envelope export so it rejects any
   bundle whose remote counterparty domain is outside
   `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, even when a SORA-origin bundle
   runtime export diagnostic/backlog-only while public discovery hides the
-  runtime SCALE capability fields.
-- Added a signed SORA -> SORA2 runtime-export regression proving the endpoint
+  runtime proof capability fields.
+- Added a signed SORA -> SORA-origin retired-runtime export regression proving the endpoint
   envelope bytes, while the supported ETH token-control runtime export remains
   accepted.
 - Validation:
@@ -7444,7 +18152,7 @@ Last updated: 2026-06-08
   - `rustfmt --edition 2024 crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_circuit_material_validation_binds_registered_profile --lib -- --nocapture`
     (`1` passed, `662` filtered out)
-  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_binds_full_bootstrap_material_but_execution_stays_unavailable --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto evaluation_key_bundle_binds_full_bootstrap_material_but_direct_execution_requires_artifacts --lib -- --nocapture`
     (`1` passed, `662` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-rns-root-contract CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto bootstrap_key_proof_statement_digest_preflights_public_metadata --lib -- --nocapture`
     (`1` passed, `662` filtered out)
@@ -8293,6 +19001,16 @@ Last updated: 2026-06-08
   receipt, evidence, readiness, and XSD tooling proving identifier-style secret
   path segments are rejected without echo while ordinary token-file paths still
   reach their intended filesystem validators.
+- Hardened receipt verifier metadata replay so raw rail receipts must record
+  nullable `profile`/`rail_message_id` keys, digest-bound receipt summaries now
+  retain both fields for evidence/readiness replay, omitted optional sidecar
+  metadata still matches adapter receipts that record JSON `null`, and source
+  sidecars that forge those fields as explicit `null` fail as malformed before
+  metadata comparison.
+- Hardened raw receipt response metadata so any recorded HTTP response must
+  carry a response-body digest/preview pair, response-body digests cannot appear
+  without an HTTP status, and failed receipts must preserve a non-secret error
+  string even when `--allow-failed` is supplied for local diagnostics.
 - Remaining production blockers are still external: live rail/notary delivery
   evidence, official trust/revocation bundles, and redistributable official ISO
   schemas/profile coverage for the remaining gaps.
@@ -8305,6 +19023,26 @@ Last updated: 2026-06-08
   - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_canary_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_rail_gateway_adapter_test pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_xsd_fixture_verify_test`
     (`557` tests passed)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_source_sidecar_null_optional_metadata_is_rejected_when_required`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test`
+    (`44` tests passed)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`579` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_rail_receipt_nullable_metadata_must_be_recorded pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_default_profile_archive_receipts_require_explicit_local_override pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_default_profile_receipt_policy_blocks_readiness`
+    (`3` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_default_profile_rail_receipts_require_explicit_local_override pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_receipt_verifier_stdout_requires_kind_specific_metadata pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_entries_must_preserve_kind_metadata pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_archive_receipts_must_bind_canary_receipt_metadata`
+    (`4` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_status_timestamp_and_response_metadata_are_consistent pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_failed_receipt_requires_explicit_allow_failed`
+    (`2` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_failed_receipt_requires_explicit_allow_failed`
+    (`1` test passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`298` tests passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test`
+    (`45` tests passed)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`580` tests passed)
   - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_rejected_source_url_does_not_echo_secret_query pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_rejected_torii_url_does_not_echo_secret_path pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_bearer_token_file_adds_authorization_without_persisting_token pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_non_regular_bearer_token_files_are_rejected_before_network_delivery pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_secret_looking_message_paths_are_rejected_before_receipt_output pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_rejected_endpoint_does_not_echo_secret_path pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_bearer_token_file_adds_authorization_without_persisting_token pytests.scripts.iso_audit_notary_adapter_test.IsoAuditNotaryAdapterTest.test_non_regular_bearer_token_files_are_rejected_before_network_delivery pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_endpoint_urls_reject_secret_path_without_echo pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_endpoint_urls_reject_secret_path_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_source_urls_reject_secret_path_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_output_cli_paths_reject_encoded_secret_material_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_source_urls_reject_secret_path_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_rejected_compact_trust_source_url_does_not_echo_secret_query pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_output_cli_paths_reject_encoded_secret_material_without_echo`
     (`21` tests passed)
   - `python3 scripts/iso_xsd_fixture_verify.py --manifest fixtures/iso20022/xsd/fixture_manifest.json --profile-catalog crates/iroha_core/src/iso_bridge/profiles.rs --require-fixture-for-schema --validate-xml-schema --summary-out target/iso-gates/iroha_iso_xsd_fixture_strict.json`
@@ -12678,7 +23416,7 @@ Last updated: 2026-06-08
   `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, matching the release evidence
   inventory and public discovery surface.
 - Added a direct unsupported-lane guard for configured launch checks, so
-  SORA2/SORA Kusama/SORA Polkadot return the explicit
+  retired runtime-network lanes return the explicit
   policy message.
 - Updated the configured launch fixtures and regressions for the active
   Ethereum mainnet launch policy, including supported-domain all-lanes route
@@ -13204,8 +23942,8 @@ Last updated: 2026-06-08
 
 - Constrained Torii public SCCP capability and proof-manifest snapshots to
   `SCCP_SUPPORTED_LAUNCH_REMOTE_DOMAINS_V1`, so public discovery advertises
-  Ethereum, BSC, Solana, TON, and TRON without SORA2, SORA Kusama, SORA
-- Stopped advertising optional runtime SCALE capability fields while
+  Ethereum, BSC, Solana, TON, and TRON without retired-runtime lane, SORA retired-runtime, SORA
+- Stopped advertising optional runtime proof capability fields while
   handler stays available, but public discovery reports those fields as absent.
 - Filtered configured wallet route manifests through the same launch-scope
   predicate, preventing an unready-proof or mistakenly production-ready
@@ -13621,13 +24359,13 @@ Last updated: 2026-06-08
 
 - Updated the Torii SCCP capability and manifest OpenAPI descriptions to list
   the current launch networks as Ethereum, BSC, Solana, TON, and Tron.
-  SORA2, SORA Kusama, and SORA Polkadot, are not supported for now and any
+  retired runtime-network lanes, are not supported for now and any
   helper metadata remains diagnostic/backlog-only.
 - Validation:
   - `rustfmt --edition 2024 crates/iroha_torii/src/openapi.rs`
   - `jq empty docs/portal/static/openapi/torii.json docs/portal/static/openapi/versions/current/torii.json`
   - Checked `crates/iroha_torii/src/openapi.rs` and `docs/portal/static/openapi`
-    for the previous support-implying SORA2/SORA Kusama/SORA Polkadot OpenAPI
+    for the previous support-implying retired runtime-network lanes OpenAPI
     phrasing; no matches remain.
 
 ## 2026-06-06 soranet-relay SessionKey telemetry compatibility
@@ -14537,7 +25275,7 @@ Last updated: 2026-06-08
 - Unsupported diagnostic lanes must include the explicit unsupported
   launch-scope blocker, and complete diagnostic rows may not hide extra
   operator blockers beside it.
-- Added adversarial release-bundle coverage that tampers a complete SORA Kusama
+- Added adversarial release-bundle coverage that tampers a complete SORA retired-runtime
   diagnostic lane with a non-canonical source hash, an unexpected audit hash,
   and a replaced blocker list; the verifier now rejects both the embedded
   readiness evidence and copied all-lanes summary.
@@ -14594,7 +25332,7 @@ Last updated: 2026-06-08
 
 - Added an explicit user-facing note to `docs/source/bridge_proofs.md`, the
   roadmap, and the Torii OpenAPI SCCP discovery descriptions that SCCP does not
-  Polkadot, SORA Kusama, SORA Polkadot, and SORA2.
+  retired runtime-network lanes.
   diagnostic/backlog-only until the launch scope is explicitly re-opened.
 
 ## 2026-06-06 SCCP launch-scope summary schema hardening
@@ -14604,7 +25342,7 @@ Last updated: 2026-06-08
   the full diagnostic `required_domains` list.
 - The release-bundle verifier now checks that the supported launch set is
   exactly ETH/BSC/Solana/TON/TRON, the unsupported diagnostic set is exactly
-  SORA Kusama/SORA Polkadot/SORA2, the sets are disjoint, and together they
+  retired runtime-network lanes, the sets are disjoint, and together they
   cover the published diagnostic domains.
 - Added negative release-bundle coverage that tampers the launch-scope arrays in
   both the readiness report and copied all-lanes summary, then verifies the
@@ -14807,8 +25545,7 @@ Last updated: 2026-06-08
 ## 2026-06-06 SCCP launch scope and release inventory hardening
 
   launch scope. Rust lane readiness, manifest readiness, all-lanes evidence,
-  release summaries, `roadmap.md`, and diagnostics now keep SORA Kusama,
-  SORA Polkadot, and SORA2 evidence as backlog/diagnostic-only until support is
+  release summaries, `roadmap.md`, and diagnostics now keep retired runtime-network lanes evidence as backlog/diagnostic-only until support is
   explicitly re-opened.
 - Preserved launch readiness for the supported ETH/BSC/Solana/TON/TRON scope by
   all-lanes blockers while keeping those individual lanes non-production-ready.
@@ -28228,8 +38965,9 @@ Last updated: 2026-06-08
   before falling back to the older Swift-only byte offsets.
 - Updated the JS, Python, Swift, Kotlin/JVM, Java Android, C#, and bridge
   documentation plus `offline_kagemusha.md` and `roadmap.md` to describe
-  recursive compact mode `2` as a reserved fail-closed surface pending a
-  composed private-hop verifier-slice proof.
+  recursive compact mode `2` as a reserved fail-closed surface pending the
+  then-missing composed verifier-slice proof; current status is tracked in the
+  2026-06-07 one-hop compact entry above.
 - Validation:
   - `cargo fmt --all`
   - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha-codex-core-target cargo test -p iroha_core kagemusha_recursive_compact --lib`
@@ -32105,9 +42843,9 @@ Last updated: 2026-06-08
 ## 2026-06-05 ISO receipt verifier input size gate
 
 - Hardened `scripts/iso_operator_receipt_verify.py` so raw receipt JSON is
-  capped at `4 MiB`, notary source JSON artifacts are capped at `64 MiB`, and
-  rail source XML payloads are capped at `4 MiB` before parsing, hashing, or
-  source replay.
+  capped at `4 MiB`, notary anchor/index JSON artifacts are capped at `64 MiB`,
+  persisted notary record-source JSON is capped at `1 MiB`, and rail source XML
+  payloads are capped at `4 MiB` before parsing, hashing, or source replay.
 - The receipt verifier now applies caller-specific size labels on the existing
   no-follow `lstat`/`fstat` plus `max + 1` actual-read boundary, while keeping
   the prior `16 KiB` rail source-sidecar JSON cap.
@@ -32129,8 +42867,9 @@ Last updated: 2026-06-08
 ## 2026-06-05 ISO audit export input size gate
 
 - Hardened `scripts/iso_audit_notary_adapter.py` so audit export anchor,
-  digest-addressed anchor peer, exported index, and persisted record-source JSON
-  inputs are capped at `64 MiB` before parsing or peer comparison.
+  digest-addressed anchor peer, and exported index JSON inputs are capped at
+  `64 MiB`, while persisted record-source JSON inputs are capped at `1 MiB`
+  before parsing or peer comparison.
 - The audit adapter now applies `lstat`/`fstat` plus `max + 1` actual-read
   boundaries to those export artifacts before any network publication, while
   preserving existing symlink, non-regular file, duplicate-key, and schema
@@ -33101,9 +43840,9 @@ Last updated: 2026-06-08
   present `null`, empty, non-string, control-bearing, or whitespace-padded
   values now fail before a trust summary or profile override can be emitted.
 - Hardened `scripts/iso_trust_bundle_verify.py` so DER-object `sha256` digests
-  are optional only when the key is absent. Present `null` or other non-string
-  values now fail for trust anchors, revoked certificates, CRLs, and OCSP
-  responses before a trust summary or profile override can be emitted.
+  are mandatory. Omitted, `null`, non-string, or mismatched values now fail for
+  trust anchors, revoked certificates, CRLs, and OCSP responses before a trust
+  summary or profile override can be emitted.
 - Hardened DER proof labels across `scripts/iso_trust_bundle_verify.py` and
   `scripts/iso_operator_evidence_verify.py`: absent DER labels are omitted from
   trust summaries, while archived trust summaries that explicitly carry
@@ -34326,6 +45065,13 @@ Last updated: 2026-06-08
   values. The production-readiness gate rechecks and preserves those provenance
   digests in compact XSD summaries and treats omitted, non-canonical, or
   digest-drifted provenance as malformed release evidence or blockers.
+  Direct manifest preflight and archived readiness replay now also distinguish
+  omitted schema/blocked-source `source` keys from explicit null source objects,
+  with regressions pinning both malformed paths.
+  Readiness also requires archived XSD summaries to retain the emitted
+  `manifest` path and `profile_catalog` key; explicit `profile_catalog: null`
+  remains recorded no-catalog evidence and cannot satisfy strict
+  profile-schema-backed proof.
 - Profile catalog checks now fail closed on non-canonical profile ids, malformed
   message family ids, unsupported directions, empty profile/version lists,
   duplicate profile ids, duplicate profile/message/direction entries, duplicate
@@ -34369,17 +45115,39 @@ Last updated: 2026-06-08
   the evidence gate, and readiness reports duplicated compact trust-profile IDs
   as production blockers rather than allowing copied profile entries to inflate
   trust material counts.
+- Trust-bundle preflight now requires every list-typed trust-material field to
+  be recorded as an array, including explicit `[]` values for intentionally
+  empty pin or DER collections. The checked-in templates and regression tests
+  now reject omitted material arrays instead of silently inferring empty
+  production evidence.
+- Trust-bundle preflight now also distinguishes omitted source provenance from
+  explicit `source: null`: omitted `source` is rejected as an unrecorded
+  production provenance object, while null source remains malformed as a
+  non-object. Regression coverage now pins both paths.
 - The XSD fixture preflight now rejects copied XML fixtures with duplicate
   fixture SHA-256 values, and the readiness rollup independently rechecks
   digest-bound XSD `schemas[]`/`fixtures[]` metadata for count consistency,
   duplicate schema/fixture evidence, schema-reference drift, and
   schema-backed/missing-schema count mismatches.
+- XSD fixture manifests now must record `blocked_schema_sources` explicitly as
+  an array, including `[]` when no reviewed restricted source candidates are
+  present. The preflight rejects omitted blocker-review evidence instead of
+  silently treating absence as an empty gap review.
 - `scripts/iso_audit_notary_adapter.py` now rejects duplicate publication
   endpoints before network delivery, preventing repeated anchor submissions
   from overwriting a single endpoint-addressed receipt. The canary runner also
   rejects duplicate notary endpoints, duplicate explicit receipt paths or
   receipt directories, and shared stage receipt directories before a runbook can
   be planned.
+- `scripts/iso_operator_canary.py` now requires list-valued notary and verify
+  receipt-selector fields to be explicitly recorded under
+  `--require-explicit-policy`, including `[]` for generated-stage-only receipt
+  verification. The checked-in runbook templates and regressions now reject
+  omitted selector arrays instead of silently treating them as empty.
+- Notary adapter and receipt-verifier source replay now require embedded
+  audit-index `records` to remain an explicit array before source-file checks
+  run, and the readiness rollup consumes normalized XSD replay lists as
+  verifier invariants instead of fallback-empty evidence.
 - XSD, operator-evidence, and compact trust summaries now must retain
   timezone-aware, non-future `verified_at` timestamps; missing, naive,
   malformed, control-character, or future timestamps are malformed
@@ -34401,11 +45169,20 @@ Last updated: 2026-06-08
   credentialed, query-bearing, localhost/private-address, malformed, future, or
   control-character source provenance as malformed release input, and blocks
   stale digest-correct compact trust source timestamps.
+- `scripts/iso_trust_bundle_verify.py` now requires each bundle to carry an
+  explicit `embedded_signature_policy` instead of silently inferring
+  `require-verified` for omitted policy fields.
+- Trust-bundle DER material now must declare `sha256` on every trust-anchor,
+  revoked-certificate, CRL, and OCSP object; omitted, non-string, or mismatched
+  digests fail before summary emission.
 - `scripts/iso_operator_canary.py` now records per-stage `started_at` and
   `finished_at` timestamps. The evidence gate compacts those as
   `stage_windows`, and readiness rechecks the compact stage windows against the
   top-level canary window and exact `stage_names` sequence, including
   overlapping, reordered, duplicate, or unsupported stage-name forgery.
+- The operator evidence gate now also enforces the raw canary summary one-of
+  shape before compaction: executed canary evidence must not carry
+  `planned_stages`, and plan-only evidence must not carry executed `stages`.
 - Operator canary summaries now must carry timezone-aware, non-future
   `started_at`/`finished_at` windows, and evidence/readiness both reject
   reversed canary time windows.
@@ -34415,6 +45192,42 @@ Last updated: 2026-06-08
   profile-advertised version gaps, real rail PKI/revocation bundles, and live
   provider canary evidence.
 - Validation:
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_declared_der_digest_must_be_recorded_as_string pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_declared_der_digest_mismatch_is_rejected pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_checked_in_trust_bundle_templates_verify`
+    (`3` passed)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_embedded_signature_policy_must_be_explicit pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_record_only_policy_requires_explicit_nonproduction_override`
+    (`2` passed)
+  - `python3 -m py_compile scripts/iso_trust_bundle_verify.py pytests/scripts/iso_trust_bundle_verify_test.py`
+    (passed)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
+    (`60` passed, latest run 0.303s)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`313` passed, latest run 155.342s)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_canary_stage_branches_are_mutually_exclusive`
+    (`1` passed)
+  - `python3 -m py_compile scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_evidence_verify_test.py`
+    (passed)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test`
+    (`130` passed, latest run 28.045s)
+  - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
+    (`253` passed, latest run 155.911s)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_xsd_profile_catalog_must_be_recorded pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_xsd_manifest_path_must_be_recorded_and_canonical`
+    (`2` passed)
+  - `python3 -m py_compile scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py`
+    (passed)
+  - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
+    (`123` passed, latest run 127.377s)
+  - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
+    (`573` passed, latest run 255.289s)
+  - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
+    (passed)
+  - `git diff --check -- scripts/iso_*.py pytests/scripts/iso_*_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md fixtures/iso20022/operator_canary fixtures/iso20022/trust_bundles fixtures/iso20022/xsd/README.md status.md roadmap.md`
+    (passed)
+  - `git diff --exit-code -- Cargo.lock`
+    (passed)
+  - `rg -n '^(<<<<<<<( |$)|=======$|>>>>>>>( |$))' scripts pytests docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md fixtures/iso20022/operator_canary fixtures/iso20022/trust_bundles fixtures/iso20022/xsd/README.md status.md roadmap.md`
+    (no conflict markers)
+  - `fd -H '__pycache__|.*\.pyc' scripts pytests`
+    (no generated ISO Python cache files)
   - `python3 -m py_compile scripts/iso_audit_notary_adapter.py scripts/iso_rail_gateway_adapter.py scripts/iso_operator_receipt_verify.py scripts/iso_operator_canary.py scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_xsd_fixture_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_audit_notary_adapter_test.py pytests/scripts/iso_rail_gateway_adapter_test.py pytests/scripts/iso_operator_receipt_verify_test.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_xsd_fixture_verify_test.py pytests/scripts/iso_production_readiness_test.py`
     (passed)
   - `python3 -m unittest pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test`
@@ -43981,7 +54794,7 @@ Last updated: 2026-06-08
   - `ci/check_sorafs_pin_register_sdk_guard.sh`
   - `ci/check_connect_norito_bridge_header.sh`
     (8 ABI-6 recursive spend symbols and 4 privacy FFI symbols declared)
-  - `bash scripts/check_no_scale.sh`
+  - `bash scripts/check_no_legacy_codec.sh`
 - Deferred native SDK lanes that invoke `maturin`/`cargo` remain queued behind
   the pre-existing Kagemusha bridge proof process.
 
@@ -71171,8 +81984,7 @@ Last updated: 2026-06-08
 
   source material hash, source-adapter deployment hash, runtime-storage circuit,
   FastPQ parameter set, and source-state verifier hash.
-- The all-lanes readiness summary now derives that gate for SORA-Kusama,
-  SORA-Polkadot, and SORA2 and marks it as required source-adapter audit
+- The all-lanes readiness summary now derives that gate for retired runtime-network lanes and marks it as required source-adapter audit
   evidence. The release-bundle verifier now rejects ready bundles whose
   lane hash.
   runtime-storage source proof readiness is machine-audited in release bundles,
@@ -71415,7 +82227,7 @@ Last updated: 2026-06-08
   across JavaScript, Python, Swift, Kotlin/JVM, and Java Android so
   `bundleBytes` now shares the native recursive proof-byte corridor: non-empty,
   non-all-zero, and capped at 2 MiB before a web portal or mobile app builds a
-  prover request or SCALE runtime-call envelope.
+  prover request or retired codec runtime-call envelope.
   canonical message-bundle bytes outside that same corridor before emitting a
   lanes.
 - Rebuilt the JavaScript `dist` artifact and updated the bridge-proof docs plus
@@ -73719,8 +84531,7 @@ Last updated: 2026-06-08
     (`674 passed`)
 
 
-- Hardened `scripts/sccp_verify_release_bundle.py` so SORA Kusama, SORA
-  published readiness/all-lanes JSON must be non-zero canonical bytes32 values,
+- Hardened `scripts/sccp_verify_release_bundle.py` so retired runtime-network lanes published readiness/all-lanes JSON must be non-zero canonical bytes32 values,
   matching the finalized-runtime route-canary evidence preflight.
   finalized-head route-canary fields in both embedded readiness evidence and the
   standalone all-lanes summary, proving the public verifier rejects both
@@ -78793,7 +89604,7 @@ Last updated: 2026-06-08
 ## 2026-05-31 SCCP Torii Nexus finality crypto gate
 
 - Tightened Torii production bridge-proof and runtime-envelope packaging so
-  SORA-origin SCCP message submit, artifact, proof-job, and runtime SCALE
+  SORA-origin SCCP message submit, artifact, proof-job, and runtime proof
   export generation require the BLS-backed Nexus finality verifier before
   packaging user-submitted proofs. Diagnostic `allow_unready` paths remain
   available, but production paths no longer accept structurally valid finality
@@ -78807,8 +89618,7 @@ Last updated: 2026-06-08
   packaging.
 - SORA-origin message bundle lookup now serves locally published/cacheable
   bundles before probing the non-SORA proof registry, so an empty proof
-  registry cannot break runtime SCALE export for freshly published local SCCP
-  messages while external-source bundles still depend on verified proof records
+  registry cannot break runtime proof export for freshly published local SCCP messages while external-source bundles still depend on verified proof records
   and configured source-lane material.
 - Core SCCP finality admission now also calls the BLS aggregate verifier on
   embedded Nexus finality before local block/QC anchoring. Structural-only
@@ -78816,7 +89626,7 @@ Last updated: 2026-06-08
   check to fail indirectly.
 - Validation:
   - `cargo test -p iroha_core --lib sccp_finality_local_state_check_rejects_unsigned_qc_before_state_lookup -- --nocapture`
-  - `cargo test -p iroha_torii --lib runtime_scale_export -- --nocapture`
+  - `cargo test -p iroha_torii --lib runtime_proof_export -- --nocapture`
   - `cargo test -p iroha_torii --lib bridge_proof_from_sccp_burn_bundle -- --nocapture`
   - `cargo fmt -p iroha_torii -- --check`
   - `git diff --check -- crates/iroha_torii/src/routing.rs status.md roadmap.md`
@@ -79459,9 +90269,9 @@ Last updated: 2026-06-08
   - `python3 -m pytest python/iroha_torii_client/tests/sccp_test.py -q` (`75` passed)
 
 
-  authority-set payload, authority transition, GRANDPA justification, and
+  authority-set payload, authority transition, finality justification, and
   transition-justification helpers now reject duplicate aliases for source
-  domains, source event indexes, finalized block fields, GRANDPA set ids,
+  domains, source event indexes, finalized block fields, finality set ids,
   storage roots, authority rosters/weights, payload hashes, transition hashes,
   signers bitmaps, nested verifier material, and runtime storage proof hashes
 - Rebuilt `javascript/iroha_js/dist/sccp.js` and `dist/index.js` so packaged
@@ -79672,7 +90482,7 @@ Last updated: 2026-06-08
   callbacks.
   wrapped proof results, proof contexts, proof bytes, bundle/source-proof bytes,
   public-input bytes, public inputs, source domains, destination-binding hashes,
-  and statement hashes before deriving SCALE runtime calls.
+  and statement hashes before deriving retired codec runtime calls.
 - Rebuilt `javascript/iroha_js/dist/sccp.js` and `dist/index.js` so packaged web
 - Validation:
   - `node --check javascript/iroha_js/src/sccp.js && node --check javascript/iroha_js/test/sccpSolanaProver.test.js`
@@ -81431,7 +92241,7 @@ Last updated: 2026-06-08
   coverage only and does not change Rust implementation logic.
 
 
-  evidence in runtime config. SORA Kusama, SORA Polkadot, and SORA2 now require
+  evidence in runtime config. retired runtime-network lanes now require
   finalized head, runtime spec name/version, transaction version, runtime code
   hash, and replayable runtime code bytes before configured all-lanes launch can
   pass.
@@ -87456,12 +98266,12 @@ Last updated: 2026-06-08
 
 
   `state_getRuntimeVersion.specName` must match the selected SCCP destination
-  lane (`sora-kusama`, `sora-polkadot`, or `sora2`) before finalized runtime
+  retired runtime-network lane before finalized runtime
   code evidence is accepted.
   runtime `specName` metadata to match the selected destination domain, and the
   all-lanes preflight rejects destination records whose live runtime comments
-- Added regressions for a foreign `sora-polkadot` runtime being supplied to the
-  `sora2` lane through live collection, direct evidence rendering, and the
+- Added regressions for a foreign `retired-runtime-lane` runtime being supplied to the
+  another retired runtime-network lane through live collection, direct evidence rendering, and the
   all-lanes production-readiness validator.
 - Validation:
 
@@ -88008,7 +98818,7 @@ Last updated: 2026-06-08
 - Fixed the TRON live route-canary preflight to pass source material and
   source-adapter deployment hashes into the shared replay guard after that guard
   started rejecting canary evidence that reuses source record hashes.
-  TOML into a complete evidence bundle and verifies the SORA2 lane remains
+  TOML into a complete evidence bundle and verifies the retired-runtime lane lane remains
   production-ready.
 - Validation:
   - `python3 -m pytest -q pytests/scripts/sccp_tron_live_evidence_test.py -k 'preflights_source_records'` (`1 passed, 29 deselected`)
@@ -88714,12 +99524,12 @@ Last updated: 2026-06-08
   - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh canonical-frontier-reanchor-fast`
   - Apalache wrapper sweep for all 35 `canonical-frontier-reanchor-bug-*` configs observed the expected invariant rejection for each mutation.
 
-## 2026-05-28 SCCP runtime SCALE configured source-lane export
+## 2026-05-28 SCCP runtime proof configured source-lane export
 
 - Added deployment-aware runtime proof-envelope conversion for non-SORA SCCP
   message bundles, requiring configured source-verifier material and
-  source-adapter deployment evidence before SCALE runtime bytes can be exported.
-- Torii's `/v1/sccp/proofs/message/{message_id}/runtime-scale` path now keeps
+  source-adapter deployment evidence before runtime proof bytes can be exported.
+- Torii's `/v1/sccp/proofs/message/{message_id}/runtime-proof` path now keeps
   SORA-origin bundles on the existing Nexus finality converter, but requires
   configured production source-lane material for Solana/TON/TRON/EVM-family
   source bundles instead of falling back to the static placeholder catalog.
@@ -88730,7 +99540,7 @@ Last updated: 2026-06-08
 - Validation:
   - `cargo fmt --all`
   - `cargo test -p iroha_sccp runtime_envelope_production_export_requires_configured_source_deployment -- --nocapture`
-  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-runtime-envelope cargo test -p iroha_torii --lib runtime_scale_export_requires_configured_source_lane_for_non_sora_bundles --features app_api -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 CARGO_TARGET_DIR=target/codex-sccp-runtime-envelope cargo test -p iroha_torii --lib runtime_proof_export_requires_configured_source_lane_for_non_sora_bundles --features app_api -- --nocapture`
 
 ## 2026-05-28 Sumeragi missing-QC stall range-pull formal gate
 
@@ -89056,7 +99866,7 @@ Last updated: 2026-06-08
 
 ## 2026-05-28 SCCP Torii proof-registry message bundle lookup
 
-- Torii SCCP message proof, runtime SCALE envelope, proof artifact, proof job,
+- Torii SCCP message proof, runtime proof envelope, proof artifact, proof job,
   and recent-message read paths now recover non-SORA bundles from verified
   on-chain bridge proof records before falling back to SORA block
   reconstruction or the in-memory cache.
@@ -89470,7 +100280,7 @@ Last updated: 2026-06-08
   - `git diff --check -- crates/iroha_torii/src/routing.rs docs/source/bridge_proofs.md roadmap.md status.md`
 
 
-  SORA -> SORA Kusama/SORA Polkadot/SORA2 destination evidence from read-only
+  SORA -> retired runtime-network lanes destination evidence from read-only
 - The live collector reads the finalized head, `state_getRuntimeVersion`, and
   finalized `:code` storage, hashes runtime WASM bytes with BLAKE2b-256, and
   requires pinned finalized head, runtime code hash, `specName`, `specVersion`,
@@ -91430,7 +102240,7 @@ Last updated: 2026-06-08
   reject JSON or TOML output unless the route hash recomputes from the exact
   source/deployment/destination tuple.
 - Added route-hash vectors plus drift regressions for SORA -> Solana,
-  SORA -> TON, SORA -> SORA Kusama, SORA -> SORA Polkadot, and SORA -> SORA2
+  SORA -> TON, SORA -> retired runtime-network lanes
   destination helpers.
 - Validation:
 
@@ -92223,8 +103033,7 @@ Last updated: 2026-06-08
 - Added `scripts/sccp_all_lanes_evidence.py`, an offline Python preflight that
   merges rendered SCCP source, source-adapter deployment, destination rollout,
   and route allowlist TOML snippets. It requires complete records for every
-  advertised remote domain (ETH, BSC, Solana, TON, TRON, SORA-Kusama,
-  SORA-Polkadot, and SORA2) and exits non-zero with JSON lane blockers when
+  advertised remote domain (ETH, BSC, Solana, TON, TRON, retired runtime-network lanes) and exits non-zero with JSON lane blockers when
   any governed rollout record is missing or not production-shaped. The preflight
   now recomputes audited Solana and TON full-light-client gate hashes plus the
   TRON source bridge config hash and invokes each lane's canonical source
@@ -94030,7 +104839,7 @@ Last updated: 2026-06-08
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock' package-lock.json '**/package-lock.json'`
 
 
-  `SccpSourceStateVerificationProofV1` capsule to GRANDPA source proofs and
+  `SccpSourceStateVerificationProofV1` capsule to finality source proofs and
   made production material require it through the governed runtime
   storage-proof source-state verifier hash.
   schema descriptor, FastPQ batch, proof builder, verifier, and deployment gate
@@ -94162,11 +104971,11 @@ Last updated: 2026-06-08
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
 
 
-  canonicalization, raw authority-set payload decoding, and GRANDPA
+  canonicalization, raw authority-set payload decoding, and finality
   justification verification preflight.
 - Mirrored the same preflight across JavaScript, Python, Swift, Kotlin, and
   Java Android UI prover helpers, including raw payload hash paths and direct
-  GRANDPA justification byte builders where exposed.
+  finality justification byte builders where exposed.
   verification and recursive deployment evidence are represented and checked.
 - Validation:
   - `node --test --test-name-pattern "source proof hashes bind UI witness material" javascript/iroha_js/test/sccpSolanaProver.test.js`
@@ -94995,9 +105804,8 @@ Last updated: 2026-06-08
     runner
 
 
-  transcript so every `storage_proof_hash` now binds the canonical
-  `frame_system::Events` key
-  (`twox_128("System") || twox_128("Events")`) before the leaf index and
+  transcript so every `storage_proof_hash` now binds the canonical runtime
+  events storage key configured by the source profile before the leaf index and
   inclusion branch.
 - Mirrored the transcript change in the JavaScript, Python, Swift, Kotlin, and
   Java Android SDK helper implementations used by UI/mobile proof generators,
@@ -95059,11 +105867,11 @@ Last updated: 2026-06-08
 
 
   transcript so `storage_proof_hash` now binds the source-event leaf index in
-  addition to the source event digest, finalized block, GRANDPA set id,
+  addition to the source event digest, finalized block, finality set id,
   authority set hash, events root, and inclusion branch.
 - The Rust source-adapter verifier now decodes the submitted
   proof hash with the exact leaf index used to reconstruct the events root.
-  Mutating the leaf index now rejects the adapter proof before the GRANDPA
+  Mutating the leaf index now rejects the adapter proof before the finality
   certificate can be accepted.
 - Mirrored the required leaf-index input through the JavaScript, Python,
   Swift, Kotlin, and Java Android SDK storage-proof helpers used by web/mobile
@@ -95586,8 +106394,7 @@ Last updated: 2026-06-08
 - Added canonical `SccpSourceVerifierMaterialV1` and
   `SccpSourceAdapterEngineDeploymentV1` byte/hash helpers to the JavaScript,
   Python, Swift, Kotlin, and Java Android SDK surfaces.
-- The helpers cover ETH, BSC, Solana, TON, TRON, SORA-Kusama,
-  SORA-Polkadot, and SORA2 source lanes with the same source profile ids,
+- The helpers cover ETH, BSC, Solana, TON, TRON, retired runtime-network lanes source lanes with the same source profile ids,
   source-bridge emitter fields, canonical source-adapter verifier VK hash, and
   deployment receipt binding used by governed evidence renderers and Rust
   admission.
@@ -95793,8 +106600,7 @@ Last updated: 2026-06-08
 
 - Added canonical `fastpq-lane-balanced` OpenVerify source-adapter verifier-key
   commitment helpers to the JavaScript, Python, Swift, Kotlin, and Java Android
-  SDK surfaces for ETH, BSC, Solana, TON, TRON, SORA-Kusama, SORA-Polkadot,
-  and SORA2 source lanes.
+  SDK surfaces for ETH, BSC, Solana, TON, TRON, retired runtime-network lanes source lanes.
 - Pinned the SDK helpers to the same lane vectors used by the evidence
   renderers and Rust admission so UI/mobile tooling can derive
   `adapter_verifier_vk_hash` locally instead of copying verifier commitments by
@@ -95870,7 +106676,7 @@ Last updated: 2026-06-08
   OpenVerify source-adapter verifier commitment that Rust admission requires.
 - The helpers now reject mismatched `adapter_verifier_vk_hash` values before
   rendering source-adapter deployment TOML for Solana -> SORA, TON -> SORA,
-  and SORA-Kusama/SORA-Polkadot/SORA2 -> SORA source lanes.
+  and retired runtime-network lanes -> SORA source lanes.
 - Validation passed:
   - scoped `git diff --check --no-index /dev/null <path>` checks for the
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock' package-lock.json '**/package-lock.json'` (no output)
@@ -96021,8 +106827,8 @@ Last updated: 2026-06-08
 
 
   domain-specific template-derived component hashes as `iroha_sccp` and
-  rejects them before emitting governance TOML for SORA Kusama, SORA Polkadot,
-  or SORA2 lanes.
+  rejects them before emitting governance TOML for SORA retired-runtime, SORA retired-runtime,
+  or retired-runtime lane lanes.
 - The helper now fails early for template source trust-anchor,
   consensus-verifier, message-inclusion, or finality-policy hashes instead of
   reject as non-deployable placeholder evidence.
@@ -96239,7 +107045,7 @@ Last updated: 2026-06-08
   - `JAVA_HOME="$HOME/.gradle/jdks/eclipse_adoptium-21-aarch64-os_x.2/jdk-21.0.11+10/Contents/Home" ANDROID_HOME="$HOME/Library/Android/sdk" ANDROID_SDK_ROOT="$HOME/Library/Android/sdk" ./gradlew test --console=plain -Dandroid.test.mains=org.hyperledger.iroha.android.client.HttpClientTransportTests` in `java/iroha_android`
 
 
-  proof-request/prover wrappers for SORA-Kusama, SORA-Polkadot, and SORA2
+  proof-request/prover wrappers for retired runtime-network lanes
   destination lanes. The mobile builders bind source domain, canonical
   transparent public inputs, length-prefixed SCCP bundle/source-proof bytes,
   statement hash, and destination binding hash before invoking an app-linked
@@ -96334,7 +107140,7 @@ Last updated: 2026-06-08
 
 
 - Added JavaScript and Python SDK proof-request/prover wrappers for
-  builders accept SORA-Kusama, SORA-Polkadot, and SORA2 targets, bind source
+  builders accept retired runtime-network lanes targets, bind source
   domain, transparent public inputs, length-prefixed SCCP bundle/source-proof
   bytes, statement hash, and destination binding hash, and reject wrong
   invoking an app-linked runtime prover.
@@ -96668,13 +107474,13 @@ Last updated: 2026-06-08
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` (no output)
 
 
-  for SORA Kusama/SORA Polkadot/SORA2 -> SORA source material and
-  domain, SORA target domain, non-zero GRANDPA/event-storage component hashes,
+  for retired runtime-network lanes -> SORA source material and
+  domain, SORA target domain, non-zero finality/event-storage component hashes,
   adapter verifier key hash, and deployment receipt hash before rendering
   `zk.sccp_source_verifier_materials` plus
   `zk.sccp_source_adapter_engine_deployments` TOML.
 - The helper pins the lane-specific source trust-anchor,
-  finalized-header-consensus, event-storage-inclusion, and GRANDPA finality
+  finalized-header-consensus, event-storage-inclusion, and finality finality
   policy ids for domains `6`, `7`, and `8`, while rejecting non-SORA source
   adapter targets before production TOML output.
 - Focused validation passed:
@@ -96682,7 +107488,7 @@ Last updated: 2026-06-08
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock'` (no output)
 
 
-  helper for SORA -> SORA Kusama, SORA Polkadot, and SORA2 destination rollout
+  helper for SORA -> retired runtime-network lanes destination rollout
   `SccpBridge.submit_message_proof` runtime entrypoint, non-zero runtime
   verifier code hash, and non-zero governed route allowlist hash before
   rendering `zk.sccp_destination_rollouts` plus `zk.sccp_route_allowlists`
@@ -103226,7 +114032,7 @@ Last updated: 2026-06-08
 - Added JavaScript, Python, Swift, Kotlin, and Java Android helpers for the
   justification transcripts. The helpers validate the raw next authority-set
   payload hash, derive the next authority-set hash from that payload, and bind
-  the parent GRANDPA authority set before hashing the transition proof inputs.
+  the parent finality authority set before hashing the transition proof inputs.
   message hash, and transition-justification hash:
   - next payload hash:
     `0x12ce972498ba5cd8a760aee0429fdc30d8b6447890e1bf77d8dde46f86b40d85`
@@ -103722,7 +114528,7 @@ Last updated: 2026-06-08
 - Added `next_authority_set_payload` to
   transition proof/justification transcripts.
   `0x01 || authority_count_le || (ed25519_authority_key || weight_le)[0..n]`
-  the signed next authority set before GRANDPA transition signatures are
+  the signed next authority set before finality transition signatures are
   accepted.
   Python, JavaScript, Swift, Kotlin, and Java Android SDK surfaces. Shared
   fixture hash:
@@ -103935,8 +114741,8 @@ Last updated: 2026-06-08
   families.
   from a configured parent trust anchor through an ordered transition chain.
   Current steps bind the parent set, canonical next authority-set payload hash,
-  payload-derived next set, transition block, and GRANDPA set-id range, then
-  verify a strict `> 2/3` parent-set Ed25519 GRANDPA justification before the
+  payload-derived next set, transition block, and finality set-id range, then
+  verify a strict `> 2/3` parent-set Ed25519 finality justification before the
   next set becomes eligible.
   message and transition-justification transcript prefixes, closing the previous
   material-profile gap for authority-set rotation proofs.
@@ -104302,7 +115108,7 @@ Last updated: 2026-06-08
   - `git diff --name-only -- Cargo.lock '**/Cargo.lock'`
 
 
-  source-adapter proof and bound `grandpa_justification_hash` into the canonical
+  source-adapter proof and bound `finality_justification_hash` into the canonical
   adapter transcript.
   authority-set hash from 32-byte Ed25519 authority keys and non-zero weights,
   checks it against the adapter and configured source trust anchor for
@@ -105896,9 +116702,9 @@ Last updated: 2026-06-08
   - `rm -rf /tmp/iroha-sccp-evm-smoke && mkdir -p /tmp/iroha-sccp-evm-smoke && npm install --prefix /tmp/iroha-sccp-evm-smoke --no-save --no-package-lock solc@0.7.4 ganache ethers >/tmp/iroha-sccp-evm-smoke/npm-install.log 2>&1 && NODE_PATH=/tmp/iroha-sccp-evm-smoke/node_modules node contracts/evm/sccp/test/sccp_message_bridge_smoke.js`
 
 
-  Kusama, SORA Polkadot, and SORA2. Configured material can now satisfy the
+  retired-runtime, SORA retired-runtime, and retired-runtime lane. Configured material can now satisfy the
   source-material production gate only when it uses the canonical
-  GRANDPA/event-storage profile ids and deployment-supplied authority-set,
+  finality/event-storage profile ids and deployment-supplied authority-set,
   finalized-header verifier, event-storage inclusion-verifier, and finality
   policy hashes.
   template-derived hashes, wrong profiles, and replayed ids remain fail-closed.
@@ -106183,8 +116989,8 @@ Last updated: 2026-06-08
 - Tightened `sccp_destination_rollout_is_production_ready(...)` so rollout
   material must match an exact destination profile instead of merely carrying
   non-empty metadata.
-- Added profile anchor ids for ETH, BSC, TON, TRON, SORA Kusama, SORA Polkadot,
-  and SORA2, plus `sccp_profiled_destination_rollout_v1(...)`,
+- Added profile anchor ids for ETH, BSC, TON, TRON, SORA retired-runtime, SORA retired-runtime,
+  and retired-runtime lane, plus `sccp_profiled_destination_rollout_v1(...)`,
   `sccp_evm_mainnet_destination_rollout_v1(...)`, and
   `sccp_tron_mainnet_destination_rollout_v1(...)` for operator-supplied rollout
   material. The EVM/TRON names were later superseded by binding-aware helpers
@@ -106208,8 +117014,8 @@ Last updated: 2026-06-08
   transcripts that the Rust SCCP source adapters already recompute.
 - The new helpers bind UI/RPC-collected witness material into the same
   adapter-proof hashes used on-chain, complementing the existing Solana
-  require the caller to pass the exact source domain so SORA Kusama, SORA
-  Polkadot, and SORA2 lanes cannot silently share one default domain.
+  require the caller to pass the exact source domain so SORA retired-runtime, SORA
+  retired-runtime, and retired-runtime lane lanes cannot silently share one default domain.
 - Added focused SDK coverage for branch tampering, malformed branch rejection,
   and canonical transcript lengths. The Java Android Gradle harness now includes
   the SCCP source-proof helper tests and the existing Solana SCCP prover tests.
@@ -106355,8 +117161,8 @@ Last updated: 2026-06-08
   hash for each source-chain envelope and rejects receipt hash tampering,
   branch mutation, and finality witness substitution before production material
   can be evaluated.
-  source event digest, canonical `frame_system::Events` storage key,
-  source-event leaf index, finalized block number, GRANDPA set id, block hash,
+  source event digest, canonical runtime events storage key,
+  source-event leaf index, finalized block number, finality set id, block hash,
   authority set hash, events root, and Merkle inclusion branch.
 - Added focused regression coverage for ETH/BSC receipt-proof hash binding and
 - Focused validation passed:
@@ -107559,7 +118365,7 @@ Last updated: 2026-06-08
   - `cd IrohaSwift && swift test --filter Halo2PastaTests/testOfflineNoteInstanceBuilderRejectsCountAndAmountViolations`
   - `cd IrohaSwift && swift test --filter OfflineNoteTests/testOfflineNoteAuditBundleRejectsInvalidShapes`
   - `cd IrohaSwift && swift test`
-  - `scripts/check_no_scale.sh`
+  - `scripts/check_no_legacy_codec.sh`
   - `git diff --check`
 
 ## 2026-05-28 Offline Bearer Cash SDK policy hardening
@@ -110591,7 +121397,7 @@ Last updated: 2026-06-08
   SORA-origin bundles must carry a Nexus finality proof, while non-SORA source
   bundles must carry the source-chain envelope. Wrong-format proofs are rejected
   before public-input or runtime-envelope projection.
-- SCCP message public inputs and runtime-scale projection now derive finality
+- SCCP message public inputs and runtime-proof projection now derive finality
   height/block hash from the source-chain envelope for non-SORA source bundles,
   and continue to use Nexus commit-QC finality for SORA-origin bundles.
 - Torii SCCP message-bundle reconstruction and publication now preserve the
@@ -110613,7 +121419,7 @@ Last updated: 2026-06-08
   - `cargo fmt -p iroha_core -p iroha_sccp -p iroha_torii`
   - `cargo test -p iroha_sccp source_chain -- --nocapture`
   - `cargo test -p iroha_sccp message_bundle_structure_rejects_wrong_finality_format_for_source_direction -- --nocapture`
-  - `cargo test -p iroha_sccp runtime_envelope_from_message_bundle_exports_scale_inputs_for_pallet -- --nocapture`
+  - `cargo test -p iroha_sccp runtime_envelope_from_message_bundle_exports_runtime_proof_inputs -- --nocapture`
   - `cargo test -p iroha_sccp --lib -- --nocapture`
   - `cargo test -p iroha_torii --lib sccp_ -- --nocapture`
   - `cargo test -p iroha get_sccp_capabilities_requests_norito_and_decodes_typed_payload -- --nocapture`
@@ -112005,7 +122811,7 @@ Last updated: 2026-06-08
   - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 RUST_TEST_THREADS=1 cargo test -p integration_tests --test events_and_triggers -- --test-threads=1 --nocapture`
   - `cargo fmt --all -- --check`
   - `git diff --check`
-  - `scripts/check_no_scale.sh`
+  - `scripts/check_no_legacy_codec.sh`
 
 ## 2026-05-21 SCCP audit proof gate and EVM binding hardening
 
@@ -112237,7 +123043,7 @@ Last updated: 2026-06-08
   - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=1 cargo test --workspace --no-run`
   - `env -u LOG_FORMAT CARGO_TARGET_DIR=target/codex-autoscale-params RUST_TEST_THREADS=1 cargo test -p integration_tests --test nexus_and_streaming routed_submit_response -- --test-threads=1 --nocapture`
   - `git diff --check`
-  - `scripts/check_no_scale.sh`
+  - `scripts/check_no_legacy_codec.sh`
 - The patched proof scenario and the full `queries_and_proofs` binary are now
   green. Full workspace build and full workspace test-target compilation are
   also green. The broad test compile exposed a missing
@@ -112408,7 +123214,7 @@ Last updated: 2026-06-08
   and
   `CARGO_TARGET_DIR=target/codex-autoscale-params CARGO_BUILD_JOBS=2 cargo clippy -p iroha_sccp --lib -- -D warnings`.
   Hygiene is green with `cargo fmt --all -- --check`, `git diff --check`,
-  and `scripts/check_no_scale.sh`; `Cargo.lock` remains unchanged.
+  and `scripts/check_no_legacy_codec.sh`; `Cargo.lock` remains unchanged.
 
 ## 2026-05-20 WSV/Kura query, proof, and event closure
 
@@ -112439,7 +123245,7 @@ Last updated: 2026-06-08
   and
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo clippy -p integration_tests --test queries_and_proofs --test events_and_triggers -- -D warnings`.
   Hygiene is green with `cargo fmt --all -- --check`, `git diff --check`, and
-  `scripts/check_no_scale.sh`. Workspace test-target compilation is green with
+  `scripts/check_no_legacy_codec.sh`. Workspace test-target compilation is green with
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo test --workspace --no-run`
   (CUDA helper crates fell back because `nvcc` is not installed on this host).
 
@@ -112720,7 +123526,7 @@ Last updated: 2026-06-08
   fixture with `LOG_FORMAT` unset, Norito JSON duplicate-field rejection, Torii
   encrypted-only RAM-LFE DTO rejection, and `iroha_core` identifier claim
   binding checks. Hygiene is green with `cargo fmt --all -- --check`,
-  `git diff --check`, and `scripts/check_no_scale.sh`.
+  `git diff --check`, and `scripts/check_no_legacy_codec.sh`.
 
 ## 2026-05-19 Nexus autoscale public-testnet hardening
 
@@ -112823,7 +123629,7 @@ Last updated: 2026-06-08
 - Hygiene is green with
   `rustfmt --edition 2024 --check crates/iroha/src/client.rs crates/iroha_core/src/state.rs integration_tests/tests/nexus/autoscale_localnet.rs`,
   `cargo fmt --all -- --check`, `git diff --check`, and
-  `scripts/check_no_scale.sh`; `Cargo.lock` remains unchanged. The Rust workspace
+  `scripts/check_no_legacy_codec.sh`; `Cargo.lock` remains unchanged. The Rust workspace
   builds with
   `CARGO_TARGET_DIR=target/codex-autoscale-params cargo build --workspace`
   (43m44s; optional CUDA kernels were skipped because `nvcc` is not installed).
@@ -113111,7 +123917,7 @@ Last updated: 2026-06-08
   verify_rejects_invalid_dynamic_access_hints -- --nocapture` check is now
   green after the BFV rotation-key lint fix.
 - Closeout validation also passed with `cargo fmt --all -- --check`,
-  `git diff --check`, `scripts/check_no_scale.sh`,
+  `git diff --check`, `scripts/check_no_legacy_codec.sh`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-build cargo build --workspace`,
   and `CARGO_TARGET_DIR=/tmp/iroha-codex-workspace-build cargo test --workspace
   --no-run`. The full workspace test execution remains a separate multi-hour
@@ -113174,7 +123980,7 @@ Last updated: 2026-06-08
   binaries); and `CARGO_TARGET_DIR=/tmp/iroha-trigger-it cargo test -p
   integration_tests --test events_and_triggers triggers:: -- --nocapture` (`26`
   passed) are green. `cargo fmt --all -- --check`, `git diff --check` on the
-  touched files, and `scripts/check_no_scale.sh` are also green. Focused
+  touched files, and `scripts/check_no_legacy_codec.sh` are also green. Focused
   `NORITO_SKIP_BINDINGS_SYNC=1 cargo clippy -p iroha_data_model --lib --
   -D warnings`, `NORITO_SKIP_BINDINGS_SYNC=1 cargo clippy -p iroha_core --lib
   -- -D warnings`, and the earlier
@@ -116936,7 +127742,7 @@ Last updated: 2026-06-08
   and
   `cargo test -p iroha_core asset_definition_holder_index_waits_for_last_partition_removal --lib -- --nocapture`.
 - Library validation passed with `cargo check -p iroha_core --lib`; the
-  serialization guard `scripts/check_no_scale.sh` also passed.
+  serialization guard `scripts/check_no_legacy_codec.sh` also passed.
 
 ## 2026-05-07 Torii ephemeral query first-batch path
 
@@ -116945,7 +127751,7 @@ Last updated: 2026-06-08
   existing `remaining_items` contract. Stored cursors still materialize owned
   iterators because they can outlive the state snapshot borrow.
 - Added unit coverage for the no-sort ephemeral first-batch/remaining-count
-  path. `cargo check -p iroha_core --lib` and `scripts/check_no_scale.sh`
+  path. `cargo check -p iroha_core --lib` and `scripts/check_no_legacy_codec.sh`
   passed; the focused `cargo test -p iroha_core
   ephemeral_unsorted_query_returns_first_batch_and_remaining_without_cursor
   --lib -- --nocapture` also passed.
@@ -117885,7 +128691,7 @@ Last updated: 2026-06-08
   tests. Formatting is green; crate-level
   `cargo check -p iroha_core --lib` is green; `cargo check -p iroha_data_model
   --features fast_dsl` is green; `git diff --check` and
-  `scripts/check_no_scale.sh` are green. The 2026-05-06 rerun also covered
+  `scripts/check_no_legacy_codec.sh` are green. The 2026-05-06 rerun also covered
   `find_transactions_by_authority_timestamp_and_result_use_kura_indexes`,
   `find_transactions_by_filter_timestamp_range_uses_kura_index`,
   `transaction_index_completes_after_lazy_loading_reopened_blocks`, and
@@ -117979,7 +128785,7 @@ Last updated: 2026-06-08
   workspace has no operator mixed-host inventory or observability evidence
   inputs. That remains a rollout blocker rather than a local code failure.
 - Hygiene checks passed with `cargo fmt --all -- --check`, `git diff --check`,
-  and `scripts/check_no_scale.sh`.
+  and `scripts/check_no_legacy_codec.sh`.
 
 ## 2026-05-05 UAID replay/checkpoint hardening
 
@@ -118072,7 +128878,7 @@ Last updated: 2026-06-08
   height advancement (`171` passed, `4` ignored; 3193.09s).
 - Additional validation passed with focused Torii fanout clippy/tests, the
   reduced-sample ignored `torii_load_profile`, `cargo fmt --all -- --check`,
-  `git diff --check`, `scripts/check_no_scale.sh`, and focused strict clippy
+  `git diff --check`, `scripts/check_no_legacy_codec.sh`, and focused strict clippy
   for `iroha`, `iroha_core`, `iroha_torii`, `network_functional`,
   `nexus_and_streaming`, and the `core_api` integration target. Focused
   `iroha_core` unit tests for entrypoint hashing, the stateless-validation
@@ -118094,7 +128900,7 @@ Last updated: 2026-06-08
   `iroha_crypto` Ed25519 aggregate tests (`7` passed), the Ed25519 public-key
   fast-cache unit, strict clippy for `iroha_core --lib`, `iroha_crypto
   --lib --tests`, and `integration_tests --lib`, plus formatting, diff
-  whitespace, no-SCALE, and signature-bypass term guards. A fresh end-to-end
+  whitespace, no-retired-codec, and signature-bypass term guards. A fresh end-to-end
   `cargo test --workspace` remains queued for a clean uninterrupted rerun.
 
 ## 2026-05-04 Sumeragi embedded QC and NPoS block-sync hardening
@@ -118247,7 +129053,7 @@ Last updated: 2026-06-08
   `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p fastpq_prover --all-targets -- -D warnings`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p ivm --all-targets -- -D warnings`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p iroha --all-targets -- -D warnings`,
-  `cargo fmt --all -- --check`, `scripts/check_no_scale.sh`, and
+  `cargo fmt --all -- --check`, `scripts/check_no_legacy_codec.sh`, and
   `git diff --check`.
 - Full workspace tests were not rerun in this follow-up and remain for the next
   uncontended validation window.
@@ -118283,7 +129089,7 @@ Last updated: 2026-06-08
   `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test events_and_triggers triggers::by_call_trigger::trigger_in_genesis -- --nocapture`.
   Strict focused clippy passed for `iroha_core --lib`, `iroha --lib`, and the
   `events_and_triggers` integration target. `cargo fmt --all -- --check`,
-  `scripts/check_no_scale.sh`, and `git diff --check` are also clean.
+  `scripts/check_no_legacy_codec.sh`, and `git diff --check` are also clean.
 - The full workspace test sweep was not restarted after these repairs; it
   remains queued for the next long validation window.
 
@@ -118460,7 +129266,7 @@ Last updated: 2026-06-08
   `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo test -p integration_tests --test consensus_and_da submit_retry_budget_covers_localnet_startup_jitter -- --nocapture`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo check -p integration_tests --test consensus_and_da`,
   `cargo fmt --all -- --check`,
-  `scripts/check_no_scale.sh`,
+  `scripts/check_no_legacy_codec.sh`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p iroha_core -p iroha_torii -p iroha_test_network --lib -- -D warnings`,
   `CARGO_TARGET_DIR=/tmp/iroha-codex-uaid-target cargo clippy -p integration_tests --test consensus_and_da -- -D warnings`, and
   `git diff --check`.
@@ -119833,7 +130639,7 @@ Last updated: 2026-06-08
   focused Swift regression filter for Ed25519 seed, bridge pinning, BFV vectors,
   and legacy receipt rejection, the JavaScript Connect/identifier test slice,
   ESLint over the touched JS SDK files, Android `:core:verifyNoritoSchemas`,
-  `scripts/check_no_scale.sh`, plus the same focused Kotlin/JVM and Java
+  `scripts/check_no_legacy_codec.sh`, plus the same focused Kotlin/JVM and Java
   Android transport harnesses with Homebrew OpenJDK 21 pinned via `JAVA_HOME`.
 - A temporary .NET 8 SDK installed under `/tmp/iroha-dotnet/sdk` unblocked C#
   validation. `dotnet test csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj --no-restore`

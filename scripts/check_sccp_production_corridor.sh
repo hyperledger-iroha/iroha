@@ -338,6 +338,7 @@ phase_evidence_scripts() {
     pytests/scripts/sccp_ton_source_state_evidence_test.py
     pytests/scripts/sccp_tron_live_evidence_test.py
     pytests/scripts/sccp_tron_source_bridge_evidence_test.py
+    pytests/scripts/sccp_retired_network_surface_test.py
   )
   run_cmd "$SCCP_CORRIDOR_PYTHON_BIN" -m pytest -q "${tests[@]}"
 }
@@ -371,7 +372,9 @@ phase_kotlin_sdk() {
   run_java_version_check "$java_home"
   run_in_dir "$ROOT/kotlin" \
     env "JAVA_HOME=$java_home" "PATH=$java_home/bin:$PATH" \
-    ./gradlew :core-jvm:test --console=plain --tests 'org.hyperledger.iroha.sdk.sccp.*'
+    ./gradlew :core-jvm:test --console=plain \
+      --tests 'org.hyperledger.iroha.sdk.sccp.*' \
+      --tests 'org.hyperledger.iroha.sdk.sccp.TonSccpProverTest'
 }
 
 phase_java_android() {

@@ -22,7 +22,7 @@ estruturas de donnees canonices, les hooks du pipeline de blocs, les preuves de
 cliente leger, e as superfícies Torii/RPC que devem chegar antes que les
 Validadores que podem ser aplicados em compromissos DA para cheques
 d'admission ou de gouvernance. Todas as cargas úteis são codificadas em Norito; passo de
-SCALE não é JSON ad hoc.
+retired codec não é JSON ad hoc.
 
 ## Objetivos
 

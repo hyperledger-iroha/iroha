@@ -302,6 +302,53 @@ TypeInvariant ==
 Safety ==
   \A c \in Cases: Matches(c)
 
+SafetyFast ==
+  Safety
+
+EmptyBlockDropDecisionExact ==
+  \A c \in Cases:
+    /\ ActualDropped(c) = SpecDropped(c)
+    /\ ActualContinues(c) = SpecContinues(c)
+
+EmptyBlockTelemetryExact ==
+  \A c \in Cases:
+    ActualInvalidPayloadRecorded(c) = SpecInvalidPayloadRecorded(c)
+
+EmptyBlockPendingCleanupExact ==
+  \A c \in Cases:
+    /\ ActualPendingRetained(c) = SpecPendingRetained(c)
+    /\ ActualMissingRequestRetained(c) = SpecMissingRequestRetained(c)
+    /\ ActualRbcSessionRetained(c) = SpecRbcSessionRetained(c)
+
+EmptyBlockQcCleanupExact ==
+  \A c \in Cases:
+    /\ ActualQcCacheRetained(c) = SpecQcCacheRetained(c)
+    /\ ActualQcTallyRetained(c) = SpecQcTallyRetained(c)
+
+EmptyBlockProposalContextCleanupExact ==
+  \A c \in Cases:
+    /\ ActualProposalRetained(c) = SpecProposalRetained(c)
+    /\ ActualHintRetained(c) = SpecHintRetained(c)
+
+EmptyBlockVoteCleanupExact ==
+  \A c \in Cases:
+    /\ ActualVoteLogRetained(c) = SpecVoteLogRetained(c)
+    /\ ActualVoteValidationRetained(c) = SpecVoteValidationRetained(c)
+
+EmptyBlockRosterSignerCleanupExact ==
+  \A c \in Cases:
+    /\ ActualRosterCacheRetained(c) = SpecRosterCacheRetained(c)
+    /\ ActualSignerCacheRetained(c) = SpecSignerCacheRetained(c)
+
+EmptyBlockQcDropExactness ==
+  /\ EmptyBlockDropDecisionExact
+  /\ EmptyBlockTelemetryExact
+  /\ EmptyBlockPendingCleanupExact
+  /\ EmptyBlockQcCleanupExact
+  /\ EmptyBlockProposalContextCleanupExact
+  /\ EmptyBlockVoteCleanupExact
+  /\ EmptyBlockRosterSignerCleanupExact
+
 NewViewNeverDropped ==
   Matches("new_view_known_empty")
 

@@ -48901,9 +48901,22 @@ async fn maybe_emit_rbc_ready_for_local_kura_payload_hydrates_before_ready() {
         "READY emission should not wait for external READY bootstrap"
     );
     assert_eq!(
+        stored.received_chunks(),
+        stored.total_chunks(),
+        "local Kura payload should hydrate missing chunks before READY emission"
+    );
+    assert_eq!(
         stored.progress_stage(),
-        super::RbcProgressStage::Delivered,
-        "authoritative READY emission should immediately cascade into the DELIVER sidecar"
+        super::RbcProgressStage::LocalReadySent,
+        "uncommitted Kura payload should wait for READY quorum before local DELIVER"
+    );
+    assert!(
+        !stored.delivered,
+        "uncommitted Kura payload must not use the local-authoritative DELIVER bypass"
+    );
+    assert!(
+        !actor.rbc_session_has_local_authoritative_payload_for_progress(key, stored),
+        "uncommitted Kura payload must not be treated as locally authoritative"
     );
     assert_eq!(
         stored
@@ -55588,6 +55601,137 @@ async fn handle_rbc_deliver_emits_local_ready_after_ready_bundle() {
     assert!(
         stored.sent_ready,
         "local READY should be emitted after DELIVER"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn handle_rbc_deliver_relay_ready_bundle_before_deferring() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let key = session_key();
+    let payload_hash = Hash::prehashed([0x31; 32]);
+    let chunk_root = Hash::prehashed([0x32; 32]);
+    let epoch = actor.epoch_for_height(key.1);
+    let mut session = RbcSession::test_new(2, Some(payload_hash), Some(chunk_root), epoch);
+    session.test_note_chunk(0, b"chunk-a".to_vec(), 0);
+
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    let roster = actor.effective_commit_topology();
+    assert_eq!(roster.len(), 4, "test requires exactly four validators");
+    actor.record_rbc_session_roster(key, roster.clone(), super::RbcRosterSource::Derived);
+
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = actor.rbc_deliver_quorum(&topology);
+    let relay_threshold = roster
+        .len()
+        .saturating_sub(required)
+        .saturating_add(1)
+        .max(1);
+    assert_eq!(required, 3, "test requires a three-vote DELIVER quorum");
+    assert_eq!(
+        relay_threshold, 2,
+        "test requires a two-vote READY relay threshold"
+    );
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(key.1);
+    let signature_topology = super::topology_for_view(&topology, key.1, key.2, mode_tag, prf_seed);
+    let local_sender = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local sender");
+
+    let roster_hash = roster_hash(&roster);
+    let mut ready_signatures = Vec::new();
+    let mut deliver_signer = None;
+    for (idx, peer) in signature_topology.as_ref().iter().enumerate() {
+        if ready_signatures.len() >= relay_threshold {
+            break;
+        }
+        let sender = u32::try_from(idx).expect("sender fits u32");
+        if sender == local_sender {
+            continue;
+        }
+        let signer_kp = harness
+            .key_pairs
+            .iter()
+            .find(|kp| kp.public_key() == peer.public_key())
+            .expect("signer keypair");
+        let mut ready = crate::sumeragi::consensus::RbcReady {
+            block_hash: key.0,
+            height: key.1,
+            view: key.2,
+            epoch,
+            roster_hash,
+            chunk_root,
+            sender,
+            signature: Vec::new(),
+        };
+        let preimage = super::rbc_ready_preimage(&actor.common_config.chain, mode_tag, &ready);
+        let signature = Signature::new(signer_kp.private_key(), &preimage);
+        ready.signature = signature.payload().to_vec();
+        if deliver_signer.is_none() {
+            deliver_signer = Some((peer.clone(), sender));
+        }
+        ready_signatures.push(crate::sumeragi::consensus::RbcReadySignature {
+            sender: ready.sender,
+            signature: ready.signature.clone(),
+        });
+    }
+    assert_eq!(
+        ready_signatures.len(),
+        relay_threshold,
+        "READY bundle should reach relay threshold but remain below DELIVER quorum"
+    );
+
+    let (deliver_peer, deliver_sender) = deliver_signer.expect("deliver signer");
+    let deliver_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == deliver_peer.public_key())
+        .expect("deliver keypair");
+    let mut deliver = crate::sumeragi::consensus::RbcDeliver {
+        block_hash: key.0,
+        height: key.1,
+        view: key.2,
+        epoch,
+        roster_hash,
+        chunk_root,
+        sender: deliver_sender,
+        signature: Vec::new(),
+        ready_signatures,
+    };
+    let preimage = super::rbc_deliver_preimage(&actor.common_config.chain, mode_tag, &deliver);
+    let signature = Signature::new(deliver_kp.private_key(), &preimage);
+    deliver.signature = signature.payload().to_vec();
+
+    actor.handle_rbc_deliver(deliver).expect("deliver handled");
+
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session");
+    assert!(
+        stored.sent_ready,
+        "READY relay should run before the inbound DELIVER is deferred"
+    );
+    assert!(
+        stored
+            .ready_signatures
+            .iter()
+            .any(|entry| entry.sender == local_sender),
+        "local READY should be recorded after the bundled READYs reach relay threshold"
+    );
+    assert!(
+        !stored.delivered,
+        "incomplete chunks should still prevent DELIVER acceptance"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.pending.contains_key(&key),
+        "the inbound DELIVER should remain deferred after local READY relay"
     );
 
     harness.shutdown.send();
@@ -106543,7 +106687,7 @@ async fn maybe_force_view_change_for_stalled_pending_rebroadcasts_cached_frontie
     {
         let state = Arc::get_mut(&mut actor.state).expect("state uniquely held");
         let mut params_block = state.world.parameters.block();
-        params_block.sumeragi.block_time_ms = 1_000;
+        params_block.sumeragi.block_time_ms = 200;
         params_block.commit();
     }
     let timing_view = actor.state.view();
@@ -106568,34 +106712,13 @@ async fn maybe_force_view_change_for_stalled_pending_rebroadcasts_cached_frontie
     let block = sample_block(height, view_idx, parent);
     let block_hash = block.hash();
     let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
-    let base_timeout = actor.commit_quorum_timeout().max(Duration::from_millis(1));
-    let backlog_timeout = actor.backlog_extended_view_change_timeout(base_timeout, true);
-    let frontier_pending_timeout =
-        super::saturating_mul_duration(actor.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
-    let repair_exhaustion_window = actor.cap_active_block_production_gap(
-        frontier_pending_timeout.saturating_add(
-            actor
-                .frontier_slot_lag_window()
-                .max(actor.rebroadcast_cooldown())
-                .max(Duration::from_millis(1)),
-        ),
-        true,
-    );
 
     let now = Instant::now();
-    let stalled_age = frontier_pending_timeout.saturating_add(Duration::from_millis(2));
-    assert!(
-        stalled_age < repair_exhaustion_window,
-        "test setup should exercise quorum-timeout replay before repair exhaustion"
-    );
-    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
     let mut pending = PendingBlock::new(block.clone(), payload_hash, height, view_idx);
-    pending.touch_progress(stalled_at);
+    pending.touch_progress(now);
     actor.pending.pending_blocks.insert(block_hash, pending);
     actor.note_proposal_seen(height, view_idx, payload_hash);
-    actor
-        .phase_tracker
-        .on_view_change(height, view_idx, stalled_at);
+    actor.phase_tracker.on_view_change(height, view_idx, now);
     actor.frontier_slot = Some(super::FrontierSlot::new(
         height,
         view_idx,
@@ -106671,6 +106794,31 @@ async fn maybe_force_view_change_for_stalled_pending_rebroadcasts_cached_frontie
         super::StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout,
         "test setup should match the active-recovery backlog timeout path"
     );
+    let frontier_pending_timeout = decision.timeout;
+    let repair_exhaustion_window = actor.cap_active_block_production_gap(
+        frontier_pending_timeout.saturating_add(
+            actor
+                .frontier_slot_lag_window()
+                .max(actor.rebroadcast_cooldown())
+                .max(Duration::from_millis(1)),
+        ),
+        true,
+    );
+    let stalled_age = frontier_pending_timeout.saturating_add(Duration::from_millis(2));
+    assert!(
+        stalled_age < repair_exhaustion_window,
+        "test setup should exercise quorum-timeout replay before repair exhaustion: timeout={frontier_pending_timeout:?}, stalled_age={stalled_age:?}, repair_exhaustion_window={repair_exhaustion_window:?}"
+    );
+    let stalled_at = now.checked_sub(stalled_age).unwrap_or(now);
+    actor
+        .pending
+        .pending_blocks
+        .get_mut(&block_hash)
+        .expect("pending retained")
+        .touch_progress(stalled_at);
+    actor
+        .phase_tracker
+        .on_view_change(height, view_idx, stalled_at);
 
     assert!(
         !actor.maybe_force_view_change_for_stalled_pending(now),

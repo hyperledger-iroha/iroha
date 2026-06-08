@@ -6534,28 +6534,42 @@ impl Actor {
                             },
                         );
                     iroha_logger::debug!(
-                        height = key.1,
-                        view = key.2,
-                        block = %key.0,
-                        local_peer = %self.common_config.peer.id(),
-                        sender = deliver.sender,
-                        peer = ?deliver_peer,
-                        roster_source = ?roster_source,
-                        local_ready_sender = ?local_ready_sender,
-                        local_ready_sent,
-                        local_ready_deferral = ?local_ready_deferral,
-                        ready = ready_senders.len(),
-                        required = deliver_quorum,
-                        missing_ready_total,
-                        missing_ready = ?missing_ready,
-                        missing_ready_peers = ?missing_ready_peers,
-                        pending_ready_total,
-                        pending_ready = ?pending_ready,
-                        pending_ready_peers = ?pending_ready_peers,
-                        senders = ?ready_senders.iter().copied().collect::<Vec<_>>(),
-                        "deferring RBC DELIVER: READY quorum not yet satisfied"
+                    height = key.1,
+                    view = key.2,
+                    block = %key.0,
+                    local_peer = %self.common_config.peer.id(),
+                    sender = deliver.sender,
+                    peer = ?deliver_peer,
+                    roster_source = ?roster_source,
+                    local_ready_sender = ?local_ready_sender,
+                    local_ready_sent,
+                    local_ready_deferral = ?local_ready_deferral,
+                    ready = ready_senders.len(),
+                    required = deliver_quorum,
+                    missing_ready_total,
+                    missing_ready = ?missing_ready,
+                    missing_ready_peers = ?missing_ready_peers,
+                    pending_ready_total,
+                    pending_ready = ?pending_ready,
+                    pending_ready_peers = ?pending_ready_peers,
+                    senders = ?ready_senders.iter().copied().collect::<Vec<_>>(),
+                    "deferring RBC DELIVER: READY quorum not yet satisfied"
                     );
                 }
+            }
+            self.maybe_emit_rbc_ready(key)?;
+            let should_stash_deferred_deliver = self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .get(&key)
+                .is_some_and(|session| !session.delivered && !session.is_invalid());
+            if !should_stash_deferred_deliver {
+                self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
+                self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
             }
             let sender = deliver.sender;
             let max_bytes = self.pending_rbc_caps().1;

@@ -11,6 +11,7 @@ import {
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
   SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
   SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+  validateBscTestnetNativeEvmProverBundle,
 } from "../javascript/iroha_js/src/sccp.js";
 import {
   BSC_MAINNET_NETWORK_ID_HEX,
@@ -21,6 +22,7 @@ import {
   SCCP_DOMAIN_BSC,
   SCCP_DOMAIN_SORA,
   bscCanonicalProductionOutputProblems,
+  canonicalBscNativeEvmProverBundleHash,
   bscDestinationBindingHash,
   bscDestinationBindingKey,
   buildBscNativeEvmProverBundleFromArtifacts,
@@ -387,7 +389,10 @@ const nativeProverSelfTestFixture = ({
   };
 };
 
-async function writeNativeProverFixtureFiles({ routeOverrides = {} } = {}) {
+async function writeNativeProverFixtureFiles({
+  routeOverrides = {},
+  artifactByteOverrides = {},
+} = {}) {
   const workDir = await mkdtemp(join(tmpdir(), "iroha-bsc-native-prover."));
   const artifactRoot = join(workDir, "native");
   await mkdir(artifactRoot, { recursive: true });
@@ -396,11 +401,23 @@ async function writeNativeProverFixtureFiles({ routeOverrides = {} } = {}) {
     await writeFile(pathName, bytes);
     return pathName;
   };
-  const bytesFor = (label) =>
-    Buffer.from(`${label}: ${"route-bound native bsc material ".repeat(16)}`);
-  const proofBytes = bytesFor("proof-artifact");
-  const provingKeyBytes = bytesFor("proving-key");
-  const verifierKeyBytes = bytesFor("verifier-key");
+  const bytesFor = (label, size) => {
+    const seed = Buffer.from(`${label}: route-bound native bsc material\n`);
+    const bytes = Buffer.alloc(size);
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] =
+        (seed[index % seed.length] + index * 31 + (index >> 7)) & 0xff;
+    }
+    return bytes;
+  };
+  const proofBytes =
+    artifactByteOverrides.proofArtifact ??
+    artifactByteOverrides.proof ??
+    bytesFor("proof-artifact", 96 * 1024);
+  const provingKeyBytes =
+    artifactByteOverrides.provingKey ?? bytesFor("proving-key", 96 * 1024);
+  const verifierKeyBytes =
+    artifactByteOverrides.verifierKey ?? bytesFor("verifier-key", 2048);
   const proofArtifactHash = sha256Hex(proofBytes);
   const provingKeyHash = sha256Hex(provingKeyBytes);
   const verifierKeyHash = sha256Hex(verifierKeyBytes);
@@ -439,7 +456,12 @@ async function writeNativeProverFixtureFiles({ routeOverrides = {} } = {}) {
   )) {
     const relativePath = `${sdk}-implementation.bin`;
     sdkImplementationPaths[sdk] = relativePath;
-    await writeArtifact(relativePath, bytesFor(`${sdk}-implementation`));
+    await writeArtifact(
+      relativePath,
+      artifactByteOverrides[`${sdk}Implementation`] ??
+        artifactByteOverrides[sdk] ??
+        bytesFor(`${sdk}-implementation`, 2048),
+    );
   }
   for (const name of [
     "circuit-security-audit.bin",
@@ -447,7 +469,7 @@ async function writeNativeProverFixtureFiles({ routeOverrides = {} } = {}) {
     "reproducible-build-attestation.bin",
     "no-wasm-no-remote-scan.bin",
   ]) {
-    await writeArtifact(name, bytesFor(name));
+    await writeArtifact(name, bytesFor(name, 2048));
   }
   const {
     destinationRollout: routeDestinationRolloutOverrides,
@@ -815,6 +837,7 @@ test("BSC route-config writes backend-compatible TOML with BSC deployment eviden
   assert.match(toml, new RegExp(`prover_artifact_hash = "${HASH_44}"`, "u"));
   assert.match(toml, new RegExp(`circuit_artifact_hash = "${HASH_44}"`, "u"));
   assert.match(toml, new RegExp(`proving_key_hash = "${HASH_55}"`, "u"));
+  assert.doesNotMatch(toml, /native_evm_prover_bundle_hash/u);
   assert.match(
     toml,
     new RegExp(`destination_binding_hash = "${bindingHash()}"`, "u"),
@@ -1001,12 +1024,24 @@ test("BSC route-config validates explorer URLs against the selected network", ()
 });
 
 test("BSC route-config requires SDK-valid native prover bundles for production readiness", () => {
-  const validToml = buildBscTairaXorRouteConfigToml(
-    productionReadyRouteManifest(),
+  const manifest = productionReadyRouteManifest();
+  const expectedNativeBundleHash = canonicalBscNativeEvmProverBundleHash(
+    validateBscTestnetNativeEvmProverBundle(
+      nativeProverBundleForRollout(manifest.destinationRollout),
+      { expectedDestinationBindingHash: manifest.destinationRollout.destinationBindingHash },
+    ),
   );
+  const validToml = buildBscTairaXorRouteConfigToml(manifest);
   assert.match(validToml, /production_ready = true/u);
   assert.match(validToml, new RegExp(`proof_artifact_hash = "${HASH_44}"`, "u"));
   assert.match(validToml, new RegExp(`proving_key_hash = "${HASH_55}"`, "u"));
+  assert.match(
+    validToml,
+    new RegExp(
+      `native_evm_prover_bundle_hash = "${expectedNativeBundleHash}"`,
+      "u",
+    ),
+  );
 
   assert.throws(
     () =>
@@ -1023,6 +1058,14 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
         }),
       ),
     /nativeEvmProverBundle.*BSC SDK validation.*chain must be bsc-testnet/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml({
+        ...manifest,
+        nativeEvmProverBundleHash: HASH_66,
+      }),
+    /nativeEvmProverBundleHash does not match nativeEvmProverBundle/u,
   );
   assert.throws(
     () =>
@@ -1075,6 +1118,17 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
         }),
       ),
     /nativeEvmProverBundle.*BSC SDK validation.*proofArtifact/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyRouteManifest({
+          bundleOverrides: {
+            proving_key: "artifacts/bsc-testnet/proof-artifact.bin",
+          },
+        }),
+      ),
+    /nativeEvmProverBundle.*BSC SDK validation.*artifact paths must be role-separated/u,
   );
 
   const aliasBase = productionReadyRouteManifest();
@@ -1135,6 +1189,14 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
       .proof_artifact_hash,
     fixture.proofArtifactHash,
   );
+  assert.equal(
+    result.attachedRouteManifest.nativeEvmProverBundleHash,
+    canonicalBscNativeEvmProverBundleHash(result.descriptor),
+  );
+  assert.equal(
+    result.attachedRouteManifest.destinationRollout.nativeEvmProverBundleHash,
+    result.attachedRouteManifest.nativeEvmProverBundleHash,
+  );
 
   const out = join(fixture.workDir, "bundle.json");
   const attachedOut = join(fixture.workDir, "route.attached.json");
@@ -1155,6 +1217,11 @@ test("BSC native-prover-bundle builds SDK-valid route-bound bundles from artifac
     JSON.parse(await readFile(attachedOut, "utf8")).nativeEvmProverBundle
       .proving_key_hash,
     fixture.provingKeyHash,
+  );
+  assert.equal(
+    JSON.parse(await readFile(attachedOut, "utf8"))
+      .nativeEvmProverBundleHash,
+    canonicalBscNativeEvmProverBundleHash(result.descriptor),
   );
 });
 
@@ -1180,8 +1247,71 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
       buildBscNativeEvmProverBundleFromArtifacts({
         ...fixture.options,
         "audit-cross-sdk-fixture-parity": HASH_11,
-      }),
+    }),
     /auditHashes.cross_sdk_fixture_parity must match the artifact sha256/u,
+  );
+
+  const tinyProof = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      proofArtifact: Buffer.alloc(256, 0xa7),
+    },
+  });
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(tinyProof.options),
+    /proofArtifactBytes must be at least 65536 bytes/u,
+  );
+
+  const repeatedProof = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      proofArtifact: Buffer.alloc(96 * 1024, 0xa7),
+    },
+  });
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(repeatedProof.options),
+    /proof artifact looks like placeholder proof material: repeated 1-byte pattern/u,
+  );
+
+  const repeatedPattern = Buffer.alloc(96 * 1024);
+  for (let index = 0; index < repeatedPattern.length; index += 1) {
+    repeatedPattern[index] = index % 32;
+  }
+  const repeatedProvingKey = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      provingKey: repeatedPattern,
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(repeatedProvingKey.options),
+    /proving key looks like placeholder proof material: repeated 32-byte pattern/u,
+  );
+
+  const arithmeticProof = Buffer.alloc(96 * 1024);
+  for (let index = 0; index < arithmeticProof.length; index += 1) {
+    arithmeticProof[index] = (index * 17 + 23) & 0xff;
+  }
+  const arithmeticProofFixture = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      proofArtifact: arithmeticProof,
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        arithmeticProofFixture.options,
+      ),
+    /proof artifact looks like placeholder proof material: arithmetic byte sequence with step 17/u,
+  );
+
+  const tinyImplementation = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      dotnetImplementation: Buffer.alloc(256, 0xb8),
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(tinyImplementation.options),
+    /implementationBytes must be at least 1024 bytes/u,
   );
 
   const proofDrift = await writeNativeProverFixtureFiles({

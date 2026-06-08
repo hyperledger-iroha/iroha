@@ -148,9 +148,38 @@ LiveCleanupPreserveSafety ==
   /\ ~PreserveStaleCurrentViewAccepted
   /\ ~PreserveNoActionableAccepted
 
+QuorumOwnerActionableRejectsNonExactInputs ==
+  /\ ~ActionableWithoutSourceAccepted
+  /\ ~OwnerWrongViewAccepted
+  /\ ~VoteWrongViewAccepted
+  /\ ~DependencyStaleAccepted
+  /\ ~SenderStaleAccepted
+  /\ ~MissingBlockWrongViewAccepted
+  /\ ~MissingCommitWrongPhaseAccepted
+  /\ ~VoteBackedPassiveAccepted
+  /\ ~PreserveNonFrontierHeightAccepted
+  /\ ~PreserveStaleCurrentViewAccepted
+  /\ ~PreserveNoActionableAccepted
+
+QuorumOwnerActionableHasExactPositiveEvidence ==
+  /\ OwnerActiveExact
+  /\ VoteEvidenceExact
+  /\ DependencyBacklogExact
+  /\ RbcSenderActivityExact
+  /\ MissingBlockActivityExact
+  /\ MissingCommitActivityExact
+  /\ VoteBackedRecoveryExact
+  /\ PreserveOwnerSource
+  /\ PreserveRecoverySource
+
+FrontierQuorumOwnerCleanupExactness ==
+  /\ QuorumOwnerActionableRejectsNonExactInputs
+  /\ QuorumOwnerActionableHasExactPositiveEvidence
+
 SafetyFast ==
   /\ ActionableSourceSafety
   /\ LiveCleanupPreserveSafety
+  /\ FrontierQuorumOwnerCleanupExactness
 
 ActionableSourceAnchors ==
   /\ ActionableSourceSafety

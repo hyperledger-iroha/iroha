@@ -2251,11 +2251,7 @@ export interface SccpSourceAdapterDeploymentBinding {
 
 export type SccpDestinationBindingDomainInput =
   | SccpDomainIdInput
-  | {
-      targetDomain?: SccpDomainIdInput;
-      target_domain?: SccpDomainIdInput;
-      domain?: SccpDomainIdInput;
-    };
+  | { targetDomain?: SccpDomainIdInput; target_domain?: SccpDomainIdInput; domain?: SccpDomainIdInput };
 
 export interface EvmSccpDestinationBindingInput {
   version?: SccpVersionInput;
@@ -3087,8 +3083,7 @@ export interface EthSyncCommitteeTransitionMessageInput {
   next_sync_committee_branch_hash?: string;
 }
 
-export interface EthBeaconSyncCommitteeProofInput
-  extends EthSyncCommitteePayloadInput {
+export interface EthBeaconSyncCommitteeProofInput extends EthSyncCommitteePayloadInput {
   version?: SccpVersionInput;
   totalWeight?: string | number | bigint;
   total_weight?: string | number | bigint;
@@ -6819,13 +6814,9 @@ export function canonicalBscValidatorSetTransitionMessageBytes(
 export function bscValidatorSetTransitionMessageHash(
   input: BscValidatorSetTransitionMessageInput,
 ): string;
-export function canonicalBscCommitMessageBytes(
-  input: BscCommitMessageInput,
-): Uint8Array;
+export function canonicalBscCommitMessageBytes(input: BscCommitMessageInput): Uint8Array;
 export function bscCommitMessageHash(input: BscCommitMessageInput): string;
-export function canonicalBscCommitSealBytes(
-  input: BscCommitSealInput,
-): Uint8Array;
+export function canonicalBscCommitSealBytes(input: BscCommitSealInput): Uint8Array;
 export function bscCommitSealHash(input: BscCommitSealInput): string;
 export function bscValidatorSetPayloadFromParliaExtra(
   extraData: BinaryLike,
@@ -7617,14 +7608,12 @@ export function sccpTonFullLightClientGateHash(
   input: SccpSourceAdapterEngineDeploymentInput,
 ): string;
 export function sccpSourceAdapterVerifierVkHash(
-  input:
-    | SccpDomainIdInput
-    | {
-        sourceDomain?: SccpDomainIdInput;
-        source_domain?: SccpDomainIdInput;
-        targetDomain?: SccpDomainIdInput;
-        target_domain?: SccpDomainIdInput;
-      },
+  input: SccpDomainIdInput | {
+    sourceDomain?: SccpDomainIdInput;
+    source_domain?: SccpDomainIdInput;
+    targetDomain?: SccpDomainIdInput;
+    target_domain?: SccpDomainIdInput;
+  },
 ): string;
 export function sccpGroth16Bn254PublicSignalWords(
   input: SccpGroth16Bn254PublicSignalsInput,
@@ -7934,6 +7923,8 @@ export type PrivacyBackendTag =
   | "stark"
   | "stark/fri"
   | "stark/fri/sha256-goldilocks"
+  | "stark/fri/poseidon2-goldilocks"
+  | "stark/fri/sha256_goldilocks.v1"
   | "unsupported"
   | "halo2-ipa-orchard"
   | "groth16-bls12-377"
@@ -17458,6 +17449,8 @@ export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
+export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
+export const KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND: "halo2/ipa";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-v1";
@@ -17597,6 +17590,9 @@ export function isKagemushaCompactPaymentTokenNativeAvailable(): boolean;
 export function isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean;
 export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable(): boolean;
 export function isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(): boolean;
+export function isKagemushaRecursiveCompactUnavailable(error: unknown): boolean;
+export function isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(): boolean;
+export function isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(): boolean;
 export function kagemushaProveVerifiedCompactPaymentTokenWithRecords(
   recordBundleArchive: BinaryLike,
 ): Buffer;
@@ -17610,6 +17606,14 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
 ): Buffer;
 export function kagemushaVerifyRecursiveCompactPaymentToken(
   compactTokenArchive: BinaryLike,
+): boolean;
+export function kagemushaRecursiveSpendCompactPaymentTokenFromBundle(
+  bundleArchive: BinaryLike,
+): Buffer;
+export function kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+  compactTokenArchive: BinaryLike,
+  verifierRecordArchive: BinaryLike,
+  blockHeight?: number | bigint | null,
 ): boolean;
 export function kagemushaRecursiveSpendInit(requestArchive: BinaryLike): Buffer;
 export function kagemushaRecursiveSpendAppend(

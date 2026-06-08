@@ -5517,7 +5517,15 @@ pub mod isi {
 
         #[test]
         fn offline_note_rejects_non_transparent_proof_backends() {
-            for backend in ["halo2/pasta", "stark/fri/"] {
+            for backend in [
+                "halo2/pasta",
+                "stark/fri/",
+                "halo2/unknown-native-v1",
+                "halo2/ipa:tiny-add-public",
+                "halo2/pasta/tiny-add",
+                "halo2/pasta/ivm-execution-v2",
+                "halo2/pasta/unknown-native-v1",
+            ] {
                 let (state, mut proof, _public_inputs_hash) =
                     offline_note_verifier_test_state(ConfidentialStatus::Active);
                 proof.verifier_key_id =
@@ -5602,9 +5610,14 @@ pub mod isi {
             for backend in [
                 "halo2/ipa:production-ready",
                 "halo2/ipa:mainnet-ready",
+                "halo2/ipa/orchard:production-ready",
+                "orchard:mainnet-ready",
+                "penumbra-masp:external-security-review",
+                "jindo-lattice-pcs-zk:release-ready",
                 "stark/fri/audit-signoff",
                 "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
                 "stark/fri/a-u-d-i-t-c-l-a-i-m",
+                "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
             ] {
                 let (state, mut proof, _public_inputs_hash) =
                     offline_note_verifier_test_state(ConfidentialStatus::Active);
@@ -5966,6 +5979,8 @@ pub mod isi {
                 "halo2/ipa: KZG",
                 "halo2/ipa:Mock-Proof",
                 "halo2/ipa:M-o-c-k-Proof",
+                "halo2/ipa:tiny-add-public",
+                "halo2/pasta/tiny-add",
                 "stark/fri/d-e-b-u-g",
             ] {
                 let err = sample_kagemusha_transfer(backend)
@@ -6583,11 +6598,16 @@ pub mod isi {
                     .len()
                     .checked_sub(1)
                     .expect("recursive lineage fixture has a final note");
-                let sibling_output =
-                    fixed_bytes(b"recursive-redeem-final-note-sibling-output-collision");
-                output_collision_witness.record_bundle.bundle.steps[final_note_index]
-                    .output_commitments
-                    .push(sibling_output);
+                let final_note_commitment =
+                    output_collision_witness.current_notes[final_note_index].note_commitment;
+                let final_step =
+                    &output_collision_witness.record_bundle.bundle.steps[final_note_index];
+                let final_step_outputs = &final_step.output_commitments;
+                let sibling_output = final_step_outputs
+                    .iter()
+                    .copied()
+                    .find(|commitment| *commitment != final_note_commitment)
+                    .expect("recursive lineage final hop has a sibling output commitment");
                 output_collision_witness.current_notes[final_note_index].spend_nullifier =
                     sibling_output;
                 output_collision.instruction.lineage_witness = Some(output_collision_witness);

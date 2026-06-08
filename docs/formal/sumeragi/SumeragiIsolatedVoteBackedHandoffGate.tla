@@ -67,6 +67,43 @@ Cases == {
   RangePullRejected
 }
 
+AdmissionRejectCases == {
+  DisabledResilience,
+  ZeroVotes,
+  MultipleVotes,
+  AtQuorum,
+  StaleHeight,
+  FutureHeight,
+  CachedCommitQc
+}
+
+AdmissionAcceptCases == {
+  HappyPath,
+  NoSlotAfterSeed,
+  WrongSlotHeight,
+  WrongSlotView,
+  WrongSlotHash,
+  MissingBody,
+  CommitQcObserved,
+  NoVoteBackedOwner,
+  RangePullRejected
+}
+
+SlotRejectCases == {
+  NoSlotAfterSeed,
+  WrongSlotHeight,
+  WrongSlotView,
+  WrongSlotHash,
+  MissingBody,
+  CommitQcObserved,
+  NoVoteBackedOwner
+}
+
+AnchorRequestCases == {
+  HappyPath,
+  RangePullRejected
+}
+
 BoolToInt(b) == IF b THEN 1 ELSE 0
 
 MinVotes(c) == 3
@@ -271,11 +308,70 @@ RangePullStable ==
   /\ SpecOutput(RangePullRejected)[4] = 0
   /\ SpecOutput(HappyPath)[5] = 1
 
+IsolatedAdmissionRejectExact ==
+  \A c \in AdmissionRejectCases:
+    /\ ~SpecAdmission(c)
+    /\ ActualAdmission(c) = FALSE
+    /\ ActualSeedsRecovery(c) = FALSE
+    /\ ActualBodyEvent(c) = FALSE
+    /\ ActualRequestsAnchor(c) = FALSE
+    /\ ActualAction(c) = FALSE
+    /\ ActualOutput(c) = SpecOutput(c)
+
+IsolatedAdmissionAcceptExact ==
+  \A c \in AdmissionAcceptCases:
+    /\ SpecAdmission(c)
+    /\ ActualAdmission(c) = TRUE
+    /\ ActualSeedsRecovery(c) = TRUE
+    /\ ActualBodyEvent(c) = TRUE
+    /\ ActualOutput(c)[1] = 1
+    /\ ActualOutput(c)[2] = 1
+    /\ ActualOutput(c) = SpecOutput(c)
+
+IsolatedSlotValidationExact ==
+  \A c \in SlotRejectCases:
+    /\ SpecAdmission(c)
+    /\ ~SpecSlotValid(c)
+    /\ ActualSlotValid(c) = FALSE
+    /\ ActualRequestsAnchor(c) = FALSE
+    /\ ActualAction(c) = FALSE
+    /\ ActualOutput(c) = SpecOutput(c)
+
+IsolatedAnchorRequestExact ==
+  \A c \in AnchorRequestCases:
+    /\ SpecRequestsAnchor(c)
+    /\ ActualRequestsAnchor(c) = TRUE
+    /\ ActualOutput(c)[3] = 1
+    /\ ActualOutput(c) = SpecOutput(c)
+
+IsolatedRangePullActionExact ==
+  /\ ActualAction(HappyPath) = TRUE
+  /\ ActualAction(RangePullRejected) = FALSE
+  /\ ActualOutput(HappyPath)[4] = 1
+  /\ ActualOutput(RangePullRejected)[4] = 0
+  /\ ActualOutput(HappyPath) = SpecOutput(HappyPath)
+  /\ ActualOutput(RangePullRejected) = SpecOutput(RangePullRejected)
+
+IsolatedReasonLabelExact ==
+  \A c \in Cases:
+    /\ ActualReasonOk(c) = SpecReasonOk(c)
+    /\ ActualOutput(c)[5] = 1
+    /\ ActualOutput(c) = SpecOutput(c)
+
 SafetyFast ==
   /\ SelectionExact
   /\ AdmissionStable
   /\ SlotValidationStable
   /\ RangePullStable
+
+IsolatedVoteBackedHandoffExactness ==
+  /\ SafetyFast
+  /\ IsolatedAdmissionRejectExact
+  /\ IsolatedAdmissionAcceptExact
+  /\ IsolatedSlotValidationExact
+  /\ IsolatedAnchorRequestExact
+  /\ IsolatedRangePullActionExact
+  /\ IsolatedReasonLabelExact
 
 Safety ==
   SafetyFast

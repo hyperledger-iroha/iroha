@@ -59,7 +59,7 @@ legitimacy اور “main crate” assessment (اہم نکات):
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — Rust میں جدید اور
   canonical TLS stack۔
 - Noise: `snow` — canonical Noise implementation۔
-- Serialization: `parity-scale-codec`، SCALE کے لیے canonical codec ہے۔
+- Serialization: `retired codec`، retired codec کے لیے canonical codec ہے۔
   پورے workspace میں Serde کو production dependencies سے ہٹا دیا گیا ہے؛
   Norito کے derives/writers تمام runtime paths کو cover کرتے ہیں۔ Serde کی
   کوئی بھی residual references فقط تاریخی documentation، guard scripts یا

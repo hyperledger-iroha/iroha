@@ -409,24 +409,32 @@ JobOwnersAreExclusive ==
 EveryDispatchLeavesBlockRecoverable ==
   candidate # "none" => block_recoverable
 
-Safety ==
+CommitJobDispatchProgressExact ==
   /\ JobStartedMatchesSpec
-  /\ WorkerEnqueuedMatchesSpec
-  /\ InlineExecutionMatchesSpec
-  /\ PendingRetentionMatchesSpec
-  /\ InflightSetMatchesSpec
-  /\ ExistingInflightPreservationMatchesSpec
-  /\ WorkerStateClearMatchesSpec
   /\ CommitStartMatchesSpec
   /\ ActorThreadAdvanceMatchesSpec
   /\ ReturnValueMatchesSpec
+
+CommitJobDispatchOwnershipExact ==
+  /\ WorkerEnqueuedMatchesSpec
+  /\ InlineExecutionMatchesSpec
+  /\ InflightSetMatchesSpec
+  /\ ExistingInflightPreservationMatchesSpec
+  /\ WorkerStateClearMatchesSpec
+
+CommitJobDispatchRetentionExact ==
+  /\ PendingRetentionMatchesSpec
   /\ BlockRecoveryMatchesSpec
+
+CommitJobDispatchScenarioExact ==
   /\ ExistingSameBlockSuppressesSecondDispatch
   /\ ExistingOtherBlockKeepsNewPendingAndCurrentInflight
   /\ WorkerReadySuccessUsesWorkerOnly
   /\ QueueFullKeepsPendingAndDoesNotOwn
   /\ DisconnectedFallbackClearsWorkerAndRunsInline
   /\ MissingWorkerRunsInlineWithoutClearingWorkerState
+
+CommitJobDispatchStructuralExact ==
   /\ InlineLeavesNoWorkerInflight
   /\ WorkerQueueNeedsBothChannels
   /\ WorkerStateClearedOnlyOnDisconnected
@@ -436,6 +444,16 @@ Safety ==
   /\ ReturnTrueRequiresStartedWork
   /\ JobOwnersAreExclusive
   /\ EveryDispatchLeavesBlockRecoverable
+
+CommitJobDispatchExactness ==
+  /\ CommitJobDispatchProgressExact
+  /\ CommitJobDispatchOwnershipExact
+  /\ CommitJobDispatchRetentionExact
+  /\ CommitJobDispatchScenarioExact
+  /\ CommitJobDispatchStructuralExact
+
+Safety ==
+  CommitJobDispatchExactness
 
 =============================================================================
 ====

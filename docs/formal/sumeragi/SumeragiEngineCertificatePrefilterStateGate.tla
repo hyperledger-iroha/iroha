@@ -135,6 +135,41 @@ WrongQuorumPolicy(candidate) ==
 StalePrepareCommit(candidate) ==
   candidate \in {"stale_prepare", "stale_commit"}
 
+AcceptedPrefilterCases == {
+  "current_prepare",
+  "current_commit",
+  "new_view_lower_view",
+  "new_view_same_view",
+  "new_view_future_view"
+}
+
+RejectedPrefilterCases == {
+  "stale_prepare",
+  "stale_commit",
+  "committed_prepare",
+  "committed_commit",
+  "committed_new_view",
+  "wrong_height_prepare",
+  "wrong_height_commit",
+  "wrong_height_new_view",
+  "wrong_epoch_prepare",
+  "wrong_epoch_commit",
+  "wrong_epoch_new_view",
+  "wrong_validator_set_prepare",
+  "wrong_validator_set_commit",
+  "wrong_validator_set_new_view",
+  "wrong_quorum_prepare",
+  "wrong_quorum_commit",
+  "wrong_quorum_new_view"
+}
+
+PrefilterStateGroupedCases ==
+  AcceptedPrefilterCases \cup RejectedPrefilterCases
+
+PrefilterStateCaseGroupsPartition ==
+  /\ PrefilterStateGroupedCases = Cases
+  /\ AcceptedPrefilterCases \intersect RejectedPrefilterCases = {}
+
 SpecHandler(candidate) ==
   IF \/ CommittedHeight(candidate)
      \/ WrongContext(candidate)
@@ -342,13 +377,23 @@ ValuesStayInDomain ==
     /\ ImplementationValidating(candidate) \in ValidationOwners
     /\ ImplementationOutputEmitted(candidate) \in BOOLEAN
 
-Safety ==
+AcceptedPrefilterHandoffExact ==
   /\ AcceptedDispatchesToCorrectHandler
   /\ AcceptedHandlerReceivesOriginalState
+
+RejectedPrefilterReturnExact ==
   /\ RejectedDoesNotDispatch
   /\ RejectedStatePreserved
   /\ RejectedEmitsNothing
+
+PrefilterStateExactness ==
+  /\ PrefilterStateCaseGroupsPartition
+  /\ AcceptedPrefilterHandoffExact
+  /\ RejectedPrefilterReturnExact
   /\ ValuesStayInDomain
+
+Safety ==
+  PrefilterStateExactness
 
 =============================================================================
 ====

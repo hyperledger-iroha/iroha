@@ -246,21 +246,33 @@ CommittedFallbackOnlyAfterNoCommitHighestWins ==
 NoCandidateSelectsNone ==
   candidate \in NoSelectionCases => selected = "none"
 
-Safety ==
+PrecommitQcSelectionExact ==
   /\ SelectionMatchesSpec
-  /\ HighestFilterMatchesSpec
-  /\ CommittedFallbackMatchesSpec
-  /\ HeightViewComparisonMatchesSpec
-  /\ TiePreferenceMatchesSpec
   /\ NonCommitHighestNeverSelected
   /\ HighestSelectedOnlyFromCommitHighest
   /\ CommittedSelectedOnlyWhenPresent
+  /\ NoCandidateSelectsNone
+
+PrecommitQcFilterFallbackExact ==
+  /\ HighestFilterMatchesSpec
+  /\ CommittedFallbackMatchesSpec
+  /\ CommittedFallbackOnlyAfterNoCommitHighestWins
+
+PrecommitQcOrderingExact ==
+  /\ HeightViewComparisonMatchesSpec
+  /\ TiePreferenceMatchesSpec
   /\ BothCommitCandidatesUseHeightViewComparison
   /\ HigherHeightBeatsLowerView
   /\ LowerHeightLosesDespiteHigherView
   /\ EqualHeightViewPrefersHighest
-  /\ CommittedFallbackOnlyAfterNoCommitHighestWins
-  /\ NoCandidateSelectsNone
+
+PrecommitQcViewChangeExactness ==
+  /\ PrecommitQcSelectionExact
+  /\ PrecommitQcFilterFallbackExact
+  /\ PrecommitQcOrderingExact
+
+Safety ==
+  PrecommitQcViewChangeExactness
 
 =============================================================================
 ====

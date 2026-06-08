@@ -47,11 +47,10 @@ In this repository you can find documentation for Iroha 2 tools:
 
 ## Norito (Serialization Codec)
 
-Norito is the workspace serialization codec. We do not use `parity-scale-codec`
-(SCALE). Where documentation or benchmarks compare to SCALE, it is only for
-context; all production paths use Norito. The `norito::codec::{Encode, Decode}`
-APIs provide a headerless ("bare") Norito payload for hashing and wire
-efficiency — it is Norito, not SCALE.
+Norito is the workspace serialization codec. All production serialization paths
+use Norito. The `norito::codec::{Encode, Decode}` APIs provide a headerless
+("bare") Norito payload for hashing and wire efficiency while still using
+Norito's canonical layout.
 
 Latest state:
 
@@ -68,11 +67,11 @@ Latest state:
   based on payload size and cached hardware capabilities. Selection only affects
   performance and the header's `compression` byte; payload semantics are unchanged.
 
-See `crates/norito/README.md` for parity tests, benchmarks, and usage examples.
+See `crates/norito/README.md` for roundtrip tests, benchmarks, and usage examples.
 
 Note: Some subsystem docs (e.g., IVM acceleration and ZK circuits) are evolving. Where functionality is incomplete, the files call out the work that remains and the direction of travel.
 
 Status endpoint encoding notes
 - Torii `/status` body uses Norito by default with a headerless ("bare") payload for compactness. Clients should attempt Norito decode first.
 - Servers may return JSON when requested; clients fall back to JSON if the `content-type` is `application/json`.
-- The wire format is Norito, not SCALE. The `norito::codec::{Encode,Decode}` APIs are used for the bare variant.
+- The wire format is Norito. The `norito::codec::{Encode,Decode}` APIs are used for the bare variant.

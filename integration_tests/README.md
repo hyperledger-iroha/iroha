@@ -17,6 +17,7 @@ This crate hosts cross-component tests for Iroha.
   `cargo test -p integration_tests --test core_api asset::client_add_asset_quantities_should_increase_asset_amounts -- --exact --nocapture`
 - Feature flags: `telemetry` (default), `fault_injection`, `norito_streaming_fec`, `js_host_parity`. Enable with `cargo test -p integration_tests --features "<feature list>"`.
 - Ignored/long cases (e.g., adversarial network, flaky trigger paths): `IROHA_RUN_IGNORED=1 cargo test -p integration_tests -- --ignored --nocapture`.
+- The workspace Cargo config keeps plain `cargo test` conservative by default (`build.jobs=1`, `RUST_TEST_THREADS=1`) so WSL and memory-constrained VMs do not fan out across every logical CPU. Override with `cargo test --jobs <N>` and/or `RUST_TEST_THREADS=<N>` on high-memory hosts.
 - Test networks run one-at-a-time by default so plain `cargo test` stays stable on WSL and memory-constrained VMs. Increase concurrency with `IROHA_TEST_NETWORK_PARALLELISM=<N>` on high-memory hosts; set `IROHA_TEST_SERIALIZE_NETWORKS=1` to force one-at-a-time startup explicitly.
 - `scripts/run_full_tests.sh` now reuses the workspace-built `iroha3d`, `iroha`, and `kagami` binaries when they are available and isolates the integration-test permit directory by default.
 - For WSL or memory-constrained VMs, first size WSL memory/swap/host disk headroom appropriately; use `scripts/run_full_tests.sh --wsl-safe --target-dir /tmp/iroha-wsl-tests` only when you still need a conservative local run.

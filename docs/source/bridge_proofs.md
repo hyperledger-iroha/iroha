@@ -16,6 +16,12 @@ Torii public SCCP discovery, proof manifests, route readiness, SDK helpers, and
 operator scripts must advertise only those lanes. Unsupported domain ids fail at
 the absent-manifest/backend boundary rather than routing through diagnostic
 relay paths.
+Retired runtime-network families are not supported for now. Future support
+requires a new source-proof design, fresh fixtures, SDK/Torii surface review,
+and explicit governance approval rather than reviving diagnostic code paths.
+Retired platform-family lanes are explicitly outside SCCP launch support for
+now.
+Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 The active launch policy is Ethereum-mainnet lane readiness. The active Ethereum launch lane
 can open from complete mainnet source-proof, source-adapter deployment,
 destination rollout, and route-canary evidence without waiting for future
@@ -954,7 +960,7 @@ python3 scripts/sccp_solana_source_state_evidence.py \
   --toml
 ```
 
-the GRANDPA authority-set hash from ordered non-zero 32-byte Ed25519 authority
+the finality authority-set hash from ordered non-zero 32-byte Ed25519 authority
 keys and non-zero weights, requires it to match the adapter and configured
 source trust anchor for non-placeholder material, recomputes the finalized-header
 precommit-message hash, checks the justification hash, verifies Ed25519
@@ -3123,7 +3129,12 @@ verifier fields plus the request bundle/source-proof bytes before adding an
 envelope hash over the request hash, deployment-binding hash, and proof bytes.
 TON proof-result submission helpers rebuild this request hash before BOC
 packaging, so wallet/liteserver callers cannot pair proof bytes with a
-different SCCP bundle after the local prover returns. TON proof-request builders require
+different SCCP bundle after the local prover returns. The Rust TON proof-request
+and proof-result path, plus the JavaScript, Python, Swift, Kotlin/JVM, and Java
+Android SDK TON request builders, now decode `bundle_bytes` as canonical SCCP message
+bundle bytes, match them to the transparent public inputs, and require non-SORA
+source bundles to carry non-empty source-proof bytes before local proof
+generation or wrapped-result submission. TON proof-request builders require
 `sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1` with a
 non-zero source-state verifier hash before local prover invocation. They also
 reject zero/zero deployment bindings so UI/mobile provers cannot produce
@@ -3262,9 +3273,9 @@ components or partial audit evidence.
   bounded structural MPT proof nodes, and caps solid-block ancestor headers,
   solid-block confirmation headers, and witness-schedule transition chains at
   64 steps each.
-  `grandpa_set_id`, `block_hash`, `authority_set_hash`, `events_root`,
-  `grandpa_justification_hash`, `storage_proof_hash`,
-  `grandpa_justification`, and `authority_set_transition_proofs`.
+  `finality_set_id`, `block_hash`, `authority_set_hash`, `events_root`,
+  `finality_justification_hash`, `storage_proof_hash`,
+  `finality_justification`, and `authority_set_transition_proofs`.
 
 All source inclusion branches and nested H256 branches are bounded to at most
 64 32-byte siblings. EVM-family and TRON MPT openings are separately bounded to
@@ -3522,9 +3533,9 @@ count equal to selected signers, claimed total/signed stake equal to the
 validator roster and selected signers, strict `> 2/3` signed-stake quorum,
 non-empty StakeHistory sysvar data, and the exact 2,048-byte non-zero
 AccountsLtHash before deeper account/finality checks run.
-canonical `frame_system::Events` storage key and the source-event leaf index as
+canonical runtime events storage key and the source-event leaf index as
 first-class UI witness material, so the same runtime storage item and path bits
-used to reconstruct the events root are also signed by the GRANDPA precommit
+used to reconstruct the events root are also signed by the finality precommit
 the adapter must additionally carry the
 public inputs to the governed runtime storage-proof verifier hash. The
 portal, operator tooling, and mobile apps should derive these hashes and the
@@ -3920,7 +3931,7 @@ as Nexus-origin messages from block-level SCCP records.
   - local hub domain/chain identity (`SORA`);
   - the SCCP burn registry backend;
   - the generic message proof family (`stark-fri-v1`);
-  - no runtime SCALE proof family, verifier backend, or runtime envelope path
+  - no runtime proof family, verifier backend, or runtime envelope path
   - the typed SCCP message proof-artifact discovery path (`/v1/sccp/artifacts/message/{message_id}`);
   - the normalized SCCP counterparty proof-job discovery path (`/v1/sccp/jobs/message/{message_id}`);
   - the SCCP proof-manifest discovery path (`/v1/sccp/manifests`);
@@ -4285,10 +4296,11 @@ as Nexus-origin messages from block-level SCCP records.
     version, message id, SORA source-domain word, or commitment root does not
     match the accompanying `message_bundle`.
   - current production behavior: this route can expose production packaging for
-    BSC mainnet only when the configured BSC source-chain finality/inclusion
-    material, immutable destination verifier deployment, active cryptographic
-    anchors, route allowlist, and route canary are all present. Other
-    counterparty lanes remain behind their future lane launch policies.
+    the active Ethereum mainnet launch lane only when the configured Ethereum
+    source-chain finality/inclusion material, immutable destination verifier
+    deployment, active cryptographic anchors, route allowlist, and route canary
+    are all present. Other counterparty lanes remain behind their future lane
+    launch policies.
 - `GET /v1/sccp/jobs/message/{message_id}` returns the normalized SCCP counterparty proof job for the same canonical message id. Each job bundles:
   - the chain family, chain key, backend labels, verifier backend, manifest seed, finality model, verifier target, and canonical SCCP public inputs;
   - the same SCCP security model / cryptographic anchor mode and destination binding that the artifact and manifest commit into the canonical statement hash;
@@ -4324,10 +4336,11 @@ as Nexus-origin messages from block-level SCCP records.
     strings, bad checksums, short payloads, and the all-zero TRON account
     payload are rejected during response normalization.
   - current production behavior: this route can expose production packaging for
-    BSC mainnet only when the configured BSC source-chain finality/inclusion
-    material, immutable destination verifier deployment, active cryptographic
-    anchors, route allowlist, and route canary are all present. Other
-    counterparty lanes remain behind their future lane launch policies.
+    the active Ethereum mainnet launch lane only when the configured Ethereum
+    source-chain finality/inclusion material, immutable destination verifier
+    deployment, active cryptographic anchors, route allowlist, and route canary
+    are all present. Other counterparty lanes remain behind their future lane
+    launch policies.
 - `GET /v1/sccp/proofs/message/{message_id}` now reconstructs the proof from committed blocks that contain `RecordSccpMessage` instructions and a non-null `sccp_commitment_root` in the finalized block header. The in-memory bundle registry is retained only for unit tests and never bypasses typed artifact or finality verification.
 - Generic SCCP `message` payloads now enforce explicit v1 codec families during structural verification instead of accepting arbitrary nonzero codec ids:
   - `1`: generic UTF-8 logical identifiers;

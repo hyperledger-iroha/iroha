@@ -17,11 +17,11 @@ translator: machine-google-reviewed
 
 כל השינויים הבולטים בפרויקט זה יתועדו בקובץ זה.
 
-## [לא פורסם]- זרוק את SCALE shim; `norito::codec` מיושם כעת עם סידור Norito מקורי.
-- החלף את השימושים של `parity_scale_codec` ב-`norito::codec` על פני ארגזים.
+## [לא פורסם]- זרוק את retired codec shim; `norito::codec` מיושם כעת עם סידור Norito מקורי.
+- החלף את השימושים של `retired_codec` ב-`norito::codec` על פני ארגזים.
 - התחל בהעברת כלים לעיבוד Norito מקורי.
-- הסר את התלות הנותרת של `parity-scale-codec` מסביבת העבודה לטובת סידור Norito מקורי.
-- החלף נגזרות של תכונת SCALE שיורית בהטמעות מקוריות של Norito ושנה את שם מודול ה-codec עם גרסאות.
+- הסר את התלות הנותרת של `retired codec` מסביבת העבודה לטובת סידור Norito מקורי.
+- החלף נגזרות של תכונת retired codec שיורית בהטמעות מקוריות של Norito ושנה את שם מודול ה-codec עם גרסאות.
 - מיזוג `iroha_config_base_derive` ו-`iroha_futures_derive` לתוך `iroha_derive` עם פקודות מאקרו מותאמות לתכונות.
 - *(multisig)* דחה חתימות ישירות מרשויות multisig עם קוד שגיאה/סיבת שגיאה יציבה, אכיפת מכסי TTL של multisig על פני ממסרים מקוננים, ומכסי TTL משטחים ב-CLI לפני ההגשה (שווי SDK בהמתנה).
 - העבר פקודות מאקרו פרוצדורליות של FFI לתוך `iroha_ffi` והסר את ארגז `iroha_ffi_derive`.
@@ -242,7 +242,7 @@ translator: machine-google-reviewed
 - שנה את שם TransactionValue ל-CommittedTransaction (#4610)
 - אימות חשבונות אישיים באמצעות מזהה (#4411)
 - השתמש בפורמט multihash עבור מפתחות פרטיים (#4541)
- - שנה את שם `parity_scale_decoder` ל-`norito_cli`
+ - שנה את שם `legacy_codec_decoder` ל-`norito_cli`
 - שלח בלוקים לאימות סט B
 - להפוך את `Role` לשקוף (#4886)
 - הפק את ה-hash של בלוק מהכותרת (#4890)
@@ -1153,7 +1153,7 @@ translator: machine-google-reviewed
 - hyperledger#2309: הפעל מחדש בדיקות doc ב-CI.
 - hyperledger#2165 הסר את התקנת codecov.
 - העבר למיכל חדש כדי למנוע התנגשויות עם המשתמשים הנוכחיים.
- - hyperledger#2158 שדרוג `parity_scale_codec` ותלויות אחרות. (Codec Norito)
+ - hyperledger#2158 שדרוג `retired_codec` ותלויות אחרות. (Codec Norito)
 - תקן את המבנה.
 - hyperledger#2461 שפר את iroha2 CI.
 - עדכון `syn`.

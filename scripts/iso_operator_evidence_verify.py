@@ -47,8 +47,10 @@ CANARY_SUMMARY_VERSION = 1
 RECEIPT_SUMMARY_VERSION = 1
 TRUST_SUMMARY_VERSION = 1
 REQUIRE_VERIFIED = "require-verified"
+TRUST_SIGNATURE_POLICIES = {"record-only", "reject-unsupported", REQUIRE_VERIFIED}
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.\d{3}$")
+RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
 KNOWN_RAILS = {
     "generic-iso20022",
     "swift-cbpr-plus",
@@ -62,15 +64,45 @@ REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 RECEIPT_PATH_SUFFIX = ".receipt.json"
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
+SUPPORTED_RAIL_MESSAGE_TYPES = {
+    "pacs.008",
+    "pacs.009",
+    "pacs.002",
+    "pacs.004",
+    "camt.056",
+    "sese.023",
+    "sese.024",
+    "sese.025",
+    "colr.007",
+    "colr.012",
+}
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
 MAX_TRUST_DER_BASE64_CHARS = ((MAX_TRUST_DER_BYTES + 2) // 3) * 4
+MAX_RAIL_MESSAGE_ID_CHARS = 128
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_RECEIPT_VERIFIER_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_HTTP_URL_CHARS = 2048
 DEFAULT_RECEIPT_VERIFIER_TIMEOUT_SECS = 300.0
-PLACEHOLDER_TRUST_SOURCE_MARKERS = ("placeholder", "replace-before-production")
-PLACEHOLDER_TRUST_SOURCE_HOSTS = {"example.invalid"}
+PLACEHOLDER_TRUST_SOURCE_MARKERS = (
+    "dummy",
+    "fake",
+    "placeholder",
+    "replace-before-production",
+    "sample",
+    "template",
+)
+PLACEHOLDER_TRUST_SOURCE_HOSTS = {
+    "example",
+    "example.com",
+    "example.invalid",
+    "example.net",
+    "operator-canary.bank",
+    "example.org",
+}
+TEMPLATE_CANARY_ENDPOINT_HOSTS = {
+    "operator-canary.bank",
+}
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
@@ -260,9 +292,15 @@ RECEIPT_ENTRY_KEYS = {
     "message_type",
     "payload_sha256",
     "profile",
+    "rail_message_id",
 }
 NOTARY_RECEIPT_METADATA_KEYS = {"anchor_sha256", "index_sha256", "record_count"}
-RAIL_RECEIPT_METADATA_KEYS = {"message_type", "payload_sha256", "profile"}
+RAIL_RECEIPT_METADATA_KEYS = {
+    "message_type",
+    "payload_sha256",
+    "profile",
+    "rail_message_id",
+}
 TRUST_SUMMARY_KEYS = {
     "version",
     "verified_at",
@@ -959,6 +997,30 @@ def _required_message_type(value: dict[str, Any], key: str, label: str) -> str:
     return raw
 
 
+def _nullable_rail_message_id(value: dict[str, Any], key: str, label: str) -> str | None:
+    if key not in value:
+        raise EvidenceError(f"{label}.{key} must be recorded")
+    raw = value[key]
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise EvidenceError(f"{label}.{key} must be null or a non-empty string")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise EvidenceError(f"{label}.{key} must not contain control characters")
+    if raw != raw.strip():
+        raise EvidenceError(f"{label}.{key} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise EvidenceError(f"{label}.{key} must not contain whitespace")
+    if len(raw) > MAX_RAIL_MESSAGE_ID_CHARS:
+        raise EvidenceError(
+            f"{label}.{key} must be at most {MAX_RAIL_MESSAGE_ID_CHARS} characters"
+        )
+    if RAIL_MESSAGE_ID_RE.fullmatch(raw) is None:
+        raise EvidenceError(f"{label}.{key} must be a canonical ASCII rail message id")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
 def _required_receipt_kind(value: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(value, key, label)
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
@@ -1002,9 +1064,9 @@ def _verify_receipt_entry_metadata(
         if (
             isinstance(record_count, bool)
             or not isinstance(record_count, int)
-            or record_count < 0
+            or record_count <= 0
         ):
-            raise EvidenceError(f"{entry_label}.record_count must be a non-negative integer")
+            raise EvidenceError(f"{entry_label}.record_count must be a positive integer")
     elif receipt_kind == "iso-rail-gateway":
         _reject_forbidden_receipt_metadata(
             receipt_entry,
@@ -1013,16 +1075,23 @@ def _verify_receipt_entry_metadata(
             receipt_kind,
         )
         message_type = _required_message_type(receipt_entry, "message_type", entry_label)
+        if message_type not in SUPPORTED_RAIL_MESSAGE_TYPES:
+            raise EvidenceError(
+                f"{entry_label}.message_type is unsupported: {message_type!r}"
+            )
         if message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
             raise EvidenceError(
                 f"{entry_label}.message_type uses legacy rail message type {message_type!r}"
             )
         _required_sha256(receipt_entry, "payload_sha256", entry_label)
-        if receipt_entry.get("profile") is None:
+        if "profile" not in receipt_entry:
+            raise EvidenceError(f"{entry_label}.profile must be recorded")
+        if receipt_entry["profile"] is None:
             if not allow_default_profile:
                 raise EvidenceError(f"{entry_label}.profile must be a non-empty string")
         else:
             _required_profile_id(receipt_entry, "profile", entry_label)
+        _nullable_rail_message_id(receipt_entry, "rail_message_id", entry_label)
     else:  # pragma: no cover - supported kinds are checked before this helper.
         raise EvidenceError(f"{entry_label}.receipt_kind is unsupported: {receipt_kind!r}")
 
@@ -1033,7 +1102,7 @@ def _receipt_entry_content_metadata(receipt_entry: dict[str, Any]) -> tuple[tupl
     if receipt_kind == "iso-audit-notary":
         keys = ("anchor_sha256", "index_sha256", "record_count")
     elif receipt_kind == "iso-rail-gateway":
-        keys = ("message_type", "payload_sha256", "profile")
+        keys = ("message_type", "payload_sha256", "profile", "rail_message_id")
     else:  # pragma: no cover - supported kinds are checked before this helper.
         raise EvidenceError(f"unsupported receipt_kind {receipt_kind!r}")
     return tuple((key, receipt_entry.get(key)) for key in (*generic_keys, *keys))
@@ -2113,6 +2182,8 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
 
     stage_results: list[dict[str, Any]] = []
     if plan_only:
+        if "stages" in summary:
+            raise EvidenceError(f"{path}.stages must be omitted for plan-only evidence")
         stages = _require_list(summary.get("planned_stages"), f"{path}.planned_stages")
         stage_names = [
             _planned_stage_summary(
@@ -2123,6 +2194,8 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
             for offset, stage in enumerate(stages)
         ]
     else:
+        if "planned_stages" in summary:
+            raise EvidenceError(f"{path}.planned_stages must be omitted for executed evidence")
         stages = _require_list(summary.get("stages"), f"{path}.stages")
         stage_results = [
             _stage_summary(
@@ -2160,7 +2233,7 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
             )
     verify_receipt_dirs = next(
         (
-            stage.get("_receipt_dirs", [])
+            stage["_receipt_dirs"]
             for stage in stage_results
             if stage["name"] == "verify"
         ),
@@ -2265,6 +2338,8 @@ def _check_clean_http_url(
         raise EvidenceError(f"{label} must not contain params, query, or fragment")
     _validate_url_path(parsed, label)
     hostname = hostname.strip().lower()
+    if reject_local_hosts and _host_uses_reserved_placeholder_suffix(hostname):
+        raise EvidenceError(f"{label} must not use reserved placeholder hostnames")
     if reject_local_hosts and not allow_insecure_http:
         if hostname == "localhost" or hostname.endswith(".localhost"):
             raise EvidenceError(f"{label} must not use localhost")
@@ -2283,6 +2358,13 @@ def _check_clean_http_url(
 def _host_uses_rebinding_suffix(hostname: str) -> bool:
     return hostname in LOCAL_REBINDING_HOST_SUFFIXES or any(
         hostname.endswith("." + suffix) for suffix in LOCAL_REBINDING_HOST_SUFFIXES
+    )
+
+
+def _host_uses_reserved_placeholder_suffix(hostname: str) -> bool:
+    reserved_hosts = PLACEHOLDER_TRUST_SOURCE_HOSTS | TEMPLATE_CANARY_ENDPOINT_HOSTS
+    return hostname in reserved_hosts or any(
+        hostname.endswith("." + suffix) for suffix in reserved_hosts
     )
 
 
@@ -2439,7 +2521,7 @@ def _trust_source_url_uses_placeholder_host(url: str) -> bool:
 
 def _reject_placeholder_trust_source_url(url: str, label: str) -> None:
     if _trust_source_url_uses_placeholder_host(url):
-        raise EvidenceError(f"{label} must not use example.invalid placeholder provenance")
+        raise EvidenceError(f"{label} must not use reserved placeholder provenance")
 
 
 def _parse_timestamp(value: Any, label: str) -> dt.datetime:
@@ -2500,7 +2582,7 @@ def _computed_profile_json_emittable(
     if not bundle_summaries:
         return False
     for offset, bundle in enumerate(bundle_summaries):
-        source = bundle.get("source")
+        source = bundle["source"]
         if source is None:
             return False
         if (
@@ -2534,6 +2616,8 @@ def _check_trust_bundle(
         )
     policy = _required_string(bundle, "embedded_signature_policy", label)
     _reject_secret_looking_identifier(policy, f"{label}.embedded_signature_policy")
+    if policy not in TRUST_SIGNATURE_POLICIES:
+        raise EvidenceError(f"{label}.embedded_signature_policy is unsupported")
     if policy != REQUIRE_VERIFIED and not args.allow_record_only_trust:
         raise EvidenceError(f"{label}.embedded_signature_policy is {policy!r}")
 
@@ -2543,7 +2627,9 @@ def _check_trust_bundle(
         _reject_secret_looking_identifier(bundle_sha256, f"{label}.bundle_sha256")
     if not _is_lower_sha256(bundle_sha256):
         raise EvidenceError(f"{label}.bundle_sha256 must be a canonical SHA-256")
-    source = bundle.get("source")
+    if "source" not in bundle:
+        raise EvidenceError(f"{label}.source must be explicitly recorded")
+    source = bundle["source"]
     if source is None:
         if not args.allow_missing_trust_source:
             raise EvidenceError(f"{label}.source is required for production evidence")
@@ -2883,8 +2969,6 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         raise EvidenceError(f"{path} was verified with --allow-record-only")
     if allow_insecure_source_url and not args.allow_insecure_http:
         raise EvidenceError(f"{path} was verified with --allow-insecure-source-url")
-    if not profile_json_emittable and not args.allow_synthetic_trust:
-        raise EvidenceError(f"{path} cannot emit production profile JSON")
     if profile_json_emittable:
         if max_source_age_days is None:
             raise EvidenceError(f"{path}.max_source_age_days must be a positive integer")
@@ -2914,6 +2998,17 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         )
         for offset, bundle in enumerate(bundle_objects)
     ]
+    profile_json_non_emittable_allowed = (
+        (allow_synthetic_der and args.allow_synthetic_trust)
+        or (allow_record_only and args.allow_record_only_trust)
+        or (allow_insecure_source_url and args.allow_insecure_http)
+        or (
+            args.allow_missing_trust_source
+            and any(bundle.get("source") is None for bundle in bundle_summaries)
+        )
+    )
+    if not profile_json_emittable and not profile_json_non_emittable_allowed:
+        raise EvidenceError(f"{path} cannot emit production profile JSON")
     computed_profile_json_emittable = _computed_profile_json_emittable(
         allow_synthetic_der=allow_synthetic_der,
         allow_record_only=allow_record_only,
@@ -2964,6 +3059,9 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         "verified_at": verified_at_raw,
         "verified_bundles": verified_bundles,
         "max_source_age_days": max_source_age_days,
+        "allow_synthetic_der": allow_synthetic_der,
+        "allow_record_only": allow_record_only,
+        "allow_insecure_source_url": allow_insecure_source_url,
         "profile_json_emitted": profile_json_emitted,
         "profile_json_emittable": profile_json_emittable,
         "profile_json_sha256": profile_json_sha256,
@@ -3011,6 +3109,11 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
         )
     if returncode != 0:
         detail = stderr.strip()[:4096]
+        if detail and (
+            _contains_secret_material(detail)
+            or _contains_secret_identifier_material(detail)
+        ):
+            detail = "[receipt verifier stderr redacted: secret-looking material]"
         if stderr_truncated:
             detail = (
                 f"{detail} [stderr truncated at "

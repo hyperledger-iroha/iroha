@@ -1712,39 +1712,67 @@ fn validate_optional_json_backend_object(
 const ZK_PRODUCTION_BACKEND_HALO2_IPA: &str = "halo2/ipa";
 const ZK_PRODUCTION_BACKEND_STARK_FRI: &str = "stark/fri";
 
+const ZK_PRODUCTION_STARK_FRI_PROFILES: &[&str] = &[
+    "sha256-goldilocks",
+    "poseidon2-goldilocks",
+    "sha256_goldilocks.v1",
+];
+
 const ZK_PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS: &[&str] = &[
-    "halo2/pasta/tiny-add",
-    "halo2/pasta/tiny-mul",
-    "halo2/pasta/tiny-add-2rows",
-    "halo2/pasta/tiny-add-public",
-    "halo2/pasta/tiny-mul-public",
-    "halo2/pasta/tiny-id-public",
-    "halo2/pasta/tiny-add3",
-    "halo2/pasta/tiny-add2inst-public",
-    "halo2/pasta/asset-hidden-transfer-public-test",
-    "halo2/pasta/tiny-anon-transfer-2x2",
     "halo2/pasta/kaigi-roster-v1",
     "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/tiny-vote-bool",
     "halo2/pasta/ivm-overlay-bind",
     "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/offline-note-recursive",
     "halo2/pasta/kagemusha-folded-v1",
     "halo2/pasta/kagemusha-recursive-aggregation-v1",
+    "halo2/pasta/kagemusha-recursive-compact-v1",
     "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
-    "halo2/pasta/tiny-commit-open",
-    "halo2/pasta/tiny-merkle2",
-    "halo2/pasta/vote-bool-commit",
-    "halo2/pasta/vote-bool-commit-merkle2",
-    "halo2/pasta/vote-bool-commit-merkle8",
-    "halo2/pasta/vote-bool-commit-merkle16",
-    "halo2/pasta/anon-transfer-2x2",
-    "halo2/pasta/anon-transfer-2x2-merkle2",
-    "halo2/pasta/anon-transfer-2x2-merkle8",
-    "halo2/pasta/anon-transfer-2x2-merkle16",
+    "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+    "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
     "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-merkle16-poseidon-diversified",
     "halo2/pasta/anon-unshield-2in-1change-merkle16-poseidon-diversified",
+];
+
+const DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS: &[&str] = &["debug", "mock", "fixture", "dev"];
+const DEVELOPER_ONLY_EXACT_BACKEND_TOKENS: &[&str] =
+    &["test", "dummy", "fake", "stub", "sample", "placeholder"];
+const PRODUCTION_CLAIM_BACKEND_FRAGMENTS: &[&str] = &[
+    "productionready",
+    "productionhardened",
+    "productionenabled",
+    "productionapproved",
+    "productioncertified",
+    "productionclaim",
+    "claimedproduction",
+    "mainnetready",
+    "mainnetcomplete",
+    "mainnetclaim",
+    "claimedmainnet",
+    "mainnetcertified",
+    "mainnetapproved",
+    "mainnetrelease",
+    "auditedproduction",
+    "externallyaudited",
+    "thirdpartyaudited",
+    "boiaudited",
+    "auditedmainnet",
+    "externalaudit",
+    "auditpassed",
+    "auditapproved",
+    "auditsignoff",
+    "auditclaim",
+    "claimedaudit",
+    "securityreviewpassed",
+    "securityauditpassed",
+    "securityaudited",
+    "externalsecurityreview",
+    "certifiedproduction",
+    "certifiedmainnet",
+    "releaseready",
+    "releaseapproved",
+    "releasecertified",
 ];
 
 fn require_production_verify_backend_label<'a>(backend: &'a str, context: &str) -> Result<&'a str> {
@@ -1764,6 +1792,7 @@ fn is_production_verify_backend_label(backend: &str) -> bool {
         || backend.trim() != backend
         || !is_portable_verify_backend_label(backend)
         || iroha_data_model::zk::BackendTag::is_pending_production_backend_label(backend)
+        || is_production_claim_backend_label(backend)
         || is_trusted_setup_backend_label(backend)
         || is_developer_only_backend_label(backend)
     {
@@ -1776,19 +1805,43 @@ fn is_production_verify_backend_label(backend: &str) -> bool {
 }
 
 fn is_portable_verify_backend_label(backend: &str) -> bool {
-    backend.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'_' | b'.' | b':' | b'-')
-    })
+    if backend.is_empty() || backend.trim() != backend {
+        return false;
+    }
+    let Some(first) = backend.as_bytes().first() else {
+        return false;
+    };
+    let Some(last) = backend.as_bytes().last() else {
+        return false;
+    };
+    if !first.is_ascii_alphanumeric() || !last.is_ascii_alphanumeric() {
+        return false;
+    }
+    if backend.as_bytes().iter().any(|&byte| {
+        !matches!(
+            byte,
+            b'a'..=b'z' | b'0'..=b'9' | b'/' | b'_' | b'.' | b':' | b'-'
+        )
+    }) {
+        return false;
+    }
+    !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]
+        .iter()
+        .any(|separator| backend.contains(separator))
+}
+
+fn is_production_claim_backend_label(backend: &str) -> bool {
+    let compact = compact_privacy_backend_label(backend);
+    PRODUCTION_CLAIM_BACKEND_FRAGMENTS
+        .iter()
+        .any(|fragment| compact.contains(fragment))
 }
 
 fn is_stark_fri_production_backend_label(backend: &str) -> bool {
     backend == ZK_PRODUCTION_BACKEND_STARK_FRI
-        || backend.strip_prefix("stark/fri/").is_some_and(|profile| {
-            !profile.is_empty()
-                && profile
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        })
+        || backend
+            .strip_prefix("stark/fri/")
+            .is_some_and(|profile| ZK_PRODUCTION_STARK_FRI_PROFILES.contains(&profile))
 }
 
 fn is_native_halo2_pasta_production_backend_label(backend: &str) -> bool {
@@ -1879,11 +1932,38 @@ fn has_trusted_setup_backend_segment(backend: &str) -> bool {
 
 fn is_developer_only_backend_label(backend: &str) -> bool {
     let backend = backend.to_ascii_lowercase();
-    let compact = compact_privacy_backend_label(&backend);
-    backend.contains("debug")
-        || backend.contains("mock")
-        || compact.contains("debug")
-        || compact.contains("mock")
+    let mut letter_run = String::new();
+    for token in backend
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+    {
+        if is_developer_only_direct_backend_token(token) {
+            return true;
+        }
+        if token.len() == 1 {
+            letter_run.push_str(token);
+        } else {
+            if is_developer_only_compact_backend_run(&letter_run) {
+                return true;
+            }
+            letter_run.clear();
+        }
+    }
+    is_developer_only_compact_backend_run(&letter_run)
+}
+
+fn is_developer_only_direct_backend_token(token: &str) -> bool {
+    DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS
+        .iter()
+        .any(|reserved| token.contains(reserved))
+        || DEVELOPER_ONLY_EXACT_BACKEND_TOKENS.contains(&token)
+}
+
+fn is_developer_only_compact_backend_run(run: &str) -> bool {
+    DEVELOPER_ONLY_EMBEDDED_BACKEND_TOKENS
+        .iter()
+        .any(|reserved| run.contains(reserved))
+        || DEVELOPER_ONLY_EXACT_BACKEND_TOKENS.contains(&run)
 }
 
 fn compact_privacy_backend_label(value: &str) -> String {
@@ -14998,7 +15078,7 @@ where
     // so we can later detect the corresponding block finalization event.
     let mut block_height = None;
     // Track when the transaction first entered the queue.
-    let mut queued_at: Option<Instant> = None;
+    let mut queued_at: Option<tokio::time::Instant> = None;
     let poll_enabled = poll_interval != Duration::ZERO;
     let poll_interval = if poll_enabled {
         poll_interval
@@ -15017,12 +15097,12 @@ where
         tokio::select! {
             biased;
             submit_outcome = async {
-                match submit_result_receiver.as_mut() {
-                    Some(receiver) => Some(receiver.await),
-                    None => None,
-                }
+                submit_result_receiver
+                    .as_mut()
+                    .expect("submit result branch is gated by receiver presence")
+                    .await
             }, if submit_result_receiver.is_some() => {
-                match submit_outcome.expect("submit result branch is gated by receiver presence") {
+                match submit_outcome {
                     Ok(Ok(())) => {
                         debug!(%hash, "transaction submission acknowledged; awaiting terminal status");
                         submit_result_receiver = None;
@@ -15035,20 +15115,33 @@ where
                     ))),
                 }
             }
+            _ = async move {
+                let queued_at =
+                    queued_at.expect("queued timeout branch is gated by queued_at presence");
+                tokio::time::sleep_until(queued_at + max_queued_duration).await;
+            }, if queued_at.is_some() => {
+                let elapsed = queued_at
+                    .map(|queued_at| queued_at.elapsed())
+                    .unwrap_or_default();
+                warn!(%hash, ?elapsed, "transaction remained queued");
+                return Err(tx_confirmation_final_report(eyre!(
+                    "transaction queued for too long"
+                )));
+            }
             _ = poll.tick(), if poll_enabled => {
                 match status_check() {
                     Ok(Some(status)) => match status {
                         TxConfirmationStatus::Queued => {
                             if let Some(first) = queued_at {
                                 let elapsed = first.elapsed();
-                                if elapsed > max_queued_duration {
+                                if elapsed >= max_queued_duration {
                                     warn!(%hash, ?elapsed, "transaction remained queued");
                                     return Err(tx_confirmation_final_report(eyre!(
                                         "transaction queued for too long"
                                     )));
                                 }
                             } else {
-                                queued_at = Some(Instant::now());
+                                queued_at = Some(tokio::time::Instant::now());
                                 debug!(%hash, "transaction entered queue");
                             }
                         }
@@ -15091,7 +15184,7 @@ where
                                 TransactionStatus::Queued => {
                                     if let Some(first) = queued_at {
                                         let elapsed = first.elapsed();
-                                        if elapsed > max_queued_duration {
+                                        if elapsed >= max_queued_duration {
                                             warn!(%hash, ?elapsed, "transaction remained queued");
                                             return Some(Err(tx_confirmation_final_report(eyre!(
                                                 "transaction queued for too long"
@@ -15099,7 +15192,7 @@ where
                                         }
                                         // Duplicate queued notifications are possible; keep waiting.
                                     } else {
-                                        queued_at = Some(Instant::now());
+                                        queued_at = Some(tokio::time::Instant::now());
                                         debug!(%hash, "transaction entered queue");
                                     }
                                 }
@@ -15134,14 +15227,14 @@ where
                                         TxConfirmationStatus::Queued => {
                                             if let Some(first) = queued_at {
                                                 let elapsed = first.elapsed();
-                                                if elapsed > max_queued_duration {
+                                                if elapsed >= max_queued_duration {
                                                     warn!(%hash, ?elapsed, "transaction remained queued");
                                                     return Some(Err(tx_confirmation_final_report(eyre!(
                                                         "transaction queued for too long"
                                                     ))));
                                                 }
                                             } else {
-                                                queued_at = Some(Instant::now());
+                                                queued_at = Some(tokio::time::Instant::now());
                                                 debug!(%hash, "transaction entered queue");
                                             }
                                         }
@@ -16885,9 +16978,13 @@ mod url_join_tests {
             "halo2/ipa:ivm-execution-v1",
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kagemusha-folded-v1",
+            "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
             "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
             "stark/fri",
             "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1",
         ] {
             assert!(
                 is_production_verify_backend_label(backend),
@@ -16910,15 +17007,69 @@ mod url_join_tests {
             "\thalo2/ipa",
             "halo2/ipa\n",
             "halo2/ipa\0",
+            "HALO2/IPA",
+            "stark/FRI",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2//ipa",
+            "halo2/ipa:",
+            "halo2/ipa.",
+            "halo2/ipa/.ivm-execution-v1",
+            "halo2/ipa:ivm..execution-v1",
             "../halo2/ipa",
             "halo2/ipa/../tiny-add",
             "halo2/ipa/orchard",
+            "fcmp++",
             "groth16/bls12-377",
             "stark/fri/miden",
             "stark/fri/pq-masp-stark-fri",
+            "stark/fri/latest",
+            "stark/fri/random-profile",
+            "stark/fri/poseidon2-goldilocks/extra",
+            "stark/fri/sha256_goldilocks.v2",
+            "stark/fri/sha512-goldilocks",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v",
+            "stark/fri/test",
+            "stark/fri/t-e-s-t",
+            "stark/fri/placeholder",
             "stark/fri/kzg",
             "stark/fri/debug",
             "halo2/kzg",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-production",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:dev",
+            "halo2/ipa:d-e-v",
+            "halo2/ipa:dummy",
+            "halo2/ipa:f-a-k-e",
+            "halo2/ipa:stub",
+            "halo2/ipa:s-a-m-p-l-e",
+            "halo2/pasta/tiny-add",
+            "halo2/ipa/tiny-add",
+            "halo2/ipa:tiny-add",
+            "halo2/pasta/tiny-anon-transfer-2x2",
+            "halo2/pasta/tiny-commit-open",
+            "halo2/pasta/anon-transfer-2x2",
+            "halo2/ipa/anon-transfer-2x2",
+            "halo2/ipa:anon-transfer-2x2",
+            "halo2/pasta/anon-transfer-2x2-merkle2",
+            "halo2/ipa/anon-transfer-2x2-merkle8",
+            "halo2/ipa:anon-transfer-2x2-merkle16",
+            "halo2/pasta/vote-bool-commit",
+            "halo2/ipa/vote-bool-commit",
+            "halo2/ipa:vote-bool-commit",
+            "halo2/pasta/vote-bool-commit-merkle2",
+            "halo2/ipa/vote-bool-commit-merkle8",
+            "halo2/ipa:vote-bool-commit-merkle16",
+            "halo2/pasta/asset-hidden-transfer-public-test",
+            "halo2/ipa/asset-hidden-transfer-public-test",
+            "halo2/ipa:asset-hidden-transfer-public-test",
             "mock/dev",
         ] {
             assert!(
@@ -16940,6 +17091,10 @@ mod url_join_tests {
             " halo2/ipa",
             "halo2/ipa/orchard",
             "stark/fri/miden",
+            "stark/fri/latest",
+            "stark/fri/boi-audited",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:tiny-add",
             "halo2/kzg",
             "mock/dev",
         ] {

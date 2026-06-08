@@ -322,24 +322,54 @@ TypeInvariant ==
        /\ ActualAdvertHashPresent(c) \in BOOLEAN
        /\ ActualAdvertHash(c) \in Hashes
 
-BridgeMatchesSpec ==
+ComputedHashMatches(c) ==
+  ActualComputedHash(c) = SpecComputedHash(c)
+
+StatusFieldsMatch(c) ==
+  /\ ActualStatusPresent(c) = SpecStatusPresent(c)
+  /\ ActualStatusHeight(c) = SpecStatusHeight(c)
+  /\ ActualStatusView(c) = SpecStatusView(c)
+  /\ ActualStatusEpoch(c) = SpecStatusEpoch(c)
+  /\ ActualStatusHashPresent(c) = SpecStatusHashPresent(c)
+  /\ ActualStatusHash(c) = SpecStatusHash(c)
+
+CollectorPlanFieldsMatch(c) ==
+  /\ ActualPlanHeight(c) = SpecPlanHeight(c)
+  /\ ActualCollectorsK(c) = SpecCollectorsK(c)
+  /\ ActualRedundantR(c) = SpecRedundantR(c)
+
+AdvertPayloadFieldsMatch(c) ==
+  /\ ActualAdvertScheduled(c) = SpecAdvertScheduled(c)
+  /\ ActualAdvertMembershipPresent(c) = SpecAdvertMembershipPresent(c)
+  /\ ActualAdvertHeight(c) = SpecAdvertHeight(c)
+  /\ ActualAdvertView(c) = SpecAdvertView(c)
+  /\ ActualAdvertEpoch(c) = SpecAdvertEpoch(c)
+  /\ ActualAdvertHashPresent(c) = SpecAdvertHashPresent(c)
+  /\ ActualAdvertHash(c) = SpecAdvertHash(c)
+
+MembershipAdvertHashExact ==
   \A c \in Cases:
-    /\ ActualComputedHash(c) = SpecComputedHash(c)
-    /\ ActualStatusPresent(c) = SpecStatusPresent(c)
-    /\ ActualStatusHeight(c) = SpecStatusHeight(c)
-    /\ ActualStatusView(c) = SpecStatusView(c)
-    /\ ActualStatusEpoch(c) = SpecStatusEpoch(c)
-    /\ ActualStatusHashPresent(c) = SpecStatusHashPresent(c)
-    /\ ActualStatusHash(c) = SpecStatusHash(c)
-    /\ ActualPlanHeight(c) = SpecPlanHeight(c)
-    /\ ActualCollectorsK(c) = SpecCollectorsK(c)
-    /\ ActualRedundantR(c) = SpecRedundantR(c)
-    /\ ActualAdvertScheduled(c) = SpecAdvertScheduled(c)
-    /\ ActualAdvertMembershipPresent(c) = SpecAdvertMembershipPresent(c)
-    /\ ActualAdvertHeight(c) = SpecAdvertHeight(c)
-    /\ ActualAdvertView(c) = SpecAdvertView(c)
-    /\ ActualAdvertEpoch(c) = SpecAdvertEpoch(c)
-    /\ ActualAdvertHashPresent(c) = SpecAdvertHashPresent(c)
-    /\ ActualAdvertHash(c) = SpecAdvertHash(c)
+    ComputedHashMatches(c)
+
+MembershipAdvertStatusExact ==
+  \A c \in Cases:
+    StatusFieldsMatch(c)
+
+MembershipAdvertCollectorPlanExact ==
+  \A c \in Cases:
+    CollectorPlanFieldsMatch(c)
+
+MembershipAdvertPayloadExact ==
+  \A c \in Cases:
+    AdvertPayloadFieldsMatch(c)
+
+MembershipAdvertBridgeExactness ==
+  /\ MembershipAdvertHashExact
+  /\ MembershipAdvertStatusExact
+  /\ MembershipAdvertCollectorPlanExact
+  /\ MembershipAdvertPayloadExact
+
+BridgeMatchesSpec ==
+  MembershipAdvertBridgeExactness
 
 ====

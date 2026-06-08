@@ -223,12 +223,27 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+PendingProgressTouchExact ==
   /\ \A c \in OwnerCases: ActualTouchOutput(c) = SpecTouchOutput(c)
+
+PendingProgressActivationWindowRefreshExact ==
   /\ \A c \in OwnerCases: ActualRefreshOutput(c) = SpecRefreshOutput(c)
+
+PendingProgressTipActivationExact ==
   /\ \A c \in ActivationCases:
        ActualActivationOutput(c) = SpecActivationOutput(c)
+
+PendingProgressRecentWindowExact ==
   /\ \A c \in RecentCases: ActualRecentOutput(c) = SpecRecentOutput(c)
+
+PendingProgressAccountingExactness ==
+  /\ PendingProgressTouchExact
+  /\ PendingProgressActivationWindowRefreshExact
+  /\ PendingProgressTipActivationExact
+  /\ PendingProgressRecentWindowExact
+
+SafetyFast ==
+  PendingProgressAccountingExactness
 
 BugTouchSkipsMapMatch ==
   ActualTouchOutput("map_match") = SpecTouchOutput("map_match")

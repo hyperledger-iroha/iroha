@@ -999,6 +999,33 @@ fn contract_rollup_swaps_candles_query_parameters() -> Vec<Value> {
     params
 }
 
+fn contract_rollup_uranai_market_history_query_parameters() -> Vec<Value> {
+    let mut params = pagination_query_parameters();
+    params.push(required_string_query_param(
+        "market_id",
+        "Uranai market id whose committed DPM price history should be replayed.",
+    ));
+    params.push(string_query_param(
+        "contract_address",
+        "Optional canonical contract address for the Uranai market contract.",
+    ));
+    params.push(string_query_param(
+        "contract_alias",
+        "Optional contract alias for the Uranai market contract.",
+    ));
+    params.push(integer_query_param(
+        "since_timestamp_ms",
+        "Return replayed points whose timestamp is greater than or equal to this value.",
+        Some("uint64"),
+    ));
+    params.push(integer_query_param(
+        "until_timestamp_ms",
+        "Return replayed points whose timestamp is less than or equal to this value.",
+        Some("uint64"),
+    ));
+    params
+}
+
 fn trader_account_rollup_query_parameters() -> Vec<Value> {
     vec![
         required_string_query_param(
@@ -1509,6 +1536,16 @@ fn transaction_paths() -> Map {
             "Bucket the trader swap fills rollup into OHLC candles for one authority and return the paginated time buckets.",
             "#/components/schemas/JsonValue",
             contract_rollup_swaps_candles_query_parameters(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/rollups/uranai/markets/history".to_owned(),
+        Value::Object(json_get_operation(
+            "Contracts",
+            "List Uranai market price history.",
+            "Replay committed Uranai market events in block order and return paginated DPM probability and XOR price points for one market.",
+            "#/components/schemas/JsonValue",
+            contract_rollup_uranai_market_history_query_parameters(),
         )),
     );
     paths.insert(
@@ -11904,6 +11941,7 @@ mod tests {
         assert!(paths.contains_key("/v1/contracts/view/batch"));
         assert!(paths.contains_key("/v1/contracts/rollups/swaps/fills"));
         assert!(paths.contains_key("/v1/contracts/rollups/swaps/candles"));
+        assert!(paths.contains_key("/v1/contracts/rollups/uranai/markets/history"));
         assert!(paths.contains_key("/v1/contracts/rollups/trader/activity"));
         assert!(paths.contains_key("/v1/contracts/rollups/trader/account"));
         assert!(paths.contains_key("/health"));

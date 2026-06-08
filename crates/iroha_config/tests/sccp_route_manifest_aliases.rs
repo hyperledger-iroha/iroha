@@ -72,13 +72,12 @@ fn parse_panic_message(inline_toml: &str) -> String {
     }))
     .expect_err("route manifest aliases should be rejected");
 
-    if let Some(message) = panic.downcast_ref::<String>() {
-        message.clone()
-    } else if let Some(message) = panic.downcast_ref::<&str>() {
-        (*message).to_owned()
-    } else {
-        "<non-string panic>".to_owned()
-    }
+    panic.downcast_ref::<String>().cloned().unwrap_or_else(|| {
+        panic.downcast_ref::<&str>().map_or_else(
+            || "<non-string panic>".to_owned(),
+            |message| (*message).to_owned(),
+        )
+    })
 }
 
 #[test]

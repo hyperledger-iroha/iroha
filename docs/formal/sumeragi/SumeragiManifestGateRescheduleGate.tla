@@ -39,6 +39,47 @@ Cases == {
   "frontier_owner_vote_backed"
 }
 
+ManifestGateCases == {
+  "manifest_no_votes",
+  "manifest_payload",
+  "manifest_votes_payload",
+  "manifest_no_targets"
+}
+
+ManifestActionCases == {
+  "manifest_no_votes",
+  "manifest_payload",
+  "manifest_votes_payload"
+}
+
+NoTargetNoopCases == {
+  "manifest_no_targets",
+  "votes_no_targets"
+}
+
+VoteBackedActionCases == {
+  "votes_payload",
+  "votes_backlog",
+  "votes_no_slot"
+}
+
+AuthoritativeRotationCases == {
+  "votes_payload",
+  "votes_no_targets"
+}
+
+AuthoritativeSuppressedCases == {
+  "manifest_payload",
+  "manifest_votes_payload",
+  "votes_backlog",
+  "votes_no_slot"
+}
+
+PassiveVoteBackedEvidenceCases == {
+  "same_slot_evidence",
+  "frontier_owner_vote_backed"
+}
+
 BoolToInt(b) == IF b THEN 1 ELSE 0
 
 NoMarker == 0
@@ -319,6 +360,90 @@ SafetyFast ==
   /\ ActualOutput("same_slot_evidence") = SpecOutput("same_slot_evidence")
   /\ ActualOutput("frontier_owner_vote_backed") =
        SpecOutput("frontier_owner_vote_backed")
+
+ManifestGateEffectExact ==
+  \A c \in ManifestGateCases:
+    /\ ActualEffective(c) = TRUE
+    /\ ActualDropPending(c) = FALSE
+    /\ ActualRetained(c) = TRUE
+    /\ ActualCleanup(c) = FALSE
+    /\ ActualOutput(c) = SpecOutput(c)
+
+ManifestGateActionExact ==
+  \A c \in ManifestActionCases:
+    /\ ActualActionTaken(c) = TRUE
+    /\ ActualAuthoritativeRotation(c) = FALSE
+    /\ ActualReturn(c) = TRUE
+    /\ ActualMarker(c) =
+         IF HasRescheduleVotes(c) THEN VoteBackedMarker ELSE QuorumMarker
+    /\ ActualOutput(c) = SpecOutput(c)
+
+ManifestGateNoTargetExact ==
+  /\ ActualNoTargetNoop("manifest_no_targets") = TRUE
+  /\ ActualActionTaken("manifest_no_targets") = FALSE
+  /\ ActualMarker("manifest_no_targets") = NoMarker
+  /\ ActualRetained("manifest_no_targets") = TRUE
+  /\ ActualReturn("manifest_no_targets") = FALSE
+  /\ ActualOutput("manifest_no_targets") =
+       SpecOutput("manifest_no_targets")
+
+PlainZeroDropCleanupExact ==
+  /\ ActualEffective("plain_zero") = FALSE
+  /\ ActualDropPending("plain_zero") = TRUE
+  /\ ActualActionTaken("plain_zero") = TRUE
+  /\ ActualRetained("plain_zero") = FALSE
+  /\ ActualMarker("plain_zero") = QuorumMarker
+  /\ ActualCleanup("plain_zero") = TRUE
+  /\ ActualReturn("plain_zero") = TRUE
+  /\ ActualOutput("plain_zero") = SpecOutput("plain_zero")
+
+VoteBackedActionExact ==
+  \A c \in VoteBackedActionCases:
+    /\ ActualEffective(c) = TRUE
+    /\ ActualActionTaken(c) = TRUE
+    /\ ActualMarker(c) = VoteBackedMarker
+    /\ ActualRetained(c) = TRUE
+    /\ ActualCleanup(c) = FALSE
+    /\ ActualOutput(c) = SpecOutput(c)
+
+VoteBackedNoTargetExact ==
+  /\ ActualNoTargetNoop("votes_no_targets") = TRUE
+  /\ ActualActionTaken("votes_no_targets") = FALSE
+  /\ ActualMarker("votes_no_targets") = NoMarker
+  /\ ActualRetained("votes_no_targets") = TRUE
+  /\ ActualAuthoritativeRotation("votes_no_targets") = TRUE
+  /\ ActualReturn("votes_no_targets") = TRUE
+  /\ ActualOutput("votes_no_targets") = SpecOutput("votes_no_targets")
+
+AuthoritativeRotationExact ==
+  /\ \A c \in AuthoritativeRotationCases:
+       /\ ActualAuthoritativeRotation(c) = TRUE
+       /\ ActualReturn(c) = TRUE
+       /\ ActualOutput(c) = SpecOutput(c)
+  /\ \A c \in AuthoritativeSuppressedCases:
+       /\ ActualAuthoritativeRotation(c) = FALSE
+       /\ ActualOutput(c) = SpecOutput(c)
+
+PassiveVoteBackedEvidenceExact ==
+  \A c \in PassiveVoteBackedEvidenceCases:
+    /\ ActualEffective(c) = TRUE
+    /\ ActualActionTaken(c) = FALSE
+    /\ ActualMarker(c) = NoMarker
+    /\ ActualRetained(c) = TRUE
+    /\ ActualReturn(c) = FALSE
+    /\ ActualCleanup(c) = FALSE
+    /\ ActualOutput(c) = SpecOutput(c)
+
+ManifestGateRescheduleExactness ==
+  /\ SafetyFast
+  /\ ManifestGateEffectExact
+  /\ ManifestGateActionExact
+  /\ ManifestGateNoTargetExact
+  /\ PlainZeroDropCleanupExact
+  /\ VoteBackedActionExact
+  /\ VoteBackedNoTargetExact
+  /\ AuthoritativeRotationExact
+  /\ PassiveVoteBackedEvidenceExact
 
 BugManifestNotEffective ==
   ActualOutput("manifest_no_votes") = SpecOutput("manifest_no_votes")

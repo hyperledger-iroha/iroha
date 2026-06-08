@@ -28864,12 +28864,17 @@ impl StateTransaction<'_, '_> {
     ) -> crate::zk::PreverifyResult {
         // Backend tag acceptance against node policy (curve allow-list via config)
         let backend = proof.backend.as_str();
-        // Only apply curve gating for Halo2 backends; others are handled by pre-verifier sanity checks
-        if backend.starts_with("halo2/") {
+        // Only apply curve gating after production backend admission; unsupported
+        // Halo2-looking labels must fail as UnsupportedBackend in the pre-verifier.
+        if matches!(
+            crate::zk::production_verify_backend_tag(backend),
+            Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
+        ) {
             // Extract curve segment (e.g., "pasta" or "bn254") if present
-            let parts: Vec<&str> = backend.split('/').collect();
-            if parts.len() >= 2 {
-                let curve_seg = parts[1];
+            if let Some(curve_seg) = backend
+                .strip_prefix("halo2/")
+                .and_then(|rest| rest.split(['/', ':']).next())
+            {
                 let allowed = match (curve_seg, self.zk.halo2.curve) {
                     ("pasta", iroha_config::parameters::actual::ZkCurve::Pasta)
                     | ("pasta", iroha_config::parameters::actual::ZkCurve::Pallas) => true,
@@ -29009,6 +29014,156 @@ mod state_view_lock_tests {
             "state view should expose the committed empty peer set"
         );
         handle.join().expect("view thread");
+    }
+}
+
+#[cfg(all(test, feature = "zk-preverify"))]
+mod state_preverify_backend_admission_tests {
+    use std::{num::NonZeroU64, sync::Arc};
+
+    use iroha_data_model::{
+        block::BlockHeader,
+        proof::{ProofBox, VerifyingKeyBox},
+        zk::{BackendTag, OpenVerifyEnvelope},
+    };
+
+    use super::*;
+    use crate::{kura::Kura, zk::PreverifyResult};
+
+    #[test]
+    fn unsupported_halo2_looking_backends_fail_backend_admission_before_curve_policy() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Bn254;
+
+        for backend in [
+            "halo2/bn254",
+            "halo2/bn254/vote",
+            "halo2/kzg",
+            "halo2/debug",
+            "halo2/mock",
+            "halo2/unknown-native-v1",
+            "halo2/ipa:production-ready",
+            "halo2/ipa:claimed-mainnet",
+        ] {
+            let proof = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+            assert_eq!(
+                transaction.preverify_proof(&proof, None, 0, None, None, true),
+                PreverifyResult::UnsupportedBackend,
+                "case {backend}"
+            );
+        }
+
+        let admitted = ProofBox::new(crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(), vec![1, 2, 3, 4]);
+        assert_eq!(
+            transaction.preverify_proof(&admitted, None, 0, None, None, true),
+            PreverifyResult::CurveNotAllowed,
+            "admitted Halo2/Pasta backends must still honor curve policy"
+        );
+    }
+
+    #[test]
+    fn stark_fri_profile_labels_require_enveloped_state_preverify_metadata() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+
+        for backend in [
+            crate::zk::ZK_BACKEND_STARK_FRI_V1,
+            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1",
+        ] {
+            let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
+            let vk_commitment = crate::zk::hash_vk(&vk);
+            let raw = ProofBox::new(backend.to_owned(), vec![1, 2, 3, 4]);
+
+            assert_eq!(
+                transaction.preverify_proof(
+                    &raw,
+                    Some(&vk),
+                    0,
+                    Some(vk_commitment),
+                    Some(vk_commitment),
+                    true,
+                ),
+                PreverifyResult::MalformedProof,
+                "state preverify must require OpenVerifyEnvelope metadata for {backend}"
+            );
+
+            let envelope = OpenVerifyEnvelope {
+                backend: BackendTag::Stark,
+                circuit_id: format!("{backend}:state-preverify-test"),
+                vk_hash: vk_commitment,
+                public_inputs: vec![0x55; 32],
+                proof_bytes: vec![0xAA, 0xBB, 0xCC],
+                aux: Vec::new(),
+            };
+            let proof = ProofBox::new(
+                backend.to_owned(),
+                norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
+            );
+
+            assert_eq!(
+                transaction.preverify_proof(
+                    &proof,
+                    Some(&vk),
+                    0,
+                    Some(vk_commitment),
+                    Some(vk_commitment),
+                    true,
+                ),
+                PreverifyResult::Accepted,
+                "malformed raw payload for {backend} must not poison state preverify dedup"
+            );
+        }
+    }
+
+    #[test]
+    fn halo2_ipa_profile_labels_use_family_curve_segment() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query);
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Pallas;
+
+        let backend = "halo2/ipa:ivm-execution-v1";
+        let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
+        let vk_commitment = crate::zk::hash_vk(&vk);
+        let envelope = OpenVerifyEnvelope {
+            backend: BackendTag::Halo2IpaPasta,
+            circuit_id: backend.to_owned(),
+            vk_hash: vk_commitment,
+            public_inputs: vec![0x55; 32],
+            proof_bytes: vec![0xAA, 0xBB, 0xCC],
+            aux: Vec::new(),
+        };
+        let proof = ProofBox::new(
+            backend.to_owned(),
+            norito::to_bytes(&envelope).expect("encode OpenVerifyEnvelope"),
+        );
+
+        assert_eq!(
+            transaction.preverify_proof(
+                &proof,
+                None,
+                0,
+                Some(vk_commitment),
+                Some(vk_commitment),
+                true,
+            ),
+            PreverifyResult::Accepted,
+            "Halo2 IPA profile labels must be checked as IPA/Pasta labels before metadata preverify"
+        );
     }
 }
 
@@ -38028,6 +38183,10 @@ mod tests {
             amount: Numeric::new(42_u32, 0),
             custody: seller.clone(),
             status: iroha_data_model::escrow::AssetEscrowStatus::PaymentSent,
+            kind: iroha_data_model::escrow::AssetEscrowKind::Marketplace,
+            remaining_amount: Numeric::new(42_u32, 0),
+            release_authority: None,
+            expires_at_ms: None,
             evidence_hashes: vec![Hash::new("public-evidence")],
             created_at_ms: 1,
             accepted_at_ms: Some(2),

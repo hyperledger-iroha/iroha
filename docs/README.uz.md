@@ -59,11 +59,11 @@ Ushbu omborda siz Iroha 2 vositalari uchun hujjatlarni topishingiz mumkin:
 
 ## Norito (Serializatsiya kodek)
 
-Norito - bu ish maydonini ketma-ketlashtirish kodekidir. Biz `parity-scale-codec` dan foydalanmaymiz
-(SCALE). Hujjatlar yoki ko'rsatkichlar SCALE bilan solishtirganda, u faqat uchun
+Norito - bu ish maydonini ketma-ketlashtirish kodekidir. Biz `retired codec` dan foydalanmaymiz
+(retired codec). Hujjatlar yoki ko'rsatkichlar retired codec bilan solishtirganda, u faqat uchun
 kontekst; barcha ishlab chiqarish yo'llari Norito dan foydalanadi. `norito::codec::{Encode, Decode}`
 API'lar xeshlash va simlar uchun sarlavhasiz ("yalang'och") Norito foydali yukini ta'minlaydi.
-samaradorlik - bu SCALE emas, Norito.
+samaradorlik - bu retired codec emas, Norito.
 
 Oxirgi holat:
 
@@ -87,4 +87,4 @@ Eslatma: Ba'zi quyi tizim hujjatlari (masalan, IVM tezlashtirish va ZK sxemalari
 Holat so‘nggi nuqtasini kodlash qaydlari
 - Torii `/status` korpusi ixchamlik uchun sarlavhasiz (“yalangʻoch”) foydali yuk bilan sukut boʻyicha Norito dan foydalanadi. Mijozlar avval Norito kodini dekodlashga harakat qilishlari kerak.
 - Serverlar so'ralganda JSONni qaytarishi mumkin; Agar `content-type` `application/json` bo'lsa, mijozlar JSONga qaytadilar.
-- Sim formati SCALE emas, Norito. Yalang'och variant uchun `norito::codec::{Encode,Decode}` API ishlatiladi.
+- Sim formati retired codec emas, Norito. Yalang'och variant uchun `norito::codec::{Encode,Decode}` API ishlatiladi.

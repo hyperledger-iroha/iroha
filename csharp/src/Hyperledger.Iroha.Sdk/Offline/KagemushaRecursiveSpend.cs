@@ -441,6 +441,50 @@ public static class KagemushaRecursiveSpendNative
         }
     }
 
+    public static bool IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable()
+    {
+        return IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable(
+            () => TryGetAbiVersion(out var version) ? version : null,
+            TryProbeRecursiveSpendCompactPaymentTokenProjectionVerifierSymbol);
+    }
+
+    internal static bool IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable(
+        Func<uint?> abiVersionProbe,
+        Func<bool> verifierSymbolProbe)
+    {
+        try
+        {
+            var version = abiVersionProbe();
+            return version is not null
+                && version.Value >= RecursiveCompactRequiredBridgeAbiVersion
+                && verifierSymbolProbe();
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (SystemException)
+        {
+            return false;
+        }
+    }
+
     public static KagemushaOfflineSpendMode PreferredMode()
     {
         return PreferredMode(IsRecursiveCompactPaymentTokenProverAvailable(), IsAvailable());
@@ -996,12 +1040,42 @@ public static class KagemushaRecursiveSpendNative
             outLen));
     }
 
+    public static KagemushaRecursiveCompactPaymentTokenArchive RecursiveSpendCompactPaymentTokenFromBundle(
+        ReadOnlySpan<byte> bundleArchive)
+    {
+        var bundle = RequireValidInputArchive(
+            bundleArchive,
+            nameof(bundleArchive),
+            "Recursive spend bundle archive");
+        if (!IsRecursiveCompactPaymentTokenProverAvailable())
+        {
+            throw new InvalidOperationException(
+                "Recursive spend compact Kagemusha payment-token projection requires native bridge ABI 7 with the compact projection symbol.");
+        }
+        var code = NativeRecursiveSpendCompactPaymentTokenFromBundle(
+            bundle,
+            (UIntPtr)bundle.Length,
+            out var outPtr,
+            out var outLen);
+        return new KagemushaRecursiveCompactPaymentTokenArchive(ReadBridgeOutput(
+            "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle",
+            code,
+            outPtr,
+            outLen));
+    }
+
     public static bool VerifyRecursiveCompactPaymentToken(ReadOnlySpan<byte> compactTokenArchive)
     {
         if (compactTokenArchive.IsEmpty)
         {
             throw new ArgumentException(
                 "Compact token archive must not be empty.",
+                nameof(compactTokenArchive));
+        }
+        if (compactTokenArchive.Length > NativeArchiveMaxBytes)
+        {
+            throw new ArgumentException(
+                $"Compact token archive must not exceed {NativeArchiveMaxBytes} bytes.",
                 nameof(compactTokenArchive));
         }
         var compactToken = compactTokenArchive.ToArray();
@@ -1017,6 +1091,57 @@ public static class KagemushaRecursiveSpendNative
             out var valid);
         return NormalizeRecursiveCompactVerifierOutput(
             "connect_norito_kagemusha_verify_recursive_compact_payment_token",
+            code,
+            valid);
+    }
+
+    public static bool VerifyRecursiveSpendCompactPaymentTokenProjection(
+        ReadOnlySpan<byte> compactTokenArchive,
+        ReadOnlySpan<byte> verifierRecordArchive,
+        ulong? blockHeight = null)
+    {
+        if (compactTokenArchive.IsEmpty)
+        {
+            throw new ArgumentException(
+                "Compact token archive must not be empty.",
+                nameof(compactTokenArchive));
+        }
+        var compactToken = compactTokenArchive.ToArray();
+        RequireValidRecursiveCompactTokenArchive(compactToken);
+        var verifierRecord = RequireValidInputArchive(
+            verifierRecordArchive,
+            nameof(verifierRecordArchive),
+            "Verifier record archive");
+        if (!IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable())
+        {
+            throw new InvalidOperationException(
+                "Recursive spend compact Kagemusha payment-token projection verifier requires native bridge ABI 7 with the compact projection verifier symbols.");
+        }
+        byte valid;
+        int code;
+        if (blockHeight.HasValue)
+        {
+            code = NativeVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                compactToken,
+                (UIntPtr)compactToken.Length,
+                verifierRecord,
+                (UIntPtr)verifierRecord.Length,
+                blockHeight.Value,
+                out valid);
+        }
+        else
+        {
+            code = NativeVerifyRecursiveSpendCompactPaymentTokenProjection(
+                compactToken,
+                (UIntPtr)compactToken.Length,
+                verifierRecord,
+                (UIntPtr)verifierRecord.Length,
+                out valid);
+        }
+        return NormalizeRecursiveCompactVerifierOutput(
+            blockHeight.HasValue
+                ? "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"
+                : "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection",
             code,
             valid);
     }
@@ -1175,13 +1300,13 @@ public static class KagemushaRecursiveSpendNative
         {
             throw new ArgumentException($"{displayName} must not be empty.", parameterName);
         }
-        var bytes = archive.ToArray();
-        if (bytes.Length > NativeArchiveMaxBytes)
+        if (archive.Length > NativeArchiveMaxBytes)
         {
             throw new ArgumentException(
                 $"{displayName} must not exceed {NativeArchiveMaxBytes} bytes.",
                 parameterName);
         }
+        var bytes = archive.ToArray();
         if (!PrivacyNative.IsNoritoV1Archive(bytes))
         {
             throw new ArgumentException(
@@ -1456,10 +1581,94 @@ public static class KagemushaRecursiveSpendNative
         }
     }
 
+    private static bool TryProbeRecursiveSpendCompactPaymentTokenProjectionVerifierSymbol()
+    {
+        try
+        {
+            var noHeightCode = NativeVerifyRecursiveSpendCompactPaymentTokenProjection(
+                MalformedArchiveProbe,
+                (UIntPtr)MalformedArchiveProbe.Length,
+                MalformedArchiveProbe,
+                (UIntPtr)MalformedArchiveProbe.Length,
+                out var noHeightValid);
+            if (noHeightCode != ExpectedMalformedArchiveProbeErrorCode || noHeightValid != 0)
+            {
+                return false;
+            }
+            var heightCode = NativeVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+                MalformedArchiveProbe,
+                (UIntPtr)MalformedArchiveProbe.Length,
+                MalformedArchiveProbe,
+                (UIntPtr)MalformedArchiveProbe.Length,
+                0,
+                out var heightValid);
+            return heightCode == ExpectedMalformedArchiveProbeErrorCode && heightValid == 0;
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (SystemException)
+        {
+            return false;
+        }
+    }
+
     private static bool TryProbeRecursiveCompactPaymentTokenSurface()
     {
         return TryProbeRecursiveCompactPaymentTokenSymbol()
-            && TryProbeRecursiveCompactPaymentTokenVerifierSymbol();
+            && TryProbeRecursiveCompactPaymentTokenVerifierSymbol()
+            && TryProbeRecursiveSpendCompactPaymentTokenProjectionSymbol();
+    }
+
+    private static bool TryProbeRecursiveSpendCompactPaymentTokenProjectionSymbol()
+    {
+        try
+        {
+            var ok = Probe((NativeArchiveCall)NativeRecursiveSpendCompactPaymentTokenFromBundle);
+            NativeFree(IntPtr.Zero);
+            return ok;
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+        catch (BadImageFormatException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (SystemException)
+        {
+            return false;
+        }
     }
 
     private static bool Probe(NativeArchiveCall nativeCall)
@@ -1612,6 +1821,30 @@ public static class KagemushaRecursiveSpendNative
     private static extern int NativeVerifyRecursiveCompactPaymentToken(
         byte[] compactTokenPtr,
         UIntPtr compactTokenLen,
+        out byte valid);
+
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeRecursiveSpendCompactPaymentTokenFromBundle(
+        byte[] bundlePtr,
+        UIntPtr bundleLen,
+        out IntPtr outPtr,
+        out UIntPtr outLen);
+
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeVerifyRecursiveSpendCompactPaymentTokenProjection(
+        byte[] compactTokenPtr,
+        UIntPtr compactTokenLen,
+        byte[] verifierRecordPtr,
+        UIntPtr verifierRecordLen,
+        out byte valid);
+
+    [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int NativeVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+        byte[] compactTokenPtr,
+        UIntPtr compactTokenLen,
+        byte[] verifierRecordPtr,
+        UIntPtr verifierRecordLen,
+        ulong blockHeight,
         out byte valid);
 
     [DllImport(LibraryName, EntryPoint = "connect_norito_free", CallingConvention = CallingConvention.Cdecl)]

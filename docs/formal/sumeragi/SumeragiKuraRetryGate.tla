@@ -61,6 +61,22 @@ Cases == {
   FailureNextInClamp
 }
 
+DueCases == {
+  DueNoDeadline,
+  DueBeforeDeadline,
+  DueAtDeadline,
+  DueAfterDeadline,
+  DueAbortedNoDeadline,
+  DueAbortedWithDeadline
+}
+
+ResetCases == {ResetRetry, MarkPersistedRetry}
+
+MaxAttemptCases == {FailureMaxZeroFresh, FailureMaxZeroWithDeadline}
+RetryBackoffCases == {FailureFirstRetry, FailureSecondRetry}
+AbortBoundaryCases == {FailureAtMaxAbort, FailureOverflowAbort}
+DelayReportingCases == {FailureNextInClamp}
+
 Attempts0 == 1
 Attempts1 == 2
 Attempts2 == 3
@@ -271,10 +287,43 @@ FailureSemantics ==
   /\ ImplementationActions(FailureOverflowAbort) = OverflowAbortActions
   /\ ImplementationActions(FailureNextInClamp) = NextInClampActions
 
+KuraRetryDueExact ==
+  \A c \in DueCases:
+    ImplementationActions(c) = SpecActions(c)
+
+KuraRetryResetExact ==
+  \A c \in ResetCases:
+    ImplementationActions(c) = SpecActions(c)
+
+KuraRetryMaxAttemptExact ==
+  \A c \in MaxAttemptCases:
+    ImplementationActions(c) = SpecActions(c)
+
+KuraRetryBackoffExact ==
+  \A c \in RetryBackoffCases:
+    ImplementationActions(c) = SpecActions(c)
+
+KuraRetryAbortBoundaryExact ==
+  \A c \in AbortBoundaryCases:
+    ImplementationActions(c) = SpecActions(c)
+
+KuraRetryDelayReportingExact ==
+  \A c \in DelayReportingCases:
+    ImplementationActions(c) = SpecActions(c)
+
+KuraRetryStateExactness ==
+  /\ KuraRetryDueExact
+  /\ KuraRetryResetExact
+  /\ KuraRetryMaxAttemptExact
+  /\ KuraRetryBackoffExact
+  /\ KuraRetryAbortBoundaryExact
+  /\ KuraRetryDelayReportingExact
+
 SafetyFast ==
   /\ NoBugInvariant
   /\ DueSemantics
   /\ ResetSemantics
   /\ FailureSemantics
+  /\ KuraRetryStateExactness
 
 ====

@@ -347,4 +347,41 @@ UnvalidatedCommitQcDoesNotPromote ==
   "unvalidatedCommitQc" \in tried =>
     ~ImplementationPromotesUnvalidatedQc("unvalidatedCommitQc")
 
+BlockSyncRecoveryAdmissionExact ==
+  /\ AcceptedMatchesSpec
+  /\ DroppedMatchesSpec
+  /\ StaleWithoutRequestDrops
+  /\ RequestedStalePayloadAcceptedAndClearsRequest
+  /\ UnrequestedFutureDrops
+
+BlockSyncRecoveryAbortedExact ==
+  /\ AbortedPayloadOnlyDoesNotRevive
+  /\ AbortedCommitQcRevivesAndKeepsQc
+
+BlockSyncRecoveryOwnerExact ==
+  /\ VoteBackedStaleRecoveryIsAuthoritative
+  /\ CertifiedRecoveryIsAuthoritative
+  /\ PayloadOnlyDoesNotStealOwner
+  /\ UncertifiedSameHeightConflictStaysPassive
+
+BlockSyncRecoveryCommitQcRepairExact ==
+  /\ CommitQcEvidenceIsRetained
+  /\ SparsePayloadTracksMissingCommitQc
+  /\ UnknownVoteOnlyTracksMissingCommitQc
+
+BlockSyncRecoveryInflightAndValidationExact ==
+  /\ CertifiedRecoveryClearsStaleInflight
+  /\ PayloadOnlyDoesNotClearStaleInflight
+  /\ UnvalidatedCommitQcDoesNotPromote
+
+BlockSyncRecoveryExactness ==
+  /\ BlockSyncRecoveryAdmissionExact
+  /\ BlockSyncRecoveryAbortedExact
+  /\ BlockSyncRecoveryOwnerExact
+  /\ BlockSyncRecoveryCommitQcRepairExact
+  /\ BlockSyncRecoveryInflightAndValidationExact
+
+SafetyFast ==
+  BlockSyncRecoveryExactness
+
 ====

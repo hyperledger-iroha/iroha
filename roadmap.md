@@ -13,6 +13,11 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- Native asset locks are now first-class ISIs for escrow-style conditional
+  custody, including optional release authority, expiry, partial drawdown,
+  deterministic custody, Python SDK helpers, negative/adversarial unit tests, and
+  a 4-peer localnet coverage path. Keep future escrow work on this native
+  instruction surface unless it explicitly needs IVM contract semantics.
 - SoraFS/SoraNet first-release KDF identifier cleanup is complete: SoraFS
   envelopes remain V1/version 1 with the transcript-bound hybrid suite label,
   SoraNet advertises only NK2/NK3 suite IDs `0x04`/`0x05`, and old pre-release
@@ -22,13 +27,29 @@ and completed history lives in [`status.md`](./status.md).
 - SCCP launch scope is limited to Ethereum, BSC, Solana, TON, and TRON. Proof
   manifests, checked encoders, verifier dispatch, Torii public discovery, SDK
   helpers, and production readiness surfaces must stay limited to those lanes.
-  Reintroducing retired network families requires a new design pass, fresh
-  fixtures, and explicit governance approval rather than reviving diagnostic
-  code paths.
+  Retired runtime-network families outside that launch scope are explicitly
+  unsupported for now.
+  Retired platform-family lanes are explicitly outside SCCP launch support for
+  now.
+  Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+  Reintroducing any such family requires a new design pass, fresh fixtures, and
+  explicit governance approval rather than reviving diagnostic code paths.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
   as `0x1` and padded values such as `01` remain evidence blockers.
+- Keep the direct-Serde migration closed: `scripts/serde_allowlist.txt` is
+  empty, and `make guards` keeps new direct `serde_json` usage and retired
+  non-Norito codec dependencies, including renamed retired-codec package
+  aliases, out of the workspace. `tools/soranet-relay`, `crates/iroha_core`,
+  `crates/iroha_cli`, `crates/iroha_torii`, and `crates/iroha_sccp` have been
+  removed from that allowlist after their relay JSON paths, STARK/FRI envelope
+  types, contract-app TOML manifest decoder, Torii SCCP query DTOs, Torii
+  tx-history/push JWT JSON paths, and SCCP public payload/proof DTOs were
+  verified to build without direct Serde dependencies.
+  The stale workspace-level `bincode` dependency is removed; remaining Solana
+  bincode-layout wording refers to hand-validated external protocol bytes, not
+  a production codec dependency.
 - SCCP release readiness reports and release bundles must keep native EVM
   prover artifact paths role-unique across the attached native prover manifest
   and published readiness summary, so proof artifacts, proving/verifier keys,
@@ -36,6 +57,120 @@ and completed history lives in [`status.md`](./status.md).
   silently reuse another role's file. The release bundle builder rejects that
   path reuse during input validation before copying native prover payloads,
   including not-ready diagnostic bundles.
+- SCCP native EVM prover cross-SDK parity fixtures and native self-test
+  fixtures must keep semantic digest roles separated inside the fixture body:
+  receipt/source proof, request/witness, calldata, Torii payload, and proof
+  hashes cannot reuse another role even when manifests and SDK result rows are
+  rehashed consistently.
+- SCCP native EVM prover manifests must carry exactly one artifact row for each
+  required public SDK; duplicate SDK rows and missing SDK rows remain readiness
+  and published-bundle blockers even if the native manifest is rehashed.
+  Manifest SDK artifact rows must also remain canonical objects with all
+  required fields, no unknown fields, approved SDK/implementation bindings, and
+  artifact hashes matching their committed roles. SDK implementation artifact
+  paths and hashes are checked with the same local-artifact and hash-binding
+  rules as the primary prover payloads. Duplicate JSON keys inside SDK artifact
+  rows must fail before implementation hashes are trusted.
+- SCCP native EVM prover manifests must also keep their root object and
+  `audit_hashes` map schemas exact. Rehashed manifests that add unknown root
+  fields, add unexpected audit-hash roles, or omit required audit-hash roles are
+  readiness and published-bundle blockers. Duplicate JSON keys at the manifest
+  root or inside `audit_hashes` must fail before any last-key-wins parser can
+  trust overwritten audit evidence, and those negative cases remain pinned by
+  the native no-WASM/no-remote readiness inventory.
+- SCCP native EVM prover parity and self-test fixtures must also carry exactly
+  one result row for each required public SDK; rehashed fixture artifacts that
+  omit SDK rows, add unknown SDK rows, or replace the SDK result map with a
+  malformed/empty container remain readiness and published-bundle blockers.
+  Individual SDK result rows must also remain canonical objects with all
+  required fields, no unknown fields, and values matching the shared fixture
+  hashes and public-signal vector. Duplicate JSON keys inside fixture roots or
+  SDK result rows must fail before row values are trusted, so row-level shape
+  drift is rejected before release evidence can pass.
+- SCCP native EVM prover parity and self-test fixture public-signal vectors
+  must keep the canonical nine 32-byte word shape; rehashed fixture artifacts
+  with shortened vectors or malformed signal words remain readiness and
+  published-bundle blockers even when SDK rows are kept in sync.
+- SCCP native EVM prover manifest paths must remain local artifact names:
+  public SDK manifest parsers, readiness rendering, bundle generation, and
+  bundle verification reject URI/drive-prefix style paths and
+  WASM/remote-prover markers in filenames before any no-WASM/no-remote
+  evidence can be accepted. Keep SDK implementations free of raw forbidden
+  dependency tokens so the source inventory remains fail-closed.
+- SCCP release readiness reports now promote the native no-WASM/no-remote
+  source inventory to a production gate: public SDK parsers, artifact
+  verifiers, self-tests, browser distribution guards, and adversarial native
+  prover manifest coverage must remain pinned in the JSON report and published
+  bundle evidence.
+- SCCP release readiness reports now also promote the active Ethereum EVM
+  source-adapter deployment source inventory to a production gate, pinning the
+  deployment-unblocks-production helper, source-bridge network/config binding,
+  and negative drift tests before active Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum no-proxy
+  data-collection source inventory to a production gate, so app-owned execution
+  and Beacon provider reads, provider markers, and no Torii proxy/embedded
+  HTTP-client fallbacks stay pinned across public SDKs before active Ethereum
+  launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum native
+  receipt-finality source inventory to a production gate, so Swift, Kotlin/JVM,
+  Java Android, and .NET receipt-proof builders must keep finalized-header root,
+  sync-committee root, and Beacon-slot prerequisites pinned before active
+  Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum Beacon REST
+  finalized-header shape source inventory to a production gate, so public SDK
+  validators and negative tests for non-zero parent/state/body roots plus
+  96-byte finalized-header signatures must stay pinned before active Ethereum
+  launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum Beacon REST
+  execution-payload binding source inventory to a production gate, so Beacon
+  target-header/root/block reads, light-client finality-update evidence,
+  execution block-hash/receipts-root binding, and C# SSZ root parity vectors
+  must stay pinned before active Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum sync-committee
+  roster source inventory to a production gate, so exact 512-authority mainnet
+  rosters, unit validator weights, 342-participant quorum fixtures, and
+  81,925-byte next-sync-committee payload vectors must stay pinned across public
+  SDKs before active Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum source-bridge
+  config source inventory to a production gate, so bridge-address, network-id,
+  code-hash config hashing, and negative config-drift tests must stay pinned
+  before active Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the EVM contract-smoke
+  Ethereum-mainnet network-id and production-surface inventories to production
+  gates, so ETH/BSC chain-id rejection vectors, accepted-event network ids,
+  verifier code/key binding, destination-binding, domain-overflow, proof-shape,
+  cross-deployment, and replay-rejection smoke coverage must stay pinned before
+  active Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum Core
+  range/finality binding source inventory to a production gate, so message proof
+  ranges must stay bound to artifact finality height and negative outer-range
+  replay tests before active Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum Core message
+  replay source inventory to a production gate, so durable pinned-record replay
+  protection and negative replay/history tests must stay pinned before active
+  Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum Torii pinned
+  message-proof source inventory to a production gate, so public readback keeps
+  serving only pinned bridge records and negative unpinned-record serving tests
+  remain pinned before active Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the active Ethereum EVM live
+  source and destination evidence inventories to production gates, so canonical
+  live RPC chain ids, finalized block tags, deployment receipt binding, runtime
+  bytecode hashes, route canary calldata, and proof tuple drift regressions must
+  stay pinned before active Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum launch-policy
+  selector source inventory to a production gate, so the `EthereumMainnetLane`
+  selector and negative cross-lane policy regressions must stay pinned before
+  active Ethereum launch evidence can pass.
+- SCCP release readiness reports now also promote the Ethereum route-canary
+  finalized receipt-block source inventory to a production gate, so finalized
+  receipt-block binding, route-canary TOML fields, all-lanes comments, runtime
+  hashing, and negative drift tests must stay pinned before active Ethereum
+  launch evidence can pass.
+- SCCP release readiness reports now also promote the active Ethereum EVM
+  block-tag metadata source inventory to a production gate, so finalized source
+  and destination block-tag evidence and negative drift tests must stay pinned
+  before active Ethereum launch evidence can pass.
 - SCCP corridor phase evidence must also stay source-unique: downloaded
   `--phase-evidence-dir` logs and explicit `--phase-evidence` assignments
   cannot set the same phase twice, so release reports and bundles cannot
@@ -67,21 +202,24 @@ and completed history lives in [`status.md`](./status.md).
   request archives now fail closed at the C bridge, Node host, and PyO3 host
   before returning a diagnostic result when Reserved-lineage verifier records,
   proof backends, or proof attachments are malformed. The ABI-7
-  `kagemusha-recursive-compact-v1` compact-token symbols remain source-stable
-  and fail closed while core projection tests bind folded public-input hash
-  limbs, transcript limbs, witness count, hop count, verifier-key CID/hash, and
-  verifier-record windows; compact-token envelope preverification also rejects
-  noncanonical u64 public-instance limbs, unsupported verifier opening lengths,
-  multi-row proof instance columns, zero recursive verifier metadata digest
-  groups, and stale recursive public-input hash limbs reconstructed from the
-  envelope columns. Compact-CID
-  envelopes must also expose a non-zero recursive verifier scalar-projection
-  digest, so semantic aggregation proofs cannot be accepted merely by changing
-  their circuit id to `kagemusha-recursive-compact-v1`. The C bridge, Node
-  host, and PyO3 host ABI-7 compact-token verifiers now also hard-fail
-  multi-row proof instance columns before returning the soft invalid unavailable
-  result.
-  Native core plus C/JNI/Node/PyO3 compact prover preflights decode Pallas
+  `kagemusha-recursive-compact-v1` compact-token symbols now route one-hop
+  LEN=4 record-backed Pallas openings through the compact verifier-slice proof
+  path while keeping multi-hop compact fail-closed. Core projection tests bind
+  folded public-input hash limbs, transcript limbs, witness count, hop count,
+  verifier-key CID/hash, verifier-record windows, the one-hop verifier-slice
+  side column, and compact verifier-key shape; compact-token envelope
+  preverification also rejects noncanonical u64 public-instance limbs,
+  unsupported verifier opening lengths, multi-row semantic-prefix padding, zero
+  recursive verifier metadata digest groups, stale recursive public-input hash
+  limbs reconstructed from the envelope columns, and semantic compact-CID
+	  envelopes that omit the one-hop verifier-slice profile. The C bridge, Node
+	  host, and PyO3 host ABI-7 compact-token verifiers still hard-fail malformed
+	  bindings before returning soft invalid results for backend-invalid compact
+	  proofs. ABI-7 compact verification also rejects inner Halo2 IPA proof
+	  payloads below the compact proof-size floor after ZK1/instance parsing and
+	  before compact verifier-key construction, so syntactically shaped dummy
+	  tokens cannot force expensive one-hop verifier work.
+	  Native core plus C/JNI/Node/PyO3 compact prover preflights decode Pallas
   opening archives as Halo2 Pallas `OpenVerifyEnvelope` values before
   returning the explicit unavailable code, including rejection of Norito-valid
   chain proof-envelope archives, tampered Pallas openings, extra or missing
@@ -90,25 +228,47 @@ and completed history lives in [`status.md`](./status.md).
   to the supplied record bundle, and append verifier-slice witness/preflight
   splices where the previous recursive proof opening is not the detached
   preflight or the current-hop opening is not bound to the current hop proof
-  hash. Core checked-fold preflight also rejects same-hop and cross-hop
+  hash. One-hop verifier-slice evidence binding now also rejects proof-count,
+  verifier-witness profile, parameter-fingerprint, fixed-window schedule,
+  shared-table manifest, opening-length, table-base, and hop-bound batch-digest
+  splices before receiver admission can trust that metadata. Core checked-fold
+  preflight also rejects same-hop and cross-hop
   input/output overlap before hop proof decoding, and lineage witness replay
   applies full-bundle fold metadata, verifier-record set, and current-note
   shape/binding plus append-handoff and final-bundle gates before Pallas
   archive or previous-proof parsing. Record-bound
   multi-hop compact archives now also fail with an explicit composed private-hop
   verifier-batch-unavailable diagnostic, preserving one-hop verifier-slice
-  binding coverage while the full compact circuit remains reserved; the native
-  bridge maps that condition to the recursive-compact-unavailable code rather
-  than treating valid multi-hop archives as malformed input. Kotlin/JVM and
-  Java Android wrappers classify the same unavailable diagnostics as reserved
-  proof-composition state while keeping malformed local archive validation,
-  compact-token public-instance row-shape diagnostics, and compact-token
-  verifier-key hash mismatches as caller input errors. Swift, Kotlin/JVM, and
-  Java Android compact-token, recursive aggregation, recursive compact, and
-  recursive spend validators also reject over-cap caller archives with explicit
-  `must not exceed` diagnostics before native dispatch, and Swift/C# verifier
-  normalizers keep the `-312` recursive compact unavailable status distinct
-  from `-311` malformed proof rejection.
+  binding coverage while the full compact circuit remains reserved. Multi-hop
+  Pallas archives with forged metadata, duplicated openings, or reordered
+  openings reject as record-backed preflight drift before the unavailable
+  sentinel, while the native bridge maps exactly ordered valid multi-hop
+  batches to the recursive-compact-unavailable code rather than treating them
+  as malformed input. The height-aware core compact prover enforces the same
+  duplicated/reordered preflight boundary. Kotlin/JVM and Java Android wrappers
+  classify the same unavailable diagnostics as reserved proof-composition state
+  while keeping malformed local archive validation, compact-token
+  public-instance row-shape diagnostics, and compact-token verifier-key hash
+  mismatches as caller input errors. Swift, Kotlin/JVM, Java
+  Android, JavaScript/Node, Python, and C# lineage key artifact helpers also
+  require proving-key archive payloads to contain the selected circuit id bytes
+  and verifier-key commitment before native request construction. Swift,
+  Kotlin/JVM, Java Android, JavaScript/Node, Python, and C# compact-token,
+  recursive aggregation,
+  recursive compact, and recursive spend validators also reject over-cap caller
+  archives with explicit `must not exceed` diagnostics before owned byte copies,
+  Norito parsing, native availability checks, or native dispatch. The Node NAPI
+  and Python PyO3 native hosts also enforce the same 64 MiB archive cap for
+  direct native-host entrypoints that bypass the high-level SDK wrappers, with
+  ABI-7 recursive-spend regressions covering the single-archive operations and
+  every multi-archive lineage witness input slot before Norito decode. Those
+  hosts and the shared C bridge also preflight nested current-hop Pallas
+  open-envelope archives inside init/append request archives, so empty Pallas
+  material fails before core prover or nested decode paths run. The
+  Swift native bridge now caps Kagemusha output lengths before copying native
+  pointers into `Data`, and Swift/C# verifier normalizers keep the `-312`
+  recursive compact unavailable status distinct from `-311` malformed proof
+  rejection.
   The Kagemusha payload workflow and SDK parity guard now
   also pin the mobile Halo2 canonical verifier-key hash across Swift,
   Kotlin/JVM, and Java Android, with a negative control that rejects stale hash
@@ -120,9 +280,11 @@ and completed history lives in [`status.md`](./status.md).
   non-empty PEM/DER shape and payload-size checks, signed evidence artifact
   path/hash-to-bytes binding pinned to `evidence/signed-evidence.json`, a
   closed `slot.json` field allowlist, structured
-  signed-evidence schema checks for slot identity, release APK
-  path/hash-to-bytes binding, native bridge ABI version, physical-device
-  attestation, production pass/fail claims, raw command claims, canonical UTC
+	  signed-evidence schema checks for slot identity, release APK
+	  path/hash-to-bytes binding, native bridge ABI version, physical-device
+	  attestation, ABI-7 `one_hop_verified` recursive compact JNI probe state plus
+	  `multi_hop_proof_composition_unavailable` prover state, production pass/fail
+	  claims, raw command claims, canonical UTC
   `signed_at_utc`, D2D payment transcript path/hash binding under `handoff/`,
   wallet-integrity transcript path/hash binding for one-use key rotation and rollback rejection,
   required telemetry/attestation/queue/log base artifacts that cannot be
@@ -130,7 +292,8 @@ and completed history lives in [`status.md`](./status.md).
   shapes, telemetry/status/runtime completion markers, symlink- and
   hardlink-free device-lab roots, operator-supplied root ancestors, slot parent
   directories, slot path ancestors, and slot directories plus regular-file slot
-  metadata/manifests/artifacts, and wallet/handoff artifact digests,
+  metadata/manifests/artifacts, scanner rejection of unreadable slot directory
+  or parent metadata before traversal, and wallet/handoff artifact digests,
   plus exact raw-command checks for the canonical release assembly plus
   `connectedAndroidTest` invocation and the focused
   `KagemushaRecursiveSpendProverTest` and `OfflineNoteTransferHandoff`
@@ -141,44 +304,100 @@ and completed history lives in [`status.md`](./status.md).
   `physical_device_attestation: true` from `slot.json`; if both `slot` and
   `slot_id` aliases are emitted, both must match the slot directory.
 	  Trusted-signer public-key pinning with symlink-free key-path ancestors,
-	  regular non-symlink/non-hardlink key file validation, and Ed25519 signature
-	  verification, plus private/public key path validation before OpenSSL lookup
-	  and pre-OpenSSL rejection of secret-looking key path strings,
+	  regular non-symlink/non-hardlink key file validation, unreadable key leaf
+	  metadata rejection, and Ed25519 signature
+		  verification, plus private/public key path validation before OpenSSL lookup
+		  and pre-OpenSSL rejection of secret-looking key path strings while
+		  preserving key-path failures separately from private/public key mismatches
+		  and treating temporary OpenSSL staging/write/read failures as structured
+		  signer/verifier errors,
 	  standalone scanner rejection of secret-looking `--root`/`--json-out`
 	  arguments before root discovery or summary writes, direct root-validator
-	  rejection of secret-looking paths before slot discovery, direct summary-writer
-	  rejection of secret-looking output paths before JSON writes, discovered slot-name
+	  rejection of secret-looking paths and unreadable root metadata before slot
+	  discovery, direct summary-writer rejection of secret-looking output paths and
+	  unreadable output leaf metadata before JSON writes, discovered slot-name
 	  rejection/redaction before artifact traversal or summary serialization,
 	  signer-helper rejection
 	  of secret-looking `--slot`, `--output`, and `--signer-key-id` runtime
 	  arguments before metadata reads, standard device-family coverage,
 		  cross-slot duplicate device-fingerprint and attestation-challenge rejection,
 		  explicit slot-id path-safety checks, and a signer helper that emits the
-		  canonical signed artifact from completed slots without persisting private key
-	  paths, rechecks signed-evidence/manifest output ancestor/parent/leaf aliases
-		  and secret-looking direct output paths
-		  immediately before writes, preflights slot/artifact shape before parsing slot
+			  canonical signed artifact from completed slots without persisting private key
+		  paths, rechecks signed-evidence/manifest output ancestor/parent/leaf aliases
+			  and secret-looking direct output paths
+				  immediately before writes, maps absolute signed-evidence output resolver
+				  failures to structured signer errors, classifies signer-controlled
+				  output parents with `lstat()` before any `Path.is_dir()` preflight,
+				  rejects unreadable output parent or leaf metadata before write or
+				  digest reads, revalidates signed-evidence output shape before
+				  hashing the written artifact back into `slot.json`, classifies slot directory
+				  and parent metadata with `lstat()` before parsing slot metadata or rewriting
+				  manifests, preflights slot/artifact shape before parsing slot
 		  metadata, makes lower-level direct symlink/hardlink/regular-file artifact
 		  validators reject secret-looking slot paths before traversal/stat/classification,
 		  makes the signer artifact-digest builder rerun the slot preflight before
-		  hashing required signed-evidence artifacts,
+		  hashing required signed-evidence artifacts, and revalidates each
+		  per-artifact digest path, including unreadable leaf metadata, immediately
+		  before signed-evidence and manifest rewrite digest reads,
+		  makes the direct symlink artifact validator report unreadable
+		  slot-metadata, artifact-directory, and nested-artifact metadata before
+		  alias classification,
+		  makes the direct regular-file artifact validator classify leaves with
+		  `lstat()` before any `exists()` preflight can mask unreadable metadata,
+		  makes the hardlink and regular-file validators classify artifact
+		  directories with `lstat()` before any `exists()` preflight and makes the
+		  regular-file validator classify nested artifacts before any
+		  `is_symlink()` preflight,
+		  makes required-artifact shape checks, required status/runtime text reads,
+		  the D2D queue digest binding, and the signed-evidence artifact binding
+		  classify artifacts with `lstat()` before any `is_file()` preflight,
 		  rejects secret-looking direct slot paths and artifact names in
 		  metadata-loader, SHA-256 manifest parser/verifier, and SHA-256 manifest
-		  rewrite helper calls, rejects symlinked slot roots and ancestors before
-		  direct SHA-256 manifest parser/verifier reads, rejects hardlinked
-		  `sha256sum.txt` manifests before direct manifest parsing or discovery,
+		  rewrite helper calls, rejects unreadable signer slot/parent metadata before
+		  direct metadata parsing or manifest rewrites, rejects unreadable slot-root metadata
+		  plus symlinked slot roots and ancestors before direct SHA-256
+		  manifest parser/verifier reads, rejects unreadable-metadata
+		  and hardlinked `sha256sum.txt` manifests before direct manifest parsing
+		  or discovery,
+		  makes scanner and rollup missing-root decisions consume
+		  `lstat()`-classified root presence instead of `Path.exists()`,
+		  makes scanner slot inventory classify expected top-level directories,
+		  `sha256sum.txt`, and recursive file-count entries with `lstat()` before
+		  any `Path.is_dir()` or `Path.is_file()` preflight,
+		  makes automatic slot discovery classify device-lab root entries with
+		  `lstat()`, preserve symlinked slot entries for fail-closed scan rejection,
+		  and report unreadable slot-entry metadata before any `Path.is_dir()`
+		  fallback,
+		  makes shared Android ancestor validation classify each ancestor with
+		  `lstat()` before any `Path.is_symlink()` or `Path.exists()` preflight,
+		  makes manifest artifact digest validation classify slot-relative
+		  ancestors with `lstat()` before any `Path.is_symlink()` preflight,
 		  repeats that slot-path guard across direct
 		  attestation, handoff, wallet, required-artifact, signed-evidence, and
 		  production-metadata validator helpers, and repeats that
 		  preflight before direct SHA-256 manifest rewrites are also now guarded.
-		  Direct slot-file discovery returns no artifacts for secret-looking slot
-		  paths, symlinked slot ancestors, missing roots, non-directory roots,
-		  symlinked slot roots, or symlinked artifact directories before traversal,
-		  and direct manifest verification rejects entries under symlinked artifact
-		  directories before hashing. The shared
-		  Android device-lab JSON loader rejects secret-looking direct file paths and
+		  Signed-evidence artifact digest verification now also revalidates each
+		  required artifact path immediately before hashing the bytes claimed by
+		  `artifact_digests`. Slot-metadata digest checks now also revalidate
+			  `slot.json`-referenced attestation-chain, offline-wallet APK, and
+			  signed-evidence artifact paths immediately before SHA-256 reads. D2D
+			  handoff, wallet-integrity, and `queue/pending_queue.json` transcript
+			  digest checks now use the same pre-read path revalidation. Required
+			  status/runtime marker text reads now also revalidate the slot-relative
+			  artifacts immediately before decoding and marker checks.
+			  Direct slot-file discovery reports unreadable slot-root and
+		  artifact-directory metadata through caller error lists, returns no
+		  artifacts for secret-looking slot paths, symlinked slot ancestors,
+		  missing roots, non-directory roots, symlinked slot roots, or symlinked
+		  artifact directories before traversal, and
+		  direct manifest verification rejects entries under symlinked artifact
+		  directories before hashing. The manifest verifier now also revalidates each
+		  `sha256sum.txt` artifact path immediately before digesting, so direct
+		  verifier calls cannot reuse stale parse-time checks after a path mutation.
+			  The shared Android device-lab JSON loader rejects secret-looking direct file paths and
 		  symlinked ancestor directories before parsing direct metadata, attestation,
-		  handoff, wallet-integrity, or signed-evidence JSON. The D2D transcript is
+		  handoff, wallet-integrity, or signed-evidence JSON, and fails closed with a
+		  structured read error for unreadable or non-UTF-8 JSON bytes. The D2D transcript is
   closed-schema and has to
   prove an offline payer/payee handoff, matching sent/received payload hashes,
   receiver redeem acceptance, duplicate-spend rejection, hash-bound transport
@@ -193,22 +412,63 @@ and completed history lives in [`status.md`](./status.md).
   hash, and signer hash for validated slots, and avoid printing absolute summary
   output paths. A strict readiness rollup now combines the ABI-6 manifest,
   ABI-7 fail-closed contract,
-  Reserved-lineage proof evidence, signed Android evidence, release-cutoff
+  Reserved-lineage proof evidence, ABI-7 recursive compact key evidence, signed Android evidence, release-cutoff
   freshness, future-date clock-skew rejection, and standard family coverage into
 		  a ready/blocked JSON summary; the checked-in ABI-6 manifest must be a regular
 		  non-symlink, non-hardlinked file with symlink-free ancestors before its
 		  release contract is trusted, and
 	  the checked-in ABI-7 fail-closed and Reserved-lineage release-tooling marker
 	  source files must also be ordinary non-symlink, non-hardlinked files before
-	  their marker text can satisfy readiness. The proof evidence has to hash-bind adjacent
+	  their marker text can satisfy readiness, with the same source-marker
+	  validator rerun immediately before marker text is loaded, and unreadable or
+	  non-UTF-8 marker bytes fail closed as structured blockers. The proof evidence has to hash-bind adjacent
 	  `.norito`, `.record.norito`, `.vk`, `.pk`, and production proof-log artifact
-  bytes while rejecting symlinked or hardlinked proof artifacts/logs, re-check
+  bytes plus artifact sizes while rejecting empty, symlinked, hardlinked, or
+  metadata-unreadable proof artifacts/logs, classifies artifact/log missing-vs-unreadable state from the
+  lstat-backed local-file validators instead of `Path.is_file()`, re-check
   that the proof log contains only the single expected proof test and one-test
-  cargo result, satisfy release-cutoff and future-date skew bounds, keep the
+  cargo result after rerunning the lineage local-file validator immediately
+  before reading proof-log text, satisfy release-cutoff and future-date skew bounds, keep the
   canonical `lineage-proof-evidence.json` filename while rejecting symlinked
   evidence files or symlinked evidence ancestors, and remain
 	  closed-schema with duplicate JSON object keys rejected at every nested
-	  evidence object. The lineage evidence helper also rejects noncanonical raw
+	  evidence object. The compact key evidence hash-binds the ABI-7 LEN=4
+	  `recursive-compact-len4.record.norito`, `.vk`, and `.pk` artifacts,
+	  validates compact key artifact byte sizes against local bytes, rejects empty
+	  compact key artifacts and plain-text placeholder compact key artifacts,
+	  hash-binds `recursive-compact-key-artifacts.log`, requires exactly the
+	  canonical CLI summary line, and checks the reported `.vk`, `.pk`, and
+	  `.record.norito` sizes against local bytes,
+	  preserves the canonical
+	  `recursive-compact-key-evidence.json` filename, and validates the canonical
+	  release command instead of runtime key generation. The Kagemusha release
+	  bundle manifest now uses
+	  `iroha.kagemusha.production_release_bundle.v1` to recompute the checked-in
+	  ABI-6, ABI-7, and lineage release-tooling trust roots, hash-bind the ready
+	  readiness summary, Reserved-lineage proof evidence, ABI-7 compact key
+	  evidence, and scanner-validated Android signed-evidence inventory, while
+	  recording bundle-relative per-slot Android signed-evidence artifact paths
+	  and SHA-256 digests plus the Reserved-lineage and compact key artifact size maps, and listing packaged lineage artifacts,
+	  compact key artifacts, the compact key generator log, and production proof logs with
+	  bundle-relative paths, SHA-256 digests, and byte sizes after revalidating each slot name while rejecting summary drift
+	  across repo-trust and external-evidence sections, duplicate JSON keys,
+	  unexpected top-level or section-level summary fields, per-section blockers
+	  in a ready summary, secret-looking paths, secret-looking
+	  strings anywhere inside the readiness summary, plain-text placeholder
+	  compact key artifacts in the compact-key artifact inventory, evidence outside `--bundle-root`, symlinked
+	  bundle roots, symlinked or hardlinked bundle outputs, and secret-looking
+	  trusted signer key paths before loading signer keys, with newly-created
+	  bundle-output parents revalidated before fsynced temporary-file writes,
+	  atomic replacement, and readback verification. The same helper can verify existing manifests
+	  by preflighting the manifest path before local evidence scanners run and
+	  then using a stable manifest comparison that ignores only the verifier run
+	  timestamp. Any release input
+	  path that escapes the bundle root stops all readiness/evidence/device-lab
+	  loading for that bundle run, and `--out` cannot overwrite any
+	  hash-bound readiness summary, evidence JSON, proof log, key artifact, or
+	  Android signed-evidence file.
+	  Unreadable or non-UTF-8 ABI-6 manifest and proof-evidence
+	  JSON files fail closed as structured read blockers. The lineage evidence helper also rejects noncanonical raw
 	  `--generated-at-utc` input instead of normalizing it before writing release
 	  JSON, and refuses symlinked artifact directories or aliased evidence output
 	  leaves and ancestors before creating missing `--out` parents or reading
@@ -216,26 +476,63 @@ and completed history lives in [`status.md`](./status.md).
 	  same secret-path and canonical proof-log-under-artifact-dir corridor before
 	  hashing artifacts or reading proof logs, and direct artifact-dir,
 	  proof-log corridor, and output-preflight helpers reject secret-looking
-	  artifact, proof-log, or output paths before resolving corridors, creating
-	  temporary files, creating output parents, or writing evidence JSON; the shared local lineage file validator rejects
+	  artifact/proof-log/output paths plus unreadable artifact-dir or `--out`
+	  parent metadata before resolving corridors, creating temporary files,
+	  creating output parents, or writing evidence JSON, and classify `--out`
+	  parents with `lstat()` before any `Path.is_dir()` preflight, with
+	  final output write failures reported as structured blockers; the shared local lineage file validator rejects
 	  secret-looking evidence, artifact, or proof-log paths and symlinked
 	  local-file ancestors before JSON parsing, digest calculation, or proof-log
-	  reads. Ready rollup summaries also publish
+	  reads, and both the readiness rollup's direct SHA-256 reader and the
+	  lineage helper's direct SHA-256 reader repeat that validation before
+	  returning artifact digests, with read-time byte failures reported as
+	  structured blockers instead of tracebacks. Ready rollup summaries also publish
 		  sanitized SHA-256 maps for the
 		  accepted Reserved-lineage artifacts and proof log without preserving local
 		  artifact paths, reuse the scanner-validated signed-evidence timestamp for
 		  Android freshness instead of re-opening slot files, refuse symlinked or
-		  symlink-ancestor `--repo-root` aliases plus direct secret-looking repo-root
-		  validator inputs before resolving checked-in trust roots, repeat that
-		  preflight inside direct ABI/source trust-root section checks,
-		  reject secret-looking direct ABI-6 release JSON and ABI/source marker file
-		  paths before metadata checks or content parsing,
+			  symlink-ancestor `--repo-root` aliases, unreadable repo-root metadata,
+			  plus direct secret-looking repo-root validator inputs before resolving
+			  checked-in trust roots, repeat that preflight inside direct ABI/source
+			  trust-root section checks, map
+			  `--repo-root` resolver failures to structured rollup blockers before
+			  relative evidence paths are expanded, and make shared Android ancestor
+			  validation fail closed on cwd metadata failures for relative helper
+			  inputs,
+			  reject secret-looking direct ABI-6 release JSON and ABI/source marker file
+		  paths plus unreadable ABI-6 release JSON and source-marker leaf metadata
+		  before content parsing,
 		  redact and block any secret-looking string that reaches an Android scanner
 		  report before summary serialization,
-		  reject symlinked rollup summary output ancestors plus symlinked or
-		  hardlinked summary output aliases, reject secret-looking direct rollup
-		  summary output paths, and make the Android device-lab
-	  scanner reject aliased `--json-out` summary targets before writing.
+			  reject symlinked rollup summary output ancestors plus symlinked or
+			  hardlinked summary output aliases, reject dangling symlink summary
+			  output leaves, unreadable summary output parent or leaf metadata, and
+			  secret-looking direct rollup summary output paths, classify summary output parents
+			  with `lstat()` before any `Path.is_dir()` preflight,
+			  recheck created output parents and ancestors before writing summaries,
+			  and make the Android device-lab
+			  scanner reject aliased and unreadable-metadata `--json-out` summary
+			  targets before writing.
+			  Android slot artifact enumeration now fails closed on top-level slot
+			  directory list failures in both scanner and signing-helper manifest rewrite
+			  paths, and manifest inventory discovery reports artifact metadata read
+			  failures; direct hardlink artifact validation reports unreadable file
+			  metadata before hardlink checks, and digest-time manifest, metadata, and
+			  signed-evidence artifact validators distinguish missing files from
+			  unreadable leaf metadata, so release evidence cannot pass with a partial
+			  artifact inventory. The shared Android JSON loader also reports
+			  unreadable JSON leaf metadata before parsing or duplicate-key checks.
+		  The signing helper and Reserved-lineage proof helper now reject dangling
+			  symlink output leaves before writing signed evidence, manifest refreshes,
+			  or lineage proof evidence JSON, and the lineage proof helper rejects
+			  unreadable output leaf metadata before evidence writes; signer output
+			  writers also recheck created output parents and ancestors before writing,
+			  and the lineage helper's direct output preflight rechecks created parents
+			  before returning success.
+			  Android signer absolute output corridor resolver failures now return
+			  structured signer blockers before write attempts.
+			  Lineage helper proof-log and output corridor resolver failures now return
+			  structured blockers instead of raw resolver errors.
   The Android device-lab scanner also rejects duplicate JSON
 	  object keys in slot metadata, attestation, signed-evidence, D2D handoff, and
 	  wallet-integrity artifacts before those rows can move from blocked to ready;
@@ -246,13 +543,16 @@ and completed history lives in [`status.md`](./status.md).
 	  proof-composition is unavailable, plus a stale folded-token binding mutation
 	  and non-canonical compact verifier-key/hash regressions that hard-fail
 	  before the soft-invalid path.
-  Remaining compact-token release work is to replace the semantic aggregation
-  proof with a composed private-hop verifier-slice proof before enabling
-  receiver admission or SDK default selection. The production-readiness CI
-  guard now treats that as the release contract: ABI-6 Reserved-lineage may be
-  advertised as the production offline-offline route, but ABI-7 recursive
-  compact remains a blocker/default-disabled surface until the composed proof
-  exists.
+  Remaining compact-token release work is to package one-hop proving-key
+  artifacts for runtime-disabled production builds, compose the multi-hop append
+  verifier batch into the compact proof, and attach signed device-lab evidence
+  before enabling receiver admission or SDK default selection. The
+  production-readiness CI guard now treats that as the release contract and
+  checks concrete ABI-7 core and bridge function bodies, not only loose marker
+  text: ABI-6 Reserved-lineage may be advertised as the production
+  offline-offline route, but ABI-7 recursive compact remains a
+  blocker/default-disabled surface until
+  the composed proof exists.
 - Active BSC mainnet SCCP SDK hardening now directly gates malformed
   receipt-observed source-event logs: browser, Python, Swift, Kotlin/JVM, Java
   Android, and .NET tests reject matching BSC source-bridge logs with extra
@@ -1624,6 +1924,12 @@ and completed history lives in [`status.md`](./status.md).
   XSDs with `xmllint --nonet`; it also
   requires canonical repository/commit/path/license/source-SHA provenance for
   every checked-in XSD with source repository URLs capped at 2048 characters,
+  placeholder repository owners or names rejected during preflight and
+  readiness replay, secret-looking repository coordinates rejected before
+  archived-summary output, and identifier-style secret-looking path material
+  rejected before summary emission, while requiring the
+  `blocked_schema_sources` review list to be recorded explicitly even when
+  empty,
   rejects XSD files with known restricted Standards
   Editor redistribution terms, parses the embedded default rail profile catalog
   on demand, and records which concrete advertised message versions are
@@ -1641,7 +1947,10 @@ and completed history lives in [`status.md`](./status.md).
   XSDs now
   have standalone XML fixtures that pass XML schema validation, and remaining
   MDR/XSD work is locating redistributable official packages and making the
-  strict schema-backed and profile-version release flags pass. The legacy
+  strict schema-backed and profile-version release flags pass. Blocked public
+  XSD candidate evidence now must carry at least one explicit redistribution or
+  public-distribution restriction marker, so copyright-only provenance cannot
+  satisfy missing-package blocker evidence. The legacy
   `colr.007` collateral parser and
   route are now local-compatibility only; operator receipt/evidence/readiness
   gates reject the explicit `--allow-legacy-colr007` override for production. An
@@ -1666,14 +1975,17 @@ and completed history lives in [`status.md`](./status.md).
 					  roots and inputs that reject symlink leaves and symlinked ancestors,
 					  including explicit message leaves with
 			  whitespace/leading-dash-segment/backslash/semicolon/empty-segment/dot-segment smuggling rejected
-		  before reads and duplicate payload digests or duplicate rail message ids
-		  rejected before network delivery, with live rail and notary redirects
-		  archived as failed receipts instead of followed, and with live rail, notary, and archived
-		  receipt endpoint URLs capped for full URL length and DNS-host length,
+			  before reads and duplicate payload digests or duplicate rail message ids
+			  rejected before network delivery, with live rail and notary redirects
+			  archived as failed receipts instead of followed, and with live rail, notary, and archived
+			  receipt endpoint URLs capped for full URL length and DNS-host length
+			  and rejecting reserved placeholder hosts such as `.example` or
+			  `example.invalid`,
 	  bearer-token files for the live rail and notary adapters capped before
 	  decoding,
 			  regular non-symlink notary export roots/source files with symlinked
-			  ancestors rejected and 64 MiB caps per JSON artifact, and local
+			  ancestors rejected, 64 MiB caps for anchor/index JSON artifacts,
+			  1 MiB caps for persisted record-source JSON artifacts, and local
 			  receipts that do
 		  not persist token material, secret-looking remote response previews, or
 		  secret-looking transport errors while preflighting receipt output
@@ -1689,8 +2001,14 @@ and completed history lives in [`status.md`](./status.md).
   read-only receipt verifier now gates those receipts for canary use and emits
   a digest-bound summary with per-receipt `receipt_sha256` entries while
 	  closing raw receipt and notary source schemas including duplicate-free nested audit records,
-	  audit record filename/message-id bindings, endpoint-digest bindings,
-	  timestamp/status consistency, bounded response
+	  complete audit-index record key sets,
+	  complete persisted record/context/metadata/history key sets for source replay and
+	  Torii durable-store reload,
+	  audit record filename/message-id bindings, Torii reload clean-string enforcement,
+	  Torii reload filename/message-id binding, symlink-free regular-file-only Torii record
+	  directory/loading, symlink-free Torii durable-output directories, bounded Torii
+	  persisted-record persist/reload, endpoint-digest bindings,
+	  timestamp/status consistency, required HTTP response digest/error metadata, bounded response
 				  metadata, canonical receipt endpoint,
 				  timestamp, canonical notary/rail source paths, including `store_dir`,
 				  that are not flag-shaped, `.xml` rail payload leaves,
@@ -1700,12 +2018,15 @@ and completed history lives in [`status.md`](./status.md).
 			  overlong or non-canonical ASCII rail-message identifiers before
 			  submission, with oversized or unknown-field sidecars rejected as
 			  malformed,
-	  rail sidecar source bindings, notary anchor-path shape checks even when
+	  rail receipt metadata recording for nullable raw receipt fields and retained
+	  archived receipt-summary identifiers, rail sidecar source bindings that reject
+	  explicit-null optional metadata instead of treating it as omission,
+	  notary anchor-path shape checks even when
 	  source files are not required, notary anchor/index source bindings that
 	  require regular non-symlink files, notary adapter publication that requires
 	  `store_dir/messages` for non-empty anchors by default, persisted notary
-		  record-source bindings from each index row's `record_sha256` to
-		  clean `store_dir/messages` paths, production evidence rejection of the adapter's
+			  record-source bindings from each explicit index `records[]` row's
+			  `record_sha256` to clean `store_dir/messages` paths, production evidence rejection of the adapter's
 		  local `--allow-missing-record-sources` diagnostic override,
 		  status-history timestamp binding for persisted record sources, and
 		  symlink-free receipt archive directories,
@@ -1718,7 +2039,9 @@ and completed history lives in [`status.md`](./status.md).
 	  executing the rail/notary/verify path with one
 	  bounded summary, bounding each child stage with positive finite
 	  `--stage-timeout-secs`, recording `timed_out` for killed children, draining
-	  child stdout/stderr through a configured preview cap, and capping runbook
+	  child stdout/stderr through a configured preview cap, requiring explicit
+	  notary and verify receipt-selector arrays under
+	  `--require-explicit-policy`, and capping runbook
 	  JSON at 64 KiB before parsing.
 	  The operator scripts reject duplicate JSON object keys, non-standard
 	  `NaN`/`Infinity` JSON constants, and lone UTF-16 surrogate escapes across
@@ -1738,9 +2061,15 @@ and completed history lives in [`status.md`](./status.md).
 	  parameters, empty segments, and dot/parent traversal before argparse `Path`
 		  normalization or file discovery. Live rail/notary adapter timeouts also
 		  reject non-positive or non-finite CLI values, and byte caps reject
-		  non-positive values before local reads or network delivery. The receipt verifier caps raw receipt JSON at
-  4 MiB, notary source JSON at 64 MiB, rail source XML at 4 MiB, and rail
-	  source-sidecar JSON at 16 KiB before source replay. The evidence gate caps
+		  non-positive values before local reads or network delivery. The receipt
+		  verifier caps raw receipt JSON at 4 MiB, notary anchor/index JSON at
+		  64 MiB, persisted notary record-source JSON at 1 MiB, rail source XML
+		  at 4 MiB, and rail source-sidecar JSON at 16 KiB before source replay,
+			  while the notary adapter and downstream evidence gates require positive
+			  notary record counts, canonical audit-index lifecycle states, and
+			  state-compatible pacs.002 summary/status-history codes before publication
+			  and during source-file or production-evidence replay. The
+		  evidence gate caps
 	  direct receipt-verifier stdout/stderr at 4 MiB before JSON parsing, bounds
 	  direct verifier runtime with positive finite `--receipt-verifier-timeout-secs`,
 	  and rejects control characters, whitespace, leading-dash segments, backslashes,
@@ -1753,9 +2082,14 @@ and completed history lives in [`status.md`](./status.md).
 	  gate and XSD/evidence summaries consumed by the readiness gate are capped at
 	  4 MiB before parsing, optional `xmllint` stdout/stderr is capped at 64 KiB
 	  and runtime is bounded by positive finite `--xmllint-timeout-secs` during
-	  XSD fixture validation, operator trust-bundle JSON is capped at
+  XSD fixture validation, operator trust-bundle JSON is capped at
   64 MiB before trust-preflight parsing, and trust DER base64 is capped before
-  decoding to the 1 MiB DER material limit.
+  decoding to the 1 MiB DER material limit while requiring each DER object to
+  declare a matching SHA-256 digest. Trust-bundle preflight now requires an
+  explicit `embedded_signature_policy` instead of inferring `require-verified`
+  from omission, and every list-typed trust-material field must be recorded as
+  an array so intentionally empty pin/DER collections cannot be confused with
+  omitted production evidence.
   An offline
   evidence gate now requires exact expected provider/environment context,
   records that context in its digest-bound policy, recomputes
@@ -1804,7 +2138,8 @@ and completed history lives in [`status.md`](./status.md).
 		  receipt archive verification covering canary receipt digests and receipt
 		  kinds before archival, preserves compact trust bundle SHA-256, source
 		  authority/version and URL/retrieval provenance, trust source freshness
-		  emission budgets, revoked-certificate pin
+		  emission budgets, source trust-verifier diagnostic flags,
+		  revoked-certificate pin
 	  counts, certificate-policy OID counts,
 	  and compact trust-anchor/revoked/CRL/OCSP DER proof digests and byte lengths
 	  for release review, rejects profile-emittable drift and
@@ -1814,24 +2149,36 @@ and completed history lives in [`status.md`](./status.md).
 		  context, requires explicit freshness budgets for
 		  XSD/evidence/canary/trust/trust-source timestamps, blocks stale
 	  digest-correct summaries and archive freshness policies weaker than the final
-		  release budgets, rejects stale, placeholder, or smuggled compact trust
-		  source provenance including `placeholder`, `replace-before-production`,
-		  `example.invalid`, overlong URLs, invalid or overlong host labels,
-		  numeric-host/legacy-IPv4 spoofing, IPv6 transition embedded-IPv4
-		  smuggling, percent-escape smuggling, and omitted,
-		  malformed, or release-weaker trust source freshness budgets, rejects
-		  compact profile-emittable drift or emitted-but-not-emittable
-		  contradictions against trust source policy, and
+			  release budgets, rejects stale, placeholder, or smuggled compact trust
+			  source provenance including `dummy`, `fake`, `placeholder`,
+			  `replace-before-production`, `sample`, `template`, reserved hosts
+			  such as `.example`, `example.com`, `example.net`, `example.org`, and
+			  `example.invalid`, overlong URLs, invalid or overlong host labels,
+			  numeric-host/legacy-IPv4 spoofing, IPv6 transition embedded-IPv4
+			  smuggling, percent-escape smuggling, and omitted,
+			  malformed, or release-weaker trust source freshness budgets, rejects
+			  omitted trust-bundle source provenance separately from explicit null
+			  source objects,
+			  compact profile-emittable drift or emitted-but-not-emittable
+		  contradictions against trust source policy or replayed trust-verifier
+		  diagnostic flags, reports explicit diagnostic `source: null` compact
+		  trust profiles as blockers while keeping omitted source keys malformed,
+		  requires canary-stage-only evidence to record explicit
+		  `receipt_verification: null` instead of omitting the archive field, and
   rechecks compact trust profile JSON emission and digest, CRL/OCSP revocation
 	  posture, direct archive/canary receipt digest/kind/status/metadata binding, and trust
 	  profile-count binding, while rejecting repeated or copied
   XSD/evidence and compact canary/trust summaries, rejecting nested
   canary/trust/receipt/profile replay across evidence summaries, requiring compact
-  canary/trust source paths to be control-free, trim-free, not flag-shaped, and
-  traversal-free, requiring compact canary runbook config paths to remain
-  traversal-free JSON pointers, requiring compact canary stage names to remain
-  unique production stages in rail/notary/verify order,
-	  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
+	  canary/trust source paths to be control-free, trim-free, not flag-shaped, and
+	  traversal-free, requiring compact canary runbook config paths to remain
+	  traversal-free JSON pointers, requiring compact canary stage names to remain
+	  unique production stages in rail/notary/verify order, rejecting raw canary
+	  summaries that carry both executed and plan-only stage branches,
+		  accepting plan-only compact summaries only with empty `stage_windows` and
+		  explicitly recorded null `receipt_summary` so they become production
+		  blockers instead of malformed executed-evidence claims,
+		  requiring summary digests, rejecting duplicate receipt paths or receipt digests,
 	  rejecting non-canonical compact receipt paths, rejecting duplicate compact
 	  trust profile IDs or bundle digests across trust summaries, rejecting control-bearing or whitespace-padded
   compact identity strings, rejecting non-canonical compact trust profile IDs,
@@ -1860,9 +2207,12 @@ and completed history lives in [`status.md`](./status.md).
 	  XSD preflight and readiness rollup, rejecting stale missing-schema reasons
 		  on schema-backed archived fixtures, rejecting embedded
 		  whitespace, leading-dash path segments, or semicolon path parameters in checked-in XSD source provenance,
-	  manifest schema, fixture, fixture schema-reference, and archived
+		  rejects omitted checked-in and blocked-source `source` keys separately
+		  from explicit null source objects,
+		  manifest schema, fixture, fixture schema-reference, and archived
 	  profile-catalog paths during preflight and archived-summary readiness
-	  rechecks, requiring
+	  rechecks, requiring archived summaries to retain the emitted manifest
+	  path and explicit profile-catalog object/null state, requiring
 	  profile-catalog source and embedded JSON
   digest provenance from exactly one active Rust `DEFAULT_PROFILES_JSON`
   raw-string declaration plus duplicate-free profile/message/direction/version shape
@@ -1886,11 +2236,11 @@ and completed history lives in [`status.md`](./status.md).
   aggregate production-readiness gate.
 	  ISO rail ingress now has
 	  an operator file-drop adapter that verifies sidecar-pinned message
-	  type/profile/payload digests, rejects non-canonical sidecar profile IDs
-	  and non-canonical rail-message IDs, and closes the live sidecar schema
-	  while bounding sidecar JSON before submitting to clean Torii base URLs and
-	  writing receipts, plus the same receipt verifier and runbook runner for
-	  canary evidence.
+	  type/profile/payload digests, rejects unsupported rail message types,
+	  non-canonical sidecar profile IDs, and non-canonical rail-message IDs, and
+	  closes the live sidecar schema while bounding sidecar JSON before
+	  submitting to clean Torii base URLs and writing receipts, plus the same
+	  receipt verifier and runbook runner for canary evidence.
   Remaining rail-connectivity work is provider-specific live gateway canaries
   and archived rail evidence. Live
   securities lifecycle profile admission now checks
@@ -2355,15 +2705,6 @@ and completed history lives in [`status.md`](./status.md).
   command lines instead of phase output. The verifier owns its required phase
   and phase transcript inventories independently of the report generator, with
   parity tests preventing drift.
-- Keep core-admission SCCP tests aligned with the first-release BSC
-  mainnet lane launch policy; non-BSC source proofs may recognize configured
-  source-adapter evidence but must stop at lane launch before route-canary,
-  route-allowlist, or destination-rollout drift checks. Core keeps configured
-  BSC source-adapter `SubmitBridgeProof` coverage using a Parlia finality
-  BSC mainnet fixture as active-lane evidence, while the Ethereum supported
-  lane is covered by readiness and launch-gate rejection tests. The same Core
-  corridor keeps Ethereum, Solana, TON, and TRON proofs behind launch gating even
-  when they carry configured source-adapter material.
 - Keep Ethereum mainnet inbound source-proof support on the active
   local-admission proof path: core admits configured Ethereum proofs when the
   governed Ethereum source, deployment, destination-rollout, route-allowlist,
@@ -2693,8 +3034,16 @@ and completed history lives in [`status.md`](./status.md).
   post-finality pre-GST GST-elapsed terminalization,
   post-finality pre-GST Next/GST-elapsed exclusivity,
   post-finality pre-GST spec-step stutter/GST split,
+  committed+GST spec-step terminal stuttering,
+  committed spec-step non-stuttering GST observation exclusivity,
+  committed spec-step stutter/GST closure,
+  committed spec-step finality-stack preservation,
+  committed spec-step GST-only data-change footprint,
+  committed spec-step no protocol-action footprint,
   post-finality progress-action quiescence,
-  honest/fault roster-budgeted vote counters, RBC delivery stability, fast
+  committed spec-step progress-gate quiescence, honest/fault roster-budgeted
+  vote counters, RBC delivery stability, committed spec-step budgeted-RBC
+  evidence stability, fast
   canonical frontier recovery, small exhaustive frontier recovery,
   frontier committed source future-stage isolation,
   frontier view-bound drop future-stage isolation,
@@ -2784,7 +3133,7 @@ and completed history lives in [`status.md`](./status.md).
   RBC missing BlockCreated recovery semantics,
   RBC unverified-roster escape-hatch semantics,
   RBC signing-preimage binding semantics,
-  classic Vote/VRF signing-preimage binding semantics,
+  classic Vote/VRF signing-preimage aggregate exactness,
   classic Vote/QC signature-verification semantics,
   invalid-signature telemetry label semantics,
   invalid-signature throttle/penalty semantics,
@@ -2793,26 +3142,79 @@ and completed history lives in [`status.md`](./status.md).
   penalty status projection semantics,
   local peer removed flag semantics,
   execution-witness root projection semantics,
-  RBC compact block-message semantics,
-  consensus block-message priority semantics,
-  block-message height/view projection semantics,
-  block-message log/status kind projection semantics,
+  RBC compact block-message aggregate exactness,
+  consensus block-message priority aggregate exactness,
+  block-message height/view aggregate exactness,
+  block-message log/status kind aggregate exactness,
   consensus message projection semantics,
   pipeline event emission semantics,
-  cached block-message wire-frame semantics,
-  BlockCreated frontier metadata wire/rebuild semantics,
+  cached block-message wire-frame aggregate exactness,
+  BlockCreated frontier metadata wire/rebuild aggregate exactness,
+  direct BlockCreated payload admission aggregate exactness,
   cached proposal rebroadcast semantics,
-  exact-slot frontier recovery activity semantics,
-  frontier reassembly activity semantics,
-  frontier quorum-owner cleanup preservation semantics,
-  contiguous-frontier sidecar retarget semantics,
-  contiguous-frontier sidecar expected-hash semantics,
-  contiguous-frontier payload-hint selection semantics,
-  contiguous-frontier parent-QC hint retarget semantics,
-  vote-verification worker config derivation,
-  QC aggregate-verification worker config derivation,
-  voting-roster support counting, plus collector
-  retry/gossip plans.
+  exact-slot frontier recovery activity semantics, exact-slot aggregate
+  activity-source exactness,
+  frontier reassembly activity semantics, frontier reassembly aggregate
+  activity-source exactness,
+  frontier quorum-owner cleanup preservation semantics, frontier quorum-owner
+  aggregate cleanup exactness,
+  contiguous-frontier sidecar retarget semantics, contiguous-frontier sidecar
+  retarget aggregate exactness,
+  contiguous-frontier sidecar expected-hash semantics, contiguous-frontier
+  sidecar expected-hash aggregate exactness,
+  contiguous-frontier payload-hint selection semantics, contiguous-frontier
+  payload-hint aggregate exactness,
+  contiguous-frontier parent-QC hint retarget semantics, contiguous-frontier
+  parent-QC hint retarget aggregate exactness,
+  vote-verification worker config derivation, vote-verification worker config
+  aggregate exactness,
+  QC aggregate-verification worker config derivation, QC aggregate-verification
+  worker config aggregate exactness,
+  voting-roster support counting, voting-roster support-count aggregate
+  exactness, collector retry/gossip plans, collector retry/gossip plan
+  aggregate exactness, collector fanout/selection semantics, plus collector
+  fanout/selection aggregate exactness,
+  topology ordered-roster mutation semantics, topology ordered-roster aggregate
+  exactness, PRF leader/shuffle topology semantics, PRF leader/shuffle
+  aggregate exactness, topology fanout/redundant-send semantics,
+  topology fanout/redundant-send aggregate exactness, topology role-filter
+  semantics, topology role-filter aggregate exactness, active topology-selection
+  semantics, active topology-selection aggregate exactness, trusted-peer P2P
+  topology semantics, trusted-peer P2P topology aggregate exactness, P2P
+  topology refresh semantics, P2P topology refresh aggregate exactness, quorum
+  retransmit target semantics, quorum retransmit target aggregate exactness,
+  retransmit backpressure aggregate exactness, paced retransmit target
+  aggregate exactness, quorum reschedule backoff aggregate exactness,
+  RBC availability reschedule aggregate exactness, vote-backed reassembly stall
+  aggregate exactness, completed quorum view-advance aggregate exactness,
+  quorum rebroadcast dispatch aggregate exactness, isolated vote-backed handoff
+  aggregate exactness, preemptive vote-backed retransmit aggregate exactness,
+  near-quorum preemptive escalation aggregate exactness, manifest-gate
+  reschedule aggregate exactness, QC signer-bitmap admission aggregate
+  exactness, raw QC signer-count aggregate exactness, QC signer-bitmap
+  construction aggregate exactness, signer-index normalization aggregate
+  exactness, commit-root consistency aggregate exactness, commit-pipeline
+  recovery aggregate exactness, known-block commit-QC recovery aggregate
+  exactness, stale-view commit-QC fetch aggregate exactness, commit-anchor QC
+  promotion aggregate exactness, committed-height QC admission aggregate
+  exactness, empty-block QC drop aggregate exactness, pending-progress
+  accounting aggregate exactness, pending-block lifecycle aggregate exactness,
+  pending-block marker/cooldown aggregate exactness, pending-block Kura retry
+  aggregate exactness, commit-pipeline scheduling aggregate exactness,
+  commit-QC cache/history lookup aggregate exactness, cached-QC precommit
+  signer-record aggregate exactness, roster-validation memo cache aggregate
+  exactness, cached roster-validation wrapper aggregate exactness, core
+  roster-validation aggregate exactness, roster artifact selection aggregate
+  exactness, block roster cache aggregate exactness, block-sync roster evidence
+  aggregate exactness, block-sync history roster aggregate exactness,
+  persisted block-sync roster selection aggregate exactness, BlockSyncUpdate
+  roster hydration aggregate exactness, roster index projection aggregate
+  exactness, membership-view hash aggregate exactness, membership mismatch
+  status aggregate exactness, membership advert publication aggregate
+  exactness, membership mismatch ingress/fail-closed aggregate exactness,
+  consensus-params ingress aggregate exactness, prevalidated commit artifact
+  trust aggregate exactness, commit-job dispatch aggregate exactness,
+  commit-worker config aggregate exactness.
 - Sumeragi prepare-quorum phase-gating validation is closed for the current
   formal slice: the dedicated 2026-06-03 Apalache fast run reached `NoError`
   up to computation length `10` with `CommitPhasesNeverBypassPrepareQuorum`
@@ -4098,7 +4500,7 @@ operator-provided rollout bundles.
   bind the tuple to `message_bundle.commitment.message_id`,
   `message_bundle.commitment_root`, and the SORA source-domain word before
   returning a submit payload. Torii
-  production bridge-proof submit, artifact, proof-job, and runtime SCALE
+  production bridge-proof submit, artifact, proof-job, and runtime proof
   envelope generation now also require SORA-origin message bundles to pass the
   BLS-backed Nexus finality verifier before packaging, and burn bridge-proof
   submission rejects structurally valid but unsigned Nexus finality proofs.
@@ -4204,9 +4606,9 @@ operator-provided rollout bundles.
 	  epochs, transition block hashes, schedule hashes/payload hashes, nested
 	  seal proofs, and transition message hashes before deriving TRON
 	  source-finality evidence.
-	  authority-set payload, authority transition, GRANDPA justification, and
+	  authority-set payload, authority transition, finality justification, and
 	  transition-justification helpers now reject duplicate aliases for source
-	  domains, source event indexes, finalized block fields, GRANDPA set ids,
+	  domains, source event indexes, finalized block fields, finality set ids,
 	  storage roots, authority rosters/weights, payload hashes, transition
 	  hashes, signers bitmaps, nested verifier material, and runtime storage
 	  material.
@@ -4789,7 +5191,7 @@ operator-provided rollout bundles.
   proofs. The same SDKs
   also derive canonical native destination
   binding keys and hashes for SORA -> Solana, SORA -> TON, and SORA ->
-  SORA Kusama/SORA Polkadot/SORA2 runtime lanes, aligning user-side proof
+  retired runtime-network lanes, aligning user-side proof
   requests with the destination rollout evidence helpers. For EVM-family and
   TRON source
   lanes, material
@@ -5081,7 +5483,7 @@ operator-provided rollout bundles.
 	  live-account metadata cannot open the SORA -> TON lane. Direct TON
 	  evidence and all-lanes validation also reject reuse between the live
 	  account-state hash and last-transaction hash snapshot roles.
-	  renders exact SORA -> SORA Kusama/SORA Polkadot/SORA2 runtime destination
+	  renders exact SORA -> retired runtime-network destination
 	  rollout plus route allowlist TOML with the fixed
 	  `SccpBridge.submit_message_proof` verifier entrypoint. Production TOML now
 	  requires a matching `--expected-destination-binding-hash` and
@@ -5124,7 +5526,7 @@ operator-provided rollout bundles.
 	  Configured Rust readiness
 	  now carries the same finalized runtime fields in destination rollouts and
 	  rejects SORA-family launch without them. The offline
-  same three runtime lanes from governed GRANDPA/event-storage component
+  same three runtime lanes from governed finality/event-storage component
   hashes, adapter verifier key hashes, and deployment receipt hashes, and it
   rejects padded runtime-lane selectors, component hashes, and target domains
   before those record hashes are derived.
@@ -5300,7 +5702,7 @@ operator-provided rollout bundles.
   proof-result binding checks that revalidate proof context, request hashes, and
   envelope hashes before portal and mobile wallet submission.
   JavaScript, Python, Swift, Kotlin, and Java Android
-  SORA-Kusama, SORA-Polkadot, and SORA2 destination lanes, locked to SORA-origin
+  retired runtime-network destination lanes, locked to SORA-origin
   source domains and binding the source domain, canonical transparent public
   inputs, length-prefixed SCCP bundle/source proof bytes, statement hash, and
   destination binding hash
@@ -5577,10 +5979,11 @@ operator-provided rollout bundles.
   defensive BOC/envelope byte getters; the same mobile SDKs can build the TON
   message-body submission input directly from a local `TonSccpProofResult`, so
   apps no longer need to manually copy proof-context hashes between proof
-  generation and wallet/liteserver packaging. Because SCCP launch support no
-  builders, prover facades, or SCALE runtime-call submission helpers. Torii and
-  the SDK release checks now keep the production SCCP surface limited to ETH,
-  explicitly.
+  generation and wallet/liteserver packaging. Because SCCP launch support
+  excludes retired runtime-network families for now, the SDKs ship no builders,
+  prover facades, or retired codec runtime-call submission helpers for them.
+  Torii and the SDK release checks now keep the production SCCP surface limited
+  to ETH, BSC, Solana, TON, and TRON explicitly.
   The package root also re-exports the SCCP source-adapter OpenVerify circuit id, FastPQ
   parameter-set id, and verifier VK hash helper used by portal evidence
   checks, keeping declared TypeScript imports runtime-available.
@@ -5604,7 +6007,7 @@ operator-provided rollout bundles.
   production source-proof extraction now enters through the deployment-aware
   bundle-structure gate, so configured material and source-adapter deployment
   evidence are checked consistently before accepting a source-chain proof
-  envelope. Torii's app API artifact, proof-job, runtime SCALE export,
+  envelope. Torii's app API artifact, proof-job, runtime proof export,
   bridge-proof submit, and bridge-message submit paths now resolve that same
   configured source lane from ZK config before wrapping UI-generated
   source-chain proof envelopes, so production Solana/TON/TRON/EVM-family proofs
@@ -6393,16 +6796,16 @@ operator-provided rollout bundles.
   schedule/seal transcripts fail before recursive verifier material is
   evaluated.
   derive `storage_proof_hash` from the source event digest, finalized block
-  number, GRANDPA set id, authority set hash, events root, source-event leaf
-  index, canonical `frame_system::Events` storage key, and inclusion branch
+  number, finality set id, authority set hash, events root, source-event leaf
+  index, canonical runtime events storage key, and inclusion branch
   instead of accepting a placeholder storage proof hash. They also verify an
-  embedded GRANDPA authority certificate by deriving the ordered Ed25519
+  embedded finality authority certificate by deriving the ordered Ed25519
   authority-set trust-anchor hash, recomputing the finalized precommit-message
   hash, checking the justification hash, verifying Ed25519 signatures, and
   transition proofs now derive the active authority set from a configured parent
   trust anchor by binding the parent set, canonical next authority-set payload
-  hash, payload-derived next set, transition block, and GRANDPA set-id range,
-  then requiring a strict `> 2/3` parent-set GRANDPA justification.
+  hash, payload-derived next set, transition block, and finality set-id range,
+  then requiring a strict `> 2/3` parent-set finality justification.
   templates now bind
   those validator/vote/witness certificate transcript prefixes as well as their
   inclusion-proof and TRON receipt-state prefixes, closing the inclusion-only
@@ -6497,7 +6900,7 @@ operator-provided rollout bundles.
   chain from a configured parent set into the active set, with the next
   authority-set payload and transition transcript hashes now available through
   the web, Python, Swift, Kotlin, and Java Android SDK proof-generation helpers.
-  Torii's SCCP message proof, runtime SCALE envelope, proof artifact, proof job,
+  Torii's SCCP message proof, runtime proof envelope, proof artifact, proof job,
   and recent-message read paths now recover non-SORA bundles from verified
   on-chain bridge proof records, enforcing typed artifact backend/manifest
   binding, stored proof-range/finality-height agreement, and current production
@@ -6511,10 +6914,31 @@ operator-provided rollout bundles.
   caller-supplied governed material and a matching source-adapter deployment
   descriptor are both present, and adversarial tests prove template material
   cannot be promoted by wrapping it in a matching-looking deployment record.
+  Template source-verifier component hashing and source-chain proof-envelope
+  shape checks now also reject unmapped source domains instead of falling back
+  to empty chain keys.
   The all-lanes release summary now also publishes the supported launch-domain
   set and the unsupported diagnostic-domain set as separate verified fields, so
   release tooling can reject launch-scope tampering instead of inferring scope
-  only from lane blockers.
+  only from lane blockers. The readiness source inventory now also includes
+  `launch_scope_constant_gate`, `retired_network_surface_gate`, and
+  `unready_transparent_proof_config_gate`, backed by the same strict source
+  marker scans as public release-bundle verification, so the active launch-policy
+  constants, supported launch-domain set, launch-scope no-support note,
+  active-tree scan, and config-owned diagnostic transparent-proof toggle must
+  remain present before production reports can pass. Public native EVM SDK
+  path-marker denylist strings are assembled from split literals so the
+  no-WASM/no-remote source inventory can keep catching actual forbidden
+  dependency tokens without flagging the guard implementation itself. The
+  Ethereum launch-policy documentation inventory now also rejects stale
+  BSC-only production-packaging wording, so artifact/job route docs cannot
+  silently drift back to the superseded BSC-first policy. Release-readiness
+  reports now publish that documentation inventory as a required source gate,
+  so production readiness fails before bundle publication if public launch
+  policy wording is missing or stale. Public discovery documentation now has
+  the same readiness-level source gate, pinning supported-lane and verifier
+  target wording before Torii discovery evidence can be published as
+  production-ready.
 - Keep live-network signing inputs runtime-only and continue using generated
   per-validator deployment bundles rather than hand-edited production configs.
 
@@ -6525,6 +6949,18 @@ chain rules. Shared source-state proof admission now rejects opaque nonzero
 bytes and requires canonical STARK OpenVerify/FastPQ capsules before lane-local
 verification work, and the Solana/TON source-state transcript hash helpers now
 reuse the same canonical-envelope gate before audit-statement binding.
+Strict SCCP production package builders now require non-SORA source bundles to
+pass the production source-proof gate before destination submissions can be
+constructed, leaving structural source-proof fixtures behind explicit
+diagnostic `allow_unready` paths. Rust EVM/TRON Groth16 proof-request builders
+now reject non-canonical bundle bytes, bundle/public-input mismatches, and
+omitted source-proof witness bytes for non-SORA source bundles before local UI
+proving or wrapped proof-result submission. The Rust TON native-recursive
+proof-request builder and proof-result wrapper now apply the same canonical
+SCCP bundle/public-input/source-proof gate before local proof generation or
+wallet/liteserver packaging, and the JavaScript, Python, Swift, Kotlin/JVM, and
+Java Android SDK TON request paths now mirror that gate before local prover
+callbacks or wrapped-result submission.
 Transparent OpenVerify summary helpers now apply the same production-shaped
 wrapper policy before reporting proof metadata, so metadata-only or aux-bearing
 envelopes cannot be normalized into release/readiness summaries. The
@@ -6533,11 +6969,12 @@ proof artifact wrapper first, so manifest, public-input, or submission-package
 metadata drift cannot be hidden behind otherwise valid OpenVerify proof bytes,
 and Torii/CLI artifact renderers omit OpenVerify summaries for wrappers that
 fail that typed gate.
-helpers gated as diagnostic/backlog-only surfaces, with production
-readiness and release-evidence summaries refusing to mark those lanes ready
-transition verifiers now also require the ordered transition chain to terminate
-at the adapter's declared active epoch/set id, so stale chains cannot pass by
-replaying the same final validator or authority-set hash. ETH, BSC, Solana,
+Keep any diagnostic/backlog-only helpers gated as non-production surfaces, with
+production readiness and release-evidence summaries refusing to mark those
+lanes ready. Transition verifiers now also require the ordered transition chain
+to terminate at the adapter's declared active epoch/set id, so stale chains
+cannot pass by replaying the same final validator or authority-set hash. ETH,
+BSC, Solana,
 non-canonical signer bitmap width/padding, empty signer sets, signature-count
 drift, claimed stake/weight drift, and sub-quorum certificates before
 transcript hashing. ETH source-adapter preflight also recomputes the active
@@ -6597,12 +7034,14 @@ circuit. The ETH/BSC adapter proof shapes are now preflight-bounded across Rust
 and the web/mobile SDK helper surfaces: ETH caps sync committees at 512
 authorities and 64 transition proofs, while BSC caps validator sets at 255
 validators and 64 transition proofs before transcript hashing. Backlog-only
-support is re-opened, use the offline
-hashes, including the runtime storage-proof verifier hash, and non-canonical
-source-adapter OpenVerify VK hashes before rendering governance TOML using the
-same runtime-storage template preimage as Rust. JavaScript, Python, Swift,
-Kotlin, and Java Android runtime-storage request builders also reject that
-template source-state verifier hash before invoking the app-linked prover, and
+runtime-storage support must remain outside launch scope unless a future design
+pass reopens it. If that happens, require the offline evidence renderer to
+reject template component hashes, including the runtime storage-proof verifier
+hash, and non-canonical source-adapter OpenVerify VK hashes before rendering
+governance TOML using the same runtime-storage template preimage as Rust.
+JavaScript, Python, Swift, Kotlin, and Java Android runtime-storage request
+builders also reject that template source-state verifier hash before invoking
+the app-linked prover, and
 they derive the exact statement bytes, verification context, schema descriptor,
 public-input columns, FastPQ public inputs, and metadata transitions from the
 UI-collected `System.Events` storage proof witness. JavaScript and Python also
@@ -6611,7 +7050,7 @@ source verifier material, while still rejecting nested material with duplicate
 or mismatched source-domain aliases, so portal inputs can use the same flat
 witness shape without bypassing material-domain checks. Use
 the destination evidence renderer for governed material, runtime rollout, and
-allowlist material, then extend the current GRANDPA
+allowlist material, then extend the current finality
 authority-certificate and authority-set transition checks, which are now
 preflight-bounded to 2,048 authorities and 64 transition proofs and reject
 all-zero authority keys across Rust and the web/mobile SDK proof helpers. The
@@ -7761,10 +8200,11 @@ or ABI behavior.
 	  public-input schema/prover-key/verifier-key digests. The material validator
 	  rejects zero commitments, duplicate artifact/proof commitments, and artifact
 	  or proof commitments that reuse registered profile digests, keeping each
-	  governed digest role partitioned at admission. Bundle admission
-	  and digesting bind that material, while refresh/proof/execution paths still
-	  fail closed because the full BFV bootstrap evaluator is not implemented, so
-	  the current refresh bridge cannot be mislabeled as full bootstrapping. Direct
+	  governed digest role partitioned at admission. Bundle admission and
+	  digesting bind that material, while refresh/proof paths and direct
+	  no-artifact registered execution fail closed with an explicit governed
+	  artifact requirement, so the current refresh bridge cannot be mislabeled as
+	  full bootstrapping. Direct
 	  key-authorized refresh execution, bootstrap output-bound helpers, and
 	  Soracloud exact/bounded bootstrap execution now use the same mode-aware
 	  request preflight, so reserved full-bootstrap keys are rejected before
@@ -7786,7 +8226,10 @@ or ABI behavior.
 	  STARK/`OpenVerifyEnvelope` circuit id, public-input schema, byte bounds,
 	  verifier-key commitment, statement public input, and envelope-hash checks, so
 	  governed material proofs no longer reuse the zero-refresh bootstrap proof
-	  envelope. `RunSoracloudFheJob` and Torii signed FHE job requests now carry
+	  envelope. Core now decodes material proofs through that material-specific
+	  attachment context, and all Soracloud FHE STARK wrappers reject non-empty
+	  all-zero native envelope bytes before backend verifier dispatch.
+	  `RunSoracloudFheJob` and Torii signed FHE job requests now carry
 	  an optional distinct full-bootstrap material proof attachment, provenance
 	  signs it, and Core requires it for policy-bound full-bootstrap jobs before
 	  dispatching through the active Soracloud verifier record or preverified-proof
@@ -7802,37 +8245,129 @@ or ABI behavior.
 	  Kotlin/JVM, and Java Android shared Soracloud BFV operation-fixture validators
 	  now pin the full-bootstrap material/profile digest, verifier-key commitment,
 	  and statement vector so SDK/release validation can reject fixture drift before
-		  the executable evaluator lands. Full-mode exact
+		  artifact-aware execution or proof verification. Full-mode exact
 		  and bounded runtime bootstrap paths now use dedicated crypto preflight
 		  helpers that validate governed material commitments, registered profile
-		  digests, ciphertext shape, and exact/bounded metadata before returning the
-				  current unavailable-evaluator error. Crypto now also exposes a typed
+		  digests, ciphertext shape, and exact/bounded metadata before direct
+				  no-artifact entry points return the governed-artifact requirement. Crypto now also exposes a typed
 				  full-bootstrap artifact bundle validator/digest and artifact-aware execution
 				  preflight that bind concrete evaluator/proof-profile bytes to those governed
 				  commitments. Each artifact byte field is now a Norito role/profile envelope
 				  that declares the canonical circuit id, registered parameter/RNS/decomposition
 				  digests, and max bootstrap depth, so malformed, role-swapped, stale-profile,
-				  and empty-payload artifact attachments fail before the unavailable evaluator
-					  boundary. Coefficient-to-slot and slot-to-coefficient artifacts now carry
+				  and empty-payload artifact attachments fail before artifact-aware output
+					  execution. Coefficient-to-slot and slot-to-coefficient artifacts now carry
 					  typed diagonal packed-slot linear transforms, and crypto exposes exact and
 					  bounded deterministic evaluators for those transforms through the registered
 							  RNS paths. The blind-rotation artifact now carries canonical packed-slot
-							  rotation schedules bound to the governed accumulator artifact. The
-							  sample-extraction artifact now carries typed source/output ciphertext shape
-							  and extracted-coefficient metadata, rejecting opaque, wrong-slot-count,
-							  bad-component-count, or out-of-range payloads. The accumulator artifact now
+							  rotation schedules bound to the governed accumulator artifact, and crypto
+							  exposes exact and bounded registered-RNS execution helpers plus matching
+							  public bound propagation that consume those governed selector schedules
+							  directly. The sample-extraction artifact now carries typed source/output
+							  ciphertext shape and extracted-coefficient metadata, rejects opaque,
+							  wrong-slot-count, bad-component-count, or out-of-range payloads, and crypto
+							  can extract the selected RLWE coefficient into a raw LWE-style sample whose
+							  decrypt matches the selected `c0 + c1 * s` coefficient under the existing
+							  secret polynomial basis, with exact and bounded raw-sample bound propagation.
+							  Crypto now composes the governed coefficient-to-slot, blind-rotation, and
+							  raw sample-extraction artifacts into an exact/bounded execution-prefix trace
+							  with propagated bounds, coefficient-zero diagnostic repack output,
+							  slot-to-coefficient diagnostic execution, and missing-key fail-closed checks.
+							  Artifact-aware
+							  exact/bounded final-output entry points now execute that prefix or its bound
+							  propagation through governed sample-switch and slot-to-coefficient output,
+							  so missing Galois keys and malformed executable artifacts fail before
+							  output. Crypto also exposes an explicit coefficient-zero raw-sample repack
+							  diagnostic bridge with exact and bounded coefficient-zero bounds, plus
+							  deterministic exact and bounded raw-sample switch-key material,
+							  secret-consistency checks, switch execution, public bound propagation,
+							  governed artifact carriage, and artifact-aware full-bootstrap output/bound
+							  helpers that run through slot-to-coefficient. Full-bootstrap
+							  artifact-bundle validation now requires executable sample-extraction
+							  switch-key material rather than accepting metadata-only sample-extraction
+							  payloads in the governed bundle. Direct no-artifact registered entrypoints
+							  now validate preflight, then fail with an explicit governed-artifact
+							  requirement; the real proof verifier/prover backend remains unfinished. The
+							  accumulator artifact now
 							  carries typed packed-slot test-vector material and rejects opaque,
-							  wrong-slot-count, malformed, or all-zero accumulator payloads. Crypto now
-							  also exposes a domain-separated full-bootstrap execution proof statement
+							  wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
+							  public-input schema and prover/verifier key artifacts now also carry typed
+							  proof-profile payloads that bind the canonical backend, key format,
+							  circuit id, statement-hash layout, and governed schema digest while
+							  rejecting opaque schema/key bytes, empty or all-zero key material, and
+							  duplicate prover/verifier key material. Crypto now also exposes a domain-separated
+							  full-bootstrap execution proof statement
 							  digest that validates and binds the public key, governed bootstrap
 							  key/material, concrete artifact bundle, input/output ciphertexts, exact or
-							  bounded proof mode, and input/output bound metadata for the future verifier.
-							  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts,
-							  provenance signs them, and Core routes exact/bounded full-mode jobs through
-							  artifact-aware preflight before the current unavailable-evaluator error.
+							  bounded proof mode, and input/output bound metadata for the verifier.
+							  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts plus
+							  an ordered execution-proof vector; provenance signs both, and Core routes
+							  exact/bounded full-mode jobs through artifact-aware full-bootstrap execution
+							  and bound propagation through sample-switch and slot-to-coefficient output
+							  before requiring one governed execution proof per output slot.
+							  Torii signed job-run requests now validate those verifier-backed proof
+							  attachments locally before instruction construction, so malformed signed
+							  wrappers fail as bad requests before reaching Core. Data-model and Core
+							  `OpenVerifyEnvelope` admission now also reject all-zero native STARK
+							  envelope bytes for Soracloud FHE input, bootstrap-key, full-bootstrap
+							  material, and full-bootstrap execution proofs, and data-model proof
+							  envelopes plus FHE parameter-set, execution-policy, Soracloud
+							  uploaded-model, and private-execution digest fields reject the zero
+							  prehash statement sentinel before verifier dispatch, parameter
+							  admission, policy admission, job input admission, ciphertext-state
+							  admission, or uploaded-model receipt admission.
+							  A `zk-stark` positive fixture now installs the governed
+							  artifact-backed STARK verifier key, generates backend-verified
+							  `OpenVerifyEnvelope` proofs over each full-bootstrap execution
+							  statement, and proves the active-verifier gate accepts them when
+							  STARK verification is enabled at runtime.
+							  Matching `zk-stark` positive fixtures cover the bootstrap-key and
+							  full-bootstrap material proof gates with active verifier records and
+							  backend-verified `OpenVerifyEnvelope` proofs.
+							  A `zk-preverify` positive fixture now proves the active-verifier gate
+							  accepts a preverified proof batch for every production identifier slot.
+							  The confidential verifier-call defaults now admit one such Soracloud
+							  full-bootstrap execution batch without an operator override.
+							  Torii signed job-run preflight now resolves every signed parameter-set
+							  descriptor against the registered BFV profile and runs the shared
+							  policy/job admission validators plus BFV evaluation-key and
+							  refresh-transcript digest checks before proof/artifact validation,
+							  recomputes policy proof-statement digests from the signed
+							  key/transcript material, requires policy-bound bootstrap-key and
+							  full-bootstrap material proofs to be present with matching statement
+							  hashes, validates supplied full-bootstrap artifact bundles against
+							  the governed request material before instruction construction,
+							  requires full-bootstrap execution requests to carry signed circuit
+							  artifacts and a non-empty execution-proof vector whose count cannot exceed
+							  the signed parameter-set slot count, rejects
+							  full-bootstrap material/execution proof attachments outside
+							  full-bootstrap job/key context, and rejects execution proofs that omit
+							  signed artifact bundle bytes. Parameter, policy, job, key,
+							  transcript, digest, or descriptor drift now fails locally before proof
+							  or artifact decoding.
+							  Core governed execution verifier-key derivation now validates the
+							  complete artifact bundle before decoding verifier-key material, so
+							  drifted non-verifier artifacts fail at that helper boundary.
+							  Core regressions now also prove that correctly shaped full-bootstrap
+							  execution proof attachments fail closed before backend verification
+							  when the governed verifier record is missing or withdrawn.
+							  The Core proof helper now also reruns local job-shape validation and
+							  requires input-bound metadata to match the input envelope count before
+							  deriving proof statements, so stale bound sidecars and multi-input
+							  bootstrap drift cannot reach proof verification.
+							  It also rejects full-bootstrap execution circuit artifacts outside
+							  full-bootstrap proof context even when no execution-proof attachments are
+							  supplied, so artifact-only bypass attempts fail at the proof boundary.
+							  Core regressions also pin full-bootstrap execution verifier-record
+							  metadata drift across namespace, backend, curve, public-input schema,
+							  circuit/version, gas schedule, active circuit mapping, proof byte caps,
+							  key presence/length, commitment, and governed verifier-key byte binding.
+							  The legacy no-artifact Core execution helpers are test-only, so production
+							  full-mode jobs must pass through the governed artifact-aware path.
 						  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-						  Remaining work is the executable full BFV bootstrapping evaluator and the real
-						  prover/verifier artifacts and implementation.
+						  Remaining work is the audited full-bootstrap arithmetic proof-producing
+						  backend plus release-grade prover/verifier artifacts, not the Core verifier
+						  gate or statement-recomputation policy path.
 	  Soracloud transcript digesting now preflights the advertised BFV public-key
 	  shape before evaluation-key bundle validation, so malformed transcript key
 	  material is reported at the public-key boundary instead of being masked by
@@ -8197,9 +8732,9 @@ or ABI behavior.
   FHE job output persistence now share checked binding state-total projection,
   so inconsistent existing-item accounting and `u64` total overflows fail
   closed before max-total admission checks. The production bounded-noise
-  admission circuit/prover rollout,
-  broader target-limb BFV-RNS evaluator hardening, and executable
-  full-bootstrap evaluator plus verifier/prover implementation remain pending.
+  admission circuit/prover rollout, broader target-limb BFV-RNS evaluator
+  hardening, and audited full-bootstrap proof-producing/verifier artifacts
+  remain pending.
   Owner-side
   evaluated-output diagnostics can now validate ciphertexts against
   caller-declared exact residual-multiple bounds and reject plaintext-preserving
@@ -8303,12 +8838,17 @@ or ABI behavior.
   validation and runtime planner admission.
   Soracloud FHE parameter sets and execution policies now also reject
   advertised multiplication/bootstrap budgets above the exact evaluator budget
-  before governance admission.
+  before governance admission. Soracloud decryption requests and ciphertext
+  query responses now also reject zero-prehash digest sentinels across
+  ciphertext commitments, optional consent evidence, governance linkage,
+  state-key digests, query hashes, and inclusion proof leaves/anchors before
+  private-state admission or query evidence can be trusted.
   Bootstrap fixtures now pin both the zero refresh and each round-indexed
   public refresh ciphertext. Full bootstrapping circuit/key-material
-  commitments now have a Rust admission/digest/proof-statement surface plus a
-  data-model material proof envelope, while executable full-bootstrap evaluator
-  and verifier/prover vectors remain an open release item.
+  commitments now have a Rust admission/digest/proof-statement surface,
+  artifact-aware execution path, verifier-backed Core fixtures, and a
+  data-model material proof envelope, while audited prover/verifier artifact
+  vectors remain an open release item.
 - Keep Soracloud FHE governance parameter fixtures runtime-bound instead of
   descriptor-only. The canonical parameter-set, execution-policy, governance
   bundle, and job-spec fixtures now target the registered `bfv-default`
@@ -8383,9 +8923,9 @@ or ABI behavior.
   corridor.
 
 **Next checkpoints:** extend the fixture-bound RNS descriptor/residue corridor
-into the full BFV-RNS evaluator, add executable full-bootstrap evaluator and
-verifier/prover vectors beyond encrypted-zero refresh, and fold the focused
-ZK/FHE fixture corridor into broader release validation.
+into the broader BFV-RNS evaluator, add audited full-bootstrap prover/verifier
+artifact vectors beyond encrypted-zero refresh, and fold the focused ZK/FHE
+fixture corridor into broader release validation.
 
 ## Consensus, Performance, and Operations
 
@@ -8508,8 +9048,140 @@ RBC outbound chunk flush helper gate (`rbc-outbound-flush`),
 RBC chunk post scheduling/debug-mask helper gate (`rbc-chunk-post-debug`),
 RBC READY/DELIVER deferral throttle helper gate (`rbc-deferral-throttle`),
 round-gap marker/snapshot/EMA status helper gate (`round-gap-status`),
-TLC-cross-checked missing-block request clear helper gate
-(`missing-request-clear`), TLC-cross-checked missing-block clear reason helper gate
+TLC-cross-checked contiguous-frontier repair view-change suppression helper gate
+(`frontier-repair-view-change`),
+TLC-cross-checked contiguous-frontier recovery advance state-machine helper gate
+(`frontier-recovery-advance`),
+TLC-cross-checked same-height no-proposal storm recovery helper gate
+(`same-height-no-proposal-storm`),
+TLC-cross-checked VRF commit/reveal admission gate, TLC-cross-checked VRF
+epoch-window arithmetic helper gate
+(`vrf-epoch-window`), TLC-cross-checked VRF epoch-boundary finalization helper gate
+(`vrf-epoch-boundary`), TLC-cross-checked VRF epoch restore/snapshot/observation-merge helper gate
+(`vrf-epoch-restore`), TLC-cross-checked local VRF material derivation helper gate
+(`vrf-material-derivation`), TLC-cross-checked local VRF emission state helper gate
+(`vrf-local-state`), TLC-cross-checked VRF penalties report store helper gate
+(`vrf-penalties-report`), TLC-cross-checked classic inbound vote-admission gate, vote
+TLC-cross-checked duplicate-key helper gate (`vote-duplicate-key`),
+TLC-cross-checked evidence freshness horizon helper gate,
+TLC-cross-checked evidence canonicalization/deduplication helper
+gate (`evidence-canonicalization`), TLC-cross-checked evidence validation helper gate
+(`evidence-validation`), TLC-cross-checked double-vote detection/recording helper gate
+(`double-vote-recording`), TLC-cross-checked invalid-QC shape helper gate
+(`invalid-qc-shape`), TLC-cross-checked QC validation evidence helper gate
+(`qc-validation-evidence`), TLC-cross-checked QC validation reason/evidence label helper gate
+(`qc-validation-reason`), TLC-cross-checked block-sync QC retry/fallback helper gate
+(`block-sync-qc-fallback`), TLC-cross-checked block-sync QC status helper gate
+(`block-sync-qc-status`), TLC-cross-checked block-sync locked-QC helper gate
+(`block-sync-locked-qc`), TLC-cross-checked known-block QC work enqueue gate
+(`known-block-qc-enqueue`), TLC-cross-checked known-block QC work preparation gate
+(`known-block-qc-work`), TLC-cross-checked known-block QC work queue drain gate
+(`known-block-qc-drain`), TLC-cross-checked committed signed-quorum fetch fallback gate
+(`signed-quorum-fetch-fallback`), TLC-cross-checked commit-QC-only fetch response
+dispatch gate (`commit-qc-only-fetch-response`), TLC-cross-checked
+BlockSyncUpdate gossip target-selection helper gate (`block-sync-update-targets`),
+TLC-cross-checked cached BlockSyncUpdate proof/vote attachment helper gate
+(`apply-cached-qcs`), TLC-cross-checked uncertified block-sync roster
+admission gate (`block-sync-roster`), TLC-cross-checked block-sync roster
+source/drop status helper gate (`block-sync-roster-status`), TLC-cross-checked
+BlockSyncUpdate embedded-vote filtering and deferral handoff gate
+(`block-sync-vote-deferral`), TLC-cross-checked already-known hintless
+BlockSyncUpdate fast-path gate (`block-sync-known-hintless`),
+TLC-cross-checked DA implicit BlockSyncUpdate recovery gate
+(`block-sync-implicit-recovery`),
+TLC-cross-checked frontier vote-placeholder gate (`block-sync-vote-placeholder`),
+TLC-cross-checked known-block snapshot-hint gate (`block-sync-snapshot-hint`),
+TLC-cross-checked known-block snapshot-roster gate (`block-sync-snapshot-roster`),
+TLC-cross-checked no-verifiable-roster BlockSyncUpdate gate
+(`block-sync-no-roster`),
+TLC-cross-checked selected-roster known-block terminal replay gate
+(`block-sync-known-roster`),
+TLC-cross-checked selected-roster known-block BlockSyncUpdate gate
+(`block-sync-known-selected-roster`),
+TLC-cross-checked selected-roster BlockSyncUpdate signature gate
+(`block-sync-selected-signatures`),
+TLC-cross-checked selected-roster BlockSyncUpdate QC candidate/evidence gate
+(`block-sync-selected-qc`),
+TLC-cross-checked selected-roster BlockSyncUpdate quorum/missing-QC repair gate
+(`block-sync-selected-quorum`),
+TLC-cross-checked stale BlockCreated/recovery-mode helper gate
+(`block-sync-recovery-mode`),
+TLC-cross-checked selected-roster BlockSyncUpdate apply/recovery-mode gate
+(`block-sync-selected-apply`),
+TLC-cross-checked selected-roster BlockSyncUpdate post-apply QC prefilter gate
+(`block-sync-selected-qc-prefilter`),
+TLC-cross-checked selected-roster BlockSyncUpdate post-prefilter QC process gate
+(`block-sync-selected-qc-process`),
+TLC-cross-checked selected-roster BlockSyncUpdate unknown-block QC cache gate
+(`block-sync-selected-qc-cache`),
+TLC-cross-checked BlockSyncUpdate stale-view admission gate
+(`block-sync-stale-view`),
+TLC-cross-checked committed-height BlockSyncUpdate conflict/evidence gate
+(`block-sync-commit-conflict`),
+TLC-cross-checked block-sync warning throttle helper gate
+(`block-sync-warning-throttle`),
+TLC-cross-checked QC-insufficient warning throttle helper gate
+(`qc-insufficient-warning`),
+TLC-cross-checked canonical committed fetch/body response deferral gate
+(`fetch-response-deferral`),
+TLC-cross-checked exact body fetch handler gate
+(`fetch-block-body-handle`),
+TLC-cross-checked background consensus frame-cap preparation gate
+(`background-frame-cap`),
+TLC-cross-checked background request dispatch fallback gate
+(`background-dispatch`),
+TLC-cross-checked background scheduler bypass gate
+(`background-bypass`),
+TLC-cross-checked background fallback network dispatch gate
+(`background-fallback`),
+TLC-cross-checked fetch-pending response send gate
+(`fetch-pending-response-send`),
+TLC-cross-checked fetch-pending batch response fanout gate
+(`fetch-pending-responses-batch`),
+TLC-cross-checked pending fetch/body readiness flush gate
+(`pending-response-flush`),
+TLC-cross-checked deferred BlockSyncUpdate helper gate
+(`deferred-block-sync-helper`),
+TLC-cross-checked deferred BlockSyncUpdate cache/defer integration gate
+(`deferred-block-sync-cache`),
+TLC-cross-checked deferred BlockSyncUpdate replay gate
+(`deferred-block-sync-replay`),
+TLC-cross-checked future BlockSyncUpdate drop/window gate
+(`block-sync-future-window`),
+TLC-cross-checked RBC block-body repair admission gate
+(`block-body-repair`),
+TLC-cross-checked exact body requester stash-window gate
+(`block-body-request-stash`),
+TLC-cross-checked same-height block-body repair admission gate
+(`same-height-block-body-repair`),
+TLC-cross-checked block-body repair observed epoch source gate
+(`block-body-repair-epoch`),
+TLC-cross-checked direct commit-QC source selection gate
+(`direct-commit-qc-for-block`),
+TLC-cross-checked QC materialization/Kura recovery gate
+(`materialize-qc`),
+TLC-cross-checked BlockBodyResponse direct commit-QC extraction gate
+(`block-body-direct-commit-qc`),
+TLC-cross-checked detached BlockBodyResponse commit-QC handling gate
+(`block-body-detached-commit-qc`),
+TLC-cross-checked exact BlockBodyResponse fallback/companion dispatch gate
+(`block-body-response-dispatch`),
+TLC-cross-checked invalid-proposal evidence builder helper gate
+(`invalid-proposal-evidence`),
+TLC-cross-checked proposal mismatch helper gate (`proposal-mismatch`),
+TLC-cross-checked proposal cache helper gate (`proposal-cache`),
+TLC-cross-checked proposal-hint admission gate (`proposal-hint`),
+TLC-cross-checked stale proposal-hint repair gate
+(`stale-proposal-hint-repair`), TLC-cross-checked stale RBC hint repair gate
+(`stale-rbc-hint-repair`),
+TLC-cross-checked proposal metadata admission gate (`proposal-admission`),
+TLC-cross-checked peer-admin detection helper gate
+(`peer-admin-detection`), TLC-cross-checked QC signer-bitmap admission
+(`qc-signers`), raw QC signer-count helper gate
+(`qc-signer-count`), TLC-cross-checked direct BlockCreated admission aggregate exactness gate
+(`block-created-admission`), TLC-cross-checked missing-block request clear
+helper gate (`missing-request-clear`), TLC-cross-checked missing-block clear
+reason helper gate
 (`missing-block-clear`), TLC-cross-checked proposal budget/cap helper gate
 (`proposal-budget`), TLC-cross-checked non-RBC payload frame budget helper gate
 (`non-rbc-payload-budget`), TLC-cross-checked proposal backpressure
@@ -8559,12 +9231,14 @@ helper gate, TLC-cross-checked stale-view commit-QC fetch admission helper gate
 (`stale-view-commit-qc-fetch`), TLC-cross-checked commit-anchor QC promotion
 helper gate (`commit-anchor-qc`),
 TLC-cross-checked committed-height QC admission helper gate (`committed-height-qc`),
-TLC-cross-checked empty-block QC drop helper gate (`empty-block-qc-drop`),
-TLC-cross-checked pending-progress accounting helper gate,
-TLC-cross-checked pending-block lifecycle helper gate,
-TLC-cross-checked pending-block marker/cooldown helper gate,
-TLC-cross-checked pending-block Kura retry helper gate (`kura-retry`),
-TLC-cross-checked commit-pipeline scheduling gate,
+TLC-cross-checked empty-block QC drop helper gate (`empty-block-qc-drop`) with
+aggregate exactness,
+TLC-cross-checked pending-progress accounting helper gate with aggregate exactness,
+TLC-cross-checked pending-block lifecycle helper gate with aggregate exactness,
+TLC-cross-checked pending-block marker/cooldown helper gate with aggregate exactness,
+TLC-cross-checked pending-block Kura retry helper gate (`kura-retry`) with
+aggregate exactness,
+TLC-cross-checked commit-pipeline scheduling gate with aggregate exactness,
 TLC-cross-checked precommit vote-count helper gate (`precommit-vote-count`),
 TLC-cross-checked precommit vote lock filter gate
 (`drop-precommit-vote-for-lock`),
@@ -8600,53 +9274,82 @@ TLC-cross-checked commit-QC signer quorum helper gate
 TLC-cross-checked signature-index recovery helper gate
 (`signature-index-recovery`),
 TLC-cross-checked commit-QC cache/history lookup helper gate
-(`commit-qc-lookup`),
+(`commit-qc-lookup`) with aggregate exactness,
 TLC-cross-checked embedded-QC roster bootstrap helper gate
 (`embedded-qc-roster`),
 TLC-cross-checked cached-QC precommit signer record helper gate
-(`precommit-signer-record`),
+(`precommit-signer-record`) with aggregate exactness,
 TLC-cross-checked roster-validation memo cache helper gate
-(`roster-validation-memo`),
+(`roster-validation-memo`) with aggregate exactness,
 TLC-cross-checked roster-validation cached wrapper helper gate
-(`roster-validation-cached`), TLC-cross-checked core roster-validation helper
-gate (`roster-validation-core`), TLC-cross-checked roster artifact selection
-helper gate (`roster-artifact-selection`), TLC-cross-checked block roster cache
-helper gate (`block-roster-caches`), TLC-cross-checked block-sync roster
-evidence helper gate (`block-sync-roster-evidence`), TLC-cross-checked
-block-sync history roster helper gate (`block-sync-history-roster`),
+(`roster-validation-cached`) with aggregate exactness, TLC-cross-checked core
+roster-validation helper gate (`roster-validation-core`) with aggregate
+exactness, TLC-cross-checked roster artifact selection helper gate
+(`roster-artifact-selection`) with aggregate exactness,
+TLC-cross-checked block roster cache
+helper gate (`block-roster-caches`) with aggregate exactness,
+TLC-cross-checked block-sync roster
+evidence helper gate (`block-sync-roster-evidence`) with aggregate exactness,
+TLC-cross-checked
+block-sync history roster helper gate (`block-sync-history-roster`) with
+aggregate exactness,
 TLC-cross-checked persisted block-sync roster selection helper gate
-(`persisted-roster-selection`), TLC-cross-checked BlockSyncUpdate roster
-hydration helper gate (`block-sync-update-roster`), TLC-cross-checked roster
-index projection helper gate (`roster-index-projection`), TLC-cross-checked
-membership-view hash helper gate (`membership-view-hash`), TLC-cross-checked
-membership mismatch status helper gate (`membership-mismatch-status`),
+(`persisted-roster-selection`) with aggregate exactness,
+TLC-cross-checked BlockSyncUpdate roster
+hydration helper gate (`block-sync-update-roster`) with aggregate exactness,
+TLC-cross-checked roster
+index projection helper gate (`roster-index-projection`) with aggregate
+exactness,
+TLC-cross-checked
+membership-view hash helper gate (`membership-view-hash`) with aggregate
+exactness,
+TLC-cross-checked
+membership mismatch status helper gate (`membership-mismatch-status`) with
+aggregate exactness,
 TLC-cross-checked membership advert publication helper gate
-(`membership-advert`), TLC-cross-checked membership mismatch
-ingress/fail-closed helper gate (`membership-mismatch-ingress`),
+(`membership-advert`) with aggregate exactness,
+TLC-cross-checked membership mismatch
+ingress/fail-closed helper gate (`membership-mismatch-ingress`) with aggregate
+exactness,
 TLC-cross-checked consensus-params ingress helper gate
-(`consensus-params-ingress`), TLC-cross-checked prevalidated commit artifact
-trust helper gate (`prevalidated-commit-artifact`), TLC-cross-checked
-commit-job dispatch gate,
-commit-worker channel capacity helper gate (`commit-worker-config`), slow
-commit-stage timing threshold helper gate (`commit-stage-timing-threshold`),
-commit-inflight timeout gate, post-commit pacemaker kick gate, idle-view
-proposal budget gate,
+(`consensus-params-ingress`) with aggregate exactness,
+TLC-cross-checked prevalidated commit artifact
+trust helper gate (`prevalidated-commit-artifact`) with aggregate exactness,
+TLC-cross-checked
+commit-job dispatch gate with aggregate exactness,
+commit-worker channel capacity helper gate (`commit-worker-config`) with
+aggregate exactness, slow
+commit-stage timing threshold helper gate (`commit-stage-timing-threshold`) with
+aggregate exactness,
+commit-inflight timeout gate with aggregate exactness, post-commit pacemaker
+kick gate with aggregate exactness, idle-view proposal budget gate with
+aggregate exactness,
 TLC-cross-checked pacemaker core state-machine helper gate
 (`pacemaker-core`), TLC-cross-checked pacemaker evaluation gate,
 TLC-cross-checked pacing governor helper gate,
-cached proposal-slot timeout gate,
-pending fast-path timeout helper gate (`pending-fast-path-timeout`),
-stalled pending-block timeout decision gate (`stalled-pending-timeout`),
-stalled pending-frontier timeout helper gate (`stalled-pending-frontier-timeout`),
-missing-QC timing helper gate,
-idle backlog signal helper gate (`idle-backlog-signals`),
-proposal-liveness state helper gate (`proposal-liveness`),
-exact-frontier slot tracker FSM gate (`frontier-slot-tracker`),
-exact-frontier slot helper gate (`frontier-slot-helpers`),
-exact-frontier proposal grace helper gate (`frontier-proposal-grace`),
-slot tracker state helper gate (`slot-tracker-state`),
-timeout/cooldown derivation helper gate (`timeout-derivation`),
-round/view helper gate (`round-view-helpers`),
+cached proposal-slot timeout gate with aggregate exactness,
+pending fast-path timeout helper gate (`pending-fast-path-timeout`) with
+aggregate exactness,
+stalled pending-block timeout decision gate (`stalled-pending-timeout`) with
+aggregate exactness,
+stalled pending-frontier timeout helper gate (`stalled-pending-frontier-timeout`)
+with aggregate exactness,
+missing-QC timing helper gate with aggregate exactness,
+idle backlog signal helper gate (`idle-backlog-signals`) with aggregate
+exactness,
+proposal-liveness state helper gate (`proposal-liveness`) with aggregate
+exactness,
+exact-frontier slot tracker FSM gate (`frontier-slot-tracker`) with aggregate
+exactness,
+exact-frontier slot helper gate (`frontier-slot-helpers`) with aggregate
+exactness,
+exact-frontier proposal grace helper gate (`frontier-proposal-grace`) with
+aggregate exactness,
+slot tracker state helper gate (`slot-tracker-state`) with aggregate
+exactness,
+timeout/cooldown derivation helper gate (`timeout-derivation`) with aggregate
+exactness,
+round/view helper gate (`round-view-helpers`) with aggregate exactness,
 PhaseTracker mutable state helper gate (`phase-tracker`),
 TLC-cross-checked round-trace status recorder gate (`round-trace-status`),
 failed-commit/block-sync helper gate (`failure-recovery-helpers`),
@@ -8654,10 +9357,10 @@ TLC-cross-checked transaction requeue branch helper gate
 (`requeue-transactions`),
 TLC-cross-checked tick/deadline scheduling helper gate, worker tick-gap helper
 gate (`worker-tick-gap`),
-TLC-cross-checked proposal parent resolution gate,
-TLC-cross-checked highest-QC dependency deferral gate,
-TLC-cross-checked precommit-QC view-change selector gate,
-TLC-cross-checked commit-evidence replay gate, TLC-cross-checked block-sync recovery gate, TLC-cross-checked direct certified-block fetch gate,
+TLC-cross-checked proposal parent resolution gate with aggregate exactness,
+TLC-cross-checked highest-QC dependency deferral gate with aggregate exactness,
+TLC-cross-checked precommit-QC view-change selector gate with aggregate exactness,
+TLC-cross-checked commit-evidence replay gate with aggregate exactness, TLC-cross-checked block-sync recovery gate with aggregate exactness, TLC-cross-checked direct certified-block fetch gate,
 TLC-cross-checked missing-block ingress fetch gate, TLC-cross-checked payload progress availability gate, TLC-cross-checked highest-QC fetch body-known gate, TLC-cross-checked local payload availability gate, TLC-cross-checked local block-known routing gate, TLC-cross-checked lock-safety block-known routing gate, TLC-cross-checked missing locked-QC payload recovery gate (`missing-locked-qc-recovery`), TLC-cross-checked local signed-block materialization gate, TLC-cross-checked authoritative payload progress gate, TLC-cross-checked hash-level authoritative block payload gate, TLC-cross-checked pending-block active-for-tip gate, TLC-cross-checked pending fast-unblock decision gate, TLC-cross-checked blocking pending-block counter gate, TLC-cross-checked quorum recovery vote-drain urgency gate, TLC-cross-checked frontier body-gap payload-drain urgency gate, TLC-cross-checked RBC authoritative payload progress gate, TLC-cross-checked slot authoritative payload gate, TLC-cross-checked missing-block fetch planner, TLC-cross-checked recovery status counter helper gate (`recovery-status-counters`), TLC-cross-checked QC rebuild status counter helper gate (`qc-rebuild-status`), TLC-cross-checked QC rebuild quorum reachability helper gate (`qc-rebuild-quorum`), TLC-cross-checked collector-targeting status counter helper gate (`collector-targeting-status`), TLC-cross-checked deferred recovery status counter helper gate (`deferred-recovery-status`), TLC-cross-checked missing-QC liveness status counter helper gate (`missing-qc-liveness-status`), TLC-cross-checked sidecar/no-proposal status counter helper gate (`sidecar-no-proposal-status`), TLC-cross-checked deterministic committee status helper gate (`deterministic-committee-status`), TLC-cross-checked timing/liveness status counter helper gate (`timing-status-counters`), TLC-cross-checked roster-recovery status counter helper gate (`roster-recovery-status`), TLC-cross-checked range-pull recovery helper gate (`range-pull-recovery`), TLC-cross-checked range-pull status counter helper gate (`range-pull-status`), TLC-cross-checked round-recovery bundle window helper gate (`round-recovery-bundle-window`),
 TLC-cross-checked recovery-FSM reason classifier/rank/sort helper gate (`recovery-fsm-reason`),
 TLC-cross-checked committed-edge conflict suppression gate,
@@ -8667,7 +9370,7 @@ TLC-cross-checked missing-block hard-cap cleanup gate,
 TLC-cross-checked missing-block view-change escalation gate, TLC-cross-checked precommit vote-emission gate,
 TLC-cross-checked native AMX attestation gate,
 TLC-cross-checked native AMX queue-journal replay gate, TLC-cross-checked native AMX routing-plan projection gate,
-TLC-cross-checked native AMX receipt validation gate, TLC-cross-checked native AMX control-plane ingress gate,
+TLC-cross-checked native AMX receipt validation gate, TLC-cross-checked native AMX control-plane ingress with aggregate exactness,
 TLC-cross-checked vNext chain-order helper gate, TLC-cross-checked vNext stake-weight/quorum helper gate
 (`vnext-stake-weight`), TLC-cross-checked vNext re-chain helper gate,
 TLC-cross-checked vNext re-chain error label helper gate, TLC-cross-checked
@@ -8686,7 +9389,7 @@ vote-signature verification worker config helper gate
 (`vote-verify-worker-config`), TLC-cross-checked async QC aggregate-verification ownership gate,
 QC aggregate-verification worker config helper gate (`qc-verify-worker-config`),
 TLC-cross-checked worker-loop drain scheduler gate,
-TLC-cross-checked actor-gate priority/fairness gate,
+TLC-cross-checked actor-gate priority/fairness with aggregate exactness,
 TLC-cross-checked worker-loop budget/adaptive-cap gate,
 TLC-cross-checked worker ingress routing gate,
 worker-loop stage helper gate, TLC-cross-checked worker-queue status accounting gate,
@@ -8841,14 +9544,16 @@ TLC-cross-checked pure engine exact validation-owner cleanup gate,
 TLC-cross-checked pure engine exact invalid-validation round/output advance gate,
 TLC-cross-checked reconfiguration, TLC-cross-checked certified-recovery, TLC-cross-checked view-change, TLC-cross-checked validation-callback,
 TLC-cross-checked certificate-admission, TLC-cross-checked highest-QC selection, TLC-cross-checked optional highest-QC selection-filter bounded models,
-TLC-cross-checked certified-fetch, TLC-cross-checked pure-engine certificate
-dispatch, TLC-cross-checked pure-engine certificate prefilter state,
-TLC-cross-checked frontier-gap realignment, TLC-cross-checked Kura commit retry,
-TLC-cross-checked missing-block fetch, TLC-cross-checked missing-block hard-cap cleanup,
-TLC-cross-checked missing-block hard-cap, TLC-cross-checked missing-block view-change,
-TLC-cross-checked native AMX attestation, TLC-cross-checked native AMX receipt validation,
-TLC-cross-checked native AMX routing-plan, TLC-cross-checked NPoS VRF epoch seal,
-TLC-cross-checked post-commit cleanup, and TLC-cross-checked restart replay candidate-enumeration bounded models,
+TLC-cross-checked certified-fetch with aggregate exactness, TLC-cross-checked pure-engine certificate
+dispatch with aggregate exactness, TLC-cross-checked pure-engine certificate prefilter state with aggregate exactness,
+TLC-cross-checked pure-engine certificate prefilter unrelated-state preservation with aggregate exactness,
+TLC-cross-checked frontier-gap realignment with aggregate exactness, TLC-cross-checked Kura commit retry with aggregate exactness,
+TLC-cross-checked missing-block fetch with aggregate exactness, TLC-cross-checked missing-block hard-cap cleanup with aggregate exactness,
+TLC-cross-checked missing-block hard-cap with aggregate exactness, TLC-cross-checked missing-block view-change with aggregate exactness,
+TLC-cross-checked native AMX attestation with aggregate exactness, TLC-cross-checked native AMX ingress with aggregate exactness,
+TLC-cross-checked native AMX receipt validation with aggregate exactness,
+TLC-cross-checked native AMX routing-plan with aggregate exactness, TLC-cross-checked NPoS VRF epoch seal with aggregate exactness,
+TLC-cross-checked post-commit cleanup with aggregate exactness, and TLC-cross-checked restart replay with aggregate exactness,
 and updated operator runbooks when defaults change.
 
 ## Community and Governance

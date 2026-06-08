@@ -8550,7 +8550,11 @@ esac
 
 apalache_length="${APALACHE_LENGTH:-$apalache_length}"
 if [[ -z "${JVM_ARGS:-}" ]]; then
-  export JVM_ARGS="-Xss16m -Xmx4096m"
+  if [[ "$mode" == "frontier-proposal-grace-fast" ]]; then
+    export JVM_ARGS="-Xss16m -Xmx8192m"
+  else
+    export JVM_ARGS="-Xss16m -Xmx4096m"
+  fi
 elif [[ ! "$JVM_ARGS" =~ (^|[[:space:]])-Xss ]]; then
   export JVM_ARGS="-Xss16m $JVM_ARGS"
 fi

@@ -60,8 +60,8 @@ Cargo.toml والمحلولة في Cargo.lock. أُجري التدقيق باس�
 - TLS: `rustls`، `tokio-rustls`، `hyper-rustls` — مكدّس TLS حديث ومعياري
   في Rust.
 - Noise: `snow` — تطبيق معياري لبروتوكول Noise.
-- التسييل (Serialization): الحزمة `parity-scale-codec` هي الكودك المعياري
-  لـ SCALE. تم إزالة Serde من اعتمادات الإنتاج في كامل الـ workspace؛
+- التسييل (Serialization): الحزمة `retired codec` هي الكودك المعياري
+  لـ retired codec. تم إزالة Serde من اعتمادات الإنتاج في كامل الـ workspace؛
   يغطّي Norito (مشتقات/كاتبو التسييل) كل المسارات التنفيذية. أي إشارات
   متبقية لـ Serde موجودة في وثائق تاريخية، أو سكربتات حراسة، أو
   allowlists خاصة بالاختبارات.

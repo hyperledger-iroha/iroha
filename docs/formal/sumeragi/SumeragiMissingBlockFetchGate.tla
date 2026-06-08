@@ -330,15 +330,82 @@ FetchRequestsCarryCorrectFields ==
   /\ CommitQcOnlyFlagPreserved \in tried =>
        ImplementationCommitQcOnlyFlagPreserved(CommitQcOnlyFlagPreserved)
 
-Safety ==
-  /\ FetchDecisionMatchesSpec
+MissingBlockFetchDecisionCases == {
+  FirstSeenFetch, BackoffSuppressesFetch, RetryAfterWindowFetch,
+  ForceRetryFetch, PriorityUpgradeFetch, EmptyTopologyNoTargets,
+  StrictSignersNoFallback, OutOfRangeSignerIgnored
+}
+
+MissingBlockRequestStateCases == {
+  ConflictingHeightStable, AdvancedViewAccepted, StaleViewIgnored,
+  PhaseRankAdvances
+}
+
+MissingBlockPriorityRetryCases == {
+  ConsensusPriorityWins, RetryMinBeforeAttempt, RetryMaxAfterAttempt,
+  ViewChangeNoneClears
+}
+
+MissingBlockAttemptCases == {
+  AttemptsIncrementOnRequest, AttemptsStableOnBackoff
+}
+
+MissingBlockTargetCases == {
+  DefaultPrefersSigners, DefaultFallbackNoSigners,
+  DefaultFallbackAfterAttempts, AggressiveUsesTopology
+}
+
+MissingBlockSendAndDeferralCases == {
+  SendFiltersLocal, KnownBlockNoDeferral
+}
+
+MissingBlockRequestFieldCases == {
+  FetchRequestFieldsPreserved, CommitQcOnlyFlagPreserved
+}
+
+MissingBlockFetchGroupedCases ==
+  MissingBlockFetchDecisionCases \cup MissingBlockRequestStateCases \cup
+  MissingBlockPriorityRetryCases \cup MissingBlockAttemptCases \cup
+  MissingBlockTargetCases \cup MissingBlockSendAndDeferralCases \cup
+  MissingBlockRequestFieldCases
+
+MissingBlockFetchCaseGroupsComplete ==
+  MissingBlockFetchGroupedCases = Candidates
+
+MissingBlockFetchDecisionExact ==
+  FetchDecisionMatchesSpec
+
+MissingBlockRequestStateExact ==
   /\ RequestIdentityStable
   /\ RequestProgressMonotonic
-  /\ PriorityAndRetryWindowsSafe
-  /\ AttemptsAccountedOnlyForEmittedFetches
-  /\ TargetSelectionMatchesMode
+
+MissingBlockPriorityRetryExact ==
+  PriorityAndRetryWindowsSafe
+
+MissingBlockAttemptsExact ==
+  AttemptsAccountedOnlyForEmittedFetches
+
+MissingBlockTargetsExact ==
+  TargetSelectionMatchesMode
+
+MissingBlockSendDeferralExact ==
   /\ FinalSendPathFiltersLocal
   /\ KnownBlocksDoNotDefer
-  /\ FetchRequestsCarryCorrectFields
+
+MissingBlockRequestFieldsExact ==
+  FetchRequestsCarryCorrectFields
+
+MissingBlockFetchExactness ==
+  /\ MissingBlockFetchCaseGroupsComplete
+  /\ MissingBlockFetchDecisionExact
+  /\ MissingBlockRequestStateExact
+  /\ MissingBlockPriorityRetryExact
+  /\ MissingBlockAttemptsExact
+  /\ MissingBlockTargetsExact
+  /\ MissingBlockSendDeferralExact
+  /\ MissingBlockRequestFieldsExact
+
+Safety ==
+  MissingBlockFetchExactness
 
 ====

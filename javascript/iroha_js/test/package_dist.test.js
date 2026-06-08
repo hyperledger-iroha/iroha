@@ -13,6 +13,8 @@ import {
   SCCP_DOMAIN_SORA,
   SCCP_DOMAIN_TON,
   SCCP_DOMAIN_TRON,
+  SCCP_CODEC_TEXT_UTF8,
+  SCCP_CODEC_TON_RAW,
   SCCP_ETH_MAINNET_EVM_CHAIN_ID,
   SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
@@ -29,6 +31,8 @@ import {
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+  KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
+  KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
   KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
@@ -58,6 +62,7 @@ import {
   isKagemushaRecursiveAggregationProofBundleNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable,
+  isKagemushaRecursiveCompactUnavailable,
   isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
   isKagemushaRecursiveSpendLineageProofCircuitId,
   isKagemushaRecursiveSpendLineageAppendOutputCircuitId,
@@ -118,10 +123,18 @@ import {
   bscValidatorSetPayloadHash,
   bscValidatorSetStorageValueHash,
   bscValidatorSetTransitionMessageHash,
+  canonicalSccpMessageProofBundleBytes,
+  canonicalSccpPayloadEnvelopeBytes,
   buildEvmSccpProofRequest,
   buildEvmSccpSubmission,
   EthereumMainnetBeaconRestConsensusProvider,
   EthereumMainnetSccp,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+  SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
   SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
@@ -139,6 +152,8 @@ import {
   validateEthereumMainnetNativeEvmProverSelfTestFixture,
   verifyEthereumMainnetNativeEvmProverArtifacts,
   verifyEthereumMainnetNativeEvmProverArtifactsFromBundle,
+  verifyBscMainnetNativeEvmProverArtifacts,
+  verifyBscTestnetNativeEvmProverArtifacts,
   BscMainnetSccp,
   BscMainnetSccpProver,
   BscTestnetSccp,
@@ -154,6 +169,9 @@ import {
   wrapBscMainnetSccpDestinationProofResult,
   wrapBscTestnetSccpDestinationProofResult,
   wrapEvmSccpProofResult,
+  sccpMerkleRootFromCommitment,
+  sccpPayloadHash,
+  sccpTransferMessageId,
   buildSolanaSccpAccountsLtHashProofRequest,
   buildSolanaSccpFullLightClientAuditProofRequest,
   buildSolanaSccpTowerReplayProofRequest,
@@ -175,10 +193,14 @@ import {
   wrapSolanaSccpProofResult,
   preferredKagemushaOfflineSpendMode,
   isKagemushaRecursiveSpendNativeAvailable,
+  isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable,
+  isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable,
   kagemushaProveVerifiedCompactPaymentTokenWithRecords,
   kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes,
   kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes,
   kagemushaVerifyRecursiveCompactPaymentToken,
+  kagemushaRecursiveSpendCompactPaymentTokenFromBundle,
+  kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection,
   kagemushaRecursiveSpendInit,
   kagemushaRecursiveSpendAppend,
   kagemushaRecursiveSpendTransitionProfileInit,
@@ -400,6 +422,57 @@ function privacyNoritoFrameFromPayload(schemaByte, payload) {
   return frame;
 }
 
+const TEST_NORITO_COMPACT_LEN_FLAG = 0x02;
+const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
+  "119f4df38a98ef5848ad0aadb9715779",
+  "hex",
+);
+
+function privacyNoritoFrameFromSchemaHash(schemaHash, payload, flags = 0) {
+  const payloadBuffer = Buffer.from(payload);
+  const frame = Buffer.alloc(40);
+  frame.write("NRT0", 0, "ascii");
+  Buffer.from(schemaHash).copy(frame, 6);
+  frame[39] = flags;
+  const archive = Buffer.concat([frame, payloadBuffer]);
+  archive.writeBigUInt64LE(BigInt(payloadBuffer.length), 23);
+  archive.writeBigUInt64LE(testCrc64(payloadBuffer), 31);
+  return archive;
+}
+
+function kagemushaNoritoLength(value, flags = 0) {
+  if ((flags & TEST_NORITO_COMPACT_LEN_FLAG) === 0) {
+    const length = Buffer.alloc(8);
+    length.writeBigUInt64LE(BigInt(value));
+    return length;
+  }
+  let remaining = BigInt(value);
+  const bytes = [];
+  while (remaining >= 0x80n) {
+    bytes.push(Number((remaining & 0x7fn) | 0x80n));
+    remaining >>= 7n;
+  }
+  bytes.push(Number(remaining));
+  return Buffer.from(bytes);
+}
+
+function kagemushaNoritoField(payload, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  const bytes = Buffer.from(payload);
+  return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
+}
+
+function kagemushaNoritoString(value, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  const bytes = Buffer.from(value, "utf8");
+  return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
+}
+
+function kagemushaNoritoByteVec(value) {
+  const bytes = Buffer.from(value);
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64LE(BigInt(bytes.length));
+  return Buffer.concat([length, bytes]);
+}
+
 function kagemushaZk1Tlv(tag, payload) {
   const payloadBuffer = Buffer.from(payload);
   const length = Buffer.alloc(4);
@@ -432,14 +505,19 @@ function kagemushaVerifierKeyCommitment(verifierKey) {
 }
 
 function kagemushaLineageProvingKeyArchive(circuitId, verifierKey, seed) {
-  return privacyNoritoFrameFromPayload(
-    0x9a,
-    Buffer.concat([
-      Buffer.from([1, 0]),
-      Buffer.from(circuitId, "utf8"),
-      kagemushaVerifierKeyCommitment(verifierKey),
-      Buffer.alloc(64, seed),
-    ]),
+  const flags = TEST_NORITO_COMPACT_LEN_FLAG;
+  const version = Buffer.alloc(2);
+  version.writeUInt16LE(1);
+  const payload = Buffer.concat([
+    kagemushaNoritoField(version, flags),
+    kagemushaNoritoField(kagemushaNoritoString(circuitId, flags), flags),
+    kagemushaNoritoField(kagemushaVerifierKeyCommitment(verifierKey), flags),
+    kagemushaNoritoField(kagemushaNoritoByteVec(Buffer.alloc(64, seed)), flags),
+  ]);
+  return privacyNoritoFrameFromSchemaHash(
+    KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+    payload,
+    flags,
   );
 }
 
@@ -908,6 +986,8 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
+    "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
+    "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
@@ -954,11 +1034,16 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
     "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
     "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
+    "isKagemushaRecursiveCompactUnavailable",
+    "isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable",
+    "isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable",
     "isKagemushaRecursiveSpendNativeAvailable",
     "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
     "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
     "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
     "kagemushaVerifyRecursiveCompactPaymentToken",
+    "kagemushaRecursiveSpendCompactPaymentTokenFromBundle",
+    "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection",
     "kagemushaRecursiveSpendInit",
     "kagemushaRecursiveSpendAppend",
     "kagemushaRecursiveSpendTransitionProfileInit",
@@ -979,6 +1064,24 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1, "checked_prefold_v1");
   assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION, 7);
   assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1, "kagemusha-recursive-compact-v1");
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
+    "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
+    "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch",
+  );
+  assert.equal(
+    isKagemushaRecursiveCompactUnavailable(
+      new Error(KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT),
+    ),
+    true,
+  );
+  assert.equal(
+    isKagemushaRecursiveCompactUnavailable("recursive compact proof composition unavailable"),
+    false,
+  );
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION, 6);
   assert.equal(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "halo2/ipa");
   assert.equal(
@@ -1717,12 +1820,21 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     typeof isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(),
     "boolean",
   );
+  assert.equal(
+    typeof isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(),
+    "boolean",
+  );
+  assert.equal(
+    typeof isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(),
+    "boolean",
+  );
   assert.equal(typeof kagemushaVerifyRecursiveCompactPaymentToken, "function");
+  assert.equal(typeof kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection, "function");
   assert.throws(
     () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(
       privacyNoritoFrameWithPayload(0x4d),
     ),
-    /Kagemusha compact payment-token prover|unavailable in browser-only crypto builds|Native binding required/,
+    /Kagemusha compact payment-token prover|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha record bundle archive/,
   );
   assert.throws(
     () =>
@@ -1730,7 +1842,7 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
         privacyNoritoFrameWithPayload(0x4e),
         privacyNoritoFrameWithPayload(0x4f),
       ),
-    /Kagemusha recursive aggregation proof-bundle prover|unavailable in browser-only crypto builds|Native binding required/,
+    /Kagemusha recursive aggregation proof-bundle prover|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha record bundle archive/,
   );
   assert.throws(
     () =>
@@ -1738,11 +1850,23 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
         privacyNoritoFrameWithPayload(0x4a),
         privacyNoritoFrameWithPayload(0x4c),
     ),
-    /recursive compact Kagemusha payment-token prover|unavailable in browser-only crypto builds|Native binding required/,
+    /recursive compact Kagemusha payment-token prover|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha record bundle archive/,
   );
   assert.throws(
     () => kagemushaVerifyRecursiveCompactPaymentToken(privacyNoritoFrameWithPayload(0x4b)),
-    /recursive compact Kagemusha payment-token verifier|unavailable in browser-only crypto builds|Native binding required/,
+    /recursive compact Kagemusha payment-token verifier|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha recursive compact payment token archive/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(privacyNoritoFrameWithPayload(0x4c)),
+    /recursive spend compact Kagemusha payment-token projection|unavailable in browser-only crypto builds|Native binding required/,
+  );
+  assert.throws(
+    () =>
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+        privacyNoritoFrameWithPayload(0x4c),
+        privacyNoritoFrameWithPayload(0x4d),
+      ),
+    /recursive spend compact Kagemusha payment-token projection verifier|unavailable in browser-only crypto builds|Native binding required/,
   );
   for (const helper of [
     kagemushaRecursiveSpendInit,
@@ -1930,6 +2054,10 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["lattice-pcs-sis", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk-v0", "LatticePcsSis"],
+    ["stark/fri", "Stark"],
+    ["stark/fri/sha256-goldilocks", "Stark"],
+    ["stark/fri/poseidon2-goldilocks", "Stark"],
+    ["stark/fri/sha256_goldilocks.v1", "Stark"],
     ["miden-stark", "MidenStark"],
     ["stark/fri/miden", "MidenStark"],
     ["aztec-plonkish-private-kernel", "AztecPlonkishPrivateKernel"],
@@ -2006,9 +2134,22 @@ test("package dist privacy proof envelopes reject production metadata claims", (
     { ...base, backend: "stark/fri/\u200Bsha256-goldilocks" },
     { ...base, backend: "st\u0430rk/fri/sha256-goldilocks" },
     { ...base, backend: "halo2/ipa/orchard/dev-fixture" },
+    { ...base, backend: "halo2/ipa/orchard:production-ready" },
+    { ...base, backend: "orchard:mainnet-ready" },
+    { ...base, backend: "penumbra-masp:external-security-review" },
+    { ...base, backend: "jindo-lattice-pcs-zk:release-ready" },
     { ...base, backend: "stark/fri/miden/claimed-production" },
+    { ...base, backend: "miden-stark:dev-fixture" },
     { ...base, backend: "anonymous-pgc-k-out-of-n-v1-production" },
     { ...base, backend: "sis-hints-anoncred-pq-v0-devfixture" },
+    { ...base, backend: "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d" },
+    { ...base, backend: "halo2/ipa/orchard:kzg" },
+    { ...base, backend: "orchard:universal-srs" },
+    { ...base, backend: "penumbra-masp:kzg" },
+    { ...base, backend: "jindo-lattice-pcs-zk:trusted-setup" },
+    { ...base, backend: "miden-stark:ptau" },
+    { ...base, backend: "sis-with-hints:groth16" },
+    { ...base, backend: "pq-masp-stark-fri:kzg" },
     { ...base, backend: "groth16/bls12-377/../../prod" },
     { ...base, backend: "post-quantum-masp/audit-claimed" },
     { ...base, production: true },
@@ -4528,11 +4669,11 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     finality_block_hash: `0x${"44".repeat(32)}`,
   };
   assert.equal(SCCP_ETH_MAINNET_EVM_CHAIN_ID, 1);
-  const nativeArtifactPayloadBytes = (label) => {
+  const nativeArtifactPayloadBytes = (label, size = 96 * 1024) => {
     const seed = Buffer.from(`${label}\n`, "utf8");
-    const out = Buffer.alloc(256);
+    const out = Buffer.alloc(size);
     for (let index = 0; index < out.length; index += 1) {
-      out[index] = seed[index % seed.length];
+      out[index] = (seed[index % seed.length] + index * 31 + (index >> 7)) & 0xff;
     }
     return out;
   };
@@ -4668,6 +4809,25 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
       destinationBinding: ethereumMainnetBinding,
     }).proofArtifactHash,
     proofArtifactHash,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle(
+        { ...nativeProverBundle, proof_artifact: "ipfs:proof-artifact.bin" },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifact must not contain URI schemes or drive prefixes/u,
+  );
+  assert.throws(
+    () =>
+      parseEthereumMainnetNativeEvmProverBundleManifest(
+        JSON.stringify({
+          ...nativeProverBundle,
+          proof_artifact: "artifacts/eth-mainnet/proof.wasm",
+        }),
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifact path contains forbidden prover dependency marker: wasm/u,
   );
   assert.equal(
     validateEthereumMainnetNativeEvmProverParityFixture(
@@ -4821,7 +4981,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
         },
         { destinationBinding: ethereumMainnetBinding },
       ),
-    /proofArtifactBytes must be at least 256 bytes/u,
+    /proofArtifactBytes must be at least 65536 bytes/u,
   );
   assert.throws(
     () =>
@@ -4871,12 +5031,105 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     verifierAddress: `0x${"11".repeat(20)}`,
     bridgeAddress: `0x${"22".repeat(20)}`,
     verifierCodeHash: `0x${"bb".repeat(32)}`,
-    verifierKeyHash: `0x${"cc".repeat(32)}`,
+    verifierKeyHash,
   });
   const bscPublicInputs = { ...publicInputs, target_domain: SCCP_DOMAIN_BSC };
   assert.equal(SCCP_BSC_MAINNET_EVM_CHAIN_ID, 56);
   assert.equal(SCCP_BSC_MAINNET_NETWORK_ID, bscMainnetBinding.networkId);
-  const bscRequest = buildBscMainnetSccpDestinationProofRequest({
+  const bscMainnetNativeProverBundle = {
+    ...nativeProverBundle,
+    bundle_id: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-mainnet",
+    proof_artifact: "artifacts/bsc-mainnet/proof-artifact.bin",
+    proving_key: "artifacts/bsc-mainnet/proving-key.bin",
+    verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
+    destination_binding_hash: bscMainnetBinding.bindingHash,
+    cross_sdk_fixture_parity_artifact:
+      "artifacts/bsc-mainnet/cross-sdk-fixture-parity.json",
+    native_prover_self_test_artifact:
+      "artifacts/bsc-mainnet/native-prover-self-test.json",
+    native_sdk_artifacts: Object.entries(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).map(([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      prover_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      implementation_artifact: `artifacts/bsc-mainnet/${sdk}-implementation.bin`,
+      implementation_hash: sdk === "javascript"
+        ? implementationHash
+        : `0x${(index + 0x41).toString(16).padStart(2, "0").repeat(32)}`,
+    })),
+  };
+  const bscMainnetParitySdkResult = {
+    ...paritySdkResult,
+    destination_binding_hash: bscMainnetBinding.bindingHash,
+  };
+  const bscMainnetParityFixture = {
+    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-mainnet",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    destination_binding_hash: bscMainnetBinding.bindingHash,
+    ...bscMainnetParitySdkResult,
+    sdk_results: Object.fromEntries(
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
+        sdk,
+        { ...bscMainnetParitySdkResult },
+      ]),
+    ),
+  };
+  const bscMainnetParityFixtureBytes = Buffer.from(
+    JSON.stringify(bscMainnetParityFixture),
+    "utf8",
+  );
+  const bscMainnetSelfTestFixture = {
+    schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-mainnet",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    destination_binding_hash: bscMainnetBinding.bindingHash,
+    ...selfTestSdkResult,
+    sdk_results: Object.fromEntries(
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
+        sdk,
+        { ...selfTestSdkResult },
+      ]),
+    ),
+  };
+  const bscMainnetSelfTestFixtureBytes = Buffer.from(
+    JSON.stringify(bscMainnetSelfTestFixture),
+    "utf8",
+  );
+  bscMainnetNativeProverBundle.audit_hashes = {
+    ...bscMainnetNativeProverBundle.audit_hashes,
+    cross_sdk_fixture_parity: sha256Hex(bscMainnetParityFixtureBytes),
+    native_prover_self_test: sha256Hex(bscMainnetSelfTestFixtureBytes),
+  };
+  const bscMainnetNativeArtifacts = verifyBscMainnetNativeEvmProverArtifacts(
+    {
+      nativeProverBundle: bscMainnetNativeProverBundle,
+      proofArtifactBytes,
+      provingKeyBytes,
+      verifierKeyBytes,
+      crossSdkFixtureParityBytes: bscMainnetParityFixtureBytes,
+      nativeProverSelfTestBytes: bscMainnetSelfTestFixtureBytes,
+      sdk: "javascript",
+      implementationBytes,
+    },
+    { destinationBinding: bscMainnetBinding },
+  );
+  const bscMainnetSdk = new BscMainnetSccp({
+    nativeProverArtifacts: bscMainnetNativeArtifacts,
+  });
+  const bscRequest = bscMainnetSdk.buildOutboundProofRequest({
     public_inputs: bscPublicInputs,
     bundle_bytes: new Uint8Array([5, 6, 7]),
     source_proof_bytes: new Uint8Array([9, 10]),
@@ -4889,7 +5142,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     buildBscMainnetSccpDestinationSubmission({ proofResult: bscProofResult }).targetDomain,
     SCCP_DOMAIN_BSC,
   );
-  assert.equal(new BscMainnetSccp().buildBscCalldata({ proofResult: bscProofResult }).targetDomain, SCCP_DOMAIN_BSC);
+  assert.equal(bscMainnetSdk.buildBscCalldata({ proofResult: bscProofResult }).targetDomain, SCCP_DOMAIN_BSC);
   assert.equal((await new BscMainnetSccpProver().buildRequest({
     public_inputs: bscPublicInputs,
     bundle_bytes: new Uint8Array([5, 6, 7]),
@@ -4903,8 +5156,96 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     verifierAddress: `0x${"33".repeat(20)}`,
     bridgeAddress: `0x${"44".repeat(20)}`,
     verifierCodeHash: `0x${"dd".repeat(32)}`,
-    verifierKeyHash: `0x${"ee".repeat(32)}`,
+    verifierKeyHash,
   });
+  const bscTestnetNativeProverBundle = {
+    ...nativeProverBundle,
+    bundle_id: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-testnet",
+    proof_artifact: "artifacts/bsc-testnet/proof-artifact.bin",
+    proving_key: "artifacts/bsc-testnet/proving-key.bin",
+    verifier_key: "artifacts/bsc-testnet/verifier-key.bin",
+    destination_binding_hash: bscTestnetBinding.bindingHash,
+    cross_sdk_fixture_parity_artifact: "artifacts/bsc-testnet/cross-sdk-fixture-parity.json",
+    native_prover_self_test_artifact: "artifacts/bsc-testnet/native-prover-self-test.json",
+    native_sdk_artifacts: Object.entries(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).map(([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      prover_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      implementation_artifact: `artifacts/bsc-testnet/${sdk}-implementation.bin`,
+      implementation_hash: sdk === "javascript"
+        ? implementationHash
+        : `0x${(index + 1).toString(16).padStart(2, "0").repeat(32)}`,
+    })),
+  };
+  const bscTestnetParitySdkResult = {
+    ...paritySdkResult,
+    destination_binding_hash: bscTestnetBinding.bindingHash,
+  };
+  const bscTestnetParityFixture = {
+    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-testnet",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    destination_binding_hash: bscTestnetBinding.bindingHash,
+    ...bscTestnetParitySdkResult,
+    sdk_results: Object.fromEntries(
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
+        sdk,
+        { ...bscTestnetParitySdkResult },
+      ]),
+    ),
+  };
+  const bscTestnetParityFixtureBytes = Buffer.from(
+    JSON.stringify(bscTestnetParityFixture),
+    "utf8",
+  );
+  const bscTestnetSelfTestFixture = {
+    schema: SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+    domain: SCCP_DOMAIN_BSC,
+    chain: "bsc-testnet",
+    proof_backend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proof_artifact_hash: proofArtifactHash,
+    proving_key_hash: provingKeyHash,
+    verifier_key_hash: verifierKeyHash,
+    destination_binding_hash: bscTestnetBinding.bindingHash,
+    ...selfTestSdkResult,
+    sdk_results: Object.fromEntries(
+      Object.keys(SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1).map((sdk) => [
+        sdk,
+        { ...selfTestSdkResult },
+      ]),
+    ),
+  };
+  const bscTestnetSelfTestFixtureBytes = Buffer.from(
+    JSON.stringify(bscTestnetSelfTestFixture),
+    "utf8",
+  );
+  bscTestnetNativeProverBundle.audit_hashes = {
+    ...bscTestnetNativeProverBundle.audit_hashes,
+    cross_sdk_fixture_parity: sha256Hex(bscTestnetParityFixtureBytes),
+    native_prover_self_test: sha256Hex(bscTestnetSelfTestFixtureBytes),
+  };
+  const bscTestnetNativeArtifacts = verifyBscTestnetNativeEvmProverArtifacts(
+    {
+      nativeProverBundle: bscTestnetNativeProverBundle,
+      proofArtifactBytes,
+      provingKeyBytes,
+      verifierKeyBytes,
+      crossSdkFixtureParityBytes: bscTestnetParityFixtureBytes,
+      nativeProverSelfTestBytes: bscTestnetSelfTestFixtureBytes,
+      sdk: "javascript",
+      implementationBytes,
+    },
+    { destinationBinding: bscTestnetBinding },
+  );
   assert.equal(SCCP_BSC_TESTNET_EVM_CHAIN_ID, 97);
   assert.equal(SCCP_BSC_TESTNET_NETWORK_ID, bscTestnetBinding.networkId);
   const bscTestnetRequest = buildBscTestnetSccpDestinationProofRequest({
@@ -4920,9 +5261,24 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     buildBscTestnetSccpDestinationSubmission({ proofResult: bscTestnetProofResult }).targetDomain,
     SCCP_DOMAIN_BSC,
   );
-  assert.equal(new BscTestnetSccp().buildBscCalldata({
-    proofResult: bscTestnetProofResult,
-  }).destinationBindingHash, bscTestnetRequest.destinationBindingHash);
+  const bscTestnetSdk = new BscTestnetSccp({
+    nativeProverArtifacts: bscTestnetNativeArtifacts,
+  });
+  const bscTestnetNativeRequest = bscTestnetSdk.buildOutboundProofRequest({
+    public_inputs: bscPublicInputs,
+    bundle_bytes: new Uint8Array([5, 6, 7]),
+    source_proof_bytes: new Uint8Array([9, 10]),
+    source_domain: SCCP_DOMAIN_SORA,
+    statement_hash: `0x${"55".repeat(32)}`,
+    destination_binding: bscTestnetBinding,
+  });
+  const bscTestnetNativeProofResult = wrapBscTestnetSccpDestinationProofResult(
+    proofBytes,
+    bscTestnetNativeRequest,
+  );
+  assert.equal(bscTestnetSdk.buildBscCalldata({
+    proofResult: bscTestnetNativeProofResult,
+  }).destinationBindingHash, bscTestnetNativeRequest.destinationBindingHash);
   assert.equal((await new BscTestnetSccpProver().buildRequest({
     public_inputs: bscPublicInputs,
     bundle_bytes: new Uint8Array([5, 6, 7]),
@@ -5074,19 +5430,62 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   );
 });
 
- test("package dist entrypoint exports SCCP TON proof wrapper", () => {
-  const publicInputs = {
+const buildSampleTonMessageProofBundleFixture = () => {
+  const merkleProof = { steps: [] };
+  const payload = {
     version: 1,
-    message_id: `0x${"11".repeat(32)}`,
-    payload_hash: `0x${"22".repeat(32)}`,
-    target_domain: SCCP_DOMAIN_TON,
-    commitment_root: `0x${"33".repeat(32)}`,
-    finality_height: "19",
-    finality_block_hash: `0x${"44".repeat(32)}`,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: SCCP_DOMAIN_TON,
+    nonce: "7",
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: "xor#ton",
+    amount: "42",
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender: "alice",
+    recipient_codec: SCCP_CODEC_TON_RAW,
+    recipient: `0:${"12".repeat(32)}`,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: "sccp-ton-proof-request",
   };
+  const payloadEnvelope = { kind: "Transfer", value: payload };
+  const payloadBytes = canonicalSccpPayloadEnvelopeBytes(payloadEnvelope);
+  const messageId = sccpTransferMessageId(payload);
+  const payloadHash = sccpPayloadHash(payloadBytes);
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    target_domain: SCCP_DOMAIN_TON,
+    message_id: messageId,
+    payload_hash: payloadHash,
+  };
+  const commitmentRoot = sccpMerkleRootFromCommitment(commitment, merkleProof);
+  return Object.freeze({
+    publicInputs: Object.freeze({
+      version: 1,
+      message_id: messageId,
+      payload_hash: payloadHash,
+      target_domain: SCCP_DOMAIN_TON,
+      commitment_root: commitmentRoot,
+      finality_height: "19",
+      finality_block_hash: `0x${"44".repeat(32)}`,
+    }),
+    bundleBytes: canonicalSccpMessageProofBundleBytes({
+      version: 1,
+      commitment_root: commitmentRoot,
+      commitment,
+      merkle_proof: merkleProof,
+      payload: payloadEnvelope,
+      finality_proof: [0x71, 0x72],
+    }),
+  });
+};
+
+test("package dist entrypoint exports SCCP TON proof wrapper", () => {
+  const { publicInputs, bundleBytes } = buildSampleTonMessageProofBundleFixture();
   const request = buildTonSccpProofRequest({
     public_inputs: publicInputs,
-    bundle_bytes: new Uint8Array([5, 6, 7]),
+    bundle_bytes: bundleBytes,
     source_proof_bytes: new Uint8Array([9, 10]),
     statement_hash: `0x${"55".repeat(32)}`,
     destination_binding_hash: `0x${"66".repeat(32)}`,
@@ -5097,7 +5496,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   const result = wrapTonSccpProofResult([1, 2, 3], request);
   const submission = buildTonSccpSubmission({
     proofResult: result,
-    bundleBytes: new Uint8Array([5, 6, 7]),
+    bundleBytes,
   });
 
   assert.equal(request.targetDomain, SCCP_DOMAIN_TON);

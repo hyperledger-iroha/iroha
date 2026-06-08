@@ -1972,6 +1972,28 @@ fn fhe_execution_policy_fixture_rejects_adversarial_bootstrap_digest_drift() {
         }
     ));
 
+    let mut ambiguous_digest: json::Value =
+        json::from_str(FHE_EXECUTION_POLICY_FIXTURE).expect("fixture must decode as JSON value");
+    ambiguous_digest
+        .as_object_mut()
+        .expect("fixture root must be object")
+        .insert(
+            "full_bootstrap_material_proof_statement_digest".to_string(),
+            json::to_value(&sample_hash(201)).expect("hash should serialize"),
+        );
+    let decoded_ambiguous_digest: FheExecutionPolicyV1 =
+        json::from_value(ambiguous_digest).expect("ambiguous digest fixture must decode");
+    let error = decoded_ambiguous_digest
+        .validate()
+        .expect_err("bootstrap policy must reject both proof statement digest classes");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "full_bootstrap_material_proof_statement_digest",
+            ..
+        }
+    ));
+
     let mut stale_digest = expected_fhe_execution_policy();
     stale_digest.max_bootstrap_count = 0;
     let error = stale_digest
@@ -2043,6 +2065,20 @@ fn fhe_execution_policy_norito_rejects_adversarial_bootstrap_digest_drift_after_
         }
     ));
 
+    let mut ambiguous_digest = expected_fhe_execution_policy();
+    ambiguous_digest.full_bootstrap_material_proof_statement_digest = Some(sample_hash(201));
+    let decoded_ambiguous_digest: FheExecutionPolicyV1 = decode_norito_roundtrip(&ambiguous_digest);
+    let error = decoded_ambiguous_digest
+        .validate_for_param_set(&param_set)
+        .expect_err("binary-decoded policy must reject both proof statement digest classes");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "full_bootstrap_material_proof_statement_digest",
+            ..
+        }
+    ));
+
     let mut non_bootstrap_policy = expected_fhe_execution_policy();
     non_bootstrap_policy.max_bootstrap_count = 0;
     non_bootstrap_policy.bootstrap_key_zero_refresh_proof_statement_digest = None;
@@ -2095,6 +2131,32 @@ fn fhe_governance_bundle_fixture_rejects_adversarial_policy_digest_drift() {
         error,
         SoracloudManifestError::InvalidField {
             field: "bootstrap_key_zero_refresh_proof_statement_digest",
+            ..
+        }
+    ));
+
+    let mut ambiguous_digest: json::Value =
+        json::from_str(FHE_GOVERNANCE_BUNDLE_FIXTURE).expect("fixture must decode as JSON value");
+    ambiguous_digest
+        .as_object_mut()
+        .expect("fixture root must be object")
+        .get_mut("execution_policy")
+        .expect("fixture must carry execution_policy")
+        .as_object_mut()
+        .expect("execution_policy must be object")
+        .insert(
+            "full_bootstrap_material_proof_statement_digest".to_string(),
+            json::to_value(&sample_hash(201)).expect("hash should serialize"),
+        );
+    let decoded_ambiguous_digest: FheGovernanceBundleV1 =
+        json::from_value(ambiguous_digest).expect("ambiguous nested digest fixture must decode");
+    let error = decoded_ambiguous_digest
+        .validate_for_admission()
+        .expect_err("nested policy must reject both proof statement digest classes");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "full_bootstrap_material_proof_statement_digest",
             ..
         }
     ));
@@ -2170,6 +2232,23 @@ fn fhe_governance_bundle_norito_rejects_adversarial_policy_digest_drift_after_de
         error,
         SoracloudManifestError::InvalidField {
             field: "bootstrap_key_zero_refresh_proof_statement_digest",
+            ..
+        }
+    ));
+
+    let mut ambiguous_digest = expected_fhe_governance_bundle();
+    ambiguous_digest
+        .execution_policy
+        .full_bootstrap_material_proof_statement_digest = Some(sample_hash(201));
+    let decoded_ambiguous_digest: FheGovernanceBundleV1 =
+        decode_norito_roundtrip(&ambiguous_digest);
+    let error = decoded_ambiguous_digest
+        .validate_for_admission()
+        .expect_err("binary-decoded nested policy must reject both proof statement digest classes");
+    assert!(matches!(
+        error,
+        SoracloudManifestError::InvalidField {
+            field: "full_bootstrap_material_proof_statement_digest",
             ..
         }
     ));

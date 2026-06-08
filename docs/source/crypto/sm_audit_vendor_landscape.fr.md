@@ -58,7 +58,7 @@ cohérent.
 
 ## Sécurité SlowMist (Chengdu)
 
-- Engagements documentés : examens de sécurité du substrat/Polkadot Rust, y compris
+- Engagements documentés : examens de sécurité Rust, y compris
   Fourches Guomi pour les opérateurs chinois ; évaluations de routine du portefeuille SM2/SM3/SM4
   et le code de pont utilisé par les échanges.
 - Points forts : pratique d'audit axée sur la blockchain, réponse intégrée aux incidents,

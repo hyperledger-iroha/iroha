@@ -216,6 +216,46 @@ DeferredBlockSyncSafety ==
 NoSpuriousReassemblySafety ==
   ~ReassemblyWithoutSourceAccepted
 
+ReassemblyActivityRejectsNonExactInputs ==
+  /\ ~DependencyStaleProgressAccepted
+  /\ ~DependencyNoPayloadBacklogAccepted
+  /\ ~DependencyWrongHeightAccepted
+  /\ ~IngressNoBacklogAccepted
+  /\ ~IngressWrongViewAccepted
+  /\ ~SenderStaleTimedAccepted
+  /\ ~SenderWrongHeightTimedAccepted
+  /\ ~SenderWrongHeightUntimedAccepted
+  /\ ~ValidationAbortedAccepted
+  /\ ~ValidationWrongHeightAccepted
+  /\ ~ValidationWrongViewAccepted
+  /\ ~ValidationNonPendingAccepted
+  /\ ~DeferredWrongHeightAccepted
+  /\ ~DeferredWrongViewAccepted
+  /\ ~ReassemblyWithoutSourceAccepted
+
+ReassemblyActivityHasExactPositiveEvidence ==
+  /\ (\/ DependencyFrontierProgressExact
+      \/ DependencyStormProgressExact)
+  /\ SameSlotIngressExact
+  /\ (\/ SenderPayloadRebroadcastExact
+      \/ SenderTargetedPayloadRescueExact
+      \/ SenderInitRepairExact
+      \/ SenderChunkRepairExact
+      \/ SenderReadyRebroadcastExact
+      \/ SenderDeliverRebroadcastExact
+      \/ SenderReadyDeferralExact
+      \/ SenderDeliverDeferralExact
+      \/ SenderOutboundChunksExact
+      \/ SenderPersistInflightExact
+      \/ SenderPersistPendingRefreshExact
+      \/ SenderSeedInflightExact)
+  /\ ValidationInflightExact
+  /\ DeferredBlockSyncExact
+
+FrontierReassemblyActivityExactness ==
+  /\ ReassemblyActivityRejectsNonExactInputs
+  /\ ReassemblyActivityHasExactPositiveEvidence
+
 SafetyFast ==
   /\ DependencyProgressSafety
   /\ IngressSafety
@@ -223,6 +263,7 @@ SafetyFast ==
   /\ ValidationSafety
   /\ DeferredBlockSyncSafety
   /\ NoSpuriousReassemblySafety
+  /\ FrontierReassemblyActivityExactness
 
 DependencyProgressAnchors ==
   /\ DependencyProgressSafety

@@ -38,6 +38,27 @@ Cases == {
   "history_absent"
 }
 
+CacheCases == {"cache_only", "cache_over_history"}
+
+HistoryPositiveCases == {"history_valid"}
+
+HistoryIdentityCases == {
+  "history_prepare_phase",
+  "history_hash_mismatch",
+  "history_height_mismatch",
+  "history_view_mismatch"
+}
+
+HistoryContextCases == {
+  "history_epoch_mismatch",
+  "history_mode_mismatch",
+  "history_topology_mismatch"
+}
+
+HistoryAggregateCases == {"history_empty_aggregate"}
+
+HistoryAbsentCases == {"history_absent"}
+
 CacheHit(c) ==
   c \in {"cache_only", "cache_over_history"}
 
@@ -172,6 +193,38 @@ NoHistoryFromInvalidCases ==
 
 SafetyFast ==
   \A c \in Cases: ActualSource(c) = SpecSource(c)
+
+CommitQcLookupCachePriorityExact ==
+  \A c \in CacheCases:
+    ActualSource(c) = SpecSource(c)
+
+CommitQcLookupHistoryPositiveExact ==
+  \A c \in HistoryPositiveCases:
+    ActualSource(c) = SpecSource(c)
+
+CommitQcLookupHistoryIdentityExact ==
+  \A c \in HistoryIdentityCases:
+    ActualSource(c) = SpecSource(c)
+
+CommitQcLookupHistoryContextExact ==
+  \A c \in HistoryContextCases:
+    ActualSource(c) = SpecSource(c)
+
+CommitQcLookupHistoryAggregateExact ==
+  \A c \in HistoryAggregateCases:
+    ActualSource(c) = SpecSource(c)
+
+CommitQcLookupAbsentHistoryExact ==
+  \A c \in HistoryAbsentCases:
+    ActualSource(c) = SpecSource(c)
+
+CommitQcLookupExactness ==
+  /\ CommitQcLookupCachePriorityExact
+  /\ CommitQcLookupHistoryPositiveExact
+  /\ CommitQcLookupHistoryIdentityExact
+  /\ CommitQcLookupHistoryContextExact
+  /\ CommitQcLookupHistoryAggregateExact
+  /\ CommitQcLookupAbsentHistoryExact
 
 BugIgnoreCachePriority ==
   ActualSource("cache_over_history") = SpecSource("cache_over_history")

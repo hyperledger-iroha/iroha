@@ -64,6 +64,62 @@ RosterCacheEvictSkipsStaleOrder == 29
 
 Candidates == 1..29
 
+RosterCacheKeyCases == {
+  RosterKeyRejectsNoArtifacts,
+  RosterKeyRejectsNposMissingStake,
+  RosterKeyAllowsPermissionedMissingStake,
+  RosterKeyIncludesBlockHash,
+  RosterKeyIncludesHeight,
+  RosterKeyIncludesMode,
+  RosterKeyUsesValidatorSetHashes,
+  RosterKeyIncludesStakeHash,
+  RosterKeyIgnoresBlockView
+}
+
+SignerCacheKeyCases == {
+  SignerKeyRejectsEmptyRoster,
+  SignerKeyCanonicalizesRoster,
+  SignerKeyIncludesModeAndSeed
+}
+
+SignerCacheLifecycleCases == {
+  SignerCacheNewEmptyCapacity,
+  SignerCacheClearClearsBoth
+}
+
+SignerCacheLookupCases == {
+  SignerCacheGetMissNoTouch,
+  SignerCacheGetHitTouches
+}
+
+SignerCacheInsertEvictCases == {
+  SignerCacheInsertZeroNoop,
+  SignerCacheInsertUpdatesDedups,
+  SignerCacheEvictsOldest,
+  SignerCacheEvictSkipsStaleOrder
+}
+
+SignerCacheRemovalCases == {
+  SignerCacheRemoveBlockClearsMatching
+}
+
+RosterSelectionCacheLifecycleCases == {
+  RosterCacheNewEmptyCapacity,
+  RosterCacheClearClearsBoth
+}
+
+RosterSelectionCacheLookupCases == {
+  RosterCacheGetMissNoTouch,
+  RosterCacheGetHitTouches
+}
+
+RosterSelectionCacheInsertEvictCases == {
+  RosterCacheInsertZeroNoop,
+  RosterCacheInsertUpdatesDedups,
+  RosterCacheEvictsOldest,
+  RosterCacheEvictSkipsStaleOrder
+}
+
 RejectKey == 1
 ReturnKey == 2
 HasBlockHash == 3
@@ -306,6 +362,53 @@ TypeInvariant ==
 Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+BlockRosterCacheRosterKeyExact ==
+  \A c \in RosterCacheKeyCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockRosterCacheSignerKeyExact ==
+  \A c \in SignerCacheKeyCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockRosterCacheSignerLifecycleExact ==
+  \A c \in SignerCacheLifecycleCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockRosterCacheSignerLookupExact ==
+  \A c \in SignerCacheLookupCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockRosterCacheSignerInsertEvictExact ==
+  \A c \in SignerCacheInsertEvictCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockRosterCacheSignerRemovalExact ==
+  \A c \in SignerCacheRemovalCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockRosterCacheSelectionLifecycleExact ==
+  \A c \in RosterSelectionCacheLifecycleCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockRosterCacheSelectionLookupExact ==
+  \A c \in RosterSelectionCacheLookupCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockRosterCacheSelectionInsertEvictExact ==
+  \A c \in RosterSelectionCacheInsertEvictCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockRosterCacheExactness ==
+  /\ BlockRosterCacheRosterKeyExact
+  /\ BlockRosterCacheSignerKeyExact
+  /\ BlockRosterCacheSignerLifecycleExact
+  /\ BlockRosterCacheSignerLookupExact
+  /\ BlockRosterCacheSignerInsertEvictExact
+  /\ BlockRosterCacheSignerRemovalExact
+  /\ BlockRosterCacheSelectionLifecycleExact
+  /\ BlockRosterCacheSelectionLookupExact
+  /\ BlockRosterCacheSelectionInsertEvictExact
 
 BugRosterKeyAcceptsNoArtifacts ==
   ImplementationActions(RosterKeyRejectsNoArtifacts) =

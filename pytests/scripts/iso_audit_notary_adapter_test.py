@@ -264,6 +264,18 @@ def capture_redirect_server(body=b"redirect"):
 
 
 class IsoAuditNotaryAdapterTest(unittest.TestCase):
+    def test_persisted_record_sources_require_records_array(self):
+        with self.assertRaisesRegex(
+            ADAPTER.AdapterError,
+            "anchor.records must be an array",
+        ):
+            ADAPTER._verify_persisted_record_sources(
+                {},
+                None,
+                "anchor",
+                allow_missing_record_sources=False,
+            )
+
     def test_secret_looking_unknown_keys_are_rejected_without_echo(self):
         cases = (
             ("password_audit_unknown_secret", "audit_unknown_secret"),
@@ -446,6 +458,38 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             )
             self.assertEqual(receipts[0].stat().st_mode & 0o077, 0)
             self.assertEqual(list(receipt_dir.glob(".iso-*.tmp")), [])
+
+    def test_zero_record_anchor_is_rejected_before_network_delivery(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            export_dir = root / "export"
+            export_dir.mkdir()
+            empty_index = with_digest(
+                {"version": 1, "record_count": 0, "records": []},
+                ADAPTER.INDEX_DIGEST_FIELD,
+            )
+            write_export(
+                export_dir,
+                index=empty_index,
+                store_dir=root / "store",
+                write_record_sources_flag=True,
+            )
+
+            with capture_server() as (endpoint, requests):
+                rc, stdout, stderr = run_main(
+                    [
+                        "--export-dir",
+                        str(export_dir),
+                        "--endpoint",
+                        endpoint,
+                        "--allow-insecure-http",
+                    ]
+                )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertEqual(requests, [])
+            self.assertIn("record_count must be positive", stderr)
 
     def test_available_persisted_record_sources_are_verified_before_network_delivery(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -682,6 +726,47 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
             rewrite_digest_correct_record_source(export_dir, index, store_dir, mutate)
 
+        def status_history_state_code_mismatch(export_dir, index, store_dir):
+            def mutate(source):
+                forged_entry = dict(source["status_history"][-1])
+                forged_entry["status"] = "Rejected"
+                forged_entry["pacs002_code"] = "ACSP"
+                source["status_history"].insert(0, forged_entry)
+
+            rewrite_digest_correct_record_source(export_dir, index, store_dir, mutate)
+
+        def missing_persisted_record_nullable_key(export_dir, index, store_dir):
+            rewrite_digest_correct_record_source(
+                export_dir,
+                index,
+                store_dir,
+                lambda source: source.pop("detail"),
+            )
+
+        def missing_persisted_context_nullable_key(export_dir, index, store_dir):
+            rewrite_digest_correct_record_source(
+                export_dir,
+                index,
+                store_dir,
+                lambda source: source["context"].pop("ledger_id"),
+            )
+
+        def missing_persisted_metadata_nullable_key(export_dir, index, store_dir):
+            rewrite_digest_correct_record_source(
+                export_dir,
+                index,
+                store_dir,
+                lambda source: source["metadata"].pop("business_service"),
+            )
+
+        def missing_persisted_history_nullable_key(export_dir, index, store_dir):
+            rewrite_digest_correct_record_source(
+                export_dir,
+                index,
+                store_dir,
+                lambda source: source["status_history"][0].pop("reason_code"),
+            )
+
         cases = [
             (
                 "digest_correct_source_mismatch",
@@ -702,6 +787,31 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 "status_history_timestamp_moves_backwards",
                 status_history_timestamp_moves_backwards,
                 "status_history[1].updated_at_ms must not move backwards",
+            ),
+            (
+                "status_history_state_code_mismatch",
+                status_history_state_code_mismatch,
+                "status_history[0].pacs002_code is not valid for Rejected status",
+            ),
+            (
+                "missing_persisted_record_nullable_key",
+                missing_persisted_record_nullable_key,
+                "is missing required keys: detail",
+            ),
+            (
+                "missing_persisted_context_nullable_key",
+                missing_persisted_context_nullable_key,
+                "context is missing required keys: ledger_id",
+            ),
+            (
+                "missing_persisted_metadata_nullable_key",
+                missing_persisted_metadata_nullable_key,
+                "metadata is missing required keys: business_service",
+            ),
+            (
+                "missing_persisted_history_nullable_key",
+                missing_persisted_history_nullable_key,
+                "status_history[0] is missing required keys: reason_code",
             ),
             (
                 "missing_record_source",
@@ -1264,6 +1374,15 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             ("https://notary.example/anchor;debug", False),
             ("https://notary.example/anchor?token=abc", False),
             ("https://notary.example/anchor#receipt", False),
+            ("https://notary.example/anchor", False),
+            ("https://notary.example.com/anchor", False),
+            ("https://notary.example.net/anchor", False),
+            ("https://notary.example.org/anchor", False),
+            ("https://notary.example.invalid/anchor", False),
+            (
+                "https://notary.swift-cbpr-plus.operator-canary.bank/anchor",
+                False,
+            ),
             ("https:///anchor", False),
             ("https://[::1", False),
             ("https://notary.example/anc\nhor", False),
@@ -1308,6 +1427,11 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             ("http://127.0.0.1:80/anchor", True),
             ("http://127.000.000.001/anchor", True),
             ("http://127.0.0.1/archive//anchor", True),
+            ("http://notary.example.invalid/anchor", True),
+            (
+                "http://notary.swift-cbpr-plus.operator-canary.bank/anchor",
+                True,
+            ),
         ]
         with tempfile.TemporaryDirectory() as raw_export:
             export_dir = Path(raw_export)
@@ -1499,21 +1623,24 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                         store_dir=store_dir,
                         write_record_sources_flag=True,
                     )
-                    old_limit = ADAPTER.MAX_AUDIT_EXPORT_JSON_BYTES
+                    old_audit_limit = ADAPTER.MAX_AUDIT_EXPORT_JSON_BYTES
+                    old_record_limit = ADAPTER.MAX_PERSISTED_RECORD_JSON_BYTES
                     try:
-                        ADAPTER.MAX_AUDIT_EXPORT_JSON_BYTES = 128
                         oversized = '{"version":1,"padding":"' + ("a" * 128) + '"}'
                         if name == "latest-anchor":
+                            ADAPTER.MAX_AUDIT_EXPORT_JSON_BYTES = 128
                             (export_dir / ADAPTER.LATEST_ANCHOR_FILE).write_text(
                                 oversized,
                                 encoding="utf-8",
                             )
                         elif name == "audit-index":
+                            ADAPTER.MAX_AUDIT_EXPORT_JSON_BYTES = 128
                             (export_dir / ADAPTER.INDEX_FILE).write_text(
                                 oversized,
                                 encoding="utf-8",
                             )
                         else:
+                            ADAPTER.MAX_PERSISTED_RECORD_JSON_BYTES = 128
                             record_path = next(
                                 (store_dir / ADAPTER.RECORDS_DIR).glob("*.json")
                             )
@@ -1530,7 +1657,8 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                                 ]
                             )
                     finally:
-                        ADAPTER.MAX_AUDIT_EXPORT_JSON_BYTES = old_limit
+                        ADAPTER.MAX_AUDIT_EXPORT_JSON_BYTES = old_audit_limit
+                        ADAPTER.MAX_PERSISTED_RECORD_JSON_BYTES = old_record_limit
 
                     self.assertEqual(rc, 2)
                     self.assertEqual(requests, [])
@@ -1736,6 +1864,16 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 "state must not have surrounding whitespace",
             ),
             (
+                "unsupported-state",
+                lambda record: record.update({"state": "Settled"}),
+                "state must be Pending, Accepted, or Rejected",
+            ),
+            (
+                "state-code-mismatch",
+                lambda record: record.update({"state": "Rejected", "pacs002_code": "ACSP"}),
+                "pacs002_code is not valid for Rejected state",
+            ),
+            (
                 "bad-updated-at",
                 lambda record: record.update({"updated_at_ms": -1}),
                 "updated_at_ms must be a non-negative integer",
@@ -1769,6 +1907,27 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(expected, stderr)
+
+    def test_audit_index_records_require_nullable_summary_keys(self):
+        with tempfile.TemporaryDirectory() as raw_export:
+            export_dir = Path(raw_export)
+            index = sample_index()
+            index["records"][0].pop("uetr")
+            index = with_digest(index, ADAPTER.INDEX_DIGEST_FIELD)
+            anchor = sample_anchor(index)
+            write_export(
+                export_dir,
+                index=index,
+                anchor=anchor,
+                write_record_sources_flag=False,
+            )
+
+            rc, _stdout, stderr = run_main(
+                ["--export-dir", str(export_dir), "--dry-run"]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("records[0] is missing required keys: uetr", stderr)
 
     def test_duplicate_audit_index_records_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_export:
@@ -1883,13 +2042,17 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
     def test_secret_looking_remote_response_preview_is_redacted(self):
         cases = (
-            b'{"error":"private_key=notary-secret"}',
-            b'{"error":"password=notary-secret"}',
-            b'{"error":"%70assword%253Dnotary-secret"}',
-            b'{"error":"private-key=notary-secret"}',
-            b'{"error":"Set-Cookie: notary-secret"}',
+            (b'{"error":"private_key=notary-secret"}', "notary-secret"),
+            (b'{"error":"password=notary-secret"}', "notary-secret"),
+            (b'{"error":"%70assword%253Dnotary-secret"}', "notary-secret"),
+            (b'{"error":"private-key=notary-secret"}', "notary-secret"),
+            (b'{"error":"Set-Cookie: notary-secret"}', "notary-secret"),
+            (
+                b'{"error":"token-notary-response-secret"}',
+                "notary-response-secret",
+            ),
         )
-        for body in cases:
+        for body, hidden in cases:
             with self.subTest(body=body):
                 with tempfile.TemporaryDirectory() as raw_export:
                     export_dir = Path(raw_export)
@@ -1922,7 +2085,7 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                         receipt["response_body_preview"],
                         ADAPTER.REDACTED_RESPONSE_PREVIEW,
                     )
-                    self.assertNotIn("notary-secret", receipt_text)
+                    self.assertNotIn(hidden, receipt_text)
 
     def test_secret_looking_url_error_is_redacted(self):
         self.assertEqual(
@@ -1939,6 +2102,10 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
         )
         self.assertEqual(
             ADAPTER._receipt_error("upstream private-key=notary-secret"),
+            ADAPTER.REDACTED_ERROR,
+        )
+        self.assertEqual(
+            ADAPTER._receipt_error("upstream token-notary-url-secret"),
             ADAPTER.REDACTED_ERROR,
         )
         self.assertEqual(ADAPTER._receipt_error("connection refused"), "connection refused")

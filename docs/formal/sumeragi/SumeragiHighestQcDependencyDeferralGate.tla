@@ -276,15 +276,37 @@ DeferralDoesNotAcceptSlot ==
     /\ NoSlotObserved \in ImplementationActions(c)
     /\ NoHighestUpdate \in ImplementationActions(c)
 
-NoBugInvariant ==
+HighestQcActionSetExact ==
   /\ ActionsMatchSpec
+
+HighestQcForceDecisionExact ==
   /\ ForceFetchDecisionMatchesPendingState
+
+HighestQcNoLockLagDeferralExact ==
   /\ NonLockLagUsesExactOrForcedFetchWithoutRangePull
+
+HighestQcLockLagRecoveryExact ==
   /\ LockLagReanchorsRecovery
   /\ KnownLockLagDoesNotLeaveMissingDependency
+
+HighestQcLockRejectedSuppressionExact ==
   /\ LockRejectedDependencyStaysSuppressed
+
+HighestQcDeferralSideEffectsExact ==
   /\ DeferralDoesNotAcceptSlot
 
-SafetyFast == NoBugInvariant
+HighestQcDependencyDeferralExactness ==
+  /\ HighestQcActionSetExact
+  /\ HighestQcForceDecisionExact
+  /\ HighestQcNoLockLagDeferralExact
+  /\ HighestQcLockLagRecoveryExact
+  /\ HighestQcLockRejectedSuppressionExact
+  /\ HighestQcDeferralSideEffectsExact
+
+NoBugInvariant ==
+  HighestQcDependencyDeferralExactness
+
+SafetyFast ==
+  HighestQcDependencyDeferralExactness
 
 ====

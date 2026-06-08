@@ -41,10 +41,16 @@ const PRODUCTION_CLAIM_ATTACHMENT_BACKENDS: &[&str] = &[
     "halo2/ipa:production-ready",
     "halo2/ipa:claimed-production",
     "halo2/ipa:mainnet-ready",
+    "halo2/ipa:release-ready",
+    "halo2/ipa:certified-mainnet",
+    "halo2/ipa:third-party-audited",
     "stark/fri/audit-signoff",
     "stark/fri/externally-audited",
+    "stark/fri/boi-audited",
+    "stark/fri/external-security-review",
     "stark/fri/security-review-passed",
     "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+    "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
     "stark/fri/a-u-d-i-t-c-l-a-i-m",
 ];
 

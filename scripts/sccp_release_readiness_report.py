@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import shlex
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
@@ -15,6 +16,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 ALL_LANES_SCRIPT = ROOT / "scripts" / "sccp_all_lanes_evidence.py"
+VERIFY_RELEASE_BUNDLE_SCRIPT = ROOT / "scripts" / "sccp_verify_release_bundle.py"
 ACTIVE_LAUNCH_DOMAIN = 1
 ACTIVE_LAUNCH_CHAIN = "eth"
 ACTIVE_LAUNCH_POLICY = "EthereumMainnetLane"
@@ -86,6 +88,12 @@ NATIVE_EVM_PROVER_PARITY_SDK_RESULT_KEYS = {
     "calldata_hash",
     "torii_submit_payload_hash",
 }
+NATIVE_EVM_PROVER_PARITY_HASH_ROLE_KEYS = (
+    "receipt_proof_hash",
+    "source_proof_hash",
+    "calldata_hash",
+    "torii_submit_payload_hash",
+)
 NATIVE_EVM_PROVER_SELF_TEST_SCHEMA = (
     "sccp-ethereum-mainnet-native-evm-prover-self-test-v1"
 )
@@ -116,6 +124,14 @@ NATIVE_EVM_PROVER_SELF_TEST_SDK_RESULT_KEYS = {
     "calldata_hash",
     "torii_submit_payload_hash",
 }
+NATIVE_EVM_PROVER_SELF_TEST_HASH_ROLE_KEYS = (
+    "request_hash",
+    "witness_hash",
+    "source_proof_hash",
+    "proof_hash",
+    "calldata_hash",
+    "torii_submit_payload_hash",
+)
 NATIVE_EVM_PROVER_BUNDLE_REQUIRED_KEYS = {
     "schema",
     "bundle_id",
@@ -157,6 +173,21 @@ NATIVE_EVM_PROVER_FORBIDDEN_PAYLOAD_MARKERS = (
     b"proverendpoint",
     b"prover endpoint",
 )
+NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS = (
+    "webassembly",
+    "wasm",
+    "snarkjs",
+    "remoteprover",
+    "remote-prover",
+    "remote_prover",
+    "remote prover",
+    "prover-url",
+    "prover_url",
+    "proverendpoint",
+    "prover-endpoint",
+    "prover_endpoint",
+    "prover endpoint",
+)
 NATIVE_EVM_PROVER_MIN_PAYLOAD_BYTES = 256
 
 
@@ -184,6 +215,500 @@ def _load_json_without_duplicate_keys(path: Path) -> Any:
     )
 
 
+def _load_release_bundle_verify_helpers() -> Any:
+    """Load release-bundle verifier helpers used by readiness source gates."""
+
+    spec = importlib.util.spec_from_file_location(
+        "sccp_release_bundle_verify_helpers_for_readiness_report",
+        VERIFY_RELEASE_BUNDLE_SCRIPT,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("release-bundle verifier helper module cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _sccp_proof_request_bundle_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for SCCP proof-request bundle gates."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_sccp_proof_request_bundle_gate_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP proof-request bundle/source-proof gate source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_retired_network_surface_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for retired network-surface guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_sccp_retired_network_surface_guard_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP retired network-surface guard source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_launch_scope_constant_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for SCCP launch-scope constants."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_sccp_launch_scope_constant_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP launch-scope constants source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_launch_policy_selector_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for the Ethereum launch-policy selector."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_ethereum_launch_policy_selector_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet launch-policy selector source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_launch_policy_documentation_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+    forbidden_markers: tuple[str, ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for active Ethereum launch-policy docs."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_launch_policy_documentation_inventory_errors",
+        )
+        if inventory is None and forbidden_markers is None:
+            return list(helper())
+        return list(helper(inventory, forbidden_markers))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet launch-policy documentation source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_public_discovery_documentation_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+    forbidden_markers: tuple[str, ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for public SCCP discovery docs."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_public_discovery_documentation_inventory_errors",
+        )
+        if inventory is None and forbidden_markers is None:
+            return list(helper())
+        return list(helper(inventory, forbidden_markers))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP public discovery documentation source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_data_collection_no_proxy_gate_inventory_errors(
+    regions: dict[str, tuple[str | Path, str, str, tuple[str, ...]]] | None = None,
+) -> list[str]:
+    """Return SCCP Ethereum no-proxy data-collection source inventory errors."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_ethereum_data_collection_no_proxy_inventory_errors")
+        if regions is None:
+            return list(helper())
+        return list(helper(regions))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet no-proxy data-collection source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_native_receipt_finality_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for native receipt-proof finality guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_native_receipt_finality_guard_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet native receipt finality source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_beacon_rest_finalized_header_shape_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Beacon REST finalized-header guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_beacon_rest_finalized_header_shape_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet Beacon REST finalized-header shape source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_beacon_rest_execution_payload_binding_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Beacon REST execution-payload guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_beacon_rest_execution_payload_binding_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet Beacon REST execution payload binding source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_sync_committee_roster_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Ethereum sync-committee rosters."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_ethereum_sync_committee_roster_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet sync-committee roster source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _sccp_unready_transparent_proof_config_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+    forbidden_paths: tuple[str | Path, ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for config-owned unready proof toggles."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_sccp_unready_transparent_proof_config_inventory_errors",
+        )
+        if inventory is None and forbidden_paths is None:
+            return list(helper())
+        return list(helper(inventory, forbidden_paths))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP unready transparent-proof config-only source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_source_bridge_config_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return SCCP Ethereum source-bridge config source inventory errors."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_ethereum_source_bridge_config_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet source-bridge config source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_evm_source_adapter_deployment_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Ethereum EVM source-adapter gates."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_evm_source_adapter_deployment_gate_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet EVM source-adapter deployment gate source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _contract_smoke_eth_mainnet_network_id_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return SCCP EVM contract smoke Ethereum mainnet network-id source inventory errors."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_contract_smoke_eth_mainnet_network_id_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "EVM contract smoke Ethereum mainnet network id source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _contract_smoke_evm_production_surface_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return SCCP EVM contract smoke production-surface source inventory errors."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_contract_smoke_evm_production_surface_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "EVM contract smoke production surface source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_core_range_finality_binding_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Core range/finality binding."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_core_range_finality_binding_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet SCCP range finality binding source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_core_message_replay_guard_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Core message replay guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_core_message_replay_guard_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet SCCP message replay guard source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_torii_pinned_message_proof_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Torii pinned message proofs."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_torii_pinned_message_proof_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet Torii pinned message proof source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_evm_source_live_production_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Ethereum live source evidence."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_evm_source_live_production_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet live EVM source production source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_evm_live_destination_production_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Ethereum live destination evidence."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_evm_live_destination_production_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet live EVM destination production source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_route_canary_finalized_receipt_block_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Ethereum route-canary finality."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_ethereum_route_canary_finalized_receipt_block_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet route-canary finalized receipt block source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _ethereum_evm_block_tag_metadata_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for Ethereum EVM block-tag metadata."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_ethereum_evm_block_tag_metadata_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet EVM block-tag metadata source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
+def _native_sccp_no_wasm_readiness_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for native no-WASM/no-remote readiness."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_native_sccp_no_wasm_readiness_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "native SCCP no-WASM/no-remote readiness source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
 PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "rust-sccp": ("cargo test -p iroha_sccp -- --nocapture",),
     "evidence-scripts": (
@@ -205,6 +730,7 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
         "pytests/scripts/sccp_ton_source_state_evidence_test.py",
         "pytests/scripts/sccp_tron_live_evidence_test.py",
         "pytests/scripts/sccp_tron_source_bridge_evidence_test.py",
+        "pytests/scripts/sccp_retired_network_surface_test.py",
     ),
     "js-sdk": (
         "--test javascript/iroha_js/test/sccpSolanaProver.test.js",
@@ -224,11 +750,13 @@ PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS: dict[str, tuple[str, ...]] = {
     "kotlin-sdk": (
         "java -version",
         "./gradlew :core-jvm:test --console=plain --tests org.hyperledger.iroha.sdk.sccp.",
+        "org.hyperledger.iroha.sdk.sccp.TonSccpProverTest",
     ),
     "java-android": (
         "java -version",
         "ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.sccp.EvmSccpProverTests",
         "org.hyperledger.iroha.android.sccp.SourceSccpProofsTests",
+        "org.hyperledger.iroha.android.sccp.TonSccpProverTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.GradleHarnessTests",
         "./gradlew :core:test --console=plain --tests org.hyperledger.iroha.android.sccp.SolanaSccpProverTests",
     ),
@@ -972,8 +1500,18 @@ def _native_evm_manifest_relative_path(
             f"{prefix} path contains Markdown-unsafe character "
             f"{markdown_unsafe_character}: {value!r}"
         ]
+    if ":" in value:
+        return None, [
+            f"{prefix} path must not contain URI schemes or drive prefixes"
+        ]
     if "\\" in value:
         return None, [f"{prefix} path must use POSIX separators"]
+    normalized_value = value.lower()
+    for marker in NATIVE_EVM_PROVER_FORBIDDEN_PATH_MARKERS:
+        if marker in normalized_value:
+            return None, [
+                f"{prefix} path contains forbidden prover dependency marker: {marker}"
+            ]
     path = PurePosixPath(value)
     if (
         path.is_absolute()
@@ -1218,6 +1756,13 @@ def _native_evm_prover_parity_fixture_status(
             blockers.append(
                 f"{prefix} {key} must be a canonical non-zero 32-byte hex value"
             )
+    blockers.extend(
+        _native_evm_prover_fixture_hash_role_blockers(
+            prefix,
+            fixture,
+            NATIVE_EVM_PROVER_PARITY_HASH_ROLE_KEYS,
+        )
+    )
 
     public_signal_words = fixture.get("public_signal_words")
     if not isinstance(public_signal_words, list) or len(public_signal_words) != 9:
@@ -1371,6 +1916,13 @@ def _native_evm_prover_self_test_status(
             blockers.append(
                 f"{prefix} {key} must be a canonical non-zero 32-byte hex value"
             )
+    blockers.extend(
+        _native_evm_prover_fixture_hash_role_blockers(
+            prefix,
+            fixture,
+            NATIVE_EVM_PROVER_SELF_TEST_HASH_ROLE_KEYS,
+        )
+    )
 
     public_signal_words = fixture.get("public_signal_words")
     if not isinstance(public_signal_words, list) or len(public_signal_words) != 9:
@@ -1429,6 +1981,25 @@ def _native_evm_prover_self_test_status(
         _native_evm_prover_forbidden_payload_blockers(artifact_path, label)
     )
     return artifact, blockers
+
+
+def _native_evm_prover_fixture_hash_role_blockers(
+    prefix: str,
+    fixture: dict[str, Any],
+    roles: tuple[str, ...],
+) -> list[str]:
+    blockers: list[str] = []
+    seen: dict[str, str] = {}
+    for role in roles:
+        value = fixture.get(role)
+        if not _is_nonzero_hex32(value):
+            continue
+        previous_role = seen.get(value)
+        if previous_role is not None:
+            blockers.append(f"{prefix} {role} must not reuse {previous_role}")
+            continue
+        seen[value] = role
+    return blockers
 
 
 def _native_evm_prover_hash_role_blockers(payload: dict[str, Any]) -> list[str]:
@@ -1724,26 +2295,40 @@ def _phase_log_from_dir(directory: Path, phase: str) -> Path:
 
 def _phase_transcript_block(phase: str, transcript: str) -> str | None:
     marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
-    start = transcript.find(marker)
-    if start < 0:
+    lines = transcript.splitlines()
+    start: int | None = None
+    for index, line in enumerate(lines):
+        if line == marker:
+            start = index
+            break
+    if start is None:
         return None
-    next_start = transcript.find(CORRIDOR_PHASE_MARKER_PREFIX, start + len(marker))
-    if next_start < 0:
-        next_start = len(transcript)
-    return transcript[start:next_start]
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        if lines[index].startswith(CORRIDOR_PHASE_MARKER_PREFIX):
+            end = index
+            break
+    return "\n".join(lines[start:end])
 
 
 def _transcript_has_full_corridor_completion(transcript: str) -> bool:
-    completion = transcript.rfind(CORRIDOR_COMPLETION_SENTINEL)
-    if completion < 0:
-        return False
-    marker_positions = [
-        transcript.find(f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}")
-        for phase in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS
+    lines = transcript.splitlines()
+    marker_positions: list[int] = []
+    for phase in PHASE_TRANSCRIPT_REQUIRED_FRAGMENTS:
+        marker = f"{CORRIDOR_PHASE_MARKER_PREFIX}{phase}"
+        try:
+            marker_positions.append(lines.index(marker))
+        except ValueError:
+            return False
+    completion_positions = [
+        index
+        for index, line in enumerate(lines)
+        if CORRIDOR_COMPLETION_SENTINEL in line
+        and not line.lstrip().startswith("+ ")
     ]
-    if any(position < 0 for position in marker_positions):
-        return False
-    return completion > max(marker_positions)
+    return bool(completion_positions) and max(completion_positions) > max(
+        marker_positions
+    )
 
 
 def _phase_command_lines(phase_block: str) -> list[str]:
@@ -1754,8 +2339,215 @@ def _phase_command_lines(phase_block: str) -> list[str]:
     ]
 
 
-def _phase_block_has_command_fragment(phase_block: str, fragment: str) -> bool:
-    return any(fragment in command for command in _phase_command_lines(phase_block))
+def _phase_command_tokens(command: str) -> list[str]:
+    command = command.strip()
+    if command.startswith("+ "):
+        command = command[2:]
+    try:
+        return [
+            normalized
+            for token in shlex.split(command)
+            if (normalized := token.strip("()"))
+        ]
+    except ValueError:
+        return []
+
+
+def _command_token_basename(token: str) -> str:
+    return PurePosixPath(token).name
+
+
+def _command_token_is_env_assignment(token: str) -> bool:
+    name, separator, _ = token.partition("=")
+    return bool(separator and name and name.replace("_", "").isalnum())
+
+
+def _phase_effective_command_tokens(command: str) -> list[str]:
+    tokens = _phase_command_tokens(command)
+    if "&&" in tokens:
+        tokens = tokens[tokens.index("&&") + 1 :]
+    if tokens[:1] == ["env"]:
+        tokens = tokens[1:]
+    while tokens and _command_token_is_env_assignment(tokens[0]):
+        tokens = tokens[1:]
+    return tokens
+
+
+def _effective_command_starts_with(command: str, sequence: tuple[str, ...]) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    return tuple(tokens[: len(sequence)]) == sequence
+
+
+def _rust_sccp_command_has_fragment(command: str, _fragment: str) -> bool:
+    return _effective_command_starts_with(
+        command,
+        ("cargo", "test", "-p", "iroha_sccp", "--", "--nocapture"),
+    )
+
+
+def _evidence_pytest_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or not _command_token_basename(tokens[0]).startswith("python"):
+        return False
+    module_index = next(
+        (
+            index
+            for index in range(len(tokens) - 1)
+            if tokens[index] == "-m" and tokens[index + 1] == "pytest"
+        ),
+        None,
+    )
+    if module_index is None or "-q" not in tokens[module_index + 2 :]:
+        return False
+    if fragment.startswith("pytests/"):
+        return fragment in tokens
+    if fragment.startswith("python/"):
+        return fragment in tokens
+    if fragment.startswith("-m pytest"):
+        return all(part in tokens for part in shlex.split(fragment))
+    return fragment in command
+
+
+def _js_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or _command_token_basename(tokens[0]) != "node" or "--test" not in tokens:
+        return False
+    if fragment.startswith("--test "):
+        return all(part in tokens for part in shlex.split(fragment))
+    return fragment in tokens
+
+
+def _swift_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    if not _effective_command_starts_with(command, ("swift", "test")):
+        return False
+    tokens = _phase_effective_command_tokens(command)
+    if fragment.startswith("swift test "):
+        return all(part in tokens for part in shlex.split(fragment))
+    return fragment in tokens
+
+
+def _kotlin_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if fragment == "java -version":
+        return tuple(tokens[:2]) == ("java", "-version")
+    if not tokens or _command_token_basename(tokens[0]) != "gradlew":
+        return False
+    if fragment.startswith("./gradlew "):
+        return (
+            ":core-jvm:test" in tokens
+            and "--tests" in tokens
+            and any(token.startswith("org.hyperledger.iroha.sdk.sccp.") for token in tokens)
+        )
+    if fragment.startswith("org.hyperledger.iroha.sdk.sccp."):
+        return fragment in tokens
+    return (
+        ":core-jvm:test" in tokens
+        and "--tests" in tokens
+        and any(token.startswith("org.hyperledger.iroha.sdk.sccp.") for token in tokens)
+    )
+
+
+def _java_android_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if fragment == "java -version":
+        return tuple(tokens[:2]) == ("java", "-version")
+    if not tokens or _command_token_basename(tokens[0]) != "gradlew" or ":core:test" not in tokens:
+        return False
+    all_tokens = _phase_command_tokens(command)
+    if fragment.startswith("ANDROID_HARNESS_MAINS="):
+        return any(token.startswith(fragment) for token in all_tokens)
+    if (
+        fragment.startswith("org.hyperledger.iroha.android.sccp.")
+        and fragment.endswith("Tests")
+    ):
+        return any(
+            token.startswith("ANDROID_HARNESS_MAINS=") and fragment in token
+            for token in all_tokens
+        )
+    return all(part in tokens for part in shlex.split(fragment))
+
+
+def _dotnet_sdk_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if not tokens or _command_token_basename(tokens[0]) != "dotnet":
+        return False
+    if fragment.startswith("FullyQualifiedName"):
+        normalized_fragment = fragment.replace("\\|", "|")
+        return "--filter" in tokens and any(
+            token.replace("\\|", "|") == normalized_fragment for token in tokens
+        )
+    if fragment.startswith("dotnet test "):
+        return all(part in tokens for part in shlex.split(fragment)[1:])
+    return all(part in tokens for part in shlex.split(fragment))
+
+
+def _contract_smoke_command_has_fragment(command: str, fragment: str) -> bool:
+    tokens = _phase_effective_command_tokens(command)
+    if fragment.startswith("--check "):
+        return (
+            bool(tokens)
+            and _command_token_basename(tokens[0]) == "node"
+            and all(part in tokens for part in shlex.split(fragment))
+        )
+    return _effective_command_starts_with(command, ("bash", "scripts/sccp_evm_contract_smoke.sh"))
+
+
+def _core_admission_command_has_fragment(command: str, _fragment: str) -> bool:
+    return _effective_command_starts_with(
+        command,
+        ("cargo", "test", "-p", "iroha_core", "--test", "bridge_proofs", "--", "--nocapture"),
+    )
+
+
+def _phase_command_matches_required_fragment(
+    phase: str,
+    command: str,
+    fragment: str,
+) -> bool:
+    if command == f"+ {fragment}":
+        return True
+    if fragment not in command:
+        return False
+    if phase == "evidence-scripts":
+        return _evidence_pytest_command_has_fragment(command, fragment)
+    if phase == "rust-sccp":
+        return _rust_sccp_command_has_fragment(command, fragment)
+    if phase == "js-sdk":
+        return _js_sdk_command_has_fragment(command, fragment)
+    if phase == "python-sdk":
+        return _evidence_pytest_command_has_fragment(command, fragment)
+    if phase == "swift-sdk":
+        return _swift_sdk_command_has_fragment(command, fragment)
+    if phase == "kotlin-sdk":
+        return _kotlin_sdk_command_has_fragment(command, fragment)
+    if phase == "java-android":
+        return _java_android_command_has_fragment(command, fragment)
+    if phase == "dotnet-sdk":
+        return _dotnet_sdk_command_has_fragment(command, fragment)
+    if phase == "contract-smoke":
+        return _contract_smoke_command_has_fragment(command, fragment)
+    if phase == "core-admission":
+        return _core_admission_command_has_fragment(command, fragment)
+    return True
+
+
+def _phase_block_has_command_fragment(
+    phase: str,
+    phase_block: str,
+    fragment: str,
+) -> bool:
+    return any(
+        _phase_command_matches_required_fragment(phase, command, fragment)
+        for command in _phase_command_lines(phase_block)
+    )
+
+
+def _phase_block_has_output_fragment(phase_block: str, fragment: str) -> bool:
+    return any(
+        fragment in line
+        for line in phase_block.splitlines()
+        if not line.lstrip().startswith("+ ")
+    )
 
 
 def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
@@ -1771,7 +2563,9 @@ def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
     if phase_block is None:
         errors.append("evidence artifact is missing the phase marker")
     elif (
-        CORRIDOR_COMPLETION_SENTINEL not in phase_block
+        not _phase_block_has_output_fragment(
+            phase_block, CORRIDOR_COMPLETION_SENTINEL
+        )
         and not _transcript_has_full_corridor_completion(transcript)
     ):
         errors.append(
@@ -1782,7 +2576,7 @@ def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
         errors.append("evidence artifact has no expected command fragment configured")
     elif phase_block is not None:
         for fragment in required_fragments:
-            if not _phase_block_has_command_fragment(phase_block, fragment):
+            if not _phase_block_has_command_fragment(phase, phase_block, fragment):
                 errors.append(
                     "evidence artifact is missing expected phase-block command: "
                     f"{fragment}"
@@ -1792,7 +2586,7 @@ def _phase_transcript_errors(phase: str, artifact: dict[str, Any]) -> list[str]:
         errors.append("evidence artifact has no expected success fragment configured")
     elif phase_block is not None:
         for fragment in success_fragments:
-            if fragment not in phase_block:
+            if not _phase_block_has_output_fragment(phase_block, fragment):
                 errors.append(
                     "evidence artifact is missing expected phase-block success marker: "
                     f"{fragment}"
@@ -2112,6 +2906,270 @@ def _build_report(
         native_evm_prover_bundle,
         evidence,
     )
+    proof_request_bundle_gate_blockers = (
+        _sccp_proof_request_bundle_gate_inventory_errors()
+    )
+    retired_network_surface_gate_blockers = (
+        _sccp_retired_network_surface_gate_inventory_errors()
+    )
+    launch_scope_constant_gate_blockers = (
+        _sccp_launch_scope_constant_gate_inventory_errors()
+    )
+    ethereum_launch_policy_selector_gate_blockers = (
+        _ethereum_launch_policy_selector_gate_inventory_errors()
+    )
+    ethereum_launch_policy_documentation_gate_blockers = (
+        _ethereum_launch_policy_documentation_gate_inventory_errors()
+    )
+    public_discovery_documentation_gate_blockers = (
+        _sccp_public_discovery_documentation_gate_inventory_errors()
+    )
+    ethereum_data_collection_no_proxy_gate_blockers = (
+        _ethereum_data_collection_no_proxy_gate_inventory_errors()
+    )
+    ethereum_native_receipt_finality_gate_blockers = (
+        _ethereum_native_receipt_finality_gate_inventory_errors()
+    )
+    ethereum_beacon_rest_finalized_header_shape_gate_blockers = (
+        _ethereum_beacon_rest_finalized_header_shape_gate_inventory_errors()
+    )
+    ethereum_beacon_rest_execution_payload_binding_gate_blockers = (
+        _ethereum_beacon_rest_execution_payload_binding_gate_inventory_errors()
+    )
+    ethereum_sync_committee_roster_gate_blockers = (
+        _ethereum_sync_committee_roster_gate_inventory_errors()
+    )
+    unready_transparent_proof_config_gate_blockers = (
+        _sccp_unready_transparent_proof_config_gate_inventory_errors()
+    )
+    ethereum_source_bridge_config_gate_blockers = (
+        _ethereum_source_bridge_config_gate_inventory_errors()
+    )
+    ethereum_evm_source_adapter_deployment_gate_blockers = (
+        _ethereum_evm_source_adapter_deployment_gate_inventory_errors()
+    )
+    contract_smoke_eth_mainnet_network_id_gate_blockers = (
+        _contract_smoke_eth_mainnet_network_id_gate_inventory_errors()
+    )
+    contract_smoke_evm_production_surface_gate_blockers = (
+        _contract_smoke_evm_production_surface_gate_inventory_errors()
+    )
+    ethereum_core_range_finality_binding_gate_blockers = (
+        _ethereum_core_range_finality_binding_gate_inventory_errors()
+    )
+    ethereum_core_message_replay_guard_gate_blockers = (
+        _ethereum_core_message_replay_guard_gate_inventory_errors()
+    )
+    ethereum_torii_pinned_message_proof_gate_blockers = (
+        _ethereum_torii_pinned_message_proof_gate_inventory_errors()
+    )
+    ethereum_evm_source_live_production_gate_blockers = (
+        _ethereum_evm_source_live_production_gate_inventory_errors()
+    )
+    ethereum_evm_live_destination_production_gate_blockers = (
+        _ethereum_evm_live_destination_production_gate_inventory_errors()
+    )
+    ethereum_route_canary_finalized_receipt_block_gate_blockers = (
+        _ethereum_route_canary_finalized_receipt_block_gate_inventory_errors()
+    )
+    ethereum_evm_block_tag_metadata_gate_blockers = (
+        _ethereum_evm_block_tag_metadata_gate_inventory_errors()
+    )
+    native_sccp_no_wasm_readiness_gate_blockers = (
+        _native_sccp_no_wasm_readiness_gate_inventory_errors()
+    )
+    source_inventory = {
+        "launch_scope_constant_gate": {
+            "validation_status": (
+                "passed" if not launch_scope_constant_gate_blockers else "blocked"
+            ),
+            "validation_blockers": launch_scope_constant_gate_blockers,
+        },
+        "ethereum_launch_policy_selector_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_launch_policy_selector_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": ethereum_launch_policy_selector_gate_blockers,
+        },
+        "ethereum_launch_policy_documentation_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_launch_policy_documentation_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": ethereum_launch_policy_documentation_gate_blockers,
+        },
+        "public_discovery_documentation_gate": {
+            "validation_status": (
+                "passed"
+                if not public_discovery_documentation_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": public_discovery_documentation_gate_blockers,
+        },
+        "ethereum_data_collection_no_proxy_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_data_collection_no_proxy_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": ethereum_data_collection_no_proxy_gate_blockers,
+        },
+        "ethereum_native_receipt_finality_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_native_receipt_finality_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": ethereum_native_receipt_finality_gate_blockers,
+        },
+        "ethereum_beacon_rest_finalized_header_shape_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_beacon_rest_finalized_header_shape_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                ethereum_beacon_rest_finalized_header_shape_gate_blockers
+            ),
+        },
+        "ethereum_beacon_rest_execution_payload_binding_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_beacon_rest_execution_payload_binding_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                ethereum_beacon_rest_execution_payload_binding_gate_blockers
+            ),
+        },
+        "ethereum_sync_committee_roster_gate": {
+            "validation_status": (
+                "passed" if not ethereum_sync_committee_roster_gate_blockers else "blocked"
+            ),
+            "validation_blockers": ethereum_sync_committee_roster_gate_blockers,
+        },
+        "ethereum_source_bridge_config_gate": {
+            "validation_status": (
+                "passed" if not ethereum_source_bridge_config_gate_blockers else "blocked"
+            ),
+            "validation_blockers": ethereum_source_bridge_config_gate_blockers,
+        },
+        "ethereum_evm_source_adapter_deployment_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_evm_source_adapter_deployment_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": ethereum_evm_source_adapter_deployment_gate_blockers,
+        },
+        "contract_smoke_eth_mainnet_network_id_gate": {
+            "validation_status": (
+                "passed"
+                if not contract_smoke_eth_mainnet_network_id_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": contract_smoke_eth_mainnet_network_id_gate_blockers,
+        },
+        "contract_smoke_evm_production_surface_gate": {
+            "validation_status": (
+                "passed"
+                if not contract_smoke_evm_production_surface_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": contract_smoke_evm_production_surface_gate_blockers,
+        },
+        "ethereum_core_range_finality_binding_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_core_range_finality_binding_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": ethereum_core_range_finality_binding_gate_blockers,
+        },
+        "ethereum_core_message_replay_guard_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_core_message_replay_guard_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": ethereum_core_message_replay_guard_gate_blockers,
+        },
+        "ethereum_torii_pinned_message_proof_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_torii_pinned_message_proof_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": ethereum_torii_pinned_message_proof_gate_blockers,
+        },
+        "ethereum_evm_source_live_production_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_evm_source_live_production_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": ethereum_evm_source_live_production_gate_blockers,
+        },
+        "ethereum_evm_live_destination_production_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_evm_live_destination_production_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                ethereum_evm_live_destination_production_gate_blockers
+            ),
+        },
+        "ethereum_route_canary_finalized_receipt_block_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_route_canary_finalized_receipt_block_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": (
+                ethereum_route_canary_finalized_receipt_block_gate_blockers
+            ),
+        },
+        "ethereum_evm_block_tag_metadata_gate": {
+            "validation_status": (
+                "passed"
+                if not ethereum_evm_block_tag_metadata_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": ethereum_evm_block_tag_metadata_gate_blockers,
+        },
+        "native_sccp_no_wasm_readiness_gate": {
+            "validation_status": (
+                "passed"
+                if not native_sccp_no_wasm_readiness_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": native_sccp_no_wasm_readiness_gate_blockers,
+        },
+        "proof_request_bundle_gate": {
+            "validation_status": (
+                "passed" if not proof_request_bundle_gate_blockers else "blocked"
+            ),
+            "validation_blockers": proof_request_bundle_gate_blockers,
+        },
+        "retired_network_surface_gate": {
+            "validation_status": (
+                "passed" if not retired_network_surface_gate_blockers else "blocked"
+            ),
+            "validation_blockers": retired_network_surface_gate_blockers,
+        },
+        "unready_transparent_proof_config_gate": {
+            "validation_status": (
+                "passed"
+                if not unready_transparent_proof_config_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": unready_transparent_proof_config_gate_blockers,
+        }
+    }
     release_checklist = _active_launch_release_checklist(evidence, native_prover_bundle)
     failed_phases = [
         phase for phase, status in phase_status.items() if status != "passed"
@@ -2133,9 +3191,60 @@ def _build_report(
         and not missing_phase_evidence
         and not invalid_phase_evidence
     )
-    production_ready = bool(release_checklist["ready"]) and corridor_ready
+    production_ready = (
+        bool(release_checklist["ready"])
+        and corridor_ready
+        and not launch_scope_constant_gate_blockers
+        and not ethereum_launch_policy_selector_gate_blockers
+        and not ethereum_launch_policy_documentation_gate_blockers
+        and not public_discovery_documentation_gate_blockers
+        and not ethereum_data_collection_no_proxy_gate_blockers
+        and not ethereum_native_receipt_finality_gate_blockers
+        and not ethereum_beacon_rest_finalized_header_shape_gate_blockers
+        and not ethereum_beacon_rest_execution_payload_binding_gate_blockers
+        and not ethereum_sync_committee_roster_gate_blockers
+        and not ethereum_source_bridge_config_gate_blockers
+        and not ethereum_evm_source_adapter_deployment_gate_blockers
+        and not contract_smoke_eth_mainnet_network_id_gate_blockers
+        and not contract_smoke_evm_production_surface_gate_blockers
+        and not ethereum_core_range_finality_binding_gate_blockers
+        and not ethereum_core_message_replay_guard_gate_blockers
+        and not ethereum_torii_pinned_message_proof_gate_blockers
+        and not ethereum_evm_source_live_production_gate_blockers
+        and not ethereum_evm_live_destination_production_gate_blockers
+        and not ethereum_route_canary_finalized_receipt_block_gate_blockers
+        and not ethereum_evm_block_tag_metadata_gate_blockers
+        and not native_sccp_no_wasm_readiness_gate_blockers
+        and not proof_request_bundle_gate_blockers
+        and not retired_network_surface_gate_blockers
+        and not unready_transparent_proof_config_gate_blockers
+    )
     blockers = _active_launch_blockers(evidence)
     blockers.extend(native_prover_bundle["validation_blockers"])
+    blockers.extend(launch_scope_constant_gate_blockers)
+    blockers.extend(ethereum_launch_policy_selector_gate_blockers)
+    blockers.extend(ethereum_launch_policy_documentation_gate_blockers)
+    blockers.extend(public_discovery_documentation_gate_blockers)
+    blockers.extend(ethereum_data_collection_no_proxy_gate_blockers)
+    blockers.extend(ethereum_native_receipt_finality_gate_blockers)
+    blockers.extend(ethereum_beacon_rest_finalized_header_shape_gate_blockers)
+    blockers.extend(ethereum_beacon_rest_execution_payload_binding_gate_blockers)
+    blockers.extend(ethereum_sync_committee_roster_gate_blockers)
+    blockers.extend(ethereum_source_bridge_config_gate_blockers)
+    blockers.extend(ethereum_evm_source_adapter_deployment_gate_blockers)
+    blockers.extend(contract_smoke_eth_mainnet_network_id_gate_blockers)
+    blockers.extend(contract_smoke_evm_production_surface_gate_blockers)
+    blockers.extend(ethereum_core_range_finality_binding_gate_blockers)
+    blockers.extend(ethereum_core_message_replay_guard_gate_blockers)
+    blockers.extend(ethereum_torii_pinned_message_proof_gate_blockers)
+    blockers.extend(ethereum_evm_source_live_production_gate_blockers)
+    blockers.extend(ethereum_evm_live_destination_production_gate_blockers)
+    blockers.extend(ethereum_route_canary_finalized_receipt_block_gate_blockers)
+    blockers.extend(ethereum_evm_block_tag_metadata_gate_blockers)
+    blockers.extend(native_sccp_no_wasm_readiness_gate_blockers)
+    blockers.extend(proof_request_bundle_gate_blockers)
+    blockers.extend(retired_network_surface_gate_blockers)
+    blockers.extend(unready_transparent_proof_config_gate_blockers)
     blockers.extend(
         f"production corridor phase {phase} is {phase_status[phase]}"
         for phase in failed_phases
@@ -2175,6 +3284,7 @@ def _build_report(
         "inputs": [str(path) for path in paths],
         "input_artifacts": input_artifacts,
         "native_evm_prover_bundle": native_prover_bundle,
+        "source_inventory": source_inventory,
         "cryptographic_evidence": _cryptographic_evidence(evidence),
         "user_prover_submission_surfaces": _submission_surfaces(phase_status),
     }
@@ -2529,6 +3639,23 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
         )
     )
 
+    lines.extend(["", "## Source Inventory", ""])
+    lines.append("| Gate | Status | Blockers |")
+    lines.append("| --- | --- | --- |")
+    for gate in sorted(report["source_inventory"]):
+        inventory = report["source_inventory"][gate]
+        inventory_blockers = inventory.get("validation_blockers") or []
+        blocker_text = (
+            "<br>".join(inventory_blockers) if inventory_blockers else "-"
+        )
+        lines.append(
+            "| `{gate}` | {status} | {blockers} |".format(
+                gate=gate,
+                status=inventory.get("validation_status", "blocked"),
+                blockers=blocker_text,
+            )
+        )
+
     lines.extend(["", "## Lane Readiness", ""])
     lines.append("| Domain | Chain | Status | Records | Blockers |")
     lines.append("| --- | --- | --- | --- | --- |")
@@ -2567,6 +3694,29 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             f"- {ACTIVE_LAUNCH_DISPLAY} source and destination EVM live reads must report {ACTIVE_LAUNCH_EVM_CHAIN_ID_EVIDENCE} and be pinned to the `finalized` block tag in both the all-lanes summary and readiness cryptographic-evidence table.",
             "- Governed live deployment evidence for immutable destination verifiers and source-chain verifier engines; offline placeholder or template-derived hashes keep the report blocked.",
             "- An audited `--native-evm-prover-bundle` manifest with `schema = sccp-native-evm-groth16-prover-bundle-v1`, `no_wasm = true`, `remote_prover_required = false`, and matching Ethereum destination binding/proving-key hashes.",
+            "- SCCP launch-scope source inventory must pin active launch policy constants and the supported launch-domain set across Rust, all-lanes evidence, and readiness tooling.",
+            "- SCCP Ethereum launch-policy selector source inventory must pin the EthereumMainnetLane selector and negative cross-lane policy tests.",
+            "- SCCP Ethereum launch-policy documentation source inventory must pin the active Ethereum-mainnet policy wording and reject stale BSC-only production-packaging text.",
+            "- SCCP public discovery documentation source inventory must pin supported launch-lane and verifier-target wording so unsupported lanes cannot re-enter Torii discovery evidence silently.",
+            "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
+            "- SCCP Ethereum native receipt-finality source inventory must pin Swift/Kotlin/JVM/Java Android/.NET receipt-proof builders to require finalized-header root, sync-committee root, and beacon slot before local proving can run.",
+            "- SCCP Ethereum Beacon REST finalized-header shape source inventory must pin public SDK validators and negative tests for non-zero parent/state/body roots plus 96-byte finalized-header signatures before local finality evidence can be accepted.",
+            "- SCCP Ethereum Beacon REST execution-payload binding source inventory must pin Beacon target-header/root/block reads, light-client finality-update evidence, execution block-hash/receipts-root binding, and C# SSZ root parity vectors before local finality evidence can be accepted.",
+            "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",
+            "- SCCP Ethereum source-bridge config source inventory must pin bridge-address/network/code-hash config hashing and negative config-drift tests.",
+            "- SCCP Ethereum EVM source-adapter deployment source inventory must pin the active deployment gate, source-bridge network/config binding, and negative drift tests.",
+            "- SCCP EVM contract smoke Ethereum mainnet network-id source inventory must pin ETH chain-id vectors, BSC rejection vectors, and accepted-event network-id assertions.",
+            "- SCCP EVM contract smoke production-surface source inventory must pin verifier-code/key, destination-binding, domain-overflow, proof-shape, cross-deployment, and replay rejection smoke coverage.",
+            "- SCCP Ethereum core range/finality binding source inventory must pin finality-height range binding in Core and negative outer-range replay tests.",
+            "- SCCP Ethereum core message replay source inventory must pin durable pinned-record replay protection and negative replay/history tests.",
+            "- SCCP Ethereum Torii pinned message proof source inventory must pin pinned message-proof extraction and negative unpinned-record serving tests.",
+            "- SCCP Ethereum EVM live source/destination source inventory must pin canonical live RPC chain ids, finalized block tags, deployment receipt binding, runtime bytecode hashes, route canary calldata, and proof tuple drift tests.",
+            "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
+            "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
+            "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, and adversarial manifest coverage.",
+            "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte and non-SORA source-proof rejection gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, and Java Android.",
+            "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
+            "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned and reject environment override paths.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
     )

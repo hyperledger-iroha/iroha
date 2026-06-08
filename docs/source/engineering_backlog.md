@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-07
+Last updated: 2026-06-08
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -8,10 +8,14 @@ track detailed unfinished engineering work.
 
 ## SCCP launch-scope note
 
-The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Backlog
-notes for unsupported network families are diagnostic only; they should not be
-treated as release blockers or advertised as production network support unless
-governance explicitly re-opens that scope.
+The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
+runtime-network families outside that launch scope are not supported for now.
+Retired platform-family lanes are explicitly outside SCCP launch support for
+now.
+Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+Backlog notes for unsupported network families are diagnostic only; they should
+not be treated as release blockers or advertised as production network support
+unless governance explicitly re-opens that scope.
 
 Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
 trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
@@ -46,6 +50,16 @@ Local path, raw CLI, summary-path, artifact-path, and URL-path validators now
 also reject narrow identifier-style secret path material such as
 `token-*-secret` and strong key markers without treating ordinary token-file
 operator paths as secret-bearing by name alone.
+Canary runbook artifact paths now use the same narrow local-path scanner before
+plan-only output or child command construction, while bearer-token file paths
+remain runtime secret-file references and are redacted in planned commands.
+Canary child stdout/stderr previews now also reject identifier-style
+secret-looking material before summary emission.
+XSD `xmllint` failure diagnostics now redact identifier-style secret-looking
+validator output as well as key/value secret material before schema-validation
+errors are reported.
+Direct evidence receipt-verifier failure diagnostics now redact key/value and
+identifier-style secret-looking stderr before reporting child verifier failures.
 ISO URL port parser failures now report only label-level invalid-port
 diagnostics instead of including parser exception text that may contain the raw
 operator-provided port string.
@@ -207,10 +221,11 @@ redistributable schemas, and official trust/revocation bundles.
   public-input schema/prover-key/verifier-key digests. The material validator
   rejects zero commitments, duplicate artifact/proof commitments, and artifact
   or proof commitments that reuse registered profile digests, so each governed
-  digest role remains domain-separated at admission. Bundle admission
-  and digesting bind that material, while refresh/proof/execution paths still
-  fail closed because the full BFV bootstrap evaluator is not implemented, so
-  the current refresh bridge cannot be mislabeled as full bootstrapping. Direct
+  digest role remains domain-separated at admission. Bundle admission and
+  digesting bind that material, while refresh/proof paths and direct
+  no-artifact registered execution fail closed with an explicit governed
+  artifact requirement, so the current refresh bridge cannot be mislabeled as
+  full bootstrapping. Direct
   key-authorized refresh execution, bootstrap output-bound helpers, and
   Soracloud exact/bounded bootstrap execution now share the same mode-aware
   request preflight, so reserved full-bootstrap keys are rejected before
@@ -232,7 +247,10 @@ redistributable schemas, and official trust/revocation bundles.
   STARK/`OpenVerifyEnvelope` circuit id, public-input schema, byte bounds,
   verifier-key commitment, statement public input, and envelope-hash checks, so
   governed material proofs no longer reuse the zero-refresh bootstrap proof
-  envelope. `RunSoracloudFheJob` and Torii signed FHE job requests now carry
+  envelope. Core now decodes material proofs through that material-specific
+  attachment context, and all Soracloud FHE STARK wrappers reject non-empty
+  all-zero native envelope bytes before backend verifier dispatch.
+  `RunSoracloudFheJob` and Torii signed FHE job requests now carry
   an optional distinct full-bootstrap material proof attachment, provenance
   signs it, and Core requires it for policy-bound full-bootstrap jobs before
   dispatching through the active Soracloud verifier record or preverified-proof
@@ -248,37 +266,117 @@ redistributable schemas, and official trust/revocation bundles.
   Kotlin/JVM, and Java Android shared Soracloud BFV operation-fixture validators
   now pin the full-bootstrap material/profile digest, verifier-key commitment,
   and statement vector so SDK/release validation can reject fixture drift before
-  the executable evaluator lands. Full-mode exact
+  artifact-aware execution or proof verification. Full-mode exact
   and bounded runtime bootstrap paths now use dedicated crypto preflight
   helpers that validate governed material commitments, registered profile
-  digests, ciphertext shape, and exact/bounded metadata before returning the
-  current unavailable-evaluator error. Crypto now also exposes a typed
+  digests, ciphertext shape, and exact/bounded metadata before direct
+  no-artifact entry points return the governed-artifact requirement. Crypto now
+  also exposes a typed
   full-bootstrap artifact bundle validator/digest and artifact-aware execution
   preflight that bind concrete evaluator/proof-profile bytes to those governed
   commitments. Each artifact byte field is now a Norito role/profile envelope
   that declares the canonical circuit id, registered parameter/RNS/decomposition
   digests, and max bootstrap depth, so malformed, role-swapped, stale-profile,
-  and empty-payload artifact attachments fail before the unavailable evaluator
-  boundary. Coefficient-to-slot and slot-to-coefficient artifacts now carry
+  and empty-payload artifact attachments fail before artifact-aware output
+  execution. Coefficient-to-slot and slot-to-coefficient artifacts now carry
   typed diagonal packed-slot linear transforms, and crypto exposes exact and
   bounded deterministic evaluators for those transforms through the registered
   RNS paths. The blind-rotation artifact now carries canonical packed-slot
-  rotation schedules bound to the governed accumulator artifact. The
-  sample-extraction artifact now carries typed source/output ciphertext shape
-  and extracted-coefficient metadata, rejecting opaque, wrong-slot-count,
-  bad-component-count, or out-of-range payloads. The accumulator artifact now
+  rotation schedules bound to the governed accumulator artifact, and crypto
+  exposes exact and bounded registered-RNS execution helpers plus matching
+  public bound propagation that consume those governed selector schedules
+  directly. The sample-extraction artifact now carries typed source/output
+  ciphertext shape and extracted-coefficient metadata, rejects opaque,
+  wrong-slot-count, bad-component-count, or out-of-range payloads, and crypto
+  can extract the selected RLWE coefficient into a raw LWE-style sample whose
+  decrypt matches the selected `c0 + c1 * s` coefficient under the existing
+  secret polynomial basis, with exact and bounded raw-sample bound propagation.
+  Crypto now composes the governed coefficient-to-slot, blind-rotation, and raw
+  sample-extraction artifacts into an exact/bounded execution-prefix trace with
+  propagated bounds, coefficient-zero diagnostic repack output,
+  slot-to-coefficient diagnostic execution, and missing-key fail-closed checks.
+  Crypto also exposes an explicit coefficient-zero raw-sample repack diagnostic
+  bridge with exact and bounded coefficient-zero bounds, plus deterministic
+  exact and bounded raw-sample switch-key material, secret-consistency checks,
+  switch execution, public bound propagation, governed artifact carriage, and
+  artifact-aware full-bootstrap output/bound helpers that run through
+  slot-to-coefficient. Full-bootstrap artifact-bundle validation now requires
+  executable sample-extraction switch-key material rather than accepting
+  metadata-only sample-extraction payloads in the governed bundle. Direct
+  no-artifact registered entrypoints now validate preflight, then fail with an
+  explicit governed-artifact requirement; the real proof verifier/prover
+  backend remains unfinished. The
+  accumulator artifact now
   carries typed packed-slot test-vector material and rejects opaque,
-  wrong-slot-count, malformed, or all-zero accumulator payloads. Crypto now also
+  wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
+  public-input schema and prover/verifier key artifacts now also carry typed
+  proof-profile payloads that bind the canonical backend, key format, circuit
+  id, statement-hash layout, and governed schema digest while rejecting opaque
+  schema/key bytes, empty or all-zero key material, and duplicate
+  prover/verifier key material. Crypto now also
   exposes a domain-separated full-bootstrap execution proof statement digest
   that validates and binds the public key, governed bootstrap key/material,
   concrete artifact bundle, input/output ciphertexts, exact or bounded proof
-  mode, and input/output bound metadata for the future verifier.
-  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts, provenance
-  signs them, and Core routes exact/bounded full-mode jobs through
-  artifact-aware preflight before the current unavailable-evaluator error.
+  mode, and input/output bound metadata for the verifier.
+  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts plus an
+  ordered execution-proof vector, provenance signs both, and Core routes
+  exact/bounded full-mode jobs through artifact-aware full-bootstrap execution
+  and bound propagation through sample-switch and slot-to-coefficient output
+  before requiring one governed execution proof per output slot.
+  Torii signed job-run requests now validate those verifier-backed proof
+  attachments locally before instruction construction, so malformed signed
+  wrappers fail as bad requests before reaching Core. Torii signed job-run
+  preflight now resolves every signed parameter-set descriptor against the
+  registered BFV profile and runs the shared policy/job admission validators
+  plus BFV evaluation-key and refresh-transcript digest checks before
+  proof/artifact validation, recomputes policy proof-statement digests from
+  the signed key/transcript material, requires policy-bound bootstrap-key and
+  full-bootstrap material proofs to be present with matching statement hashes,
+  validates supplied full-bootstrap artifact bundles against the governed
+  request material before instruction construction, requires full-bootstrap
+  execution requests to carry signed circuit artifacts and a non-empty
+  execution-proof vector,
+  rejects full-bootstrap material/execution proof attachments outside
+  full-bootstrap job/key context, and rejects execution proofs that omit signed
+  artifact bundle bytes. Parameter, policy, job, key, transcript, digest, or
+  descriptor drift now fails locally before proof or artifact decoding. Core governed
+  full-bootstrap execution verifier-key derivation now validates the complete
+  artifact bundle before decoding verifier-key material, so drifted
+  non-verifier artifacts fail at the helper boundary. Data-model and Core
+  `OpenVerifyEnvelope` admission now also reject all-zero native STARK
+  envelope bytes for Soracloud FHE input, bootstrap-key, full-bootstrap
+  material, and full-bootstrap execution proofs.
+  A `zk-stark` positive fixture now installs the governed artifact-backed
+  STARK verifier key, generates backend-verified `OpenVerifyEnvelope` proofs
+  over each full-bootstrap execution statement, and proves the active-verifier
+  gate accepts them when STARK verification is enabled at runtime.
+  Matching `zk-stark` positive fixtures cover the bootstrap-key and
+  full-bootstrap material proof gates with active verifier records and
+  backend-verified `OpenVerifyEnvelope` proofs.
+  A `zk-preverify` positive fixture now proves the active-verifier gate accepts
+  a preverified proof batch for every production identifier slot.
+  The confidential verifier-call defaults now admit one such Soracloud
+  full-bootstrap execution batch without an operator override.
+  Core regressions now also prove that correctly shaped full-bootstrap
+  execution proof attachments fail closed before backend verification when the
+  governed verifier record is missing or withdrawn.
+  The Core proof helper now also reruns local job-shape validation and requires
+  input-bound metadata to match the input envelope count before deriving proof
+  statements, so stale bound sidecars and multi-input bootstrap drift cannot
+  reach proof verification.
+  It also rejects full-bootstrap execution circuit artifacts outside
+  full-bootstrap proof context even when no execution-proof attachments are
+  supplied, so artifact-only bypass attempts fail at the proof boundary.
+  Core regressions also pin full-bootstrap execution verifier-record metadata
+  drift across namespace, backend, curve, public-input schema, circuit/version,
+  gas schedule, active circuit mapping, proof byte caps, key presence/length,
+  commitment, and governed verifier-key byte binding.
+  The legacy no-artifact Core execution helpers are test-only, so production
+  full-mode jobs must pass through the governed artifact-aware path.
   Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-  Remaining production work is the executable full BFV bootstrapping evaluator
-  and the real prover/verifier artifacts and implementation.
+  Remaining production work is the audited full-bootstrap arithmetic
+  proof-producing backend plus release-grade prover/verifier artifacts, not the
+  Core verifier gate or statement-recomputation policy path.
   Direct crypto
   refresh-transcript validation/digesting and Soracloud transcript digesting
   now also preflight the advertised BFV public-key shape
@@ -660,10 +758,9 @@ redistributable schemas, and official trust/revocation bundles.
   output persistence now share checked binding state-total projection, so
   inconsistent existing-item accounting and `u64` total overflows fail closed
   before max-total admission checks.
-  The production
-  bounded-noise admission circuit/prover
-  rollout, broader target-limb BFV-RNS evaluator hardening, and executable
-  full-bootstrap evaluator plus verifier/prover implementation remain pending.
+  The production bounded-noise admission circuit/prover rollout, broader
+  target-limb BFV-RNS evaluator hardening, and audited full-bootstrap
+  proof-producing/verifier artifacts remain pending.
   Registered RNS chain selection now also preflights exact-addition and exact
   negacyclic-product coverage before exposing the chain or its production digest. Public RNS
   exact evaluator entry points now also preflight their required chain coverage
@@ -882,7 +979,7 @@ redistributable schemas, and official trust/revocation bundles.
   canonical evaluation-key bundle digest from the shared operation fixture, and
   `RunSoracloudFheJob` rejects structurally valid but ungoverned key material
   before output state is emitted. Shared release vectors still need to cover
-  the full BFV-RNS evaluator and executable full-bootstrap evaluator/proof
+  the broader BFV-RNS evaluator corridor and audited full-bootstrap proof
   material beyond the current encrypted-zero round-refresh bundles and
   data-model full-bootstrap material proof envelope.
 - Broaden validation from the green focused crypto/data-model/core/Torii/daemon
@@ -1251,8 +1348,24 @@ redistributable schemas, and official trust/revocation bundles.
 				  relying on panic-only `u32` conversions; SCCP source-adapter
 				  verification statement, adapter-commitment, and FastPQ context
 				  packaging now also fail closed on unbounded adapter-proof shapes and
-				  checked proof-byte length prefixes, while the remaining SCCP
-				  proof-body transcript helper audit stays open; config
+				  checked proof-byte length prefixes, and the checked source-adapter
+				  proof-body encoder now uses fallible nested proof/list/vector
+				  writers across all launch lanes; strict SCCP production builders now
+				  require non-SORA bundles to satisfy the production source-proof gate
+				  before packaging destination submissions, and Rust EVM/TRON Groth16
+				  proof requests now require canonical bundle bytes plus non-empty
+				  source-proof witness bytes for non-SORA source bundles; SCCP
+				  Rust TON native-recursive proof requests now apply the same canonical
+				  bundle/public-input/source-proof gate before local proof generation
+				  and proof-result wrapping, and the JavaScript, Python, Swift,
+				  Kotlin/JVM, and Java Android SDK TON request builders now mirror that
+				  canonical bundle/public-input/source-proof preflight with negative
+				  tests for arbitrary bytes, swapped bundles, tampered commitments,
+				  and stripped non-SORA source proofs; SCCP
+				  source-verifier template hashes and source-chain proof envelope
+				  shapes now reject unmapped source domains instead of falling back
+				  to empty source-chain keys, while
+				  diagnostic `allow_unready` builders remain available for structural fixtures; config
 				  parsing for streaming identity, Torii receipt signer, and Torii
 				  offline issuer public keys now also uses checked algorithm access
 				  before allow-list decisions; the Nexus app
@@ -2156,10 +2269,20 @@ redistributable schemas, and official trust/revocation bundles.
   trust-pin presence, booleans, supplementary-data caps, business-service
   dependencies, and amount minor-unit currency rows are shape-checked when
   present.
-  Candidate schema imports fail closed when source provenance is missing,
-  malformed, digest-drifted, or when an XSD contains known restricted Standards
-  Editor redistribution terms, preventing public mirrors with embedded
-  no-redistribution notices from being treated as production fixture evidence.
+	  Candidate schema imports fail closed when source provenance is missing,
+	  malformed, digest-drifted, still uses placeholder GitHub repository
+	  coordinates, carries identifier-style secret-looking path material, or when
+	  an XSD contains known restricted Standards Editor redistribution terms, and
+	  checked-in and blocked candidate schema entries reject omitted `source`
+	  separately from explicit null source objects in both direct preflight and
+	  archived readiness replay,
+	  the manifest must explicitly record `blocked_schema_sources` as an array even
+  when no reviewed restricted source candidates are present. The aggregate
+  readiness gate replays the same repository-coordinate checks and
+  rejects secret-looking repository coordinates before output for archived XSD
+  summaries, preventing public mirrors with embedded
+  no-redistribution notices or placeholder provenance from being treated as
+  production fixture evidence.
 - Broaden XMLDSig/XAdES fixture coverage beyond internal P-256 key and
   generated certificate-chain material, including complete canonical XML
   coverage for broader signed ISO envelopes, official
@@ -2421,7 +2544,8 @@ redistributable schemas, and official trust/revocation bundles.
   tests, rejects endpoint URLs with credentials, params, query strings,
 	  fragments, surrounding or embedded whitespace, or control characters, rejects
 	  empty, zero, leading-zero, malformed, out-of-range, or explicit-default ports, non-canonical hosts,
-	  invalid DNS labels, percent-escaped hosts, numeric-host/legacy-IPv4
+	  reserved placeholder hosts, checked-in template hosts under
+	  `operator-canary.bank`, invalid DNS labels, percent-escaped hosts, numeric-host/legacy-IPv4
 	  spoofing, and IPv6 transition addresses embedding non-global IPv4 addresses,
 	  rejects traversal, backslash, encoded-separator, encoded-semicolon,
 	  encoded URL delimiters, encoded-percent,
@@ -2434,8 +2558,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  whitespace, embedded whitespace, or control characters, and
 	  requires the export directory, `latest.notary.json`, the digest-addressed
 	  anchor peer, `messages.index.json`, and clean `store_dir/messages` record
-	  sources to be non-symlink regular directories/files, caps each audit export
-		  JSON input at 64 MiB, requires positive finite `--timeout-secs` and
+	  sources to be non-symlink regular directories/files, caps anchor/index
+		  JSON inputs at 64 MiB and persisted record-source JSON inputs at 1 MiB,
+		  requires positive finite `--timeout-secs` and
 		  positive integer `--response-limit-bytes`, and writes bounded
 		  per-endpoint receipts without persisting token material, redacting
 		  secret-looking remote response previews or transport errors before persistence. Receipt
@@ -2455,7 +2580,8 @@ redistributable schemas, and official trust/revocation bundles.
 	  strings, fragments, surrounding or embedded whitespace, or control
 	  characters, overlong URLs or DNS hosts, localhost/local-private IP
 	  literals, known local/private rebinding hostnames, or IPv6 transition
-	  addresses embedding non-global IPv4 addresses, rejects malformed, out-of-range,
+	  addresses embedding non-global IPv4 addresses, reserved placeholder hosts,
+	  checked-in template hosts under `operator-canary.bank`, rejects malformed, out-of-range,
 	  empty, zero, leading-zero, or explicit-default ports and non-canonical hosts, invalid DNS labels, percent-escaped hosts, and
 	  numeric-host/legacy-IPv4 spoofing, rejects traversal, backslash, encoded-separator,
 	  encoded-semicolon, encoded URL delimiters, encoded-percent, percent-encoded control/space bytes, malformed percent
@@ -2498,19 +2624,23 @@ redistributable schemas, and official trust/revocation bundles.
 	  whitespace, empty/zero/leading-zero/malformed/default ports, non-canonical hosts, or control
 	  characters, localhost/local-private IP literals, known local/private
 	  rebinding hostnames, IPv6 transition addresses embedding non-global IPv4
-	  addresses, invalid DNS labels, percent-escaped hosts, numeric-host
+	  addresses, reserved placeholder hosts such as `.example`, `example.com`,
+	  `example.net`, `example.org`, or `example.invalid`, checked-in template
+	  hosts under `operator-canary.bank`, invalid DNS labels, percent-escaped hosts, numeric-host
 	  or legacy-IPv4 spoofing, plus traversal, backslash, encoded-separator,
 	  encoded-semicolon, encoded URL delimiters, encoded-percent,
 	  percent-encoded control/space bytes, malformed percent escapes, or
 	  embedded/encoded-semicolon/encoded-delimiter/repeated-separator URL paths, can cross-check referenced XML or notary anchor
-	  source files, closes the raw receipt schemas per receipt kind plus notary
-	  anchor/audit-index source schemas, including duplicate-free nested audit records, binds
+		  source files, closes the raw receipt schemas per receipt kind plus notary
+		  anchor/audit-index source schemas, including an explicit `records[]`
+		  array and duplicate-free nested audit records, binds
   audit record filenames to `sha256(message_id).json`, binds each indexed
   `record_sha256` to the persisted `store_dir/messages` body when source files
 	  are required or locally available, rejects row/source metadata drift and
 	  persisted-state-derived `pacs002_code` or status-history timestamp drift,
 	  binds endpoint digests to recorded endpoint URLs, requires timezone-aware adapter timestamps that do not
   require trimming, enforces `ok`/`status_code` consistency,
+	  requires HTTP response body digests and failed-receipt error strings,
 	  validates bounded response metadata, requires rail `xml_path` values to
 	  point at `.xml` leaves, cross-checks rail sidecars against the
 	  adapter's `xml_path + .json` convention and receipt metadata, requires notary
@@ -2520,15 +2650,29 @@ redistributable schemas, and official trust/revocation bundles.
 	  receipt `message_type`, `xml_path`, and
 	  `sidecar_path` values that carry whitespace, control characters,
 		  leading dashes, leading-dash path segments, backslashes, semicolon path
-		  parameters, empty path segments, or dot/parent path segments, plus receipt and source-sidecar rail
+		  parameters, empty path segments, or dot/parent path segments, requires raw
+		  rail receipts and archived rail receipt summaries to record nullable
+		  `profile`/`rail_message_id` keys, plus receipt and source-sidecar rail
 		  `profile`/`rail_message_id` values when they carry surrounding whitespace or
-		  embedded whitespace or control characters, rejects non-canonical receipt or
+		  embedded whitespace or control characters, rejects source-sidecar explicit
+		  null optional metadata instead of treating it as omission, rejects non-canonical receipt or
 		  source-sidecar profile IDs, rejects overlong or non-canonical ASCII
-		  `rail_message_id` values, caps receipt JSON at 4 MiB, notary source
-		  JSON at 64 MiB, rail source XML at 4 MiB, and source-sidecar JSON at
-		  16 KiB before parsing or hashing, replays digest-addressed notary-anchor and
+		  `rail_message_id` values, caps receipt JSON at 4 MiB, notary anchor/index
+  JSON at 64 MiB, persisted notary record-source JSON at 1 MiB, rail source XML
+  at 4 MiB, and source-sidecar JSON at 16 KiB before parsing or hashing,
+  replays digest-addressed notary-anchor and
   `messages.index.json` checks while rejecting symlinked or non-regular notary
-  anchor/index peers and rail XML/sidecar files, rejects legacy `colr.007` rail
+  anchor/index peers and requiring complete audit-index record summary key sets,
+  canonical Torii lifecycle states, state-compatible pacs.002 summary codes,
+  including nullable Torii-emitted fields, plus complete persisted
+  record/context/metadata/history key sets and state-compatible status-history
+  pacs.002 codes before
+  source-file replay or Torii durable-store reload,
+  positive notary record counts before publication and during source-file or
+  production-evidence replay,
+  Torii reload clean-string enforcement, filename/message-id binding, symlink-free regular-file-only
+  record directory/loading, symlink-free durable-output directories, and a 1 MiB Torii
+  persisted-record persist/reload cap, rejects legacy `colr.007` rail
   source files unless `--allow-legacy-colr007` is set for local diagnostics,
   rejects symlinked receipt archive directories before discovery, rejects
   repeated receipt paths or copied receipts with duplicate `receipt_sha256` values, and
@@ -2542,14 +2686,21 @@ redistributable schemas, and official trust/revocation bundles.
 	  runbook strings, rejects present `null` optional path and numeric limit
 		  fields instead of silently applying defaults, rejects embedded whitespace,
 		  leading-dash path segments, backslashes, semicolon path parameters, empty
-		  path segments, and dot/parent segments in runbook paths before expansion, keeps relative paths inside
+		  path segments, dot/parent segments, and secret-looking key/value or
+		  identifier-style material in ordinary runbook artifact paths before expansion, keeps relative paths inside
 	  the runbook directory while preserving final path leaves for child script
-	  symlink/file-boundary checks, rejects
-	  endpoint URLs with credentials, params, query strings, fragments, embedded
-	  whitespace, malformed bracketed hosts, overlong URL strings, or DNS hosts
-	  longer than 253 characters, localhost/local-private IP literals, or known
-	  local/private rebinding hostnames, legacy IPv4 numeric notation, or IPv6
-	  transition addresses embedding non-global IPv4 addresses,
+	  symlink/file-boundary checks, keeps bearer-token file paths as redacted
+	  runtime secret-file references, rejects identifier-style secret-looking
+	  child stdout/stderr previews before summary emission, rejects
+		  endpoint URLs with credentials, params, query strings, fragments, embedded
+		  whitespace, malformed bracketed hosts, overlong URL strings, or DNS hosts
+		  longer than 253 characters, localhost/local-private IP literals, or known
+		  local/private rebinding hostnames, reserved placeholder hosts such as
+		  `.example`, `example.com`, `example.net`, `example.org`, or
+		  `example.invalid`, legacy IPv4 numeric notation, or IPv6 transition
+		  addresses embedding non-global IPv4 addresses,
+		  accepts checked-in `operator-canary.bank` template endpoints only for
+		  `--plan-only` validation and rejects them before non-plan child execution,
 	  rejects empty, zero, leading-zero, malformed, out-of-range, or explicit-default ports,
 	  rejects non-canonical hosts, invalid DNS labels, percent-escaped hosts,
 	  numeric-host spoofing, percent-escape smuggling, and smuggled URL paths
@@ -2562,8 +2713,9 @@ redistributable schemas, and official trust/revocation bundles.
   stdout/stderr through the configured preview cap instead of retaining
   unbounded output, supports
   `--require-explicit-policy` so production runbooks must spell out every
-  policy boolean and the summary records that proof, with regression coverage
-  over the rail, notary, and verifier policy-boolean surface, and writes a single
+  policy boolean plus list-valued notary/verify receipt selector fields and the
+  summary records that proof, with regression coverage over the rail, notary,
+  and verifier policy-boolean/list surface, and writes a single
   bounded JSON summary suitable for CI or operator evidence archives. Summary
 	  output paths are preflighted before subprocess stages, reject control
 	  characters, whitespace, leading-dash segments, backslashes, semicolon
@@ -2577,7 +2729,9 @@ redistributable schemas, and official trust/revocation bundles.
 - Completed 2026-06-04: added checked-in ISO operator canary runbook templates
   under `fixtures/iso20022/operator_canary/` for Swift CBPR+, Fedwire Funds,
   SEPA SCT Inst, and securities CSD profile families. The script tests validate
-  that each template plans successfully without network access.
+  that each template plans successfully without network access, while non-plan
+  canary execution and archived production evidence reject the
+  `operator-canary.bank` template endpoint suffix.
 - Completed 2026-06-04: added `scripts/iso_trust_bundle_verify.py` as an
   offline XMLDSig/XAdES trust-bundle preflight for operator rail PKI packages.
   It caps bundle JSON at 64 MiB before parsing, verifies canonical lowercase
@@ -2593,18 +2747,28 @@ redistributable schemas, and official trust/revocation bundles.
 		  percent-escaped hosts, numeric-host/legacy-IPv4 spoofing, IPv6
 		  transition embedded-IPv4 smuggling, percent-escape smuggling,
 		  smuggled URL paths including encoded semicolon parameters, encoded URL delimiters, and repeated separators, required provenance URL,
-		  required source authority/version values, and timezone-aware
+			  an explicitly recorded top-level `source` object,
+			  required source authority/version values, and timezone-aware
 	  non-future retrieval timestamp fields,
   repeated-path/copied-bundle/duplicate
   profile ID rejection, duplicate `bundle_sha256` rejection, unique DER labels
-  per material class, DER-object `sha256` values that fail when present as
-  `null` or another non-string value, omitted absent labels in trust summaries,
+  per material class, mandatory DER-object `sha256` values that must match
+  canonical decoded `der_base64` bytes, omitted absent labels in trust summaries,
   archived-summary `label: null` rejection in the evidence gate, and
 	  secret-looking fields before emitting Torii profile trust override JSON.
+	  Trust bundles must now carry an explicit `embedded_signature_policy`;
+	  omitted policy fields are rejected instead of defaulting to
+	  `require-verified` during preflight.
+	  Every list-typed trust-material field must also be recorded as an array,
+	  including explicit `[]` values for intentionally empty pin or DER
+	  collections, so profile override emission cannot infer absence as an empty
+	  production proof.
 	  Profile override emission now also rejects local-audit `--allow-record-only`
-	  or `--allow-insecure-source-url` modes and placeholder source provenance
-	  (`placeholder`, `replace-before-production`, or `example.invalid`), leaving
-	  those bundles summary-only until real rail source metadata is supplied.
+		  or `--allow-insecure-source-url` modes and placeholder source provenance
+		  (`dummy`, `fake`, `placeholder`, `replace-before-production`, `sample`,
+		  `template`, or reserved hosts such as `example.com`, `example.net`,
+		  `example.org`, `example.invalid`, and `operator-canary.bank`), leaving those bundles summary-only
+		  until real rail source metadata is supplied.
 		  It also requires an explicit `--max-source-age-days` freshness budget and
 		  leaves stale source packages summary-only instead of writing profile
 		  overrides. The digest-bound trust summary records that budget so evidence
@@ -2627,8 +2791,12 @@ redistributable schemas, and official trust/revocation bundles.
 	  kind-specific notary anchor/index/count or rail message/profile/payload
 	  metadata,
 		  complete child-process stdout/stderr previews for every executed canary
-		  stage, rejects timed-out stages,
-		  and timeout-bounded direct receipt archive verification covering canary
+			  stage, rejects timed-out stages, rejects forged canary summaries that
+			  carry both executed `stages` and plan-only `planned_stages` branches,
+			  and readiness replay keeps plan-only compact summaries blocker-producing
+			  only when they retain `stage_windows: []` and explicitly recorded
+			  `receipt_summary: null`,
+			  and timeout-bounded direct receipt archive verification covering canary
 		  receipt digests, receipt filenames, receipt kinds, successful status
 		  metadata, kind-specific compact receipt metadata, and explicit rejection
 		  of rail default-profile fallback unless the local override is recorded by
@@ -2680,6 +2848,8 @@ redistributable schemas, and official trust/revocation bundles.
 		  delivery, caps archived
   canary/trust and XSD/evidence summary JSON inputs at 4 MiB before parsing,
   caps direct receipt-verifier stdout/stderr at 4 MiB before JSON parsing,
+  redacts key/value and identifier-style secret-looking direct receipt-verifier
+  stderr before reporting failed child verifier diagnostics,
 	  rejects receipt,
 	  summary, and emitted profile-override output paths when they contain
 	  control characters, whitespace, leading-dash segments, backslashes,
@@ -2692,14 +2862,20 @@ redistributable schemas, and official trust/revocation bundles.
 		  empty-port, malformed-port, non-canonical-host, invalid-host-label, overlong-url,
 		  overlong-host, percent-escape,
 		  numeric-host/legacy-IPv4-spoofed, IPv6-transition embedded-IPv4,
-		  repeated-separator, or traversal-bearing trust-source URLs,
-		  placeholder trust-source authority/version metadata and `example.invalid`
-		  source provenance,
+			  repeated-separator, or traversal-bearing trust-source URLs,
+			  placeholder trust-source authority/version metadata including `dummy`,
+			  `fake`, `sample`, or `template`, and reserved source provenance hosts
+			  such as `.example`, `example.com`, `example.net`, `example.org`, or
+			  `example.invalid`, and `operator-canary.bank`,
   missing/malformed/future trust-source retrieval timestamps,
   missing/malformed/future or padded trust-summary `verified_at` timestamps, smuggled
-  child command endpoint URLs including localhost/local-private IP literals,
-  known local/private rebinding hostnames, legacy IPv4 numeric notation, or IPv6
-  transition addresses embedding non-global IPv4 addresses,
+  live adapter, canary runbook, child command, and direct receipt endpoint URLs
+  including localhost/local-private IP literals, known local/private rebinding
+  hostnames, reserved documentation hosts such as `.example`, `example.com`,
+  `example.net`, `example.org`, or `example.invalid`, template child-command
+  suffixes such as `operator-canary.bank` even under local insecure-HTTP replay,
+  direct receipt archive endpoints under the same checked-in template suffix,
+  legacy IPv4 numeric notation, or IPv6 transition addresses embedding non-global IPv4 addresses,
   local-only child command flags in either `--flag` or `--flag=value` form, including the notary adapter's
   `--allow-missing-record-sources` diagnostic override, unsupported child
   command flags outside the expected rail/notary/receipt-verifier CLI surfaces,
@@ -2735,10 +2911,14 @@ redistributable schemas, and official trust/revocation bundles.
   official-package gaps until the remaining securities/collateral/legacy-return
   XSDs are checked in. `--require-profile-schema-backed-versions` now uses
   the default `DEFAULT_PROFILES_JSON` catalog when no `--profile-catalog`
-  override is supplied, so the release gate fails directly on the current
-  profile-advertised schema gaps.
-  Optional manifest/profile fields are optional only when
-  omitted; present `null` reviewed reasons, trust/revocation material lists,
+	  override is supplied, so the release gate fails directly on the current
+	  profile-advertised schema gaps.
+  Blocked public XSD candidate evidence now must include at least one explicit
+  redistribution or public-distribution restriction marker; a copyright-only
+  marker list is rejected before manifest summary emission and again during
+  readiness replay.
+	  Optional manifest/profile fields are optional only when
+	  omitted; present `null` reviewed reasons, trust/revocation material lists,
   booleans, numeric caps, business-service arrays, or amount minor-unit arrays
   fail before a digest-bound XSD summary can be emitted. Required and optional
   manifest/profile-catalog strings now reject ASCII control characters before
@@ -2749,6 +2929,8 @@ redistributable schemas, and official trust/revocation bundles.
 		  provenance, manifest schema, fixture, fixture schema-reference, and
 		  archived profile-catalog paths reject embedded whitespace, leading-dash
 		  path segments, or semicolon path parameters before summary emission and during readiness rechecks.
+  Readiness also requires archived XSD summaries to retain the emitted manifest
+  path and explicit profile-catalog object/null state.
 - Completed 2026-06-04: added `scripts/iso_production_readiness.py` as the
   aggregate offline ISO release gate. It verifies digest-bound XSD fixture and
   operator evidence summaries, requires strict schema-backed/fixture-backed XSD
@@ -3055,7 +3237,7 @@ redistributable schemas, and official trust/revocation bundles.
     targets, JavaScript/Kotlin/JVM/Java Android identifier BFV parity,
     JavaScript Connect Norito schema-hash parity, Android Norito schema-manifest
     verification, C# SDK tests on macOS with a temporary .NET 8 SDK, full Swift
-    package tests, full workspace all-target clippy, `scripts/check_no_scale.sh`,
+    package tests, full workspace all-target clippy, `scripts/check_no_legacy_codec.sh`,
     formatting, and diff whitespace checks are green as of 2026-05-02.
   - Remaining validation: run `cargo test --workspace` in an uncontended
     validation window.

@@ -165,7 +165,7 @@ guards:
 	@bash scripts/deny_serde_json.sh
 	@bash scripts/check_no_direct_serde.sh
 	@bash scripts/deny_handrolled_aos.sh
-	@bash scripts/check_no_scale.sh
+	@bash scripts/check_no_legacy_codec.sh
 
 # Run a local subset of the Norito feature matrix (use --fast for fewer cases)
 norito-matrix:

@@ -993,11 +993,6 @@ User            Iroha (bridge lane)             Bitcoin (Taproot program)       
   - Finality: strict (Sumeragi) per commit certificate; no reorgs beyond proposal.
   - Asset flow: lock/mint and burn/unlock with canonical wrapped asset ids `w<ASSET>@<src_chain>`.
 
-- Iroha ↔ Polkadot/Substrate (with bridging pallet)
-  - Pattern: on Polkadot side, a custom pallet verifies (a) Iroha commit certificate natively or (b) a compressed transparent‑ZK proof; on Iroha side, verify GRANDPA/BEEFY (finality + MMR inclusion) or zk‑compressed proof thereof.
-  - Finality: GRANDPA finality proofs; BEEFY MMR proofs for message receipts.
-  - Asset flow: pallet escrows assets and mints wrapped tokens on the other side with replay protection and nonce windows.
-
 - Iroha ↔ TON
   - Pattern: TON light client on Iroha verifies masterchain signatures/finality and inclusion of shardchain messages via Merkle proofs; optional transparent‑ZK compression.
   - Finality: masterchain validator sigs + catchain rules; reorg window configured.
@@ -1011,7 +1006,7 @@ User            Iroha (bridge lane)             Bitcoin (Taproot program)       
 Lane‑common semantics (normative)
 - Wrapped assets: `w<ASSET>@<src_chain>` definitions with metadata `origin_chain`, `origin_asset_id`, and `bridge_id`.
 - Replay protection: per‑lane `(bridge_chain_id, nonce)`; height/epoch TTL windows; dedup at stateless phase.
-- Reorg safety: per‑lane finality windows (Bitcoin N confs; Beacon finalized slots; GRANDPA finality; TON masterchain finality).
+- Reorg safety: per‑lane finality windows (Bitcoin N confs; Beacon finalized slots; TON masterchain finality).
 - Events: `BridgeLock`, `BridgeMint`, `BridgeBurn`, `BridgeRelease`, `BridgeReceipt` with cross‑refs (uetr/msgid if applicable) and proof hashes.
 
 Bridge roadmap (order)
@@ -1019,10 +1014,9 @@ Bridge roadmap (order)
 - 2) Bitcoin trustless lane (BitVM2‑style)
 - 3) EVM adapter lane (initial SNARK wrapper OK on EVM)
 - 4) TON lane
-- 5) Polkadot/Substrate lane (bridging pallet)
 
 PQ posture (initial)
-- It is acceptable that EVM, Bitcoin, and Polkadot lanes are not PQ end‑to‑end at launch. Iroha‑side verification remains PQ‑capable (hash‑based), while counterparties MAY use non‑PQ wrappers (e.g., Groth16 on EVM) or threshold signatures. Plan migrations later.
+- It is acceptable that EVM and Bitcoin lanes are not PQ end‑to‑end at launch. Iroha‑side verification remains PQ‑capable (hash‑based), while counterparties MAY use non‑PQ wrappers (e.g., Groth16 on EVM) or threshold signatures. Plan migrations later.
 
 Light‑Client Statements (normative per lane)
 - Bitcoin → Iroha (SPV)
@@ -1031,10 +1025,6 @@ Light‑Client Statements (normative per lane)
 - Iroha ↔ Iroha
   - Constraints: `VerifyCommit(header, commit_certificate, validator_set_hash)`; `ICS23Verify(path, leaf, header.state_root)`.
   - Finality: commit certificate is strict; reorgs past proposal are disallowed by protocol.
-- Iroha ↔ Polkadot/Substrate
-  - Constraints (Iroha→Polkadot): verify Iroha commit + ICS‑23 (or compressed ZK) in pallet.
-  - Constraints (Polkadot→Iroha): `VerifyGRANDPA(finality_proof)`; `VerifyMMR(inclusion_proof, mmr_root)`; `VerifyReceipt(leaf, path, state_root)`.
-  - Finality: GRANDPA finality; reorg window negligible after finalized.
 - Iroha ↔ TON
   - Constraints: `VerifyMasterSig(validator_set, signatures, header_hash)`; `VerifyShardMerkle(msg, proof, shard_root)`; link shard to master header.
   - Finality: masterchain finality rules; configured reorg window.
@@ -1075,9 +1065,6 @@ Counterparty Verifier API (sketch)
 - EVM (Solidity-ish):
   - `verifyIrohaProof(bytes header, bytes commitCert, bytes ics23Path, bytes leaf) returns (bool)`
   - `submitMessage(bytes msg, bytes proof) emits BridgeReceipt`
-- Polkadot (pallet):
-  - `fn verify_iroha_commit(cert, header) -> bool;`
-  - `fn submit_message(origin, bridge_msg, proof) -> DispatchResult;`
 - TON (funC/TVM):
   - `op verify_master_sig(root, sigs, set) -> bool;`
   - `op verify_shard_proof(msg, proof, shard_root) -> bool;`

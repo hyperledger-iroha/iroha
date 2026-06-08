@@ -91,7 +91,7 @@ translator: machine-google-reviewed
   `serde`/`serde_json` استعمال ، ایڈہاک AOS مددگار ، اور باہر پیمانے پر انحصار
   Norito بنچ (`scripts/deny_serde_json.sh` ،
   `scripts/check_no_direct_serde.sh` ، `scripts/deny_handrolled_aos.sh` ،
-  `scripts/check_no_scale.sh`)۔
+  `scripts/check_no_legacy_codec.sh`)۔
 -** پروک میکرو UI پالیسی: ** ہر پروک میکرو کریٹ کو لازمی طور پر ایک `trybuild` بھیجنا چاہئے
   `trybuild-tests` کے پیچھے کنٹرول (پاس/فیل گلوبز کے ساتھ `tests/ui.rs`)
   خصوصیت `tests/ui/pass` کے تحت ہیپی پاتھ کے نمونے رکھیں ، مسترد ہونے والے معاملات کے تحت

@@ -80,6 +80,21 @@ private let tonFullLightClientAuditStatementPrefixV1 =
     "sccp:ton:full-light-client-audit:statement:v1"
 private let tonRouteCanaryLiveAccountPrefixV1 =
     "iroha:sccp:ton-route-canary-live-account:v1"
+private let tonSccpMessagePrefixAssetRegisterV1 = "sccp:asset:register:v1"
+private let tonSccpMessagePrefixRouteActivateV1 = "sccp:route:activate:v1"
+private let tonSccpMessagePrefixTransferV1 = "sccp:transfer:v1"
+private let tonSccpMessagePrefixTokenAddV1 = "sccp:token:add:v1"
+private let tonSccpMessagePrefixTokenPauseV1 = "sccp:token:pause:v1"
+private let tonSccpMessagePrefixTokenResumeV1 = "sccp:token:resume:v1"
+private let tonSccpHubLeafPrefixV1 = "sccp:hub:leaf:v1"
+private let tonSccpHubNodePrefixV1 = "sccp:hub:node:v1"
+private let tonSccpPayloadHashPrefixV1 = "sccp:payload:v1"
+private let tonSccpCodecTextUtf8: UInt8 = 1
+private let tonSccpCodecEvmHex: UInt8 = 2
+private let tonSccpCodecSolanaBase58: UInt8 = 3
+private let tonSccpCodecTonRaw: UInt8 = 4
+private let tonSccpCodecTronBase58Check: UInt8 = 5
+private let tonSccpCodecSoraAssetId: UInt8 = 6
 
 /// TON live-account evidence collected by UI code before route canary submission.
 public struct TonSccpRouteCanaryEvidenceInput: Equatable {
@@ -3083,6 +3098,11 @@ public func buildTonSccpProofRequest(_ input: TonSccpProofRequestInput) throws -
         throw TonSccpProverError.invalidField("proof byte length")
     }
     let publicInputsBytes = try canonicalTonSccpPublicInputsBytes(input.publicInputs)
+    try requireTonSccpProofRequestBundleMatchesPublicInputs(
+        input.publicInputs,
+        bundleBytes: bundleBytes,
+        sourceProofBytes: sourceProofBytes
+    )
     let proofContext = try normalizeTonSccpProofContext(
         statementHash: input.statementHash,
         destinationBindingHash: input.destinationBindingHash
@@ -3162,6 +3182,608 @@ private func requireTonOptionalSourceProofBytes(_ bytes: Data, field: String) th
         throw TonSccpProverError.invalidField(field)
     }
     return bytes
+}
+
+private struct TonCanonicalSccpVecRange {
+    let bytes: Data
+    let nextOffset: Int
+}
+
+private struct TonCanonicalSccpPayloadSummary {
+    let kind: String
+    let sourceDomain: UInt32
+    let targetDomain: UInt32
+    let messageId: String
+    let payloadHash: String
+}
+
+private struct TonCanonicalSccpCommitmentSummary {
+    let kindCode: UInt8
+    let targetDomain: UInt32
+    let messageId: String
+    let payloadHash: String
+}
+
+private struct TonCanonicalSccpBundleSummary {
+    let sourceDomain: UInt32
+    let targetDomain: UInt32
+    let messageId: String
+    let payloadHash: String
+    let commitmentRoot: String
+}
+
+@discardableResult
+private func requireTonSccpProofRequestBundleMatchesPublicInputs(
+    _ publicInputs: TonSccpPublicInputsInput,
+    bundleBytes: Data,
+    sourceProofBytes: Data
+) throws -> TonCanonicalSccpBundleSummary {
+    let summary = try decodeCanonicalTonSccpMessageProofBundleSummary(bundleBytes, field: "bundleBytes")
+    let messageId = try tonNormalizeHex32(publicInputs.messageId, field: "publicInputs.messageId")
+    let payloadHash = try tonNormalizeHex32(publicInputs.payloadHash, field: "publicInputs.payloadHash")
+    let commitmentRoot = try tonNormalizeHex32(publicInputs.commitmentRoot, field: "publicInputs.commitmentRoot")
+    guard summary.targetDomain == publicInputs.targetDomain,
+          summary.messageId == messageId,
+          summary.payloadHash == payloadHash,
+          summary.commitmentRoot == commitmentRoot else {
+        throw TonSccpProverError.invalidField("bundleBytes")
+    }
+    guard summary.sourceDomain == sccpDomainSora || !sourceProofBytes.isEmpty else {
+        throw TonSccpProverError.invalidField("sourceProofBytes")
+    }
+    return summary
+}
+
+private func decodeCanonicalTonSccpMessageProofBundleSummary(
+    _ bundleBytes: Data,
+    field: String
+) throws -> TonCanonicalSccpBundleSummary {
+    var offset = 0
+    let version = try tonReadBundleU8(bundleBytes, offset: offset, field: "\(field).version")
+    offset += 1
+    guard version == 1 else {
+        throw TonSccpProverError.invalidField("\(field).version")
+    }
+    guard offset + 32 <= bundleBytes.count else {
+        throw TonSccpProverError.invalidField("\(field).commitment_root")
+    }
+    let commitmentRoot = "0x" + Data(bundleBytes[offset..<(offset + 32)]).hexEncodedString()
+    offset += 32
+    var range = try tonReadCanonicalSccpVec(bundleBytes, offset: offset, field: "\(field).commitment")
+    let commitmentBytes = range.bytes
+    offset = range.nextOffset
+    range = try tonReadCanonicalSccpVec(bundleBytes, offset: offset, field: "\(field).merkle_proof")
+    let merkleProofBytes = range.bytes
+    offset = range.nextOffset
+    range = try tonReadCanonicalSccpVec(bundleBytes, offset: offset, field: "\(field).payload")
+    let payloadBytes = range.bytes
+    offset = range.nextOffset
+    range = try tonReadCanonicalSccpVec(bundleBytes, offset: offset, field: "\(field).finality_proof")
+    offset = range.nextOffset
+    try tonRequireExactPayloadEnd(offset, bundleBytes, field: field)
+
+    let payload = try decodeCanonicalTonSccpBundlePayloadSummary(payloadBytes, field: "\(field).payload")
+    let expectedCommitmentBytes = try canonicalTonSccpCommitmentBytes(
+        kind: payload.kind,
+        targetDomain: payload.targetDomain,
+        messageId: payload.messageId,
+        payloadHash: payload.payloadHash
+    )
+    guard commitmentBytes == expectedCommitmentBytes else {
+        throw TonSccpProverError.invalidField("\(field).commitment")
+    }
+    let commitment = try decodeCanonicalTonSccpBundleCommitmentSummary(commitmentBytes, field: field)
+    let payloadKindCode = try tonSccpMessageKindCode(payload.kind)
+    guard commitment.kindCode == payloadKindCode else {
+        throw TonSccpProverError.invalidField("\(field).commitment")
+    }
+    let expectedRoot = try merkleRootFromCanonicalTonSccpCommitmentBytes(
+        commitmentBytes,
+        merkleProofBytes: merkleProofBytes,
+        field: "\(field).merkle_proof"
+    )
+    guard commitmentRoot == expectedRoot else {
+        throw TonSccpProverError.invalidField("\(field).commitment_root")
+    }
+    return TonCanonicalSccpBundleSummary(
+        sourceDomain: payload.sourceDomain,
+        targetDomain: commitment.targetDomain,
+        messageId: commitment.messageId,
+        payloadHash: commitment.payloadHash,
+        commitmentRoot: commitmentRoot
+    )
+}
+
+private func decodeCanonicalTonSccpBundlePayloadSummary(
+    _ payloadBytes: Data,
+    field: String
+) throws -> TonCanonicalSccpPayloadSummary {
+    let discriminant = try tonReadBundleU8(payloadBytes, offset: 0, field: "\(field).kind")
+    let body = Data(payloadBytes.dropFirst())
+    let version = try tonReadBundleU8(body, offset: 0, field: "\(field).version")
+    guard version == 1 else {
+        throw TonSccpProverError.invalidField("\(field).version")
+    }
+    var cursor = 1
+
+    func readDomain(_ name: String) throws -> UInt32 {
+        let domain = try tonReadBundleU32Le(body, offset: cursor, field: "\(field).\(name)")
+        cursor += 4
+        try requireSupportedTonSccpBundleDomain(domain, field: "\(field).\(name)")
+        return domain
+    }
+
+    func readU64(_ name: String) throws {
+        _ = try tonReadBundleU64Le(body, offset: cursor, field: "\(field).\(name)")
+        cursor += 8
+    }
+
+    func readCodec(_ name: String) throws -> UInt8 {
+        let codec = try tonReadBundleU8(body, offset: cursor, field: "\(field).\(name)")
+        cursor += 1
+        return try normalizeTonSccpCodecId(codec, field: "\(field).\(name)")
+    }
+
+    func readCodecValue(_ codec: UInt8, _ name: String) throws {
+        let range = try tonReadCanonicalSccpVec(body, offset: cursor, field: "\(field).\(name)")
+        cursor = range.nextOffset
+        try validateCanonicalTonSccpCodecBytes(codec, range.bytes, field: "\(field).\(name)")
+    }
+
+    func readFixed(_ byteCount: Int, _ name: String) throws -> Data {
+        guard cursor + byteCount <= body.count else {
+            throw TonSccpProverError.invalidField("\(field).\(name)")
+        }
+        let value = Data(body[cursor..<(cursor + byteCount)])
+        cursor += byteCount
+        return value
+    }
+
+    func summary(
+        kind: String,
+        sourceDomain: UInt32,
+        targetDomain: UInt32,
+        prefix: String
+    ) -> TonCanonicalSccpPayloadSummary {
+        TonCanonicalSccpPayloadSummary(
+            kind: kind,
+            sourceDomain: sourceDomain,
+            targetDomain: targetDomain,
+            messageId: tonPrefixedKeccakHex(prefix: prefix, payload: body),
+            payloadHash: tonHashHex(prefix: tonSccpPayloadHashPrefixV1, payload: payloadBytes)
+        )
+    }
+
+    switch discriminant {
+    case 0:
+        let targetDomain = try readDomain("target_domain")
+        let sourceDomain = try readDomain("home_domain")
+        try readU64("nonce")
+        let assetIdCodec = try readCodec("asset_id_codec")
+        try readCodecValue(assetIdCodec, "asset_id")
+        _ = try tonReadBundleU8(body, offset: cursor, field: "\(field).decimals")
+        cursor += 1
+        try tonRequireExactPayloadEnd(cursor, body, field: field)
+        return summary(
+            kind: "AssetRegister",
+            sourceDomain: sourceDomain,
+            targetDomain: targetDomain,
+            prefix: tonSccpMessagePrefixAssetRegisterV1
+        )
+    case 1:
+        let sourceDomain = try readDomain("source_domain")
+        let targetDomain = try readDomain("target_domain")
+        guard sourceDomain != targetDomain else {
+            throw TonSccpProverError.invalidField("\(field).target_domain")
+        }
+        try readU64("nonce")
+        let assetIdCodec = try readCodec("asset_id_codec")
+        try readCodecValue(assetIdCodec, "asset_id")
+        let routeIdCodec = try readCodec("route_id_codec")
+        try readCodecValue(routeIdCodec, "route_id")
+        try tonRequireExactPayloadEnd(cursor, body, field: field)
+        return summary(
+            kind: "RouteActivate",
+            sourceDomain: sourceDomain,
+            targetDomain: targetDomain,
+            prefix: tonSccpMessagePrefixRouteActivateV1
+        )
+    case 2:
+        let sourceDomain = try readDomain("source_domain")
+        let targetDomain = try readDomain("dest_domain")
+        guard sourceDomain != targetDomain else {
+            throw TonSccpProverError.invalidField("\(field).dest_domain")
+        }
+        try readU64("nonce")
+        _ = try readDomain("asset_home_domain")
+        let assetIdCodec = try readCodec("asset_id_codec")
+        try readCodecValue(assetIdCodec, "asset_id")
+        let amount = try readFixed(16, "amount")
+        guard amount.contains(where: { $0 != 0 }) else {
+            throw TonSccpProverError.invalidField("\(field).amount")
+        }
+        let senderCodec = try readCodec("sender_codec")
+        let expectedSenderCodec = try tonSccpCounterpartyAccountCodec(sourceDomain)
+        guard senderCodec == expectedSenderCodec else {
+            throw TonSccpProverError.invalidField("\(field).sender_codec")
+        }
+        try readCodecValue(senderCodec, "sender")
+        let recipientCodec = try readCodec("recipient_codec")
+        let expectedRecipientCodec = try tonSccpCounterpartyAccountCodec(targetDomain)
+        guard recipientCodec == expectedRecipientCodec else {
+            throw TonSccpProverError.invalidField("\(field).recipient_codec")
+        }
+        try readCodecValue(recipientCodec, "recipient")
+        let routeIdCodec = try readCodec("route_id_codec")
+        try readCodecValue(routeIdCodec, "route_id")
+        try tonRequireExactPayloadEnd(cursor, body, field: field)
+        return summary(
+            kind: "Transfer",
+            sourceDomain: sourceDomain,
+            targetDomain: targetDomain,
+            prefix: tonSccpMessagePrefixTransferV1
+        )
+    case 3:
+        let targetDomain = try readDomain("target_domain")
+        try readU64("nonce")
+        let assetId = try readFixed(32, "sora_asset_id")
+        guard assetId.contains(where: { $0 != 0 }) else {
+            throw TonSccpProverError.invalidField("\(field).sora_asset_id")
+        }
+        _ = try tonReadBundleU8(body, offset: cursor, field: "\(field).decimals")
+        cursor += 1
+        let name = try readFixed(32, "name")
+        guard tonFixedAsciiFieldIsNonEmpty(name) else {
+            throw TonSccpProverError.invalidField("\(field).name")
+        }
+        let symbol = try readFixed(32, "symbol")
+        guard tonFixedAsciiFieldIsNonEmpty(symbol) else {
+            throw TonSccpProverError.invalidField("\(field).symbol")
+        }
+        try tonRequireExactPayloadEnd(cursor, body, field: field)
+        return summary(
+            kind: "TokenAdd",
+            sourceDomain: sccpDomainSora,
+            targetDomain: targetDomain,
+            prefix: tonSccpMessagePrefixTokenAddV1
+        )
+    case 4, 5:
+        let targetDomain = try readDomain("target_domain")
+        try readU64("nonce")
+        let assetId = try readFixed(32, "sora_asset_id")
+        guard assetId.contains(where: { $0 != 0 }) else {
+            throw TonSccpProverError.invalidField("\(field).sora_asset_id")
+        }
+        try tonRequireExactPayloadEnd(cursor, body, field: field)
+        let isPause = discriminant == 4
+        return summary(
+            kind: isPause ? "TokenPause" : "TokenResume",
+            sourceDomain: sccpDomainSora,
+            targetDomain: targetDomain,
+            prefix: isPause ? tonSccpMessagePrefixTokenPauseV1 : tonSccpMessagePrefixTokenResumeV1
+        )
+    default:
+        throw TonSccpProverError.invalidField(field)
+    }
+}
+
+private func decodeCanonicalTonSccpBundleCommitmentSummary(
+    _ commitmentBytes: Data,
+    field: String
+) throws -> TonCanonicalSccpCommitmentSummary {
+    guard commitmentBytes.count == 70 else {
+        throw TonSccpProverError.invalidField("\(field).commitment")
+    }
+    let version = try tonReadBundleU8(commitmentBytes, offset: 0, field: "\(field).commitment.version")
+    guard version == 1 else {
+        throw TonSccpProverError.invalidField("\(field).commitment.version")
+    }
+    let targetDomain = try tonReadBundleU32Le(
+        commitmentBytes,
+        offset: 2,
+        field: "\(field).commitment.target_domain"
+    )
+    return TonCanonicalSccpCommitmentSummary(
+        kindCode: try tonReadBundleU8(commitmentBytes, offset: 1, field: "\(field).commitment.kind"),
+        targetDomain: targetDomain,
+        messageId: "0x" + Data(commitmentBytes[6..<38]).hexEncodedString(),
+        payloadHash: "0x" + Data(commitmentBytes[38..<70]).hexEncodedString()
+    )
+}
+
+private func merkleRootFromCanonicalTonSccpCommitmentBytes(
+    _ commitmentBytes: Data,
+    merkleProofBytes: Data,
+    field: String
+) throws -> String {
+    var offset = 0
+    let stepCount = try tonReadBundleU32Le(merkleProofBytes, offset: offset, field: "\(field).steps")
+    offset += 4
+    var current = tonHashBytes(prefix: tonSccpHubLeafPrefixV1, payload: commitmentBytes)
+    for index in 0..<Int(stepCount) {
+        guard offset + 33 <= merkleProofBytes.count else {
+            throw TonSccpProverError.invalidField("\(field).steps[\(index)]")
+        }
+        let sibling = Data(merkleProofBytes[offset..<(offset + 32)])
+        offset += 32
+        let siblingIsLeft = try tonReadBundleU8(
+            merkleProofBytes,
+            offset: offset,
+            field: "\(field).steps[\(index)].sibling_is_left"
+        )
+        offset += 1
+        guard siblingIsLeft == 0 || siblingIsLeft == 1 else {
+            throw TonSccpProverError.invalidField("\(field).steps[\(index)].sibling_is_left")
+        }
+        var payload = Data()
+        if siblingIsLeft == 1 {
+            payload.append(sibling)
+            payload.append(current)
+        } else {
+            payload.append(current)
+            payload.append(sibling)
+        }
+        current = tonHashBytes(prefix: tonSccpHubNodePrefixV1, payload: payload)
+    }
+    try tonRequireExactPayloadEnd(offset, merkleProofBytes, field: field)
+    return "0x" + current.hexEncodedString()
+}
+
+private func canonicalTonSccpCommitmentBytes(
+    kind: String,
+    targetDomain: UInt32,
+    messageId: String,
+    payloadHash: String
+) throws -> Data {
+    var out = Data()
+    out.append(1)
+    out.append(try tonSccpMessageKindCode(kind))
+    tonAppendU32Le(targetDomain, to: &out)
+    try out.append(tonBytesFromHex32(messageId, field: "commitment.messageId"))
+    try out.append(tonBytesFromHex32(payloadHash, field: "commitment.payloadHash"))
+    return out
+}
+
+private func tonSccpMessageKindCode(_ kind: String) throws -> UInt8 {
+    switch kind {
+    case "Burn":
+        return 0
+    case "TokenAdd":
+        return 1
+    case "TokenPause":
+        return 2
+    case "TokenResume":
+        return 3
+    case "AssetRegister":
+        return 4
+    case "RouteActivate":
+        return 5
+    case "Transfer":
+        return 6
+    default:
+        throw TonSccpProverError.invalidField("messageKind")
+    }
+}
+
+private func requireSupportedTonSccpBundleDomain(_ domain: UInt32, field: String) throws {
+    guard domain == sccpDomainSora ||
+          domain == sccpDomainEthereum ||
+          domain == sccpDomainBsc ||
+          domain == sccpDomainSolana ||
+          domain == sccpDomainTon ||
+          domain == sccpDomainTron else {
+        throw TonSccpProverError.invalidField(field)
+    }
+}
+
+private func normalizeTonSccpCodecId(_ value: UInt8, field: String) throws -> UInt8 {
+    guard value == tonSccpCodecTextUtf8 ||
+          value == tonSccpCodecEvmHex ||
+          value == tonSccpCodecSolanaBase58 ||
+          value == tonSccpCodecTonRaw ||
+          value == tonSccpCodecTronBase58Check ||
+          value == tonSccpCodecSoraAssetId else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    return value
+}
+
+private func tonSccpCounterpartyAccountCodec(_ domain: UInt32) throws -> UInt8 {
+    switch domain {
+    case sccpDomainSora:
+        return tonSccpCodecTextUtf8
+    case sccpDomainEthereum, sccpDomainBsc:
+        return tonSccpCodecEvmHex
+    case sccpDomainSolana:
+        return tonSccpCodecSolanaBase58
+    case sccpDomainTon:
+        return tonSccpCodecTonRaw
+    case sccpDomainTron:
+        return tonSccpCodecTronBase58Check
+    default:
+        throw TonSccpProverError.invalidField("domain")
+    }
+}
+
+private func validateCanonicalTonSccpCodecBytes(
+    _ codec: UInt8,
+    _ raw: Data,
+    field: String
+) throws {
+    switch codec {
+    case tonSccpCodecTextUtf8:
+        guard let text = String(data: raw, encoding: .utf8), !text.isEmpty else {
+            throw TonSccpProverError.invalidField(field)
+        }
+    case tonSccpCodecEvmHex:
+        guard let text = String(data: raw, encoding: .utf8),
+              text.count == 42,
+              text.hasPrefix("0x"),
+              text.dropFirst(2).allSatisfy({ $0.isHexDigit }),
+              text == text.lowercased() else {
+            throw TonSccpProverError.invalidField(field)
+        }
+    case tonSccpCodecSolanaBase58:
+        guard let text = String(data: raw, encoding: .utf8) else {
+            throw TonSccpProverError.invalidField(field)
+        }
+        _ = try tonDecodeBase58Fixed(text, field: field, byteCount: 32)
+    case tonSccpCodecTonRaw:
+        guard let text = String(data: raw, encoding: .utf8) else {
+            throw TonSccpProverError.invalidField(field)
+        }
+        _ = try tonNormalizeRawAddress(text, field: field)
+    case tonSccpCodecTronBase58Check:
+        guard let text = String(data: raw, encoding: .utf8) else {
+            throw TonSccpProverError.invalidField(field)
+        }
+        _ = try tonTronBase58CheckPayload(text, field: field)
+    case tonSccpCodecSoraAssetId:
+        guard raw.count == 32 else {
+            throw TonSccpProverError.invalidField(field)
+        }
+    default:
+        throw TonSccpProverError.invalidField(field)
+    }
+}
+
+private func tonFixedAsciiFieldIsNonEmpty(_ raw: Data) -> Bool {
+    raw.contains { byte in
+        byte != 0 && byte >= 0x20 && byte <= 0x7e
+    }
+}
+
+private func tonReadCanonicalSccpVec(
+    _ bytes: Data,
+    offset: Int,
+    field: String
+) throws -> TonCanonicalSccpVecRange {
+    let length = Int(try tonReadBundleU32Le(bytes, offset: offset, field: "\(field).length"))
+    let start = offset + 4
+    let end = start + length
+    guard offset >= 0, start >= 4, end >= start, end <= bytes.count else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    return TonCanonicalSccpVecRange(
+        bytes: Data(bytes[start..<end]),
+        nextOffset: end
+    )
+}
+
+private func tonRequireExactPayloadEnd(_ offset: Int, _ bytes: Data, field: String) throws {
+    guard offset == bytes.count else {
+        throw TonSccpProverError.invalidField(field)
+    }
+}
+
+private func tonReadBundleU8(_ data: Data, offset: Int, field: String) throws -> UInt8 {
+    guard offset >= 0, offset < data.count else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    return data[offset]
+}
+
+private func tonReadBundleU32Le(_ data: Data, offset: Int, field: String) throws -> UInt32 {
+    guard offset >= 0, offset + 4 <= data.count else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    var value: UInt32 = 0
+    for index in 0..<4 {
+        value |= UInt32(data[offset + index]) << UInt32(index * 8)
+    }
+    return value
+}
+
+private func tonReadBundleU64Le(_ data: Data, offset: Int, field: String) throws -> UInt64 {
+    guard offset >= 0, offset + 8 <= data.count else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    var value: UInt64 = 0
+    for index in 0..<8 {
+        value |= UInt64(data[offset + index]) << UInt64(index * 8)
+    }
+    return value
+}
+
+private let tonBase58Alphabet = Array("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+
+private func tonDecodeBase58Fixed(_ value: String, field: String, byteCount: Int) throws -> Data {
+    guard !value.isEmpty else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    var bytes = [UInt8]()
+    for character in value {
+        guard let alphabetIndex = tonBase58Alphabet.firstIndex(of: character) else {
+            throw TonSccpProverError.invalidField(field)
+        }
+        var carry = alphabetIndex
+        if !bytes.isEmpty {
+            for index in stride(from: bytes.count - 1, through: 0, by: -1) {
+                let next = Int(bytes[index]) * 58 + carry
+                bytes[index] = UInt8(next & 0xff)
+                carry = next >> 8
+            }
+        }
+        while carry > 0 {
+            bytes.insert(UInt8(carry & 0xff), at: 0)
+            carry >>= 8
+        }
+    }
+    let leadingZeros = value.prefix { $0 == "1" }.count
+    var decoded = Data(repeating: 0, count: leadingZeros)
+    decoded.append(Data(bytes))
+    guard decoded.count == byteCount else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    return decoded
+}
+
+private func tonTronBase58CheckPayload(_ value: String, field: String) throws -> Data {
+    let raw = try tonDecodeBase58Flexible(value, field: field)
+    guard raw.count == 25, raw.first == 0x41 else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    let payload = Data(raw.prefix(21))
+    let checksum = Data(raw.suffix(4))
+    let expected = Data(Data(SHA256.hash(data: Data(SHA256.hash(data: payload)))).prefix(4))
+    guard checksum == expected else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    return payload
+}
+
+private func tonDecodeBase58Flexible(_ value: String, field: String) throws -> Data {
+    guard !value.isEmpty else {
+        throw TonSccpProverError.invalidField(field)
+    }
+    var bytes = [UInt8]()
+    for character in value {
+        guard let alphabetIndex = tonBase58Alphabet.firstIndex(of: character) else {
+            throw TonSccpProverError.invalidField(field)
+        }
+        var carry = alphabetIndex
+        if !bytes.isEmpty {
+            for index in stride(from: bytes.count - 1, through: 0, by: -1) {
+                let next = Int(bytes[index]) * 58 + carry
+                bytes[index] = UInt8(next & 0xff)
+                carry = next >> 8
+            }
+        }
+        while carry > 0 {
+            bytes.insert(UInt8(carry & 0xff), at: 0)
+            carry >>= 8
+        }
+    }
+    let leadingZeros = value.prefix { $0 == "1" }.count
+    var decoded = Data(repeating: 0, count: leadingZeros)
+    decoded.append(Data(bytes))
+    return decoded
+}
+
+private func tonPrefixedKeccakHex(prefix: String, payload: Data) -> String {
+    var preimage = Data(prefix.utf8)
+    preimage.append(payload)
+    return "0x" + irohaKeccak256(preimage).hexEncodedString()
 }
 
 private func normalizeTonSccpProofContext(statementHash: String,

@@ -579,6 +579,7 @@ public sealed class PrivacyNativeTests
                 ptr =>
                 {
                     Assert.Equal(pointer, ptr);
+                    AssertPointerZeroed(ptr, bytes.Length);
                     Marshal.FreeHGlobal(ptr);
                     freed = true;
                 },
@@ -615,6 +616,7 @@ public sealed class PrivacyNativeTests
                 ptr =>
                 {
                     Assert.Equal(pointer, ptr);
+                    AssertPointerZeroed(ptr, bytes.Length);
                     Marshal.Copy(FilledBytes(0x7f, bytes.Length), 0, ptr, bytes.Length);
                     Marshal.FreeHGlobal(ptr);
                     freed = true;
@@ -654,6 +656,7 @@ public sealed class PrivacyNativeTests
                         ptr =>
                         {
                             Assert.Equal(pointer, ptr);
+                            AssertPointerZeroed(ptr, bytes.Length);
                             Marshal.FreeHGlobal(ptr);
                             pointer = IntPtr.Zero;
                             freed = true;
@@ -1020,11 +1023,13 @@ public sealed class PrivacyNativeTests
         try
         {
             Marshal.Copy(output, 0, pointer, output.Length);
-            return PrivacyNative.IsValidProbeResult(
+            var valid = PrivacyNative.IsValidProbeResult(
                 code,
                 pointer,
                 (UIntPtr)output.Length,
                 expectedSchemaBytes);
+            AssertPointerZeroed(pointer, output.Length);
+            return valid;
         }
         finally
         {
@@ -1068,6 +1073,13 @@ public sealed class PrivacyNativeTests
                 Marshal.FreeHGlobal(pointer);
             }
         }
+    }
+
+    private static void AssertPointerZeroed(IntPtr pointer, int length)
+    {
+        var observed = new byte[length];
+        Marshal.Copy(pointer, observed, 0, observed.Length);
+        Assert.All(observed, value => Assert.Equal((byte)0, value));
     }
 
     private static void AssertReadOutputRejectsUnknownSymbol(

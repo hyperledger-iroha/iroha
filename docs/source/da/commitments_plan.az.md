@@ -18,7 +18,7 @@ DA-3 Nexus blok formatını genişləndirir, beləliklə hər zolaq deterministi
 DA-2 tərəfindən qəbul edilən blobları təsvir edir. Bu qeyd kanonik məlumatları əhatə edir
 konstruksiyalar, blok boru kəməri qarmaqları, yüngül müştəri sübutları və Torii/RPC səthləri
 validatorlar qəbul zamanı DA öhdəliklərinə etibar etməzdən əvvəl yerə enməlidir və ya
-idarəetmə yoxlamaları. Bütün faydalı yüklər Norito kodludur; SCALE və ya ad-hoc JSON yoxdur.
+idarəetmə yoxlamaları. Bütün faydalı yüklər Norito kodludur; retired codec və ya ad-hoc JSON yoxdur.
 
 ## Məqsədlər
 

@@ -128,7 +128,12 @@ proofs in lineage order, with each proof's hop count equal to its one-based
 position. Each previous proof must also share the final bundle's verifier
 opening length, Pallas parameter fingerprint, fixed-window schedule digest, and
 shared-table manifest digest; per-hop witness-batch and table-base digests
-remain prefix-specific and are replayed by core. Semantic previous proofs must
+remain prefix-specific and are replayed by core. One-hop verifier-slice
+evidence binding now has adversarial coverage for proof-count,
+verifier-witness profile, parameter fingerprint, fixed-window schedule,
+shared-table manifest, opening-length, table-base, and hop-bound batch-digest
+splices before receiver admission can trust that evidence. Semantic previous
+proofs must
 leave the lineage scalar-projection digest zero; Reserved-lineage previous
 proofs must bind a non-zero scalar-projection digest and require the active
 lineage verifier record before native hosts can serialize a redeem instruction.
@@ -217,7 +222,11 @@ JavaScript/Node, Python, and C# expose typed lineage key artifact helpers for th
 same package shape; those helpers defensively copy key bytes and reject unknown
 profile ids, unsupported opening lengths, non-`halo2/ipa` verifier backends,
 empty verifier keys, and empty proving-key archives before wallet code can
-construct a native request archive. Kotlin/JVM also converts Java-callable null
+construct a native request archive. The helpers also require the proving-key
+archive payload to contain both the selected circuit id bytes and the stable
+verifier-key commitment for the supplied verifier key, so a self-consistent
+archive cannot be paired with a different verifier package. Kotlin/JVM also
+converts Java-callable null
 lineage artifact inputs into the same stable field errors instead of relying on
 Kotlin intrinsic null checks.
 
@@ -239,24 +248,44 @@ iroha app zk kagemusha lineage-key-artifacts \
   --record-out artifacts/kagemusha/lineage-append-len128.record.norito \
   --vk-out artifacts/kagemusha/lineage-append-len128.vk \
   --pk-out artifacts/kagemusha/lineage-append-len128.pk
+
+iroha app zk kagemusha recursive-compact-key-artifacts \
+  --vk-out artifacts/kagemusha/recursive-compact-len4.vk \
+  --pk-out artifacts/kagemusha/recursive-compact-len4.pk \
+  --record-out artifacts/kagemusha/recursive-compact-len4.record.norito \
+  --record-namespace offline_kagemusha \
+  --record-version 1
 ```
 
-The primary `.norito` package is the SDK input. `--record-out` writes the
-governance/WSV `VerifyingKeyRecord` bound to `offline_kagemusha`; use
-`--record-namespace` and `--record-version` when an operator needs a different
-namespace or governance version. The separate `.vk` and `.pk` files are optional
-operator artifacts for inspection, checksums, or escrow. Generating these
+For lineage commands, the primary `.norito` package is the SDK input.
+`--record-out` writes the governance/WSV `VerifyingKeyRecord` bound to `offline_kagemusha`;
+use `--record-namespace` and `--record-version` when an
+operator needs a different namespace or governance version. The separate `.vk`
+and `.pk` files are optional operator artifacts for inspection, checksums, or
+escrow. The `recursive-compact-key-artifacts` command writes the ABI-7 one-hop
+LEN=4 compact verifier key and packaged compact proving-key archive used by
+`kagemusha-recursive-compact-v1`; its optional record is the governance input,
+and it does not create a multi-hop compact proof package. Generating these
 artifacts is intentionally expensive; do it during release preparation, not on
 payment devices or inside request handling.
 The production readiness rollup requires
-`artifacts/kagemusha/lineage-proof-evidence.json` to sit beside these
-Reserved-lineage `.norito`, `.record.norito`, `.vk`, and `.pk` files plus the
+`artifacts/kagemusha/lineage-proof-evidence.json` and
+`artifacts/kagemusha/recursive-compact-key-evidence.json` to sit beside these
+Reserved-lineage `.norito`, `.record.norito`, `.vk`, and `.pk` files, the
+ABI-7 recursive compact `.record.norito`, `.vk`, and `.pk` files, plus the
 captured `record-archive-proof.log` from the ignored production proof run. The
-canonical `lineage-proof-evidence.json` filename is part of the release packet
+canonical `lineage-proof-evidence.json` and
+`recursive-compact-key-evidence.json` filenames are part of the release packet
 contract; renamed, copied, symlinked, or symlink-ancestor evidence JSON files
-are rejected. The evidence JSON declares their SHA-256 digests. The rollup
-recomputes each digest from the adjacent local artifact bytes, requires those
-artifacts and the proof log to be regular non-symlink, non-hardlinked files,
+are rejected. The evidence JSON declares SHA-256 digests and byte sizes for
+Reserved-lineage and ABI-7 compact key artifacts. The rollup recomputes each digest
+and artifact size from the adjacent local artifact bytes, requires those
+artifacts and the proof log to be regular non-symlink, non-hardlinked files
+with readable leaf metadata, requires lineage and compact key artifacts to be
+non-empty, rejects obvious plain-text placeholder compact key artifacts before
+digest-only acceptance, and
+classifies artifact/log missing-vs-unreadable state from the lstat-backed
+local-file validators rather than `Path.is_file()`,
 and treats the checked-in ABI-6 manifest plus ABI-7 fail-closed and
 Reserved-lineage release-tooling marker files as local trust roots that must
 also be ordinary non-symlink, non-hardlinked files with symlink-free ancestors
@@ -264,15 +293,31 @@ before their contents can satisfy readiness,
 then re-checks that the local proof log
 contains the passing cargo result for the production Reserved-lineage test
 as a single expected `test ... ok` line with exactly one one-test cargo result,
+rerunning the lineage local-file validator immediately before reading proof-log
+text,
 and that the recorded command is the production
 `cargo test -p iroha_core ... --lib -- --ignored --test-threads=1 --nocapture`
 run exactly as the canonical command string, with runtime lineage keygen unset
 and no quoted-token aliases, newlines, or appended shell commands, before it can
-report ready. Marker-stuffed proof logs with extra passing tests are rejected
+report ready. The compact key evidence separately requires the exact
+`iroha app zk kagemusha recursive-compact-key-artifacts --vk-out artifacts/kagemusha/recursive-compact-len4.vk --pk-out artifacts/kagemusha/recursive-compact-len4.pk --record-out artifacts/kagemusha/recursive-compact-len4.record.norito --record-namespace offline_kagemusha --record-version 1`
+command string, LEN=4, IPA `k = 8`, `halo2/ipa`, circuit id
+`kagemusha-recursive-compact-v1`, record namespace `offline_kagemusha`, record
+version `1`, adjacent non-empty digest- and size-checked compact key files, and
+the captured `recursive-compact-key-artifacts.log` stdout line from the
+canonical key-generation command. The rollup hash-binds that generator log,
+requires it to contain exactly the canonical CLI summary line, and checks the
+reported `.vk`, `.pk`, and `.record.norito` byte sizes against the adjacent
+artifact bytes.
+Plain-text placeholder compact key artifacts are rejected as non-production
+fixtures even when their SHA-256 digest and byte size match the evidence JSON.
+Marker-stuffed proof logs with extra passing tests are rejected
 even when their digest matches the evidence JSON. The evidence JSON and its nested `circuit_ids`,
 `artifacts`, and `tests` objects are closed schemas, so extra release claims are
 rejected instead of ignored; duplicate JSON object keys are also invalid, so
-auditors never have to interpret last-key-wins evidence packets. Proof evidence
+auditors never have to interpret last-key-wins evidence packets. Unreadable or
+non-UTF-8 ABI-6 manifest and proof-evidence JSON files fail closed as structured
+read blockers instead of tracebacks. Proof evidence
 before the release cutoff, or future-dated beyond the release validator
 clock-skew allowance, remains blocked
 even when every artifact digest is otherwise valid. Its `generated_at_utc`
@@ -286,57 +331,155 @@ proof-log, and output paths before resolving corridors, creating output parents,
 creating temporary evidence files, or writing evidence JSON. The shared local lineage file validator
 also rejects secret-looking evidence, artifact, or proof-log paths and symlinked
 local-file ancestors before JSON parsing, digest calculation, or proof-log
-reads. Ready summaries publish only
+reads; both the readiness rollup's direct SHA-256 reader and the lineage
+helper's direct SHA-256 reader repeat that file-shape validation before
+returning artifact digests. Ready summaries publish only
 sanitized SHA-256 maps for the accepted Reserved-lineage artifacts and proof
 log, not the local artifact directory path, so release reviewers can compare
 evidence packets without capturing workstation paths. Android freshness checks consume the
 scanner-validated signed-evidence timestamp already present in each accepted slot
 report instead of re-opening slot metadata or signed-evidence JSON during the
 rollup. The rollup rejects symlinked `--repo-root` directories, symlinked
-repo-root ancestors, and direct secret-looking repo-root validator inputs before
-resolving checked-in ABI/source trust roots. The ABI-6 manifest, ABI-7 marker,
-and Reserved-lineage release-tooling section checks repeat that repo-root
-preflight before reading their checked-in trust-root files, and the lower-level
-release JSON/source marker file validators reject secret-looking direct file
-paths before metadata checks or content parsing. The
+repo-root ancestors, unreadable repo-root metadata, and direct secret-looking
+repo-root validator inputs before resolving checked-in ABI/source trust roots.
+The ABI-6 manifest, ABI-7 marker, and Reserved-lineage release-tooling section
+checks repeat that repo-root preflight before reading their checked-in
+trust-root files, and the lower-level release JSON/source marker file validators
+reject secret-looking direct file paths and unreadable ABI-6 release JSON leaf
+metadata before content parsing.
+ABI-7 and Reserved-lineage
+source marker text reads also rerun the source-marker file validator immediately
+before loading marker text, so symlink, hardlink, non-regular, or secret-bearing
+source aliases cannot satisfy readiness markers after an earlier check. Unreadable
+source-marker leaf metadata, unreadable marker bytes, or non-UTF-8 ABI-7 and
+Reserved-lineage marker files return
+structured blockers instead of raw decode errors. The
+ABI-7 compact section also extracts the relevant Rust function bodies before
+trusting the checked-in source: compact record preflight must still reject
+multi-hop Pallas archives with the reserved unavailable diagnostic, one-hop
+Pallas archives must bind to the production LEN=4 verifier-slice key and either
+consume packaged proving-key material or fail at the proving-key gate, and the C
+bridge must still map true multi-hop compact unavailability to
+`KagemushaRecursiveCompactUnavailable` instead of a generic proof error. The
 readiness summary writer also rejects symlinked `--summary-out` ancestors and
-secret-looking direct output paths before creating missing output parent
-directories, keeping local rollup artifacts from being emitted through secret or
+symlinked, hardlinked, non-regular, dangling-symlink, or unreadable-metadata
+output leaves, plus secret-looking direct output paths, before creating missing
+output parent directories, then rechecks the output parent and ancestors before
+writing, keeping local rollup artifacts from being emitted through secret or
 aliased paths. The
 Android signing helper runs the slot/artifact symlink, hardlink, and
-regular-file preflight before parsing `slot.json`, so metadata-derived output
-paths, signatures, and manifest refreshes cannot start from an aliased slot
-bundle. Runtime private-key and signer public-key paths are validated for
-secret-looking material before OpenSSL lookup, so missing local tooling cannot
-mask unsafe operator path inputs. Lower-level direct symlink, hardlink, and regular-file artifact
+regular-file preflight before parsing `slot.json`, and classifies the slot
+directory plus its parent with `lstat()` so unreadable slot or parent metadata
+fails closed before metadata-derived output paths, signatures, or manifest
+refreshes can start from an aliased slot bundle. Scanner and signing-helper direct calls also route top-level slot
+artifact enumeration through the same guarded list helper, so a post-validation
+slot directory listing failure becomes `slot directory could not be listed`
+instead of a traceback or a partial manifest rewrite. Runtime private-key and signer public-key paths are validated for
+secret-looking material before OpenSSL lookup, and private-key leaf metadata is
+checked before classifying missing, symlinked, non-regular, hardlinked, or
+unreadable key files. Trusted public-key leaf metadata follows the same
+missing, symlink, non-regular, hardlink, and unreadable-metadata shape checks.
+Missing local tooling cannot mask unsafe operator path inputs, and signature
+verification preserves key-path validation failures
+separately from private/public key mismatches. Temporary
+OpenSSL staging write failures and signature output read failures are reported
+as structured signer/verifier errors instead of tracebacks. Lower-level direct symlink, hardlink, and regular-file artifact
 validators reject secret-looking slot paths before traversing, stat-ing, or
-classifying slot artifacts. Direct signer metadata-loader and SHA-256 manifest rewrite helper calls
-also reject secret-looking slot paths before metadata parsing, artifact
-traversal, hashing, or manifest writes. The lower-level signer artifact-digest
+classifying slot artifacts. The symlink validator now reports unreadable
+slot-metadata, artifact-directory, and nested-artifact metadata before alias
+classification, and the regular-file validator classifies leaves with `lstat()`
+before any `exists()` preflight can mask unreadable metadata. Hardlink and
+regular-file validators also classify artifact directories with `lstat()`
+before any `exists()` preflight, and the regular-file validator classifies
+nested artifacts before any `is_symlink()` preflight. Required-artifact shape
+checks, required status/runtime text reads, the D2D queue digest binding, and
+the signed-evidence artifact binding also classify artifacts with `lstat()`
+before any `is_file()` preflight. Direct signer metadata-loader and SHA-256 manifest rewrite helper calls
+also reject secret-looking slot paths and unreadable slot or parent metadata
+before metadata parsing, artifact traversal, hashing, or manifest writes. The lower-level signer artifact-digest
 builder reruns that slot preflight before hashing required signed-evidence
 artifacts, so direct calls cannot hash through secret-bearing or aliased slot
-paths. Low-level signer output writers also
+paths, and the per-artifact digest helper rechecks each relative artifact path
+for secret-looking names, unreadable leaf metadata, symlinks, hardlinks, and
+non-regular files immediately before digest reads used by signed evidence and
+manifest rewrites. Low-level signer output writers also
 reject secret-looking signed-evidence and manifest paths before creating output
-parents or writing files. Direct SHA-256 manifest parser and verifier helper
-calls reject secret-looking slot paths, symlinked slot roots, and symlinked slot
-ancestors before parsing `sha256sum.txt` or traversing slot artifacts. Direct
-parser and verifier calls also reject hardlinked `sha256sum.txt` manifests
-before reading manifest bytes or discovering slot files. Direct slot-file
-discovery returns no artifacts for secret-looking slot paths,
-symlinked slot ancestors, missing roots, non-directory roots, or symlinked slot
-roots before traversal, and skips symlinked artifact directories instead of
-discovering files through them. Direct
+parents or writing files, convert absolute signed-evidence output path resolver
+failures into `signed evidence output path could not be resolved`, reject
+unreadable output leaf metadata before write or digest reads, reject dangling
+symlink output leaves as symlinks even when the target is missing,
+rerun parent and ancestor checks after creating missing output parents, and the
+signing helper revalidates the signed-evidence output as a regular non-symlink,
+non-hardlinked file before hashing it back into `slot.json`. Direct SHA-256 manifest parser and verifier helper
+calls reject secret-looking slot paths, unreadable slot-root metadata,
+symlinked slot roots, and symlinked slot ancestors before parsing
+`sha256sum.txt` or traversing slot artifacts. Direct
+parser and verifier calls also reject unreadable-metadata and hardlinked
+`sha256sum.txt` manifests before reading manifest bytes or discovering slot
+files. Direct slot-file discovery reports unreadable slot-root and
+artifact-directory metadata through caller error lists, returns no artifacts for
+secret-looking slot paths, symlinked slot ancestors, missing roots,
+non-directory roots, or symlinked slot roots before traversal, and skips
+symlinked artifact directories instead of discovering files through them. Direct
 manifest verification rejects entries under symlinked artifact directories
-before reading or hashing bytes. Direct attestation, D2D handoff, wallet-integrity,
+before reading or hashing bytes, and the manifest artifact digest helper
+revalidates each `sha256sum.txt` entry for secret-looking names, symlinks,
+hardlinks, and non-regular files immediately before hashing. Direct
+attestation, D2D handoff, wallet-integrity,
 required-artifact, signed-evidence, and production-metadata validator helper
 calls reject the same slot paths before parsing artifacts, reading transcript
-bindings, or hashing signed evidence. The Android device-lab root validator
-also rejects secret-looking paths before slot discovery, and the direct
-device-lab summary writer rejects secret-looking output paths before writing
-JSON. The shared Android device-lab JSON loader also rejects secret-looking
+bindings, or hashing signed evidence. Signed-evidence artifact digest
+verification also revalidates required artifact paths for secret-looking names,
+symlinks, hardlinks, and non-regular files immediately before hashing the bytes
+claimed by `artifact_digests`. The Android device-lab root validator
+also rejects secret-looking paths and unreadable root metadata before slot
+discovery, and scan_slot(...) rejects unreadable slot directory or parent metadata
+before slot traversal. Scanner and rollup missing-root decisions also consume
+the same `lstat()`-classified root presence instead of calling `Path.exists()`.
+The direct device-lab summary writer rejects
+secret-looking output paths plus unreadable output parent or leaf metadata,
+classifies summary output parents with `lstat()` before any `Path.is_dir()`
+preflight, and rechecks created output parents before writing JSON. The signed-evidence helper also
+classifies signer-controlled output parents with `lstat()` before write or
+read-back digest preflight, so unreadable parent metadata stays a structured
+signer blocker instead of being hidden by `Path.is_dir()`.
+Scanner slot inventory also classifies expected top-level directories,
+`sha256sum.txt`, and recursive file-count entries with `lstat()`, so summary
+presence and file-count fields do not follow symlinks or hide unreadable
+metadata behind `Path.is_dir()` or `Path.is_file()`.
+Automatic slot discovery also classifies each device-lab root entry with
+`lstat()`, preserves symlinked slot entries for fail-closed `scan_slot(...)`
+rejection, and reports unreadable slot-entry metadata without falling back to
+`Path.is_dir()`.
+The readiness CLI converts
+`--repo-root` resolver failures into `--repo-root could not be resolved` before
+expanding relative lab or lineage evidence paths, and shared Android ancestor
+validation reports cwd metadata failures as structured path blockers for
+relative helper inputs. Shared Android ancestor validation also classifies each
+ancestor with `lstat()`, so ancestor metadata errors and symlink rejections do
+not rely on `Path.is_symlink()` or `Path.exists()` preflights. Manifest artifact digest validation
+also classifies slot-relative ancestor directories with
+`lstat()` before symlink checks, so nested artifact paths do not depend on
+`Path.is_symlink()`. Slot-metadata digest checks also revalidate `slot.json`-referenced
+attestation-chain, offline-wallet APK, and signed-evidence artifact paths before
+reading bytes for SHA-256 comparison. D2D handoff and wallet-integrity transcript
+bindings, including `queue/pending_queue.json`, use the same digest-time
+revalidation before comparing SHA-256 values. Required status NDJSON and runtime
+log marker checks also revalidate their slot-relative files for symlinks,
+hardlinks, symlinked artifact directories, non-regular files, and secret-looking
+names immediately before text decoding. The shared Android device-lab JSON loader
+also rejects secret-looking
 direct file paths and symlinked ancestor directories before parsing JSON, so
 direct metadata, attestation, handoff, wallet-integrity, or signed-evidence
-validation cannot read through secret-bearing or aliased directories.
+validation cannot read through secret-bearing or aliased directories; unreadable
+leaf metadata, unreadable bytes, or non-UTF-8 JSON bytes fail closed as
+structured read errors instead of tracebacks. Manifest inventory discovery reports unreadable artifact metadata as
+structured slot-artifact blockers instead of omitting those files from
+`sha256sum.txt` coverage, and direct hardlink artifact validation reports the
+same unreadable metadata before hardlink checks. Digest-time artifact validators
+for `sha256sum.txt`, slot metadata bindings, and signed-evidence artifact
+digests also distinguish missing files from unreadable leaf metadata before
+classifying symlink, non-regular, hardlink, or read failures.
 
 Capture the production ignored proof log into the same artifact directory and
 build the evidence JSON from those local bytes:
@@ -354,18 +497,96 @@ python3 scripts/kagemusha_lineage_proof_evidence.py \
   --proof-log artifacts/kagemusha/record-archive-proof.log \
   --elapsed-seconds "$elapsed_seconds" \
   --out artifacts/kagemusha/lineage-proof-evidence.json
+
+iroha app zk kagemusha recursive-compact-key-artifacts \
+  --vk-out artifacts/kagemusha/recursive-compact-len4.vk \
+  --pk-out artifacts/kagemusha/recursive-compact-len4.pk \
+  --record-out artifacts/kagemusha/recursive-compact-len4.record.norito \
+  --record-namespace offline_kagemusha \
+  --record-version 1 \
+  2>&1 | tee artifacts/kagemusha/recursive-compact-key-artifacts.log
+
+python3 scripts/kagemusha_recursive_compact_key_evidence.py \
+  --artifact-dir artifacts/kagemusha \
+  --generator-log artifacts/kagemusha/recursive-compact-key-artifacts.log \
+  --generated-at-utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --out artifacts/kagemusha/recursive-compact-key-evidence.json
 ```
 
-The helper rejects a symlinked `--artifact-dir` and refuses to write
-`lineage-proof-evidence.json` through symlinked, hardlinked, non-regular, or
-symlink-ancestor output aliases before creating any missing output parent
-directories or reading release artifact and proof-log inputs. The shared
+After `scripts/kagemusha_production_readiness.py` writes a ready
+`dist/kagemusha-production-readiness.json`, package release evidence with the
+strict bundle verifier:
+
+```bash
+python3 scripts/kagemusha_release_bundle.py \
+  --repo-root . \
+  --bundle-root . \
+  --readiness-summary dist/kagemusha-production-readiness.json \
+  --lineage-proof-evidence artifacts/kagemusha/lineage-proof-evidence.json \
+  --compact-key-evidence artifacts/kagemusha/recursive-compact-key-evidence.json \
+  --device-lab-root artifacts/android/device_lab \
+  --trusted-signer-public-key <lab-public-key.pem> \
+  --out dist/kagemusha-production-release-bundle.json
+```
+
+To verify an already-published manifest without rewriting `--out`, run the same
+command with `--verify-existing dist/kagemusha-production-release-bundle.json`.
+Verification recomputes the manifest from local release evidence and performs a
+stable manifest comparison that ignores only `generated_at_utc`. The existing
+manifest path is checked under `--bundle-root` before readiness, proof-evidence,
+compact-key, or device-lab scanners run.
+
+The release bundle manifest uses
+`iroha.kagemusha.production_release_bundle.v1`, recomputes the checked-in ABI-6,
+ABI-7, and lineage release-tooling trust roots plus the readiness summary,
+Reserved-lineage proof evidence, ABI-7 compact key evidence, and Android
+signed-evidence inventory. The emitted manifest records bundle-relative
+per-slot Android signed-evidence artifact paths and SHA-256 digests for every
+validated device-lab slot, keeps the Reserved-lineage and ABI-7 compact
+artifact size maps from the recomputed readiness summary, records every packaged lineage artifact,
+compact key artifact, compact key generator log, and production proof log with
+bundle-relative path, SHA-256 digest, and byte size, and revalidates each slot
+name before
+constructing manifest paths. The verifier rejects summary drift, duplicate JSON keys,
+unexpected top-level or section-level summary fields, per-section blockers in a
+ready summary, secret-looking paths, evidence outside
+`--bundle-root`, secret-looking strings anywhere inside the readiness summary,
+plain-text placeholder compact key artifacts in the compact-key artifact
+inventory, symlinked bundle roots, and symlinked or hardlinked manifest outputs, and
+records only bundle-relative evidence paths. If any release input path escapes
+`--bundle-root`, the verifier stops before loading any readiness JSON, proof
+evidence, compact-key evidence, Android device-lab tree, or artifact inventory.
+Secret-looking trusted signer key paths are rejected before key loading.
+Newly-created release-bundle output parents are revalidated before writing so a
+symlinked parent cannot be introduced during output creation. The manifest is
+written through a fsynced temporary file in the target directory, atomically
+replaced into place, and read back before success is reported, and `--out` cannot
+overwrite any readiness summary, evidence JSON, proof log, key artifact, or
+Android signed-evidence file already hash-bound into the manifest.
+
+The helper rejects a symlinked or unreadable-metadata `--artifact-dir` and
+refuses to write `lineage-proof-evidence.json` through symlinked, hardlinked,
+non-regular, dangling-symlink, unreadable-metadata, or symlink-ancestor output aliases;
+the compact key evidence helper applies the same output checks for
+`recursive-compact-key-evidence.json` before reading compact key artifacts, and
+rejects obvious plain-text placeholder compact key artifacts before emitting
+evidence JSON. It also requires `recursive-compact-key-artifacts.log` beside the
+key artifacts and verifies that the canonical generator summary sizes match the
+local `.vk`, `.pk`, and `.record.norito` files.
+Both helpers create missing output parents only after these preflights,
+classify `--out` parents with `lstat()` before any `Path.is_dir()` preflight,
+and recheck created output parents before direct helper preflight returns. Input
+and output corridor resolution failures return structured `--proof-log parent`,
+`--out parent`, or `--artifact-dir` blockers instead of raw resolver errors. The shared
 evidence builder also rejects secret-looking `--artifact-dir`/`--proof-log`
 paths and detached proof logs that are not the canonical
 `record-archive-proof.log` directly under `--artifact-dir` before hashing
 artifacts or reading the proof log. Direct validation and output-writer helpers
 also reject secret-looking artifact or output paths before creating temporary
-directories or writing evidence JSON.
+directories or writing evidence JSON, and final evidence-output write failures
+return `--out could not be written`. The readiness rollup and evidence helper
+both convert read-time failures while hashing lineage artifacts or proof logs
+into structured blockers after rerunning the local-file preflight.
 Do not set `IROHA_KAGEMUSHA_ALLOW_RUNTIME_LINEAGE_KEYGEN` for that proof run;
 release evidence with runtime keygen enabled is rejected.
 If a release process already has a verifier-key file and only needs the WSV
@@ -777,12 +998,19 @@ native PyO3 extension, so Python wallets no longer need to drop to the C bridge
 to exercise the production Kagemusha path.
 Bridge ABI 7 keeps the recursive compact-token entry point
 `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`.
-The symbol is source-stable but public compact proving fails closed until the
-`kagemusha-recursive-compact-v1` proof composes the private-hop verifier-slice
-relation in-circuit. The ABI-7 compact verifier key remains CID-distinct from
-the ABI-6 recursive aggregation verifier key while reusing the semantic
-aggregation circuit shape for projection tests; those projection helpers are
-not a receiver-admission path.
+The ABI-7 recursive compact-token symbols now route one-hop
+`kagemusha-recursive-compact-v1` compact proving when the native proof bundle
+carries the packaged compact one-hop proving-key archive,
+one-hop LEN=4 compact-token proof path inputs, and matching verifier-slice open-envelope
+evidence. Routine production selection still uses the ABI-6 reserved-lineage
+recursive spend verifier and redemption surface until that packaged key has
+release evidence attached. A missing packaged key, the generic compact-token
+reservation, and the multi-hop verifier-batch reservation remain reserved ABI-7 state
+and return the recursive-compact-unavailable diagnostic instead of
+opening receiver admission or SDK default selection. The ABI-7 compact verifier
+key remains CID-distinct from the ABI-6 recursive aggregation verifier key while
+reusing the semantic aggregation circuit shape for projection tests; those
+projection helpers are not a receiver-admission path.
 Bridge ABI 6 introduced, and ABI 6-or-later bridges expose, the production
 recursive spendable-cash entry points:
 `connect_norito_kagemusha_recursive_spend_init`,
@@ -1160,10 +1388,20 @@ hop proof, and returns a Norito-encoded
 the Python native extension mirrors the same path for local proof-bundle
 generation.
 ABI 7 reserves the same record-backed private-hop evidence for
-`kagemusha-recursive-compact-v1`, but the public compact-token prover and
-receiver verifier fail closed in this release. Wallets that need production
-offline-offline spend-again behavior should use the recursive spendable-cash
-path, while recursive aggregation proof bundles remain admission-neutral.
+`kagemusha-recursive-compact-v1`. The public compact-token prover/verifier now
+admits the production LEN=4 one-hop verifier-slice profile and rejects semantic
+compact-CID envelopes that omit the in-circuit verifier-slice side column.
+Multi-hop compact tokens remain fail-closed until the append verifier batch is
+composed into the compact proof. Multi-hop Pallas verifier-batch archives with
+forged metadata, duplicated openings, or reordered openings fail as
+record-backed preflight drift before the recursive compact unavailable
+sentinel, so only an exactly ordered, record-bound multi-hop batch can reach
+the reserved proof-composition diagnostic. The height-aware core compact prover
+enforces the same preflight boundary before applying the reserved multi-hop
+diagnostic. Wallets that need
+production offline-offline spend-again behavior should use the recursive
+spendable-cash path, while recursive aggregation proof bundles remain
+admission-neutral.
 Malformed bundles, oversized bundle hop counts, malformed hop shapes, root
 discontinuities, duplicate nullifiers or output commitments, tampered hop
 proofs, oversized hop proof payloads, missing or inactive records, verifier
@@ -1192,10 +1430,13 @@ language can preflight. Swift exposes the witness helpers as
 Java Android expose the same names, JavaScript/Node and Python use the native
 snake/camel-case bridge names, and C# exposes
 `LineageWitnessFromInitResult`/`LineageWitnessAppendResult` DTO wrappers.
-Python, Swift, JavaScript/Node, Kotlin/JVM, and Java Android also fail closed
-when proof-producing native calls return no archive or a zero-length archive,
-so missing native proof material cannot be coerced into a successful SDK
-result. The Swift dynamic loader now requires bridge ABI 6 or later and the
+Python, Swift, JavaScript/Node, Kotlin/JVM, Java Android, and C# also fail
+closed when proof-producing native calls return no archive or a zero-length
+archive, so missing native proof material cannot be coerced into a successful SDK
+result. Swift's native bridge caps Kagemusha native output lengths before
+copying native pointers into `Data`, so over-cap native outputs are rejected
+and freed at the bridge boundary. The Swift dynamic loader now requires bridge
+ABI 6 or later and the
 record-backed plus complete recursive-spend Kagemusha symbols, including both
 lineage-witness assembly helpers, before probing those symbols with malformed
 Norito archives. Swift reports native compact-token, recursive-aggregation, and
@@ -1216,23 +1457,38 @@ malformed token/public-input bindings through the same core preverification
 gate, and returns `valid = 0` for shape-valid compact tokens until compact-token
 proofs compose the private-hop verifier-slice relation in-circuit. The C
 bridge, JNI shim, Node host, and PyO3 host all apply this decode/preverify
-boundary before exposing a boolean receiver result. Kotlin/JVM and Java Android expose
+boundary before exposing a boolean receiver result. Swift, Kotlin/JVM, Java
+Android, JavaScript/Node, Python, and C# expose typed recursive-spend compact
+projection verifier facades that accept raw Norito compact-token and
+verifier-record archives, reject malformed local inputs before native dispatch,
+gate availability on the ABI-7 compact projection verifier symbols, and return
+the native boolean receiver result. Kotlin/JVM and Java Android expose
 `isRecursiveCompactUnavailable(...)` classifiers for the same ABI-7 reservation
 strings and map native compact prover reservation failures to
 `IllegalStateException`, while empty or malformed local archives remain
-`IllegalArgumentException` caller-input failures. Swift, Kotlin/JVM, and Java
-Android compact-token, recursive aggregation, recursive compact, and recursive
-spend wrappers also reject oversized caller archives with explicit
-`must not exceed` diagnostics before Norito parsing or native dispatch.
+`IllegalArgumentException` caller-input failures. Swift, Kotlin/JVM, Java
+Android, JavaScript/Node, Python, and C# compact-token, recursive aggregation,
+recursive compact, and recursive spend wrappers also reject oversized caller
+archives with explicit `must not exceed` diagnostics before owned byte copies,
+Norito parsing, native availability checks, or native dispatch; the Node NAPI
+and Python PyO3 hosts enforce the same 64 MiB cap for direct native-host
+entrypoints that bypass the high-level SDK wrappers. ABI-7 recursive-spend host
+regressions now cover oversized init, append, transition-profile,
+lineage-boundary, verify, redeem, and lineage witness archives before Norito
+decode, including each multi-archive lineage witness input slot. The same host
+boundary, plus the shared C bridge, now preflights nested current-hop Pallas
+open-envelope archives inside init/append request archives, so empty Pallas
+material is rejected before core prover or nested decode paths run.
 The C bridge clears stale output pointers before rejecting null inputs, rejects
 null output slots before writing, and does not slice adversarial input lengths
 on either ABI-7 entry point. The same bounded archive reader is shared by the
 ABI-6 recursive spend, compact-token, recursive aggregation, and recursive
 compact C entry points, so empty or oversized Kagemusha archives reject before
 raw slices are formed. The recursive compact prover returns no stale archive
-output on malformed record/envelope archives or shape-valid unavailable
-archives, and the verifier returns `valid = 0` for every well-formed compact
-token in this release.
+output on malformed record/envelope archives or multi-hop archives that still
+require append-batch composition, and the verifier returns `valid = 0` for
+shape-valid compact tokens whose inner proof body fails the ABI-7 compact proof
+payload floor or backend verification.
 The data model and core pre-admission helpers now also validate the recursive
 mode-2 folded public-input projection against a recursive aggregation proof
 bundle. That check binds the folded compact-token chain id, asset, roots, hop
@@ -1339,11 +1595,12 @@ The recursive spendable-cash path above is separate from the older compact
 folded-token path. Checked pre-fold mode `1` remains available for compatibility
 and continues to verify each hop proof before emitting the folded public
 transcript. Recursive compact mode `2` is handled by the ABI-7
-`kagemusha-recursive-compact-v1` token prover/verifier; callers that need
-spend-again-offline cash should still use `KagemushaRecursiveSpendBundleV1` and
-ABI 6 because spend bundles carry lineage state for additional offline hops. The
-final aggregation proof must continue to use no trusted setup and preserve the
-same public nullifier/commitment/root semantics.
+`kagemusha-recursive-compact-v1` token prover/verifier for one-hop LEN=4
+compact receipts; callers that need spend-again-offline cash should still use
+`KagemushaRecursiveSpendBundleV1` and ABI 6 because spend bundles carry lineage
+state for additional offline hops. The final aggregation proof must continue to
+use no trusted setup and preserve the same public nullifier/commitment/root
+semantics.
 The current tree has native Halo2 IPA proof verification and IPA polynomial
 opening code, but it does not ship a Halo2 circuit gadget that verifies another
 Halo2 IPA proof in-circuit. The first reusable recursive-verifier foundations
@@ -1646,8 +1903,9 @@ metadata evidence builder are crate-private implementation helpers; public
 callers must use the record-backed Pallas preflight proof-bundle entry points.
 This proof path remains admission-neutral for compact-token receivers. The
 recursive compact-token helper verifies reserved projection shape for internal
-tests, while the public ABI-7 compact prover/verifier fail closed until that
-proof path is replaced by a composed private-hop verifier-slice circuit.
+tests, while the public ABI-7 compact prover/verifier only opens the one-hop
+path when packaged compact proving-key and verifier-slice evidence are present;
+missing packaged key, multi-hop, and default-selection cases remain reserved.
 The combined builders reject native witness-count
 mismatches before native preflight or hop proof decoding, the public preflight
 rejects empty witness batches directly, and native preflight then rejects
@@ -1786,9 +2044,11 @@ large-stack non-native verifier harness. Full production fixed-window Pallas
 verifier materialization and composed MockProver acceptance/splice tests are
 heavyweight and ignored by default. The routine offline-offline production path
 uses the ABI-6 reserved-lineage recursive spend verifier and redemption surface,
-while ABI-7 recursive compact-token symbols remain fail-closed until that proof
-uses the composed private-hop verifier-slice circuit. The ignored MockProver
-cases remain deep synthesis stress coverage for future verifier-layout changes.
+while ABI-7 recursive compact-token symbols have one-hop proof wiring only when
+the packaged compact one-hop proving-key archive and verifier-slice
+open-envelope evidence are present; missing packaged key and multi-hop cases
+remain reserved ABI-7 state. The ignored MockProver cases remain deep synthesis
+stress coverage for future verifier-layout changes.
 The routine Rust test suite also skips real Kagemusha folded-token, recursive
 aggregation, recursive-spend, and bridge success proof generators by default;
 those cases remain available as opt-in `--ignored --test-threads=1` runs so

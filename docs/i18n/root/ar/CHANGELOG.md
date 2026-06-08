@@ -18,10 +18,10 @@ translator: machine-google-reviewed
 سيتم توثيق جميع التغييرات الملحوظة في هذا المشروع في هذا الملف.
 
 ## [غير منشورة]- قم بإسقاط طبقة المقياس؛ يتم الآن تنفيذ `norito::codec` باستخدام تسلسل Norito الأصلي.
-- استبدل استخدامات `parity_scale_codec` بـ `norito::codec` عبر الصناديق.
+- استبدل استخدامات `retired_codec` بـ `norito::codec` عبر الصناديق.
 - البدء في ترحيل الأدوات إلى تسلسل Norito الأصلي.
-- قم بإزالة تبعية `parity-scale-codec` المتبقية من مساحة العمل لصالح تسلسل Norito الأصلي.
-- استبدل اشتقاقات سمات SCALE المتبقية بتطبيقات Norito الأصلية وأعد تسمية وحدة برنامج الترميز التي تم إصدارها.
+- قم بإزالة تبعية `retired codec` المتبقية من مساحة العمل لصالح تسلسل Norito الأصلي.
+- استبدل اشتقاقات سمات retired codec المتبقية بتطبيقات Norito الأصلية وأعد تسمية وحدة برنامج الترميز التي تم إصدارها.
 - دمج `iroha_config_base_derive` و`iroha_futures_derive` في `iroha_derive` مع وحدات ماكرو ذات ميزات محددة.
 - *(multisig)* رفض التوقيعات المباشرة من سلطات multisig التي تحتوي على رمز/سبب خطأ ثابت، وفرض أحرف TTL متعددة التوقيعات عبر المرحلات المتداخلة، وأحرف TTL السطحية في واجهة سطر الأوامر (CLI) قبل الإرسال (معلق تكافؤ SDK).
 - انقل وحدات الماكرو الإجرائية FFI إلى `iroha_ffi` وقم بإزالة الصندوق `iroha_ffi_derive`.
@@ -242,7 +242,7 @@ translator: machine-google-reviewed
 - إعادة تسمية TransactionValue إلى CommitTransaction (#4610)
 - مصادقة الحسابات الشخصية عن طريق المعرف (#4411)
 - استخدام تنسيق multihash للمفاتيح الخاصة (#4541)
- - إعادة تسمية `parity_scale_decoder` إلى `norito_cli`
+ - إعادة تسمية `legacy_codec_decoder` إلى `norito_cli`
 - إرسال الكتل إلى أدوات التحقق من المجموعة B
 - جعل `Role` شفافًا (#4886)
 - اشتقاق تجزئة الكتلة من الرأس (#4890)
@@ -1153,7 +1153,7 @@ translator: machine-google-reviewed
 - Hyperledger#2309: إعادة تمكين اختبارات المستندات في CI.
 - Hyperledger#2165 إزالة تثبيت codecov.
 - الانتقال إلى حاوية جديدة لمنع التعارضات مع المستخدمين الحاليين.
- - Hyperledger#2158 ترقية `parity_scale_codec` والتبعيات الأخرى. (برنامج الترميز Norito)
+ - Hyperledger#2158 ترقية `retired_codec` والتبعيات الأخرى. (برنامج الترميز Norito)
 - إصلاح البناء.
 - Hyperledger#2461 تحسين iroha2 CI.
 - تحديث `syn`.

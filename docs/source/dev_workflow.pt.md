@@ -88,10 +88,10 @@ novos patches seguem os mesmos portões padrão.
   produção `serde`/`serde_json` em relação a `AGENTS_BASE_REF`. Definir
   `SERDE_GUARD_ALLOW=1` somente para experimentos de CI após preencher um plano de migração.
 - `make guards` impõe a política de serialização Norito: nega novos
-  Uso de `serde`/`serde_json`, auxiliares AoS ad-hoc e dependências SCALE externas
+  Uso de `serde`/`serde_json`, auxiliares AoS ad-hoc e dependências retired codec externas
   as bancadas Norito (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **Política de interface do usuário Proc-macro:** cada caixa proc-macro deve enviar um `trybuild`
   chicote de fios (`tests/ui.rs` com globos de aprovação/falha) atrás do `trybuild-tests`
   recurso. Coloque amostras de caminho feliz em `tests/ui/pass`, casos de rejeição em
