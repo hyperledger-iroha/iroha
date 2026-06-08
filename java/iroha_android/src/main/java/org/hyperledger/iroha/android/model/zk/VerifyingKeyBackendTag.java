@@ -140,6 +140,7 @@ public enum VerifyingKeyBackendTag {
           "halo2/pasta/offline-note-recursive",
           "halo2/pasta/kagemusha-folded-v1",
           "halo2/pasta/kagemusha-recursive-aggregation-v1",
+          "halo2/pasta/kagemusha-recursive-compact-v1",
           "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
           "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
           "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
@@ -163,6 +164,8 @@ public enum VerifyingKeyBackendTag {
     aliases.put("stark", STARK);
     aliases.put("starkfri", STARK);
     aliases.put("starkfrisha256goldilocks", STARK);
+    aliases.put("starkfriposeidon2goldilocks", STARK);
+    aliases.put("starkfrisha256goldilocksv1", STARK);
     aliases.put("halo2ipaorchard", HALO2_IPA_ORCHARD);
     aliases.put("orchard", HALO2_IPA_ORCHARD);
     aliases.put("zcashorchard", HALO2_IPA_ORCHARD);
@@ -276,14 +279,29 @@ public enum VerifyingKeyBackendTag {
     "mainnetcomplete",
     "mainnetclaim",
     "claimedmainnet",
+    "mainnetcertified",
+    "mainnetapproved",
+    "mainnetrelease",
     "auditedproduction",
     "externallyaudited",
+    "thirdpartyaudited",
+    "boiaudited",
+    "auditedmainnet",
+    "externalaudit",
     "auditpassed",
     "auditapproved",
     "auditsignoff",
     "auditclaim",
     "claimedaudit",
-    "securityreviewpassed"
+    "securityreviewpassed",
+    "securityauditpassed",
+    "securityaudited",
+    "externalsecurityreview",
+    "certifiedproduction",
+    "certifiedmainnet",
+    "releaseready",
+    "releaseapproved",
+    "releasecertified"
   };
 
   private static boolean isTrustedSetupBackendLabel(final String raw) {
@@ -376,12 +394,15 @@ public enum VerifyingKeyBackendTag {
   }
 
   private static boolean isPortableVerifierBackendLabel(final String value) {
+    if (value.isEmpty()
+        || !isLowerAsciiAlphanumeric(value.charAt(0))
+        || !isLowerAsciiAlphanumeric(value.charAt(value.length() - 1))) {
+      return false;
+    }
     for (int index = 0; index < value.length(); index++) {
       final char ch = value.charAt(index);
       final boolean allowed =
-          (ch >= '0' && ch <= '9')
-              || (ch >= 'A' && ch <= 'Z')
-              || (ch >= 'a' && ch <= 'z')
+          isLowerAsciiAlphanumeric(ch)
               || ch == '/'
               || ch == ':'
               || ch == '.'
@@ -391,7 +412,17 @@ public enum VerifyingKeyBackendTag {
         return false;
       }
     }
+    final String[] unsafeSeparators = {"//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"};
+    for (final String separator : unsafeSeparators) {
+      if (value.contains(separator)) {
+        return false;
+      }
+    }
     return true;
+  }
+
+  private static boolean isLowerAsciiAlphanumeric(final char ch) {
+    return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z');
   }
 
   private static String normalizeNativeHalo2PastaBackendLabel(final String raw) {

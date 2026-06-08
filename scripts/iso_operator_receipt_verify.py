@@ -49,13 +49,37 @@ RECEIPT_SUMMARY_VERSION = 1
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 SUPPORTED_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
+SUPPORTED_RAIL_MESSAGE_TYPES = {
+    "pacs.008",
+    "pacs.009",
+    "pacs.002",
+    "pacs.004",
+    "camt.056",
+    "sese.023",
+    "sese.024",
+    "sese.025",
+    "colr.007",
+    "colr.012",
+}
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
+MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.\d{3}$")
 MAX_RECEIPT_JSON_BYTES = 4 * 1024 * 1024
 MAX_AUDIT_EXPORT_JSON_BYTES = 64 * 1024 * 1024
+MAX_PERSISTED_RECORD_JSON_BYTES = 1024 * 1024
 MAX_RAIL_XML_BYTES = 4 * 1024 * 1024
 MAX_RAIL_SIDECAR_JSON_BYTES = 16 * 1024
 MAX_HTTP_URL_CHARS = 2048
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
+RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
+    "example",
+    "example.com",
+    "example.invalid",
+    "example.net",
+    "example.org",
+}
+TEMPLATE_CANARY_ENDPOINT_HOSTS = {
+    "operator-canary.bank",
+}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 MAX_RAIL_MESSAGE_ID_CHARS = 128
@@ -180,6 +204,7 @@ AUDIT_INDEX_KEYS = {
     INDEX_DIGEST_FIELD,
 }
 PACS002_CODES = {"ACTC", "ACSP", "ACSC", "ACWC", "PDNG", "RJCT"}
+ISO_RECORD_STATES = {"Pending", "Accepted", "Rejected"}
 PERSISTED_RECORD_KEYS = {
     "version",
     "message_id",
@@ -479,6 +504,13 @@ def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -
         raise ReceiptError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
 
+def _require_exact_keys(value: dict[str, Any], required: set[str], label: str) -> None:
+    _reject_unknown_keys(value, required, label)
+    missing = sorted(required - set(value))
+    if missing:
+        raise ReceiptError(f"{label} is missing required keys: {', '.join(missing)}")
+
+
 def _is_secret_looking_key(value: Any) -> bool:
     markers = (
         "authorization",
@@ -705,6 +737,36 @@ def _host_uses_rebinding_suffix(hostname: str) -> bool:
     )
 
 
+def _host_uses_reserved_placeholder_suffix(hostname: str) -> bool:
+    return hostname in RESERVED_PLACEHOLDER_HOST_SUFFIXES or any(
+        hostname.endswith("." + suffix) for suffix in RESERVED_PLACEHOLDER_HOST_SUFFIXES
+    )
+
+
+def _host_uses_template_canary_suffix(hostname: str) -> bool:
+    return hostname in TEMPLATE_CANARY_ENDPOINT_HOSTS or any(
+        hostname.endswith("." + suffix) for suffix in TEMPLATE_CANARY_ENDPOINT_HOSTS
+    )
+
+
+def _reject_reserved_placeholder_url_host(
+    parsed: urllib.parse.ParseResult,
+    label: str,
+) -> None:
+    hostname = (parsed.hostname or "").strip().lower()
+    if _host_uses_reserved_placeholder_suffix(hostname):
+        raise ReceiptError(f"{label} must not use reserved placeholder hostnames")
+
+
+def _reject_template_canary_url_host(
+    parsed: urllib.parse.ParseResult,
+    label: str,
+) -> None:
+    hostname = (parsed.hostname or "").strip().lower()
+    if _host_uses_template_canary_suffix(hostname):
+        raise ReceiptError(f"{label} must not use template canary hostnames")
+
+
 def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     embedded: ipaddress.IPv4Address | None = None
     if isinstance(address, ipaddress.IPv6Address):
@@ -810,10 +872,39 @@ def _require_pacs002_code(value: Any, label: str) -> str:
     return code
 
 
+def _require_record_state(value: Any, label: str) -> str:
+    state = _require_clean_string(value, label)
+    if state not in ISO_RECORD_STATES:
+        raise ReceiptError(f"{label} must be Pending, Accepted, or Rejected")
+    return state
+
+
+def _require_status_code_consistency(
+    state: str,
+    code: str,
+    label: str,
+    *,
+    noun: str,
+) -> None:
+    allowed = {
+        "Pending": {"ACTC", "ACSP", "ACWC", "PDNG"},
+        "Accepted": {"ACSP", "ACSC"},
+        "Rejected": {"RJCT"},
+    }[state]
+    if code not in allowed:
+        raise ReceiptError(
+            f"{label}.pacs002_code is not valid for {state} {noun}"
+        )
+
+
+def _require_audit_record_status_consistency(record: dict[str, Any], label: str) -> None:
+    state = _require_record_state(record.get("state"), f"{label}.state")
+    code = _require_pacs002_code(record.get("pacs002_code"), f"{label}.pacs002_code")
+    _require_status_code_consistency(state, code, label, noun="state")
+
+
 def _derived_pacs002_code(record: dict[str, Any], label: str) -> str:
-    state = _require_clean_string(record.get("state"), f"{label}.state")
-    if state not in {"Pending", "Accepted", "Rejected"}:
-        raise ReceiptError(f"{label}.state must be Pending, Accepted, or Rejected")
+    state = _require_record_state(record.get("state"), f"{label}.state")
     if state == "Rejected":
         return "RJCT"
     if state == "Accepted":
@@ -838,7 +929,7 @@ def _verify_optional_clean_string_fields(
 def _verify_persisted_context(value: Any, label: str) -> None:
     if not isinstance(value, dict):
         raise ReceiptError(f"{label} must be an object")
-    _reject_unknown_keys(value, PERSISTED_CONTEXT_KEYS, label)
+    _require_exact_keys(value, PERSISTED_CONTEXT_KEYS, label)
     _verify_optional_clean_string_fields(value, PERSISTED_CONTEXT_KEYS, label)
 
 
@@ -847,7 +938,7 @@ def _verify_persisted_metadata(
 ) -> None:
     if not isinstance(value, dict):
         raise ReceiptError(f"{label} must be an object")
-    _reject_unknown_keys(value, PERSISTED_METADATA_KEYS, label)
+    _require_exact_keys(value, PERSISTED_METADATA_KEYS, label)
     _verify_optional_clean_string_fields(
         value,
         PERSISTED_METADATA_KEYS - {"embedded_signature_detected"},
@@ -875,11 +966,10 @@ def _verify_persisted_metadata(
 def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str, int]:
     if not isinstance(value, dict):
         raise ReceiptError(f"{label} must be an object")
-    _reject_unknown_keys(value, PERSISTED_HISTORY_KEYS, label)
-    status = _require_clean_string(value.get("status"), f"{label}.status")
-    if status not in {"Pending", "Accepted", "Rejected"}:
-        raise ReceiptError(f"{label}.status must be Pending, Accepted, or Rejected")
+    _require_exact_keys(value, PERSISTED_HISTORY_KEYS, label)
+    status = _require_record_state(value.get("status"), f"{label}.status")
     code = _require_pacs002_code(value.get("pacs002_code"), f"{label}.pacs002_code")
+    _require_status_code_consistency(status, code, label, noun="status")
     updated_at_ms = _require_nonnegative_int(
         value.get("updated_at_ms"),
         f"{label}.updated_at_ms",
@@ -894,10 +984,10 @@ def _verify_persisted_record_source(
     path: Path,
     label: str,
 ) -> None:
-    value = _load_json(path, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES)
+    value = _load_json(path, max_bytes=MAX_PERSISTED_RECORD_JSON_BYTES)
     if not isinstance(value, dict):
         raise ReceiptError(f"{label} must contain a JSON object")
-    _reject_unknown_keys(value, PERSISTED_RECORD_KEYS, label)
+    _require_exact_keys(value, PERSISTED_RECORD_KEYS, label)
     version = value.get("version")
     if (
         isinstance(version, bool)
@@ -1021,6 +1111,8 @@ def _require_https(url: str, *, allow_insecure_http: bool, label: str) -> None:
     if parsed.params or parsed.query or parsed.fragment:
         raise ReceiptError(f"{url_label} must not contain params, query, or fragment")
     _validate_url_path(parsed, url_label)
+    _reject_reserved_placeholder_url_host(parsed, url_label)
+    _reject_template_canary_url_host(parsed, url_label)
 
 
 def _check_status(receipt: dict[str, Any], path: Path, *, allow_failed: bool) -> None:
@@ -1061,12 +1153,18 @@ def _check_endpoint_digest(receipt: dict[str, Any], path: Path, endpoint: str) -
 
 
 def _check_response_metadata(receipt: dict[str, Any], path: Path) -> None:
+    status_code = receipt.get("status_code")
+    has_http_response = isinstance(status_code, int) and not isinstance(status_code, bool)
     response_body_sha256 = receipt.get("response_body_sha256")
     response_body_preview = receipt.get("response_body_preview")
     if response_body_sha256 is None:
+        if has_http_response:
+            raise ReceiptError(f"{path} response_body_sha256 must be recorded for HTTP response")
         if response_body_preview is not None:
             raise ReceiptError(f"{path} response_body_preview requires response_body_sha256")
     else:
+        if not has_http_response:
+            raise ReceiptError(f"{path} response_body_sha256 requires HTTP status_code")
         if not _is_lower_hex_sha256(response_body_sha256):
             raise ReceiptError(f"{path} has invalid response_body_sha256")
         if not isinstance(response_body_preview, str):
@@ -1083,6 +1181,8 @@ def _check_response_metadata(receipt: dict[str, Any], path: Path) -> None:
             raise ReceiptError(f"{path} error contains secret-looking material")
     if receipt.get("ok") and error is not None:
         raise ReceiptError(f"{path} successful receipt must not record error")
+    if receipt.get("ok") is False and error is None:
+        raise ReceiptError(f"{path} failed receipt must record error")
 
 
 def _response_preview_looks_secret(preview: str) -> bool:
@@ -1096,7 +1196,7 @@ def _response_preview_looks_secret(preview: str) -> bool:
 def _verify_audit_index_record_source(record: Any, label: str) -> None:
     if not isinstance(record, dict):
         raise ReceiptError(f"{label} must be an object")
-    _reject_unknown_keys(record, AUDIT_INDEX_RECORD_KEYS, label)
+    _require_exact_keys(record, AUDIT_INDEX_RECORD_KEYS, label)
     message_id = _require_clean_string(record.get("message_id"), f"{label}.message_id")
     filename = _require_clean_string(record.get("filename"), f"{label}.filename")
     expected_filename = _expected_message_filename(message_id)
@@ -1106,8 +1206,7 @@ def _verify_audit_index_record_source(record: Any, label: str) -> None:
         )
     if not _is_lower_hex_sha256(record.get("record_sha256")):
         raise ReceiptError(f"{label}.record_sha256 must be a canonical SHA-256")
-    _require_clean_string(record.get("state"), f"{label}.state")
-    _require_pacs002_code(record.get("pacs002_code"), f"{label}.pacs002_code")
+    _require_audit_record_status_consistency(record, label)
     _require_nonnegative_int(record.get("updated_at_ms"), f"{label}.updated_at_ms")
     _require_optional_nonnegative_int(record.get("settled_at_ms"), f"{label}.settled_at_ms")
     _require_optional_clean_string(record.get("transaction_hash"), f"{label}.transaction_hash")
@@ -1195,7 +1294,9 @@ def _verify_persisted_record_sources(
     *,
     require_source_files: bool,
 ) -> None:
-    records = audit_index.get("records", [])
+    records = audit_index.get("records")
+    if not isinstance(records, list):
+        raise ReceiptError(f"{label}.records must be an array")
     if store_dir is None:
         if require_source_files and records:
             raise ReceiptError(f"{label}.store_dir is required to verify audit records")
@@ -1288,6 +1389,10 @@ def _verify_anchor_source(receipt: dict[str, Any], path: Path, *, require_source
     record_count = receipt.get("record_count")
     if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
         raise ReceiptError(f"{path} record_count must be a non-negative integer")
+    if require_source_files and record_count == 0:
+        raise ReceiptError(
+            f"{path} record_count must be positive when source files are required"
+        )
 
     anchor_path_raw = _require_clean_path_string(
         receipt.get("anchor_path"),
@@ -1410,6 +1515,58 @@ def _normalize_rail_message_id(value: Any, label: str) -> str | None:
     return rail_message_id
 
 
+def _normalize_sidecar_optional_string(
+    sidecar: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    allow_embedded_whitespace: bool = True,
+) -> str | None:
+    if key not in sidecar:
+        return None
+    value = sidecar[key]
+    if not isinstance(value, str) or not value.strip():
+        raise ReceiptError(f"{label} must be a non-empty string")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
+        raise ReceiptError(f"{label} must not contain control characters")
+    if value != value.strip():
+        raise ReceiptError(f"{label} must not have surrounding whitespace")
+    if not allow_embedded_whitespace and any(ch.isspace() for ch in value):
+        raise ReceiptError(f"{label} must not contain whitespace")
+    return value
+
+
+def _normalize_sidecar_profile(sidecar: dict[str, Any], label: str) -> str | None:
+    profile = _normalize_sidecar_optional_string(
+        sidecar,
+        "profile",
+        label,
+        allow_embedded_whitespace=False,
+    )
+    if profile is not None and PROFILE_ID_RE.fullmatch(profile) is None:
+        raise ReceiptError(f"{label} must be a canonical lowercase profile id")
+    if profile is not None:
+        _reject_secret_looking_identifier(profile, label)
+    return profile
+
+
+def _normalize_sidecar_rail_message_id(sidecar: dict[str, Any], label: str) -> str | None:
+    rail_message_id = _normalize_sidecar_optional_string(
+        sidecar,
+        "rail_message_id",
+        label,
+        allow_embedded_whitespace=False,
+    )
+    if rail_message_id is None:
+        return None
+    if len(rail_message_id) > MAX_RAIL_MESSAGE_ID_CHARS:
+        raise ReceiptError(f"{label} must be at most {MAX_RAIL_MESSAGE_ID_CHARS} characters")
+    if RAIL_MESSAGE_ID_RE.fullmatch(rail_message_id) is None:
+        raise ReceiptError(f"{label} must be a canonical ASCII rail message id")
+    _reject_secret_looking_identifier(rail_message_id, label)
+    return rail_message_id
+
+
 def _verify_rail_sidecar(
     path: Path,
     sidecar_path: Path,
@@ -1427,14 +1584,11 @@ def _verify_rail_sidecar(
         raise ReceiptError(f"{path} payload_sha256 does not match source sidecar")
     if sidecar.get("message_type") != message_type:
         raise ReceiptError(f"{path} message_type does not match source sidecar")
-    sidecar_profile = _normalize_profile(
-        sidecar.get("profile"),
-        f"{sidecar_path} profile",
-    )
+    sidecar_profile = _normalize_sidecar_profile(sidecar, f"{sidecar_path} profile")
     if sidecar_profile != profile:
         raise ReceiptError(f"{path} profile does not match source sidecar")
-    sidecar_rail_message_id = _normalize_rail_message_id(
-        sidecar.get("rail_message_id"),
+    sidecar_rail_message_id = _normalize_sidecar_rail_message_id(
+        sidecar,
         f"{sidecar_path} rail_message_id",
     )
     if sidecar_rail_message_id != rail_message_id:
@@ -1454,16 +1608,24 @@ def _verify_rail_source(
         raise ReceiptError(f"{path} has invalid payload_sha256")
     message_type = _require_clean_string(receipt.get("message_type"), f"{path} message_type")
     _reject_secret_looking_identifier(message_type, f"{path} message_type")
+    if MESSAGE_TYPE_RE.fullmatch(message_type) is None:
+        raise ReceiptError(f"{path} message_type must be lowercase ISO family id")
+    if message_type not in SUPPORTED_RAIL_MESSAGE_TYPES:
+        raise ReceiptError(f"{path} has unsupported rail message_type {message_type!r}")
     if message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
         raise ReceiptError(
             f"{path} uses legacy rail message_type {message_type!r}; "
             "production evidence must use colr.012"
         )
-    profile = _normalize_profile(receipt.get("profile"), f"{path} profile")
+    if "profile" not in receipt:
+        raise ReceiptError(f"{path} profile must be recorded")
+    profile = _normalize_profile(receipt["profile"], f"{path} profile")
     if profile is None and not allow_default_profile:
         raise ReceiptError(f"{path} omitted rail profile")
+    if "rail_message_id" not in receipt:
+        raise ReceiptError(f"{path} rail_message_id must be recorded")
     rail_message_id = _normalize_rail_message_id(
-        receipt.get("rail_message_id"),
+        receipt["rail_message_id"],
         f"{path} rail_message_id",
     )
 
@@ -1614,6 +1776,7 @@ def _receipt_metadata(path: Path, receipt: dict[str, Any]) -> dict[str, Any]:
                 "message_type": receipt.get("message_type"),
                 "payload_sha256": receipt.get("payload_sha256"),
                 "profile": receipt.get("profile"),
+                "rail_message_id": receipt.get("rail_message_id"),
             }
         )
     return metadata

@@ -11326,6 +11326,148 @@ class ToriiClient(_BaseToriiClient):
 
         return self.transfer_asset_numeric_and_wait(**kwargs)
 
+    def open_asset_lock_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        escrow_id: str,
+        asset_definition_id: str,
+        destination: str,
+        amount: Union[str, int, float, Decimal],
+        release_authority: Optional[str] = None,
+        expires_at_ms: Optional[int] = None,
+        evidence_hashes: Optional[Sequence[Any]] = None,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Open a native asset lock and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.open_asset_lock(
+            escrow_id,
+            asset_definition_id,
+            self._native_transaction_account_id(destination, "destination"),
+            amount,
+            release_authority=(
+                self._native_transaction_account_id(
+                    release_authority,
+                    "release_authority",
+                )
+                if release_authority is not None
+                else None
+            ),
+            expires_at_ms=expires_at_ms,
+            evidence_hashes=evidence_hashes,
+        )
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def drawdown_asset_lock_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        escrow_id: str,
+        amount: Union[str, int, float, Decimal],
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Draw down a native asset lock and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.drawdown_asset_lock(escrow_id, amount)
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def cancel_asset_lock_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        escrow_id: str,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Cancel a native asset lock and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.cancel_asset_lock(escrow_id)
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
+    def expire_asset_lock_and_wait(
+        self,
+        *,
+        chain_id: str,
+        authority: str,
+        private_key: Optional[bytes] = None,
+        private_key_hex: Optional[str] = None,
+        escrow_id: str,
+        transaction_metadata: Optional[Mapping[str, Any]] = None,
+        wait: bool = True,
+        timeout: Optional[float] = 30.0,
+        interval: float = 1.0,
+    ) -> Mapping[str, Any]:
+        """Expire a native asset lock and optionally wait for commit."""
+
+        draft = self._transaction_draft(
+            chain_id=chain_id,
+            authority=authority,
+            metadata=transaction_metadata,
+        )
+        draft.expire_asset_lock(escrow_id)
+        return self._submit_transaction_draft_result(
+            draft,
+            private_key=private_key,
+            private_key_hex=private_key_hex,
+            wait=wait,
+            timeout=timeout,
+            interval=interval,
+        )
+
     def transfer_assets_numeric_and_wait(
         self,
         *,

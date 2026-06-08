@@ -5,6 +5,10 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
     case emptyPallasOpenEnvelopesArchive
     case oversizedRecordBundleArchive
     case oversizedPallasOpenEnvelopesArchive
+    case emptyBundleArchive
+    case oversizedBundleArchive
+    case invalidBundleArchive
+    case emptyBundlePayload
     case invalidRecordBundleArchive
     case emptyRecordBundlePayload
     case invalidPallasOpenEnvelopesArchive
@@ -13,6 +17,10 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
     case invalidCompactTokenArchive
     case emptyCompactTokenPayload
     case oversizedCompactTokenArchive
+    case emptyVerifierRecordArchive
+    case invalidVerifierRecordArchive
+    case emptyVerifierRecordPayload
+    case oversizedVerifierRecordArchive
     case bridgeUnavailable
     case recursiveCompactUnavailable
     case proofRejected
@@ -28,6 +36,14 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
             return "Kagemusha verified fold record bundle archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
         case .oversizedPallasOpenEnvelopesArchive:
             return "Kagemusha Pallas open-envelope archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+        case .emptyBundleArchive:
+            return "Kagemusha recursive spend bundle archive must not be empty."
+        case .oversizedBundleArchive:
+            return "Kagemusha recursive spend bundle archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+        case .invalidBundleArchive:
+            return "Kagemusha recursive spend bundle archive must be a valid Norito archive."
+        case .emptyBundlePayload:
+            return "Kagemusha recursive spend bundle archive must contain a non-empty Norito payload."
         case .invalidRecordBundleArchive:
             return "Kagemusha verified fold record bundle archive must be a valid Norito archive."
         case .emptyRecordBundlePayload:
@@ -44,12 +60,20 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
             return "Kagemusha recursive compact-token archive must contain a non-empty Norito payload."
         case .oversizedCompactTokenArchive:
             return "Kagemusha recursive compact-token archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+        case .emptyVerifierRecordArchive:
+            return "Kagemusha verifier record archive must not be empty."
+        case .invalidVerifierRecordArchive:
+            return "Kagemusha verifier record archive must be a valid Norito archive."
+        case .emptyVerifierRecordPayload:
+            return "Kagemusha verifier record archive must contain a non-empty Norito payload."
+        case .oversizedVerifierRecordArchive:
+            return "Kagemusha verifier record archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
         case .bridgeUnavailable:
             return NoritoNativeBridge.bridgeUnavailableMessage(
                 "Kagemusha recursive compact-token prover/verifier is unavailable."
             )
         case .recursiveCompactUnavailable:
-            return "Kagemusha recursive compact-token proving is reserved until the composed private-hop verifier-slice proof is available."
+            return "Kagemusha recursive compact-token multi-hop proving is reserved until the append verifier batch is composed into the compact proof."
         case .proofRejected:
             return "Kagemusha recursive compact-token inputs were rejected by the native prover."
         case .verificationRejected:
@@ -69,6 +93,14 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
 
     public static var isVerifierNativeAvailable: Bool {
         NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenVerifierAvailable
+    }
+
+    public static var isProjectionNativeAvailable: Bool {
+        NoritoNativeBridge.shared.isKagemushaRecursiveSpendCompactPaymentTokenProjectionAvailable
+    }
+
+    public static var isProjectionVerifierNativeAvailable: Bool {
+        NoritoNativeBridge.shared.isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable
     }
 
     public static func proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
@@ -97,6 +129,38 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
         ) {
             try NoritoNativeBridge.shared.verifyKagemushaRecursiveCompactPaymentToken(
                 compactTokenArchive: compactTokenArchive
+            )
+        }
+    }
+
+    public static func recursiveSpendCompactPaymentTokenFromBundle(
+        bundleArchive: Data
+    ) throws -> Data {
+        try recursiveSpendCompactPaymentTokenFromBundle(
+            bundleArchive: bundleArchive,
+            bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveSpendCompactPaymentTokenProjectionAvailable
+        ) {
+            try NoritoNativeBridge.shared.kagemushaRecursiveSpendCompactPaymentTokenFromBundle(
+                bundleArchive: bundleArchive
+            )
+        }
+    }
+
+    public static func verifyRecursiveSpendCompactPaymentTokenProjection(
+        compactTokenArchive: Data,
+        verifierRecordArchive: Data,
+        blockHeight: UInt64? = nil
+    ) throws -> Bool {
+        try verifyRecursiveSpendCompactPaymentTokenProjection(
+            compactTokenArchive: compactTokenArchive,
+            verifierRecordArchive: verifierRecordArchive,
+            bridgeAvailable: NoritoNativeBridge.shared
+                .isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable
+        ) {
+            try NoritoNativeBridge.shared.verifyKagemushaRecursiveSpendCompactPaymentTokenProjection(
+                compactTokenArchive: compactTokenArchive,
+                verifierRecordArchive: verifierRecordArchive,
+                blockHeight: blockHeight
             )
         }
     }
@@ -157,6 +221,79 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
             throw KagemushaRecursiveCompactPaymentTokenProverError.emptyCompactTokenArchive
         }
         try requireValidRecursiveCompactTokenArchive(compactTokenArchive)
+        guard bridgeAvailable else {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.bridgeUnavailable
+        }
+        let valid: Bool?
+        do {
+            valid = try body()
+        } catch NativeBridgeError.kagemushaRecursiveCompactUnavailable {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.recursiveCompactUnavailable
+        } catch NativeBridgeError.kagemushaProve {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.verificationRejected
+        } catch {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.verificationRejected
+        }
+        guard let valid else {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.bridgeUnavailable
+        }
+        return valid
+    }
+
+    static func recursiveSpendCompactPaymentTokenFromBundle(
+        bundleArchive: Data,
+        bridgeAvailable: Bool,
+        body: () throws -> Data?
+    ) throws -> Data {
+        guard !bundleArchive.isEmpty else {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.emptyBundleArchive
+        }
+        try requireValidInputArchive(
+            bundleArchive,
+            oversizedError: .oversizedBundleArchive,
+            invalidError: .invalidBundleArchive,
+            emptyPayloadError: .emptyBundlePayload
+        )
+        guard bridgeAvailable else {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.bridgeUnavailable
+        }
+        let token: Data?
+        do {
+            token = try body()
+        } catch NativeBridgeError.kagemushaProve {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.proofRejected
+        } catch {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.proofRejected
+        }
+        guard let token else {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.bridgeUnavailable
+        }
+        guard !token.isEmpty else {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.proofRejected
+        }
+        try requireValidRecursiveCompactTokenArchive(token)
+        return token
+    }
+
+    static func verifyRecursiveSpendCompactPaymentTokenProjection(
+        compactTokenArchive: Data,
+        verifierRecordArchive: Data,
+        bridgeAvailable: Bool,
+        body: () throws -> Bool?
+    ) throws -> Bool {
+        guard !compactTokenArchive.isEmpty else {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.emptyCompactTokenArchive
+        }
+        guard !verifierRecordArchive.isEmpty else {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.emptyVerifierRecordArchive
+        }
+        try requireValidRecursiveCompactTokenArchive(compactTokenArchive)
+        try requireValidInputArchive(
+            verifierRecordArchive,
+            oversizedError: .oversizedVerifierRecordArchive,
+            invalidError: .invalidVerifierRecordArchive,
+            emptyPayloadError: .emptyVerifierRecordPayload
+        )
         guard bridgeAvailable else {
             throw KagemushaRecursiveCompactPaymentTokenProverError.bridgeUnavailable
         }

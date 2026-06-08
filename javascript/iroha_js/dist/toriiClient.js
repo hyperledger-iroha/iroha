@@ -26743,6 +26743,7 @@ const PRODUCTION_NATIVE_HALO2_PASTA_BACKENDS = new Set([
   "halo2/pasta/offline-note-recursive",
   "halo2/pasta/kagemusha-folded-v1",
   "halo2/pasta/kagemusha-recursive-aggregation-v1",
+  "halo2/pasta/kagemusha-recursive-compact-v1",
   "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
   "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
   "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
@@ -26793,14 +26794,29 @@ const PRODUCTION_CLAIM_BACKEND_FRAGMENTS = [
   "mainnetcomplete",
   "mainnetclaim",
   "claimedmainnet",
+  "mainnetcertified",
+  "mainnetapproved",
+  "mainnetrelease",
   "auditedproduction",
   "externallyaudited",
+  "thirdpartyaudited",
+  "boiaudited",
+  "auditedmainnet",
+  "externalaudit",
   "auditpassed",
   "auditapproved",
   "auditsignoff",
   "auditclaim",
   "claimedaudit",
   "securityreviewpassed",
+  "securityauditpassed",
+  "securityaudited",
+  "externalsecurityreview",
+  "certifiedproduction",
+  "certifiedmainnet",
+  "releaseready",
+  "releaseapproved",
+  "releasecertified",
 ];
 
 function compactPrivacyBackendLabel(value) {
@@ -26952,7 +26968,15 @@ function isStarkFriProductionBackendLabel(backend) {
 }
 
 function isPortableVerifierBackendLabel(backend) {
-  return /^[A-Za-z0-9/_.:+-]+$/u.test(backend);
+  if (!/^[a-z0-9/_.:-]+$/u.test(backend)) {
+    return false;
+  }
+  if (!/^[a-z0-9]/u.test(backend) || !/[a-z0-9]$/u.test(backend)) {
+    return false;
+  }
+  return !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"].some((separator) =>
+    backend.includes(separator),
+  );
 }
 
 function normalizeNativeHalo2PastaBackendLabel(value) {

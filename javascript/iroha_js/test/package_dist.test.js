@@ -29,6 +29,8 @@ import {
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+  KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
+  KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
   KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
@@ -58,6 +60,7 @@ import {
   isKagemushaRecursiveAggregationProofBundleNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable,
+  isKagemushaRecursiveCompactUnavailable,
   isSupportedKagemushaRecursiveSpendLineageKeyArtifactOpeningLen,
   isKagemushaRecursiveSpendLineageProofCircuitId,
   isKagemushaRecursiveSpendLineageAppendOutputCircuitId,
@@ -183,10 +186,14 @@ import {
   wrapSolanaSccpProofResult,
   preferredKagemushaOfflineSpendMode,
   isKagemushaRecursiveSpendNativeAvailable,
+  isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable,
+  isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable,
   kagemushaProveVerifiedCompactPaymentTokenWithRecords,
   kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes,
   kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes,
   kagemushaVerifyRecursiveCompactPaymentToken,
+  kagemushaRecursiveSpendCompactPaymentTokenFromBundle,
+  kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection,
   kagemushaRecursiveSpendInit,
   kagemushaRecursiveSpendAppend,
   kagemushaRecursiveSpendTransitionProfileInit,
@@ -408,6 +415,57 @@ function privacyNoritoFrameFromPayload(schemaByte, payload) {
   return frame;
 }
 
+const TEST_NORITO_COMPACT_LEN_FLAG = 0x02;
+const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
+  "119f4df38a98ef5848ad0aadb9715779",
+  "hex",
+);
+
+function privacyNoritoFrameFromSchemaHash(schemaHash, payload, flags = 0) {
+  const payloadBuffer = Buffer.from(payload);
+  const frame = Buffer.alloc(40);
+  frame.write("NRT0", 0, "ascii");
+  Buffer.from(schemaHash).copy(frame, 6);
+  frame[39] = flags;
+  const archive = Buffer.concat([frame, payloadBuffer]);
+  archive.writeBigUInt64LE(BigInt(payloadBuffer.length), 23);
+  archive.writeBigUInt64LE(testCrc64(payloadBuffer), 31);
+  return archive;
+}
+
+function kagemushaNoritoLength(value, flags = 0) {
+  if ((flags & TEST_NORITO_COMPACT_LEN_FLAG) === 0) {
+    const length = Buffer.alloc(8);
+    length.writeBigUInt64LE(BigInt(value));
+    return length;
+  }
+  let remaining = BigInt(value);
+  const bytes = [];
+  while (remaining >= 0x80n) {
+    bytes.push(Number((remaining & 0x7fn) | 0x80n));
+    remaining >>= 7n;
+  }
+  bytes.push(Number(remaining));
+  return Buffer.from(bytes);
+}
+
+function kagemushaNoritoField(payload, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  const bytes = Buffer.from(payload);
+  return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
+}
+
+function kagemushaNoritoString(value, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  const bytes = Buffer.from(value, "utf8");
+  return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
+}
+
+function kagemushaNoritoByteVec(value) {
+  const bytes = Buffer.from(value);
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64LE(BigInt(bytes.length));
+  return Buffer.concat([length, bytes]);
+}
+
 function kagemushaZk1Tlv(tag, payload) {
   const payloadBuffer = Buffer.from(payload);
   const length = Buffer.alloc(4);
@@ -440,14 +498,19 @@ function kagemushaVerifierKeyCommitment(verifierKey) {
 }
 
 function kagemushaLineageProvingKeyArchive(circuitId, verifierKey, seed) {
-  return privacyNoritoFrameFromPayload(
-    0x9a,
-    Buffer.concat([
-      Buffer.from([1, 0]),
-      Buffer.from(circuitId, "utf8"),
-      kagemushaVerifierKeyCommitment(verifierKey),
-      Buffer.alloc(64, seed),
-    ]),
+  const flags = TEST_NORITO_COMPACT_LEN_FLAG;
+  const version = Buffer.alloc(2);
+  version.writeUInt16LE(1);
+  const payload = Buffer.concat([
+    kagemushaNoritoField(version, flags),
+    kagemushaNoritoField(kagemushaNoritoString(circuitId, flags), flags),
+    kagemushaNoritoField(kagemushaVerifierKeyCommitment(verifierKey), flags),
+    kagemushaNoritoField(kagemushaNoritoByteVec(Buffer.alloc(64, seed)), flags),
+  ]);
+  return privacyNoritoFrameFromSchemaHash(
+    KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+    payload,
+    flags,
   );
 }
 
@@ -916,6 +979,8 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
     "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
+    "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT",
+    "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT",
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND",
     "KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1",
@@ -962,11 +1027,16 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     "isKagemushaRecursiveAggregationProofBundleNativeAvailable",
     "isKagemushaRecursiveCompactPaymentTokenNativeAvailable",
     "isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable",
+    "isKagemushaRecursiveCompactUnavailable",
+    "isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable",
+    "isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable",
     "isKagemushaRecursiveSpendNativeAvailable",
     "kagemushaProveVerifiedCompactPaymentTokenWithRecords",
     "kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes",
     "kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes",
     "kagemushaVerifyRecursiveCompactPaymentToken",
+    "kagemushaRecursiveSpendCompactPaymentTokenFromBundle",
+    "kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection",
     "kagemushaRecursiveSpendInit",
     "kagemushaRecursiveSpendAppend",
     "kagemushaRecursiveSpendTransitionProfileInit",
@@ -987,6 +1057,24 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.equal(KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1, "checked_prefold_v1");
   assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION, 7);
   assert.equal(KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1, "kagemusha-recursive-compact-v1");
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
+    "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch",
+  );
+  assert.equal(
+    KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
+    "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch",
+  );
+  assert.equal(
+    isKagemushaRecursiveCompactUnavailable(
+      new Error(KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT),
+    ),
+    true,
+  );
+  assert.equal(
+    isKagemushaRecursiveCompactUnavailable("recursive compact proof composition unavailable"),
+    false,
+  );
   assert.equal(KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION, 6);
   assert.equal(KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND, "halo2/ipa");
   assert.equal(
@@ -1725,7 +1813,16 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
     typeof isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(),
     "boolean",
   );
+  assert.equal(
+    typeof isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(),
+    "boolean",
+  );
+  assert.equal(
+    typeof isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(),
+    "boolean",
+  );
   assert.equal(typeof kagemushaVerifyRecursiveCompactPaymentToken, "function");
+  assert.equal(typeof kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection, "function");
   assert.throws(
     () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(
       privacyNoritoFrameWithPayload(0x4d),
@@ -1751,6 +1848,18 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
   assert.throws(
     () => kagemushaVerifyRecursiveCompactPaymentToken(privacyNoritoFrameWithPayload(0x4b)),
     /recursive compact Kagemusha payment-token verifier|unavailable in browser-only crypto builds|Native binding required|invalid Kagemusha recursive compact payment token archive/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(privacyNoritoFrameWithPayload(0x4c)),
+    /recursive spend compact Kagemusha payment-token projection|unavailable in browser-only crypto builds|Native binding required/,
+  );
+  assert.throws(
+    () =>
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+        privacyNoritoFrameWithPayload(0x4c),
+        privacyNoritoFrameWithPayload(0x4d),
+      ),
+    /recursive spend compact Kagemusha payment-token projection verifier|unavailable in browser-only crypto builds|Native binding required/,
   );
   for (const helper of [
     kagemushaRecursiveSpendInit,
@@ -1938,6 +2047,10 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["lattice-pcs-sis", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk-v0", "LatticePcsSis"],
+    ["stark/fri", "Stark"],
+    ["stark/fri/sha256-goldilocks", "Stark"],
+    ["stark/fri/poseidon2-goldilocks", "Stark"],
+    ["stark/fri/sha256_goldilocks.v1", "Stark"],
     ["miden-stark", "MidenStark"],
     ["stark/fri/miden", "MidenStark"],
     ["aztec-plonkish-private-kernel", "AztecPlonkishPrivateKernel"],
@@ -2014,9 +2127,22 @@ test("package dist privacy proof envelopes reject production metadata claims", (
     { ...base, backend: "stark/fri/\u200Bsha256-goldilocks" },
     { ...base, backend: "st\u0430rk/fri/sha256-goldilocks" },
     { ...base, backend: "halo2/ipa/orchard/dev-fixture" },
+    { ...base, backend: "halo2/ipa/orchard:production-ready" },
+    { ...base, backend: "orchard:mainnet-ready" },
+    { ...base, backend: "penumbra-masp:external-security-review" },
+    { ...base, backend: "jindo-lattice-pcs-zk:release-ready" },
     { ...base, backend: "stark/fri/miden/claimed-production" },
+    { ...base, backend: "miden-stark:dev-fixture" },
     { ...base, backend: "anonymous-pgc-k-out-of-n-v1-production" },
     { ...base, backend: "sis-hints-anoncred-pq-v0-devfixture" },
+    { ...base, backend: "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d" },
+    { ...base, backend: "halo2/ipa/orchard:kzg" },
+    { ...base, backend: "orchard:universal-srs" },
+    { ...base, backend: "penumbra-masp:kzg" },
+    { ...base, backend: "jindo-lattice-pcs-zk:trusted-setup" },
+    { ...base, backend: "miden-stark:ptau" },
+    { ...base, backend: "sis-with-hints:groth16" },
+    { ...base, backend: "pq-masp-stark-fri:kzg" },
     { ...base, backend: "groth16/bls12-377/../../prod" },
     { ...base, backend: "post-quantum-masp/audit-claimed" },
     { ...base, production: true },

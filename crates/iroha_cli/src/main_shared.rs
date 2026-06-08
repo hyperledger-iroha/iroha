@@ -795,6 +795,7 @@ mod app {
                     crate::commands::da::Command::RentQuote(_)
                     | crate::commands::da::Command::RentLedger(_),
                 ) => true,
+                Self::Zk(command) => command.allows_fallback_config(),
                 Self::Taikai(command) => taikai_allows_fallback_config(command),
                 Self::Sorafs(command) => sorafs_allows_fallback_config(command),
                 Self::SpaceDirectory(crate::space_directory::Command::Manifest(
@@ -804,7 +805,6 @@ mod app {
                 )) => true,
                 Self::Gov(_)
                 | Self::Contracts(_)
-                | Self::Zk(_)
                 | Self::Confidential(_)
                 | Self::Content(_)
                 | Self::Da(_)
@@ -8368,6 +8368,33 @@ mod tests {
         let args = Args::try_parse_from(["iroha", "tools", "address", "convert", "sora1"])
             .expect("parse address conversion");
         assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "zk",
+            "kagemusha",
+            "recursive-compact-key-artifacts",
+            "--vk-out",
+            "recursive-compact-len4.vk",
+            "--pk-out",
+            "recursive-compact-len4.pk",
+            "--record-out",
+            "recursive-compact-len4.record.norito",
+        ])
+        .expect("parse offline Kagemusha compact key artifact command");
+        assert!(args.command.allows_fallback_config());
+
+        let args = Args::try_parse_from([
+            "iroha",
+            "app",
+            "zk",
+            "roots",
+            "--asset-id",
+            "asset#domain",
+        ])
+        .expect("parse runtime ZK roots command");
+        assert!(!args.command.allows_fallback_config());
 
         let args = Args::try_parse_from([
             "iroha",

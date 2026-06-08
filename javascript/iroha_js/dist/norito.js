@@ -5182,6 +5182,8 @@ function encodeBackendTagValue(value, context) {
     case "stark":
     case "starkfri":
     case "starkfrisha256goldilocks":
+    case "starkfriposeidon2goldilocks":
+    case "starkfrisha256goldilocksv1":
       return encodeEnumTagValue(3);
     case "unsupported":
       return encodeEnumTagValue(4);

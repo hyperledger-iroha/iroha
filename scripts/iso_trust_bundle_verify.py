@@ -40,14 +40,27 @@ from typing import Any
 
 BUNDLE_VERSION = 1
 TRUST_SUMMARY_VERSION = 1
-DEFAULT_POLICY = "require-verified"
 MAX_DER_BLOBS = 8
 MAX_DER_BYTES = 1024 * 1024
 MAX_DER_BASE64_CHARS = ((MAX_DER_BYTES + 2) // 3) * 4
 MAX_BUNDLE_JSON_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_URL_CHARS = 2048
-PLACEHOLDER_TRUST_SOURCE_MARKERS = ("placeholder", "replace-before-production")
-PLACEHOLDER_TRUST_SOURCE_HOSTS = {"example.invalid"}
+PLACEHOLDER_TRUST_SOURCE_MARKERS = (
+    "dummy",
+    "fake",
+    "placeholder",
+    "replace-before-production",
+    "sample",
+    "template",
+)
+PLACEHOLDER_TRUST_SOURCE_HOSTS = {
+    "example",
+    "example.com",
+    "example.invalid",
+    "example.net",
+    "operator-canary.bank",
+    "example.org",
+}
 SECRET_VALUE_PATTERNS = [
     re.compile(r"\bauthorization\s*:", re.IGNORECASE),
     re.compile(r"\bbearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
@@ -689,8 +702,19 @@ def _validate_sha256(value: str, label: str) -> str:
     return value
 
 
+def _required_list_field(
+    bundle: dict[str, Any],
+    key: str,
+    label: str,
+    description: str,
+) -> Any:
+    if key not in bundle:
+        raise TrustBundleError(f"{label}.{key} must be recorded as an array of {description}")
+    return bundle[key]
+
+
 def _sha256_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
-    raw = bundle.get(key, [])
+    raw = _required_list_field(bundle, key, label, "SHA-256 strings")
     if not isinstance(raw, list):
         raise TrustBundleError(f"{label}.{key} must be an array of SHA-256 strings")
     result: list[str] = []
@@ -709,7 +733,7 @@ def _sha256_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
 
 
 def _oid_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
-    raw = bundle.get(key, [])
+    raw = _required_list_field(bundle, key, label, "dotted numeric OIDs")
     if not isinstance(raw, list):
         raise TrustBundleError(f"{label}.{key} must be an array of dotted numeric OIDs")
     result: list[str] = []
@@ -925,7 +949,7 @@ def _der_objects(
     kind: str,
     allow_synthetic_der: bool,
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    raw = bundle.get(key, [])
+    raw = _required_list_field(bundle, key, label, "DER objects")
     if not isinstance(raw, list):
         raise TrustBundleError(f"{label}.{key} must be an array of DER objects")
     if len(raw) > MAX_DER_BLOBS:
@@ -956,16 +980,15 @@ def _der_objects(
             allow_synthetic_der=allow_synthetic_der,
         )
         digest = sha256_hex(der)
-        if "sha256" in obj:
-            declared_digest = obj.get("sha256")
-            if not isinstance(declared_digest, str):
-                raise TrustBundleError(f"{label}.{key}[{offset}].sha256 must be a string")
-            if declared_digest != declared_digest.strip():
-                raise TrustBundleError(
-                    f"{label}.{key}[{offset}].sha256 must not have surrounding whitespace"
-                )
-            if _validate_sha256(declared_digest, f"{label}.{key}[{offset}].sha256") != digest:
-                raise TrustBundleError(f"{label}.{key}[{offset}].sha256 does not match der_base64")
+        declared_digest = obj.get("sha256")
+        if not isinstance(declared_digest, str):
+            raise TrustBundleError(f"{label}.{key}[{offset}].sha256 must be a string")
+        if declared_digest != declared_digest.strip():
+            raise TrustBundleError(
+                f"{label}.{key}[{offset}].sha256 must not have surrounding whitespace"
+            )
+        if _validate_sha256(declared_digest, f"{label}.{key}[{offset}].sha256") != digest:
+            raise TrustBundleError(f"{label}.{key}[{offset}].sha256 does not match der_base64")
         if digest in seen:
             raise TrustBundleError(f"{label}.{key}[{offset}] duplicates DER SHA-256")
         seen.add(digest)
@@ -986,9 +1009,9 @@ def _source(
     label: str,
     allow_insecure_source_url: bool,
 ) -> dict[str, Any]:
-    raw = bundle.get("source")
-    if raw is None:
-        raise TrustBundleError(f"{label}.source is required")
+    if "source" not in bundle:
+        raise TrustBundleError(f"{label}.source must be recorded")
+    raw = bundle["source"]
     source = _require_object(raw, f"{label}.source")
     _reject_unknown_keys(source, SOURCE_KEYS, f"{label}.source")
     authority = _required_string(source, "authority", f"{label}.source")
@@ -1190,7 +1213,7 @@ def _reject_profile_emission_blockers(
                 )
         if _trust_source_url_uses_placeholder_host(source["url"]):
             raise TrustBundleError(
-                "cannot emit profile overrides from example.invalid source provenance: "
+                "cannot emit profile overrides from reserved placeholder source provenance: "
                 f"bundles[{offset}].source.url"
             )
     if args.max_source_age_days is None:
@@ -1363,9 +1386,10 @@ def verify_bundle(
     rail = _required_rail(bundle, "rail", str(path))
     environment = _required_string(bundle, "environment", str(path))
     _reject_secret_looking_identifier(environment, f"{path}.environment")
-    policy = bundle.get("embedded_signature_policy", DEFAULT_POLICY)
-    if isinstance(policy, str):
-        _reject_secret_looking_identifier(policy, f"{path}.embedded_signature_policy")
+    if "embedded_signature_policy" not in bundle:
+        raise TrustBundleError(f"{path}.embedded_signature_policy must be recorded")
+    policy = _required_string(bundle, "embedded_signature_policy", str(path))
+    _reject_secret_looking_identifier(policy, f"{path}.embedded_signature_policy")
     if not isinstance(policy, str) or policy not in POLICIES:
         raise TrustBundleError(f"{path}.embedded_signature_policy is unsupported")
     if policy != REQUIRE_VERIFIED and not allow_record_only:

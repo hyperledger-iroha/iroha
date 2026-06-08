@@ -113,6 +113,12 @@ class PrivacyNativeBridgeTest {
         assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrame(0x50) })
         assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrameWithPayload(0x51) })
         assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrameWithPadding(0x50, 64) })
+        val validProbeOutput = privacyNoritoFrameWithPayload(0x42)
+        assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x42) { validProbeOutput })
+        assertAllZero(validProbeOutput)
+        val invalidProbeOutput = invalidPrivacyNoritoPayloadTamper()
+        assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { invalidProbeOutput })
+        assertAllZero(invalidProbeOutput)
         assertFalse(PrivacyNativeBridge.returnsOutputProbe(0x50) { privacyNoritoFrame(0x50) })
         assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x42) { privacyNoritoFrameWithPayload(0x42) })
         assertTrue(PrivacyNativeBridge.returnsOutputProbe(0x56) { privacyNoritoFrameWithPayload(0x56) })
@@ -337,11 +343,13 @@ class PrivacyNativeBridgeTest {
         assertTrue(oversized.message.orEmpty().contains("returned oversized output"))
 
         val output = privacyNoritoFrameWithPayload(0x50)
+        val expectedOutput = privacyNoritoFrameWithPayload(0x50)
         val archive = PrivacyNativeBridge.requireNativeOutput(output, "privacy capabilities")
         assertTrue(archive !== output)
-        assertTrue(archive.contentEquals(output))
+        assertTrue(archive.contentEquals(expectedOutput))
+        assertAllZero(output)
         archive[0] = 9
-        assertEquals('N'.code.toByte(), output[0])
+        assertEquals('N'.code.toByte(), expectedOutput[0])
     }
 
     @Test
@@ -464,18 +472,17 @@ class PrivacyNativeBridgeTest {
 
         assertTrue(archive !== nativeOutput)
         assertTrue(archive.contentEquals(expectedOutput))
-
-        nativeOutput[6] = 0x7f
-        assertTrue(archive.contentEquals(expectedOutput))
+        assertAllZero(nativeOutput)
 
         archive[0] = 0x7f
-        assertEquals('N'.code.toByte(), nativeOutput[0])
+        assertEquals('N'.code.toByte(), expectedOutput[0])
     }
 
     @Test
     fun acceptsCompleteFieldBitsetNoritoFlags() {
         val requestArchive = privacyNoritoFrameWithFlags(0x52, 0x26)
         val nativeOutput = privacyNoritoFrameWithFlags(0x42, 0x26)
+        val expectedOutput = privacyNoritoFrameWithFlags(0x42, 0x26)
 
         val archive = PrivacyNativeBridge.call(
             label = "build proof",
@@ -487,7 +494,8 @@ class PrivacyNativeBridgeTest {
             bridgeAvailable = true,
         )
 
-        assertTrue(archive.contentEquals(nativeOutput))
+        assertTrue(archive.contentEquals(expectedOutput))
+        assertAllZero(nativeOutput)
     }
 
     @Test

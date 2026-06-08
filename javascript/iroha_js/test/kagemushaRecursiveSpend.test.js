@@ -8,6 +8,8 @@ import {
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1,
   KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+  KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT,
+  KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
   KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION,
   KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
   KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION,
@@ -37,6 +39,9 @@ import {
   isKagemushaRecursiveAggregationProofBundleNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenNativeAvailable,
   isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable,
+  isKagemushaRecursiveCompactUnavailable,
+  isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable,
+  isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable,
   isKagemushaRecursiveSpendLineageProofCircuitId,
   isKagemushaRecursiveSpendLineageAppendOutputCircuitId,
   isKagemushaRecursiveSpendNativeAvailable,
@@ -47,6 +52,8 @@ import {
   kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes,
   kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes,
   kagemushaVerifyRecursiveCompactPaymentToken,
+  kagemushaRecursiveSpendCompactPaymentTokenFromBundle,
+  kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection,
   kagemushaRecursiveSpendAppend,
   kagemushaRecursiveSpendInit,
   kagemushaRecursiveSpendLineageKeyArtifactsForAppend,
@@ -146,6 +153,12 @@ function kagemushaNoritoFrame(schemaByte) {
   return frame;
 }
 
+const TEST_NORITO_COMPACT_LEN_FLAG = 0x02;
+const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
+  "119f4df38a98ef5848ad0aadb9715779",
+  "hex",
+);
+
 function kagemushaNoritoFrameWithPayload(schemaByte) {
   const frame = Buffer.concat([
     kagemushaNoritoFrame(schemaByte),
@@ -190,6 +203,51 @@ function kagemushaNoritoFrameFromPayload(schemaByte, payload) {
   return frame;
 }
 
+function kagemushaNoritoFrameFromSchemaHash(schemaHash, payload, flags = 0) {
+  const payloadBuffer = Buffer.from(payload);
+  const frame = Buffer.alloc(40);
+  frame.write("NRT0", 0, "ascii");
+  Buffer.from(schemaHash).copy(frame, 6);
+  frame[39] = flags;
+  const archive = Buffer.concat([frame, payloadBuffer]);
+  archive.writeBigUInt64LE(BigInt(payloadBuffer.length), 23);
+  archive.writeBigUInt64LE(testCrc64(payloadBuffer), 31);
+  return archive;
+}
+
+function kagemushaNoritoLength(value, flags = 0) {
+  if ((flags & TEST_NORITO_COMPACT_LEN_FLAG) === 0) {
+    const length = Buffer.alloc(8);
+    length.writeBigUInt64LE(BigInt(value));
+    return length;
+  }
+  let remaining = BigInt(value);
+  const bytes = [];
+  while (remaining >= 0x80n) {
+    bytes.push(Number((remaining & 0x7fn) | 0x80n));
+    remaining >>= 7n;
+  }
+  bytes.push(Number(remaining));
+  return Buffer.from(bytes);
+}
+
+function kagemushaNoritoField(payload, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  const bytes = Buffer.from(payload);
+  return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
+}
+
+function kagemushaNoritoString(value, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  const bytes = Buffer.from(value, "utf8");
+  return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
+}
+
+function kagemushaNoritoByteVec(value) {
+  const bytes = Buffer.from(value);
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64LE(BigInt(bytes.length));
+  return Buffer.concat([length, bytes]);
+}
+
 function kagemushaZk1Tlv(tag, payload) {
   const payloadBuffer = Buffer.from(payload);
   const length = Buffer.alloc(4);
@@ -221,15 +279,22 @@ function kagemushaVerifierKeyCommitment(verifierKey) {
     .digest();
 }
 
-function kagemushaLineageProvingKeyArchive(circuitId, verifierKey, seed) {
-  return kagemushaNoritoFrameFromPayload(
-    0x9a,
-    Buffer.concat([
-      Buffer.from([1, 0]),
-      Buffer.from(circuitId, "utf8"),
-      kagemushaVerifierKeyCommitment(verifierKey),
-      Buffer.alloc(64, seed),
-    ]),
+function kagemushaLineageProvingKeyArchive(circuitId, verifierKey, seed, options = {}) {
+  const flags = options.flags ?? TEST_NORITO_COMPACT_LEN_FLAG;
+  const version = Buffer.alloc(2);
+  version.writeUInt16LE(options.version ?? 1);
+  const vkCommitment = options.vkCommitment ?? kagemushaVerifierKeyCommitment(verifierKey);
+  const provingKey = options.provingKey ?? Buffer.alloc(64, seed);
+  const payload = Buffer.concat([
+    kagemushaNoritoField(version, flags),
+    kagemushaNoritoField(kagemushaNoritoString(circuitId, flags), flags),
+    kagemushaNoritoField(vkCommitment, flags),
+    kagemushaNoritoField(kagemushaNoritoByteVec(provingKey), flags),
+  ]);
+  return kagemushaNoritoFrameFromSchemaHash(
+    options.schemaHash ?? KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+    payload,
+    flags,
   );
 }
 
@@ -346,14 +411,139 @@ test("Kagemusha recursive spend helpers reject empty request archives before nat
       /compactTokenArchive must not be empty/,
     );
     assert.throws(
+      () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(Buffer.alloc(0)),
+      /bundleArchive must not be empty/,
+    );
+    assert.throws(
       () => kagemushaVerifyRecursiveCompactPaymentToken(Buffer.from([1])),
       /compactTokenArchive must be a valid Norito archive/,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(Buffer.from([1])),
+      /bundleArchive must be a valid Norito archive/,
     );
     assert.throws(
       () => kagemushaVerifyRecursiveCompactPaymentToken(kagemushaNoritoFrame(0x4b)),
       /compactTokenArchive must contain a non-empty Norito payload/,
     );
+    assert.throws(
+      () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(kagemushaNoritoFrame(0x4c)),
+      /bundleArchive must contain a non-empty Norito payload/,
+    );
   });
+});
+
+test("Kagemusha recursive spend helpers reject oversized request archives before native calls", () => {
+  const oversizedArchive = new Uint8Array(KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1);
+  const validArchive = kagemushaInputArchive(0x60);
+
+  assert.throws(
+    () => kagemushaRecursiveSpendInit(oversizedArchive),
+    /requestArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendAppend(oversizedArchive),
+    /requestArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendTransitionProfileInit(oversizedArchive),
+    /requestArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendTransitionProfileAppend(oversizedArchive),
+    /requestArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendLineageAppendBoundary(oversizedArchive),
+    /profileArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendLineageWitnessFromInitResult(oversizedArchive, validArchive),
+    /requestArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendLineageWitnessFromInitResult(validArchive, oversizedArchive),
+    /bundleArchive must not exceed/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageWitnessAppendResult(
+        oversizedArchive,
+        validArchive,
+        validArchive,
+      ),
+    /previousWitnessArchive must not exceed/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageWitnessAppendResult(
+        validArchive,
+        oversizedArchive,
+        validArchive,
+      ),
+    /requestArchive must not exceed/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageWitnessAppendResult(
+        validArchive,
+        validArchive,
+        oversizedArchive,
+      ),
+    /bundleArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendVerify(oversizedArchive),
+    /requestArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendRedeem(oversizedArchive),
+    /requestArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(oversizedArchive),
+    /recordBundleArchive must not exceed/,
+  );
+  assert.throws(
+    () =>
+      kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+        oversizedArchive,
+        validArchive,
+      ),
+    /recordBundleArchive must not exceed/,
+  );
+  assert.throws(
+    () =>
+      kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+        validArchive,
+        oversizedArchive,
+      ),
+    /pallasOpenEnvelopesArchive must not exceed/,
+  );
+  assert.throws(
+    () =>
+      kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        oversizedArchive,
+        validArchive,
+      ),
+    /recordBundleArchive must not exceed/,
+  );
+  assert.throws(
+    () =>
+      kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        validArchive,
+        oversizedArchive,
+      ),
+    /pallasOpenEnvelopesArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaVerifyRecursiveCompactPaymentToken(oversizedArchive),
+    /compactTokenArchive must not exceed/,
+  );
+  assert.throws(
+    () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(oversizedArchive),
+    /bundleArchive must not exceed/,
+  );
 });
 
 test("Kagemusha recursive spend helpers reject malformed Norito request archives before native calls", () => {
@@ -699,6 +889,25 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
     "kagemusha-recursive-compact-v1",
   );
   assert.equal(
+    isKagemushaRecursiveCompactUnavailable(
+      new Error(KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT),
+    ),
+    true,
+  );
+  assert.equal(
+    isKagemushaRecursiveCompactUnavailable(
+      `bridge: ${KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT}`,
+    ),
+    true,
+  );
+  assert.equal(
+    isKagemushaRecursiveCompactUnavailable(
+      new Error("recursive compact proof composition unavailable"),
+    ),
+    false,
+  );
+  assert.equal(isKagemushaRecursiveCompactUnavailable(null), false);
+  assert.equal(
     preferredKagemushaOfflineSpendModeForCapabilities(true, true),
     KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
   );
@@ -980,6 +1189,191 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
     assert.equal(
       preferredKagemushaOfflineSpendMode(),
       KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1,
+    );
+  });
+});
+
+test("Kagemusha recursive spend compact projection probes availability and validates native output", () => {
+  const abi7Binding = {
+    connectNoritoBridgeAbiVersion() {
+      return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+  };
+  const bundleArchive = kagemushaInputArchive(0xe1);
+
+  withNativeBinding(abi7Binding, () => {
+    assert.equal(
+      isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(),
+      false,
+    );
+    assert.throws(
+      () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(bundleArchive),
+      /compact projection symbol/,
+    );
+  });
+
+  withNativeBinding(
+    {
+      ...abi7Binding,
+      kagemushaRecursiveSpendCompactPaymentTokenFromBundle(bundle) {
+        rejectMalformedProbe("recursive-spend-compact-projection", bundle);
+        return kagemushaNoritoFrameWithPayload(0x4f);
+      },
+    },
+    () => {
+      assert.equal(
+        isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(),
+        true,
+      );
+      assert.deepEqual(
+        kagemushaRecursiveSpendCompactPaymentTokenFromBundle(bundleArchive),
+        kagemushaNoritoFrameWithPayload(0x4f),
+      );
+    },
+  );
+
+  withNativeBinding(
+    {
+      ...abi7Binding,
+      kagemushaRecursiveSpendCompactPaymentTokenFromBundle(bundle) {
+        rejectMalformedProbe("recursive-spend-compact-projection", bundle);
+        return Uint8Array.from([1]);
+      },
+    },
+    () => {
+      assert.equal(
+        isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(),
+        true,
+      );
+      assert.throws(
+        () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(bundleArchive),
+        /returned invalid Norito archive/,
+      );
+    },
+  );
+});
+
+test("Kagemusha recursive spend compact projection verifier probes and delegates", () => {
+  const compactTokenArchive = kagemushaInputArchive(0xe2);
+  const verifierRecordArchive = kagemushaInputArchive(0xe3);
+  const baseBinding = {
+    connectNoritoBridgeAbiVersion() {
+      return KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION;
+    },
+  };
+
+  withNativeBinding(baseBinding, () => {
+    assert.equal(
+      isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(),
+      false,
+    );
+    assert.throws(
+      () =>
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          compactTokenArchive,
+          verifierRecordArchive,
+        ),
+      /compact projection verifier symbols/,
+    );
+  });
+
+  const calls = [];
+  withNativeBinding(
+    {
+      ...baseBinding,
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(token, record) {
+        rejectMalformedProbe("recursive-spend-compact-projection-verify", token, record);
+        calls.push(["verify", Buffer.from(token), Buffer.from(record)]);
+        return false;
+      },
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(
+        token,
+        record,
+        blockHeight,
+      ) {
+        rejectMalformedProbe("recursive-spend-compact-projection-verify-height", token, record);
+        calls.push(["verify-at-height", Buffer.from(token), Buffer.from(record), blockHeight]);
+        return true;
+      },
+    },
+    () => {
+      assert.equal(
+        isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(),
+        true,
+      );
+      assert.equal(
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          compactTokenArchive,
+          verifierRecordArchive,
+        ),
+        false,
+      );
+      assert.deepEqual(calls.at(-1), [
+        "verify",
+        compactTokenArchive,
+        verifierRecordArchive,
+      ]);
+      assert.equal(
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          compactTokenArchive,
+          verifierRecordArchive,
+          2,
+        ),
+        true,
+      );
+      assert.deepEqual(calls.at(-1), [
+        "verify-at-height",
+        compactTokenArchive,
+        verifierRecordArchive,
+        2,
+      ]);
+    },
+  );
+
+  withNativeBinding(
+    {
+      ...baseBinding,
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(token, record) {
+        rejectMalformedProbe("recursive-spend-compact-projection-verify", token, record);
+        return Uint8Array.from([1]);
+      },
+      kagemushaVerifyRecursiveSpendCompactPaymentTokenProjectionAtHeight(token, record) {
+        rejectMalformedProbe("recursive-spend-compact-projection-verify-height", token, record);
+        return false;
+      },
+    },
+    () => {
+      assert.equal(
+        isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(),
+        true,
+      );
+      assert.throws(
+        () =>
+          kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+            compactTokenArchive,
+            verifierRecordArchive,
+          ),
+        /kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection returned a non-boolean result/,
+      );
+    },
+  );
+
+  withNativeBinding(baseBinding, () => {
+    assert.throws(
+      () =>
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          Buffer.alloc(0),
+          verifierRecordArchive,
+        ),
+      /compactTokenArchive must not be empty/,
+    );
+    assert.throws(
+      () =>
+        kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+          compactTokenArchive,
+          Buffer.from([1]),
+        ),
+      /verifierRecordArchive must be a valid Norito archive/,
     );
   });
 });
@@ -1295,6 +1689,98 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
         initVerifierKey,
         appendProvingKeyArchive,
+      ),
+    /lineage_proving_key_archive/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        initVerifierKey,
+        kagemushaNoritoFrameFromPayload(
+          0x9a,
+          Buffer.concat([
+            Buffer.from([1, 0]),
+            Buffer.from(KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1, "utf8"),
+            kagemushaVerifierKeyCommitment(initVerifierKey),
+            Buffer.alloc(64, 0xe8),
+          ]),
+        ),
+      ),
+    /lineage_proving_key_archive/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        initVerifierKey,
+        kagemushaLineageProvingKeyArchive(
+          KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+          initVerifierKey,
+          0xe8,
+          { version: 2 },
+        ),
+      ),
+    /lineage_proving_key_archive/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        initVerifierKey,
+        kagemushaLineageProvingKeyArchive(
+          KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
+          initVerifierKey,
+          0xe8,
+        ),
+      ),
+    /lineage_proving_key_archive/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        initVerifierKey,
+        kagemushaLineageProvingKeyArchive(
+          KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+          initVerifierKey,
+          0xe8,
+          { vkCommitment: Buffer.alloc(32, 0x5a) },
+        ),
+      ),
+    /lineage_proving_key_archive/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        initVerifierKey,
+        kagemushaLineageProvingKeyArchive(
+          KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+          initVerifierKey,
+          0xe8,
+          { provingKey: Buffer.alloc(0) },
+        ),
+      ),
+    /lineage_proving_key_archive/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        initVerifierKey,
+        kagemushaLineageProvingKeyArchive(
+          KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
+          initVerifierKey,
+          0xe8,
+          { schemaHash: Buffer.alloc(16, 0x9a) },
+        ),
       ),
     /lineage_proving_key_archive/,
   );

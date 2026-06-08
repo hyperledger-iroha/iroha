@@ -12,6 +12,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_android_device_lab_slot.py"
@@ -61,6 +62,17 @@ def inject_duplicate_json_key(path: Path, key: str, first_value) -> None:
     path.write_text(text[:line_start] + duplicate_line + text[line_start:], encoding="utf-8")
 
 
+def patch_slot_iterdir_failure(slot: Path):
+    original_iterdir = Path.iterdir
+
+    def failing_iterdir(path: Path):
+        if path == slot:
+            raise OSError("simulated slot listing failure")
+        return original_iterdir(path)
+
+    return mock.patch.object(Path, "iterdir", failing_iterdir)
+
+
 def rewrite_sha256sum(slot: Path) -> None:
     lines = []
     for relative in sorted(device_lab._slot_files(slot)):  # type: ignore[attr-defined]
@@ -99,6 +111,36 @@ def replace_with_fifo(test_case: unittest.TestCase, fifo_path: Path) -> None:
         os.mkfifo(fifo_path)
     except (AttributeError, NotImplementedError, OSError) as exc:
         test_case.skipTest(f"FIFOs are not available in this test environment: {exc}")
+
+
+def with_read_bytes_failure(target_path: Path, callback):
+    original_read_bytes = Path.read_bytes
+
+    def failing_read_bytes(path: Path) -> bytes:
+        if path == target_path:
+            raise OSError("simulated read failure")
+        return original_read_bytes(path)
+
+    try:
+        Path.read_bytes = failing_read_bytes
+        return callback()
+    finally:
+        Path.read_bytes = original_read_bytes
+
+
+def with_write_text_failure(target_path: Path, callback):
+    original_write_text = Path.write_text
+
+    def failing_write_text(path: Path, *args, **kwargs) -> int:
+        if path == target_path:
+            raise OSError("simulated write failure")
+        return original_write_text(path, *args, **kwargs)
+
+    try:
+        Path.write_text = failing_write_text
+        return callback()
+    finally:
+        Path.write_text = original_write_text
 
 
 def canonical_signed_evidence_payload(evidence: dict) -> bytes:
@@ -556,8 +598,8 @@ def create_slot(
                     "one_use_key_rotation_passed": True,
                     "rollback_rejection_passed": True,
                     "abi6_recursive_spend_jni_probe": "passed",
-                    "abi7_recursive_compact_jni_probe": "unavailable",
-                    "abi7_recursive_compact_prover_state": "proof_composition_unavailable",
+                    "abi7_recursive_compact_jni_probe": "one_hop_verified",
+                    "abi7_recursive_compact_prover_state": "multi_hop_proof_composition_unavailable",
                     "raw_test_commands": raw_test_commands,
                     "signed_at_utc": "2026-06-06T00:00:00Z",
                     "signer_key_id": "android-lab-release-signer-v1",
@@ -597,8 +639,8 @@ def create_slot(
                 "one_use_key_rotation_passed": True,
                 "rollback_rejection_passed": True,
                 "abi6_recursive_spend_jni_probe": "passed",
-                "abi7_recursive_compact_jni_probe": "unavailable",
-                "abi7_recursive_compact_prover_state": "proof_composition_unavailable",
+                "abi7_recursive_compact_jni_probe": "one_hop_verified",
+                "abi7_recursive_compact_prover_state": "multi_hop_proof_composition_unavailable",
                 "signed_evidence_artifact_path": "evidence/signed-evidence.json",
                 "signed_evidence_artifact_sha256": evidence_digest,
                 "raw_test_commands": raw_test_commands,
@@ -689,8 +731,8 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
             "one_use_key_rotation_passed": True,
             "rollback_rejection_passed": True,
             "abi6_recursive_spend_jni_probe": "passed",
-            "abi7_recursive_compact_jni_probe": "unavailable",
-            "abi7_recursive_compact_prover_state": "proof_composition_unavailable",
+            "abi7_recursive_compact_jni_probe": "one_hop_verified",
+            "abi7_recursive_compact_prover_state": "multi_hop_proof_composition_unavailable",
             "signed_evidence_artifact_path": "evidence/signed-evidence.json",
             "signed_evidence_artifact_sha256": "0" * 64,
             "raw_test_commands": raw_test_commands,
@@ -726,6 +768,28 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertEqual(report["errors"], ["slot directory must not be a symlink"])
 
+    def test_scan_slot_rejects_slot_directory_metadata_failure(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == slot:
+                        raise OSError("simulated slot lstat failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                report = device_lab.scan_slot(slot)
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(report["status"], "error")
+        self.assertEqual(report["errors"], ["slot directory metadata could not be read"])
+
     def test_scan_slot_rejects_symlinked_slot_parent_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -738,6 +802,140 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(report["status"], "error")
         self.assertEqual(report["errors"], ["slot parent directory must not be a symlink"])
+
+    def test_scan_slot_rejects_slot_parent_metadata_failure(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp) / "slots", "slot-a")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == slot.parent:
+                        raise OSError("simulated slot parent lstat failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                report = device_lab.scan_slot(slot)
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(report["status"], "error")
+        self.assertEqual(
+            report["errors"],
+            ["slot parent directory metadata could not be read"],
+        )
+
+    def test_scan_slot_uses_lstat_before_expected_directory_is_dir_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                logs_dir = slot / "logs"
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == logs_dir:
+                        raise OSError("simulated scan slot directory is_dir failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+
+                report = device_lab.scan_slot(slot)
+        finally:
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(report["status"], "ok", report["errors"])
+        self.assertTrue(report["present"]["logs"])
+        self.assertEqual(report["file_counts"]["logs"], 1)
+
+    def test_scan_slot_reports_expected_directory_metadata_failure_before_is_dir_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                logs_dir = slot / "logs"
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == logs_dir:
+                        raise OSError("simulated scan slot directory is_dir failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == logs_dir:
+                        raise OSError("simulated scan slot directory metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+                path_type.lstat = failing_lstat
+
+                report = device_lab.scan_slot(slot)
+        finally:
+            path_type.lstat = original_lstat
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn("logs/ metadata could not be read", report["errors"])
+        self.assertFalse(report["present"]["logs"])
+        self.assertNotIn("missing logs/ directory", report["errors"])
+
+    def test_scan_slot_counts_artifacts_with_lstat_before_is_file_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_file = path_type.is_file
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                runtime_log = slot / "logs" / "runtime.log"
+
+                def failing_is_file(path: Path, *args, **kwargs):
+                    if path == runtime_log:
+                        raise OSError("simulated scan slot artifact is_file failure")
+                    return original_is_file(path, *args, **kwargs)
+
+                path_type.is_file = failing_is_file
+
+                report = device_lab.scan_slot(slot)
+        finally:
+            path_type.is_file = original_is_file
+
+        self.assertEqual(report["status"], "ok", report["errors"])
+        self.assertEqual(report["file_counts"]["logs"], 1)
+
+    def test_scan_slot_sha_presence_uses_lstat_before_is_file_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_is_file = path_type.is_file
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                sha_path = slot / "sha256sum.txt"
+
+                def failing_is_file(path: Path, *args, **kwargs):
+                    if path == sha_path:
+                        raise OSError("simulated scan slot sha is_file failure")
+                    return original_is_file(path, *args, **kwargs)
+
+                path_type.is_file = failing_is_file
+
+                report = device_lab.scan_slot(slot)
+        finally:
+            path_type.is_file = original_is_file
+
+        self.assertEqual(report["status"], "ok", report["errors"])
+        self.assertTrue(report["present"]["sha256sum.txt"])
 
     def test_scan_slot_rejects_symlinked_slot_ancestor_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -752,6 +950,28 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(report["status"], "error")
         self.assertEqual(report["errors"], ["slot ancestor directory must not be a symlink"])
+
+    def test_scan_slot_rejects_directory_traversal_failure_without_traceback(self) -> None:
+        original_rglob = Path.rglob
+
+        def failing_rglob(path: Path, pattern: str):
+            if path.name == "logs":
+                raise OSError("simulated directory traversal failure")
+            return original_rglob(path, pattern)
+
+        try:
+            Path.rglob = failing_rglob
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+
+                report = device_lab.scan_slot(slot)
+        finally:
+            Path.rglob = original_rglob
+
+        rendered = json.dumps(report)
+        self.assertEqual(report["status"], "error")
+        self.assertIn("logs/ could not be listed", report["errors"])
+        self.assertNotIn("Traceback", rendered)
 
     def test_load_json_rejects_symlinked_ancestor_before_read(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -772,6 +992,103 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIsNone(data)
         self.assertEqual(errors, ["test json ancestor directory must not be a symlink"])
 
+    def test_validate_no_symlink_ancestors_rejects_cwd_failure(self) -> None:
+        with mock.patch.object(
+            Path,
+            "cwd",
+            side_effect=OSError("simulated cwd failure"),
+        ):
+            errors = device_lab.validate_no_symlink_ancestors(
+                Path("payload.json"),
+                "test json ancestor directory",
+            )
+
+        self.assertEqual(errors, ["test json ancestor directory metadata could not be read"])
+
+    def test_validate_no_symlink_ancestors_rejects_ancestor_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                payload = root / "slot" / "payload.json"
+                payload.parent.mkdir()
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == payload.parent:
+                        raise OSError("simulated ancestor metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = device_lab.validate_no_symlink_ancestors(
+                    payload,
+                    "test json ancestor directory",
+                )
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["test json ancestor directory metadata could not be read"])
+
+    def test_validate_no_symlink_ancestors_uses_lstat_before_is_symlink_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_symlink = path_type.is_symlink
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                payload = root / "slot" / "payload.json"
+                payload.parent.mkdir()
+
+                def failing_is_symlink(path: Path, *args, **kwargs):
+                    if path == payload.parent:
+                        raise OSError("simulated ancestor is_symlink failure")
+                    return original_is_symlink(path, *args, **kwargs)
+
+                path_type.is_symlink = failing_is_symlink
+
+                errors = device_lab.validate_no_symlink_ancestors(
+                    payload,
+                    "test json ancestor directory",
+                )
+        finally:
+            path_type.is_symlink = original_is_symlink
+
+        self.assertEqual(errors, [])
+
+    def test_validate_no_symlink_ancestors_uses_lstat_before_exists_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_exists = path_type.exists
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                payload = root / "slot" / "payload.json"
+                payload.parent.mkdir()
+
+                def failing_exists(path: Path, *args, **kwargs):
+                    if path == payload.parent:
+                        raise OSError("simulated ancestor exists failure")
+                    return original_exists(path, *args, **kwargs)
+
+                path_type.exists = failing_exists
+
+                errors = device_lab.validate_no_symlink_ancestors(
+                    payload,
+                    "test json ancestor directory",
+                )
+        finally:
+            path_type.exists = original_exists
+
+        self.assertEqual(errors, [])
+
     def test_load_json_rejects_secret_path_directly_before_parse(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             secret_dir = Path(temp) / "token=supersecret-json"
@@ -791,6 +1108,44 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("not valid JSON", rendered)
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(payload), rendered)
+
+    def test_load_json_rejects_non_utf8_bytes_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            payload = Path(temp) / "payload.json"
+            payload.write_bytes(b"\xff\xfe\xfd")
+            errors: list[str] = []
+
+            data = device_lab._load_json(payload, "test json", errors)
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(data)
+        self.assertEqual(errors, ["test json could not be read"])
+        self.assertNotIn("not valid JSON", rendered)
+        self.assertNotIn(str(payload), rendered)
+
+    def test_load_json_rejects_file_metadata_failure_before_missing(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                payload = Path(temp) / "payload.json"
+                write_json(payload, {"status": "ok"})
+                errors: list[str] = []
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == payload:
+                        raise OSError("simulated JSON metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                data = device_lab._load_json(payload, "test json", errors)
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertIsNone(data)
+        self.assertEqual(errors, ["test json file metadata could not be read"])
 
     def test_scan_slot_rejects_symlinked_required_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -987,6 +1342,65 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn(str(secret_root), rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_root_validator_rejects_metadata_failure_directly_without_leak(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / "slots"
+                root.mkdir()
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == root:
+                        raise OSError("simulated device-lab root metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = device_lab.validate_device_lab_root_path(root)
+                rendered = json.dumps(errors)
+                root_exists = root.exists()
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["device-lab root metadata could not be read"])
+        self.assertTrue(root_exists)
+        self.assertNotIn(str(root), rendered)
+
+    def test_main_uses_lstat_before_missing_root_exists_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_exists = path_type.exists
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / "missing-slots"
+
+                def failing_exists(path: Path, *args, **kwargs):
+                    if path == root:
+                        raise OSError("simulated device-lab root exists failure")
+                    return original_exists(path, *args, **kwargs)
+
+                path_type.exists = failing_exists
+
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = device_lab.main(
+                        [
+                            "--root",
+                            str(root),
+                            "--allow-missing-root",
+                        ]
+                    )
+                rendered = stdout.getvalue() + stderr.getvalue()
+        finally:
+            path_type.exists = original_exists
+
+        self.assertEqual(status, 0)
+        self.assertIn("[device-lab] root missing; skipping", rendered)
+        self.assertNotIn("Traceback", rendered)
+
     def test_main_rejects_symlinked_device_lab_root_before_discovery(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1039,6 +1453,134 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             rendered,
         )
         self.assertNotIn("[device-lab] slot-a: ok", rendered)
+        self.assertNotIn("Traceback", rendered)
+
+    def test_discover_slots_returns_structured_error_on_root_list_failure(self) -> None:
+        original_iterdir = Path.iterdir
+
+        def failing_iterdir(path: Path):
+            if path.name == "device_lab":
+                raise OSError("simulated root listing failure")
+            return original_iterdir(path)
+
+        try:
+            Path.iterdir = failing_iterdir
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / "device_lab"
+                root.mkdir()
+
+                slot_paths, errors = device_lab.discover_slots(root, None)
+        finally:
+            Path.iterdir = original_iterdir
+
+        self.assertEqual(slot_paths, [])
+        self.assertEqual(errors, ["device-lab root could not be listed"])
+
+    def test_discover_slots_uses_lstat_before_is_dir_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / "device_lab"
+                slot = create_slot(root, "slot-a")
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == slot:
+                        raise OSError("simulated discovery is_dir failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+
+                slot_paths, errors = device_lab.discover_slots(root, None)
+        finally:
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(slot_paths, [slot])
+        self.assertEqual(errors, [])
+
+    def test_discover_slots_reports_slot_metadata_failure_before_is_dir_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / "device_lab"
+                slot = create_slot(root, "slot-a")
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == slot:
+                        raise OSError("simulated discovery is_dir failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == slot:
+                        raise OSError("simulated discovery metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+                path_type.lstat = failing_lstat
+
+                slot_paths, errors = device_lab.discover_slots(root, None)
+        finally:
+            path_type.lstat = original_lstat
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(slot_paths, [])
+        self.assertEqual(
+            errors,
+            ["device-lab slot directory metadata could not be read"],
+        )
+
+    def test_discover_slots_preserves_symlinked_slot_for_scan_slot_rejection(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            root = base / "device_lab"
+            root.mkdir()
+            target_slot = create_slot(base / "external_slots", "slot-a")
+            linked_slot = root / "slot-link"
+            create_dir_symlink(self, linked_slot, target_slot)
+
+            slot_paths, errors = device_lab.discover_slots(root, None)
+
+        self.assertEqual(slot_paths, [linked_slot])
+        self.assertEqual(errors, [])
+
+    def test_main_rejects_device_lab_root_list_failure_without_traceback(self) -> None:
+        original_iterdir = Path.iterdir
+
+        def failing_iterdir(path: Path):
+            if path.name == "device_lab":
+                raise OSError("simulated root listing failure")
+            return original_iterdir(path)
+
+        try:
+            Path.iterdir = failing_iterdir
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp) / "device_lab"
+                root.mkdir()
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = device_lab.main(
+                        [
+                            "--root",
+                            str(root),
+                            "--require-slot",
+                        ]
+                    )
+                rendered = stdout.getvalue() + stderr.getvalue()
+        finally:
+            Path.iterdir = original_iterdir
+
+        self.assertEqual(status, 1)
+        self.assertIn("device-lab root could not be listed", rendered)
         self.assertNotIn("Traceback", rendered)
 
     def test_explicit_unsafe_slot_id_rejected_before_path_join(self) -> None:
@@ -1164,6 +1706,29 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(files, set())
 
+    def test_slot_files_reports_slot_metadata_failure_without_omission(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                errors: list[str] = []
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == slot:
+                        raise OSError("simulated slot lstat failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                files = device_lab._slot_files(slot, errors)  # type: ignore[attr-defined]
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(files, set())
+        self.assertEqual(errors, ["slot directory metadata could not be read"])
+
     def test_slot_files_secret_slot_path_returns_empty_without_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             slot = create_slot(Path(temp), "token=supersecret-slot")
@@ -1218,6 +1783,123 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertNotIn("logs/runtime.log", files)
 
+    def test_slot_files_reports_artifact_directory_metadata_failure_without_omission(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                directory = slot / "logs"
+                errors: list[str] = []
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == directory:
+                        raise OSError("simulated artifact directory lstat failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                files = device_lab._slot_files(slot, errors)  # type: ignore[attr-defined]
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertNotIn("logs/runtime.log", files)
+        self.assertIn("logs/ metadata could not be read", errors)
+
+    def test_slot_files_reports_top_level_listing_failure_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            errors: list[str] = []
+
+            with patch_slot_iterdir_failure(slot):
+                files = device_lab._slot_files(slot, errors)  # type: ignore[attr-defined]
+
+        self.assertIn("slot directory could not be listed", errors)
+        self.assertIn("logs/runtime.log", files)
+
+    def test_slot_files_reports_artifact_metadata_failure_without_omission(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                artifact = slot / "logs" / "runtime.log"
+                errors: list[str] = []
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == artifact:
+                        raise OSError("simulated inventory metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                files = device_lab._slot_files(slot, errors)  # type: ignore[attr-defined]
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertIn(
+            "slot artifact logs/runtime.log file metadata could not be read",
+            errors,
+        )
+        self.assertNotIn("logs/runtime.log", files)
+
+    def test_artifact_shape_validators_report_top_level_listing_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            symlink_errors: list[str] = []
+            hardlink_errors: list[str] = []
+            regular_errors: list[str] = []
+
+            with patch_slot_iterdir_failure(slot):
+                device_lab.validate_no_slot_symlink_artifacts(slot, symlink_errors)
+                device_lab.validate_no_slot_hardlink_artifacts(slot, hardlink_errors)
+                device_lab.validate_slot_regular_file_artifacts(slot, regular_errors)
+
+        self.assertIn("slot directory could not be listed", symlink_errors)
+        self.assertIn("slot directory could not be listed", hardlink_errors)
+        self.assertIn("slot directory could not be listed", regular_errors)
+
+    def test_verify_sha256_manifest_reports_top_level_listing_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            rewrite_sha256sum(slot)
+
+            with patch_slot_iterdir_failure(slot):
+                errors = device_lab.verify_sha256_manifest(slot)
+
+        self.assertIn("slot directory could not be listed", errors)
+
+    def test_required_signed_evidence_digest_paths_reports_top_level_listing_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            errors: list[str] = []
+
+            with patch_slot_iterdir_failure(slot):
+                paths = device_lab._required_signed_evidence_digest_paths(  # type: ignore[attr-defined]
+                    slot,
+                    errors,
+                )
+
+        self.assertIn("slot directory could not be listed", errors)
+        self.assertIn("logs/runtime.log", paths)
+
+    def test_signer_manifest_rewrite_rejects_top_level_listing_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+
+            with patch_slot_iterdir_failure(slot):
+                errors = evidence_signer.rewrite_sha256_manifest(slot)
+
+        self.assertEqual(errors, ["slot directory could not be listed"])
+
     def test_parse_sha256_manifest_rejects_secret_slot_path_directly_before_parse(
         self,
     ) -> None:
@@ -1250,6 +1932,33 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(entries, {})
         self.assertEqual(errors, ["slot directory must not be a symlink"])
+        self.assertNotIn("expected '<sha256> <path>'", rendered)
+
+    def test_parse_sha256_manifest_rejects_slot_metadata_failure_before_parse(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                write_text(slot / "sha256sum.txt", "not-a-manifest-line\n")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == slot:
+                        raise OSError("simulated slot lstat failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                entries, errors = device_lab.parse_sha256_manifest(slot)
+                rendered = "\n".join(errors)
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(entries, {})
+        self.assertEqual(errors, ["slot directory metadata could not be read"])
         self.assertNotIn("expected '<sha256> <path>'", rendered)
 
     def test_parse_sha256_manifest_rejects_symlinked_slot_ancestor_before_parse(
@@ -1287,6 +1996,79 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["sha256sum.txt must not be hardlinked"])
         self.assertNotIn("expected '<sha256> <path>'", rendered)
 
+    def test_parse_sha256_manifest_rejects_file_metadata_failure_before_read(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                manifest_path = slot / "sha256sum.txt"
+                write_text(manifest_path, "not-a-manifest-line\n")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == manifest_path:
+                        raise OSError("simulated manifest file metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                entries, errors = device_lab.parse_sha256_manifest(slot)
+                rendered = "\n".join(errors)
+                manifest_text = manifest_path.read_text(encoding="utf-8")
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(entries, {})
+        self.assertEqual(errors, ["sha256sum.txt file metadata could not be read"])
+        self.assertNotIn("expected '<sha256> <path>'", rendered)
+        self.assertEqual(manifest_text, "not-a-manifest-line\n")
+
+    def test_parse_sha256_manifest_rejects_hardlink_metadata_failure_before_read(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                manifest_path = slot / "sha256sum.txt"
+                write_text(manifest_path, "not-a-manifest-line\n")
+
+                def failing_stat(path: Path, *args, **kwargs):
+                    if path == manifest_path:
+                        raise OSError("simulated manifest hardlink metadata failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_stat
+
+                entries, errors = device_lab.parse_sha256_manifest(slot)
+                rendered = "\n".join(errors)
+        finally:
+            path_type.stat = original_stat
+
+        self.assertEqual(entries, {})
+        self.assertEqual(errors, ["sha256sum.txt hardlink metadata could not be read"])
+        self.assertNotIn("expected '<sha256> <path>'", rendered)
+
+    def test_parse_sha256_manifest_rejects_non_utf8_bytes_without_traceback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            (slot / "sha256sum.txt").write_bytes(b"\xff\xfe\xfd")
+
+            entries, errors = device_lab.parse_sha256_manifest(slot)
+            rendered = "\n".join(errors)
+
+        self.assertEqual(entries, {})
+        self.assertEqual(errors, ["sha256sum.txt could not be read"])
+        self.assertNotIn("expected '<sha256> <path>'", rendered)
+        self.assertNotIn(str(slot), rendered)
+
     def test_verify_sha256_manifest_rejects_secret_slot_path_directly_before_traversal(
         self,
     ) -> None:
@@ -1320,6 +2102,32 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             rendered = "\n".join(errors)
 
         self.assertEqual(errors, ["slot directory must not be a symlink"])
+        self.assertNotIn("digest mismatch", rendered)
+        self.assertNotIn("missing entry", rendered)
+
+    def test_verify_sha256_manifest_rejects_slot_metadata_failure_before_parse(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == slot:
+                        raise OSError("simulated slot lstat failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = device_lab.verify_sha256_manifest(slot)
+                rendered = "\n".join(errors)
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["slot directory metadata could not be read"])
         self.assertNotIn("digest mismatch", rendered)
         self.assertNotIn("missing entry", rendered)
 
@@ -1392,6 +2200,175 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             ],
         )
         self.assertNotIn("digest mismatch", rendered)
+
+    def test_manifest_artifact_digest_rejects_secret_relative_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            secret_relative = "logs/token=supersecret.log"
+            write_text(slot / secret_relative, "must not be hashed\n")
+
+            digest, errors = device_lab._manifest_artifact_sha256(
+                slot,
+                secret_relative,
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["slot artifacts must not contain secret-looking material"])
+        self.assertNotIn(secret_relative, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_manifest_artifact_digest_rejects_symlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "slot-a")
+            target = root / "outside-runtime.log"
+            write_text(target, "kagemusha device-lab run complete\n")
+            replace_with_symlink(self, slot / "logs" / "runtime.log", target)
+
+            digest, errors = device_lab._manifest_artifact_sha256(
+                slot,
+                "logs/runtime.log",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["sha256sum.txt references symlink artifact logs/runtime.log"],
+        )
+
+    def test_manifest_artifact_digest_rejects_hardlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "slot-a")
+            target = root / "outside-runtime.log"
+            write_text(target, "kagemusha device-lab run complete\n")
+            replace_with_hardlink(self, slot / "logs" / "runtime.log", target)
+
+            digest, errors = device_lab._manifest_artifact_sha256(
+                slot,
+                "logs/runtime.log",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["sha256sum.txt references hardlinked artifact logs/runtime.log"],
+        )
+
+    def test_manifest_artifact_digest_rejects_file_metadata_failure(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                target = slot / "logs" / "runtime.log"
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == target:
+                        raise OSError("simulated manifest artifact metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                digest, errors = device_lab._manifest_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt references artifact file metadata could not be read "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_manifest_artifact_digest_uses_lstat_before_relative_ancestor_is_symlink_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_symlink = path_type.is_symlink
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                logs_dir = slot / "logs"
+                target = logs_dir / "runtime.log"
+                expected_digest = hashlib.sha256(target.read_bytes()).hexdigest()
+
+                def failing_is_symlink(path: Path, *args, **kwargs):
+                    if path == logs_dir:
+                        raise OSError("simulated relative ancestor is_symlink failure")
+                    return original_is_symlink(path, *args, **kwargs)
+
+                path_type.is_symlink = failing_is_symlink
+
+                digest, errors = device_lab._manifest_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+        finally:
+            path_type.is_symlink = original_is_symlink
+
+        self.assertEqual(digest, expected_digest)
+        self.assertEqual(errors, [])
+
+    def test_manifest_artifact_digest_rejects_read_failure_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            target = slot / "logs" / "runtime.log"
+
+            digest, errors = with_read_bytes_failure(
+                target,
+                lambda: device_lab._manifest_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                ),
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt references artifact that could not be read "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_verify_sha256_manifest_revalidates_artifact_before_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "slot-a")
+            target = root / "outside-runtime.log"
+            write_text(target, "kagemusha device-lab run complete\n")
+            original_parse = device_lab.parse_sha256_manifest
+
+            def parse_then_alias(slot_path: Path):
+                entries, errors = original_parse(slot_path)
+                if not errors:
+                    replace_with_symlink(self, slot_path / "logs" / "runtime.log", target)
+                return entries, errors
+
+            try:
+                device_lab.parse_sha256_manifest = parse_then_alias
+                errors = device_lab.verify_sha256_manifest(slot)
+            finally:
+                device_lab.parse_sha256_manifest = original_parse
+
+        self.assertIn(
+            "sha256sum.txt references symlink artifact logs/runtime.log",
+            errors,
+        )
+        self.assertNotIn("sha256sum.txt digest mismatch for logs/runtime.log", errors)
 
     def test_attestation_result_rejects_secret_slot_path_directly_before_parse(
         self,
@@ -1489,6 +2466,162 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(slot), rendered)
 
+    def test_d2d_transcript_binding_rejects_symlink_path_before_digest_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root)
+            slot = create_slot(
+                root,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            target = root / "outside-d2d-payment.json"
+            write_text(target, (slot / "handoff" / "d2d-payment.json").read_text())
+            replace_with_symlink(self, slot / "handoff" / "d2d-payment.json", target)
+            errors: list[str] = []
+
+            relative, digest = device_lab.validate_d2d_payment_transcript_binding(
+                slot,
+                metadata,
+                errors,
+            )
+
+        self.assertEqual(relative, "handoff/d2d-payment.json")
+        self.assertIsNone(digest)
+        self.assertIn(
+            "slot.json d2d_payment_transcript_path references symlink artifact "
+            "handoff/d2d-payment.json",
+            errors,
+        )
+        self.assertNotIn(
+            "slot.json d2d_payment_transcript_sha256 does not match "
+            "d2d_payment_transcript_path",
+            errors,
+        )
+
+    def test_wallet_transcript_binding_rejects_hardlink_path_before_digest_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root)
+            slot = create_slot(
+                root,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            target = root / "outside-integrity.json"
+            write_text(target, (slot / "wallet" / "integrity.json").read_text())
+            replace_with_hardlink(self, slot / "wallet" / "integrity.json", target)
+            errors: list[str] = []
+
+            relative, digest = device_lab.validate_wallet_integrity_transcript_binding(
+                slot,
+                metadata,
+                errors,
+            )
+
+        self.assertEqual(relative, "wallet/integrity.json")
+        self.assertIsNone(digest)
+        self.assertIn(
+            "slot.json wallet_integrity_transcript_path references hardlinked "
+            "artifact wallet/integrity.json",
+            errors,
+        )
+        self.assertNotIn(
+            "slot.json wallet_integrity_transcript_sha256 does not match "
+            "wallet_integrity_transcript_path",
+            errors,
+        )
+
+    def test_d2d_transcript_rejects_symlinked_queue_before_digest_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root)
+            slot = create_slot(
+                root,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            target = root / "outside-pending-queue.json"
+            write_text(target, (slot / "queue" / "pending_queue.json").read_text())
+            replace_with_symlink(self, slot / "queue" / "pending_queue.json", target)
+            errors: list[str] = []
+
+            device_lab.validate_d2d_payment_transcript(
+                slot,
+                slot / "handoff" / "d2d-payment.json",
+                metadata,
+                errors,
+            )
+
+        self.assertIn(
+            "d2d payment transcript queue_after_sha256 references symlink "
+            "artifact queue/pending_queue.json",
+            errors,
+        )
+        self.assertNotIn(
+            "d2d payment transcript queue_after_sha256 must match "
+            "queue/pending_queue.json",
+            errors,
+        )
+
+    def test_d2d_transcript_uses_lstat_before_queue_is_file_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_is_file = path_type.is_file
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root)
+            slot = create_slot(
+                root,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            queue_path = slot / "queue" / "pending_queue.json"
+
+            def failing_is_file(path: Path, *args, **kwargs):
+                if path == queue_path:
+                    raise OSError("simulated queue is_file failure")
+                return original_is_file(path, *args, **kwargs)
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == queue_path:
+                    raise OSError("simulated queue lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.is_file = failing_is_file
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_d2d_payment_transcript(
+                    slot,
+                    slot / "handoff" / "d2d-payment.json",
+                    metadata,
+                    errors,
+                )
+            finally:
+                path_type.is_file = original_is_file
+                path_type.lstat = original_lstat
+
+        self.assertIn(
+            "d2d payment transcript queue_after_sha256 references artifact file "
+            "metadata could not be read queue/pending_queue.json",
+            errors,
+        )
+
     def test_required_artifact_shapes_rejects_secret_slot_path_directly_before_stat(
         self,
     ) -> None:
@@ -1506,6 +2639,109 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("must be non-empty", rendered)
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(slot), rendered)
+
+    def test_required_status_artifact_rejects_symlink_before_text_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "pixel8")
+            target = root / "outside-status.ndjson"
+            write_text(target, '{"status":"failed"}\n')
+            replace_with_symlink(self, slot / "telemetry" / "status.ndjson", target)
+            errors: list[str] = []
+
+            device_lab.validate_required_kagemusha_slot_artifact_shapes(slot, errors)
+
+        self.assertIn(
+            "telemetry/status.ndjson references symlink artifact "
+            "telemetry/status.ndjson",
+            errors,
+        )
+        self.assertNotIn(
+            "telemetry/status.ndjson line 1 status must not be 'failed'",
+            errors,
+        )
+
+    def test_required_runtime_log_rejects_hardlink_before_text_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "pixel8")
+            target = root / "outside-runtime.log"
+            write_text(target, "missing completion marker\n")
+            replace_with_hardlink(self, slot / "logs" / "runtime.log", target)
+            errors: list[str] = []
+
+            device_lab.validate_required_kagemusha_slot_artifact_shapes(slot, errors)
+
+        self.assertIn(
+            "logs/runtime.log references hardlinked artifact logs/runtime.log",
+            errors,
+        )
+        self.assertNotIn(
+            "logs/runtime.log must contain Kagemusha device-lab completion marker",
+            errors,
+        )
+
+    def test_required_status_artifact_uses_lstat_before_is_file_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_is_file = path_type.is_file
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            status_path = slot / "telemetry" / "status.ndjson"
+
+            def failing_is_file(path: Path, *args, **kwargs):
+                if path == status_path:
+                    raise OSError("simulated status is_file failure")
+                return original_is_file(path, *args, **kwargs)
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == status_path:
+                    raise OSError("simulated status lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.is_file = failing_is_file
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_required_kagemusha_slot_artifact_shapes(slot, errors)
+            finally:
+                path_type.is_file = original_is_file
+                path_type.lstat = original_lstat
+
+        self.assertIn("telemetry/status.ndjson file metadata could not be read", errors)
+
+    def test_required_runtime_log_uses_lstat_before_is_file_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_is_file = path_type.is_file
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            runtime_log = slot / "logs" / "runtime.log"
+
+            def failing_is_file(path: Path, *args, **kwargs):
+                if path == runtime_log:
+                    raise OSError("simulated runtime log is_file failure")
+                return original_is_file(path, *args, **kwargs)
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == runtime_log:
+                    raise OSError("simulated runtime log lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.is_file = failing_is_file
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_required_kagemusha_slot_artifact_shapes(slot, errors)
+            finally:
+                path_type.is_file = original_is_file
+                path_type.lstat = original_lstat
+
+        self.assertIn("logs/runtime.log file metadata could not be read", errors)
 
     def test_slot_symlink_artifact_validator_rejects_secret_slot_path_directly_before_traversal(
         self,
@@ -1528,6 +2764,85 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(slot), rendered)
 
+    def test_slot_symlink_artifact_validator_reports_slot_metadata_file_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            slot_metadata_path = slot / "slot.json"
+            write_text(slot_metadata_path, "{}\n")
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == slot_metadata_path:
+                    raise OSError("simulated slot metadata lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_no_slot_symlink_artifacts(slot, errors)
+            finally:
+                path_type.lstat = original_lstat
+
+        self.assertIn("slot.json file metadata could not be read", errors)
+
+    def test_slot_symlink_artifact_validator_reports_directory_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            logs_dir = slot / "logs"
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == logs_dir:
+                    raise OSError("simulated logs directory lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_no_slot_symlink_artifacts(slot, errors)
+            finally:
+                path_type.lstat = original_lstat
+
+        self.assertIn("logs/ metadata could not be read", errors)
+
+    def test_slot_symlink_artifact_validator_reports_nested_artifact_file_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            runtime_log = slot / "logs" / "runtime.log"
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == runtime_log:
+                    raise OSError("simulated runtime log lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_no_slot_symlink_artifacts(slot, errors)
+            finally:
+                path_type.lstat = original_lstat
+
+        self.assertIn(
+            "slot artifact logs/runtime.log file metadata could not be read",
+            errors,
+        )
+
     def test_slot_hardlink_artifact_validator_rejects_secret_slot_path_directly_before_stat(
         self,
     ) -> None:
@@ -1549,6 +2864,67 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(slot), rendered)
 
+    def test_slot_hardlink_artifact_validator_reports_file_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "pixel8")
+                artifact = slot / "logs" / "runtime.log"
+                errors: list[str] = []
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == artifact:
+                        raise OSError("simulated hardlink validator metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                device_lab.validate_no_slot_hardlink_artifacts(slot, errors)
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertIn(
+            "slot artifact logs/runtime.log file metadata could not be read",
+            errors,
+        )
+
+    def test_slot_hardlink_artifact_validator_uses_lstat_before_directory_exists_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_exists = path_type.exists
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            logs_dir = slot / "logs"
+
+            def failing_exists(path: Path, *args, **kwargs):
+                if path == logs_dir:
+                    raise OSError("simulated logs exists failure")
+                return original_exists(path, *args, **kwargs)
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == logs_dir:
+                    raise OSError("simulated logs lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.exists = failing_exists
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_no_slot_hardlink_artifacts(slot, errors)
+            finally:
+                path_type.exists = original_exists
+                path_type.lstat = original_lstat
+
+        self.assertIn("logs/ metadata could not be read", errors)
+
     def test_slot_regular_artifact_validator_rejects_secret_slot_path_directly_before_shape(
         self,
     ) -> None:
@@ -1567,6 +2943,252 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("must be a regular file", rendered)
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(slot), rendered)
+
+    def test_slot_regular_artifact_validator_reports_slot_metadata_file_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            slot_metadata_path = slot / "slot.json"
+            write_text(slot_metadata_path, "{}\n")
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == slot_metadata_path:
+                    raise OSError("simulated slot metadata lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_slot_regular_file_artifacts(slot, errors)
+            finally:
+                path_type.lstat = original_lstat
+
+        self.assertIn("slot.json file metadata could not be read", errors)
+
+    def test_slot_regular_artifact_validator_uses_lstat_before_exists_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_exists = path_type.exists
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            slot_metadata_path = slot / "slot.json"
+            write_text(slot_metadata_path, "{}\n")
+
+            def failing_exists(path: Path, *args, **kwargs):
+                if path == slot_metadata_path:
+                    raise OSError("simulated slot metadata exists failure")
+                return original_exists(path, *args, **kwargs)
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == slot_metadata_path:
+                    raise OSError("simulated slot metadata lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.exists = failing_exists
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_slot_regular_file_artifacts(slot, errors)
+            finally:
+                path_type.exists = original_exists
+                path_type.lstat = original_lstat
+
+        self.assertIn("slot.json file metadata could not be read", errors)
+
+    def test_slot_regular_artifact_validator_reports_directory_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            logs_dir = slot / "logs"
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == logs_dir:
+                    raise OSError("simulated logs directory lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_slot_regular_file_artifacts(slot, errors)
+            finally:
+                path_type.lstat = original_lstat
+
+        self.assertIn("logs/ metadata could not be read", errors)
+
+    def test_slot_regular_artifact_validator_uses_lstat_before_directory_exists_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_exists = path_type.exists
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            logs_dir = slot / "logs"
+
+            def failing_exists(path: Path, *args, **kwargs):
+                if path == logs_dir:
+                    raise OSError("simulated logs exists failure")
+                return original_exists(path, *args, **kwargs)
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == logs_dir:
+                    raise OSError("simulated logs lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.exists = failing_exists
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_slot_regular_file_artifacts(slot, errors)
+            finally:
+                path_type.exists = original_exists
+                path_type.lstat = original_lstat
+
+        self.assertIn("logs/ metadata could not be read", errors)
+
+    def test_slot_regular_artifact_validator_reports_nested_artifact_file_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            runtime_log = slot / "logs" / "runtime.log"
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == runtime_log:
+                    raise OSError("simulated runtime log lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_slot_regular_file_artifacts(slot, errors)
+            finally:
+                path_type.lstat = original_lstat
+
+        self.assertIn(
+            "slot artifact logs/runtime.log file metadata could not be read",
+            errors,
+        )
+
+    def test_slot_regular_artifact_validator_uses_lstat_before_nested_symlink_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_symlink = path_type.is_symlink
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            runtime_log = slot / "logs" / "runtime.log"
+
+            def failing_is_symlink(path: Path, *args, **kwargs):
+                if path == runtime_log:
+                    raise OSError("simulated runtime log symlink preflight failure")
+                return original_is_symlink(path, *args, **kwargs)
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == runtime_log:
+                    raise OSError("simulated runtime log lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.is_symlink = failing_is_symlink
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_slot_regular_file_artifacts(slot, errors)
+            finally:
+                path_type.is_symlink = original_is_symlink
+                path_type.lstat = original_lstat
+
+        self.assertIn(
+            "slot artifact logs/runtime.log file metadata could not be read",
+            errors,
+        )
+
+    def test_required_artifact_shapes_reports_required_artifact_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            status_path = slot / "telemetry" / "status.ndjson"
+
+            def failing_stat(path: Path, *args, **kwargs):
+                if path == status_path:
+                    raise OSError("simulated required artifact stat failure")
+                return original_stat(path, *args, **kwargs)
+
+            try:
+                path_type.stat = failing_stat
+                errors: list[str] = []
+
+                device_lab.validate_required_kagemusha_slot_artifact_shapes(slot, errors)
+            finally:
+                path_type.stat = original_stat
+
+        self.assertIn(
+            "required slot artifact metadata could not be read telemetry/status.ndjson",
+            errors,
+        )
+
+    def test_required_artifact_shapes_uses_lstat_before_is_file_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_file = path_type.is_file
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            queue_path = slot / "queue" / "pending_queue.json"
+
+            def failing_is_file(path: Path, *args, **kwargs):
+                if path == queue_path:
+                    raise OSError("simulated required artifact is_file failure")
+                return original_is_file(path, *args, **kwargs)
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == queue_path:
+                    raise OSError("simulated required artifact lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.is_file = failing_is_file
+                path_type.lstat = failing_lstat
+                errors: list[str] = []
+
+                device_lab.validate_required_kagemusha_slot_artifact_shapes(slot, errors)
+            finally:
+                path_type.is_file = original_is_file
+                path_type.lstat = original_lstat
+
+        self.assertIn(
+            "required slot artifact metadata could not be read queue/pending_queue.json",
+            errors,
+        )
 
     def test_signed_evidence_artifact_rejects_secret_slot_path_directly_before_parse(
         self,
@@ -1846,7 +3468,9 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
-    def test_production_metadata_rejects_available_recursive_compact_probe(self) -> None:
+    def test_production_metadata_rejects_unavailable_recursive_compact_one_hop_probe(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
             trusted = trusted_signers_for(signer)
@@ -1858,7 +3482,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             )
             metadata_path = slot / "slot.json"
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            metadata["abi7_recursive_compact_jni_probe"] = "available"
+            metadata["abi7_recursive_compact_jni_probe"] = "unavailable"
             write_json(metadata_path, metadata)
             rewrite_sha256sum(slot)
 
@@ -1870,7 +3494,37 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(report["status"], "error")
         self.assertIn(
-            "slot.json abi7_recursive_compact_jni_probe must be one of ['fail_closed', 'unavailable']",
+            "slot.json abi7_recursive_compact_jni_probe must be one of ['one_hop_verified']",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_generic_recursive_compact_prover_state(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["abi7_recursive_compact_prover_state"] = "proof_composition_unavailable"
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json abi7_recursive_compact_prover_state must be one of ['multi_hop_proof_composition_unavailable']",
             report["errors"],
         )
 
@@ -1900,6 +3554,198 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIn(
             "slot.json signed_evidence_artifact_sha256 does not match signed_evidence_artifact_path",
             report["errors"],
+        )
+
+    def test_production_metadata_uses_lstat_before_signed_evidence_is_file_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_file = path_type.is_file
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root)
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                root,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            evidence_path = slot / "evidence" / "signed-evidence.json"
+
+            def failing_is_file(path: Path, *args, **kwargs):
+                if path == evidence_path:
+                    raise OSError("simulated signed evidence is_file failure")
+                return original_is_file(path, *args, **kwargs)
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == evidence_path:
+                    raise OSError("simulated signed evidence lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.is_file = failing_is_file
+                path_type.lstat = failing_lstat
+
+                errors, _details = device_lab.validate_kagemusha_production_metadata(
+                    slot,
+                    trusted,
+                )
+            finally:
+                path_type.is_file = original_is_file
+                path_type.lstat = original_lstat
+
+        self.assertIn(
+            "slot.json signed_evidence_artifact_path references artifact file "
+            "metadata could not be read evidence/signed-evidence.json",
+            errors,
+        )
+
+    def test_metadata_artifact_digest_rejects_secret_relative_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            secret_relative = "evidence/token=supersecret.apk"
+            write_text(slot / secret_relative, "must not be hashed\n")
+
+            payload, digest, errors = device_lab._metadata_artifact_bytes_and_sha256(
+                slot,
+                secret_relative,
+                "slot.json offline_wallet_apk_path",
+                "slot.json offline_wallet_apk_path must point to an existing file",
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(payload)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["slot.json offline_wallet_apk_path must not contain secret-looking material"],
+        )
+        self.assertNotIn(secret_relative, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_metadata_artifact_digest_rejects_file_metadata_failure(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                target = slot / "evidence" / "offline-wallet-release.apk"
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == target:
+                        raise OSError("simulated metadata artifact metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                payload, digest, errors = device_lab._metadata_artifact_bytes_and_sha256(
+                    slot,
+                    "evidence/offline-wallet-release.apk",
+                    "slot.json offline_wallet_apk_path",
+                    "slot.json offline_wallet_apk_path must point to an existing file",
+                )
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertIsNone(payload)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "slot.json offline_wallet_apk_path references artifact file metadata "
+                "could not be read evidence/offline-wallet-release.apk"
+            ],
+        )
+
+    def test_metadata_artifact_digest_rejects_read_failure_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            target = slot / "evidence" / "offline-wallet-release.apk"
+
+            payload, digest, errors = with_read_bytes_failure(
+                target,
+                lambda: device_lab._metadata_artifact_bytes_and_sha256(
+                    slot,
+                    "evidence/offline-wallet-release.apk",
+                    "slot.json offline_wallet_apk_path",
+                    "slot.json offline_wallet_apk_path must point to an existing file",
+                ),
+            )
+
+        self.assertIsNone(payload)
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["slot.json offline_wallet_apk_path could not be read"])
+
+    def test_production_metadata_rejects_symlinked_signed_evidence_digest_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root)
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                root,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            target = root / "outside-signed-evidence.json"
+            write_text(target, (slot / "evidence" / "signed-evidence.json").read_text())
+            replace_with_symlink(
+                self,
+                slot / "evidence" / "signed-evidence.json",
+                target,
+            )
+
+            errors, _details = device_lab.validate_kagemusha_production_metadata(
+                slot,
+                trusted,
+            )
+
+        self.assertIn(
+            "slot.json signed_evidence_artifact_path references symlink artifact "
+            "evidence/signed-evidence.json",
+            errors,
+        )
+
+    def test_production_metadata_rejects_hardlinked_release_apk_digest_path(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root)
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                root,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            target = root / "outside-release.apk"
+            write_text(target, "apk bytes\n")
+            replace_with_hardlink(
+                self,
+                slot / "evidence" / "offline-wallet-release.apk",
+                target,
+            )
+
+            errors, _details = device_lab.validate_kagemusha_production_metadata(
+                slot,
+                trusted,
+            )
+
+        self.assertIn(
+            "slot.json offline_wallet_apk_path references hardlinked artifact "
+            "evidence/offline-wallet-release.apk",
+            errors,
         )
 
     def test_production_metadata_rejects_unsafe_signed_evidence_path(self) -> None:
@@ -3418,6 +5264,190 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_signed_evidence_artifact_digest_rejects_secret_relative_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            secret_relative = "logs/token=supersecret.log"
+            write_text(slot / secret_relative, "must not be hashed\n")
+
+            digest, errors = device_lab._signed_evidence_artifact_sha256(
+                slot,
+                secret_relative,
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence artifact digest path must not contain "
+                "secret-looking material"
+            ],
+        )
+        self.assertNotIn(secret_relative, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_signed_evidence_artifact_digest_rejects_symlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "slot-a")
+            target = root / "outside-runtime.log"
+            write_text(target, "kagemusha device-lab run complete\n")
+            replace_with_symlink(self, slot / "logs" / "runtime.log", target)
+
+            digest, errors = device_lab._signed_evidence_artifact_sha256(
+                slot,
+                "logs/runtime.log",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence artifact digest references symlink artifact "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_signed_evidence_artifact_digest_rejects_hardlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "slot-a")
+            target = root / "outside-runtime.log"
+            write_text(target, "kagemusha device-lab run complete\n")
+            replace_with_hardlink(self, slot / "logs" / "runtime.log", target)
+
+            digest, errors = device_lab._signed_evidence_artifact_sha256(
+                slot,
+                "logs/runtime.log",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence artifact digest references hardlinked artifact "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_signed_evidence_artifact_digest_rejects_file_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                target = slot / "logs" / "runtime.log"
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == target:
+                        raise OSError(
+                            "simulated signed evidence artifact metadata failure"
+                        )
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                digest, errors = device_lab._signed_evidence_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence artifact digest references artifact file metadata "
+                "could not be read logs/runtime.log"
+            ],
+        )
+
+    def test_signed_evidence_artifact_digest_rejects_read_failure_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            target = slot / "logs" / "runtime.log"
+
+            digest, errors = with_read_bytes_failure(
+                target,
+                lambda: device_lab._signed_evidence_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                ),
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence artifact digest references artifact that could not be read "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_signed_evidence_artifact_revalidates_required_digest_before_read(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root)
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                root,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            evidence_path = slot / "evidence" / "signed-evidence.json"
+            target = root / "outside-runtime.log"
+            write_text(target, "kagemusha device-lab run complete\n")
+            original_validate = device_lab.validate_required_kagemusha_slot_artifact_shapes
+
+            def validate_then_alias(slot_path: Path, errors: list[str]) -> None:
+                original_validate(slot_path, errors)
+                if not errors:
+                    replace_with_symlink(
+                        self,
+                        slot_path / "logs" / "runtime.log",
+                        target,
+                    )
+
+            errors: list[str] = []
+            try:
+                device_lab.validate_required_kagemusha_slot_artifact_shapes = (
+                    validate_then_alias
+                )
+                device_lab.validate_signed_evidence_artifact(
+                    slot,
+                    evidence_path,
+                    metadata,
+                    trusted,
+                    errors,
+                )
+            finally:
+                device_lab.validate_required_kagemusha_slot_artifact_shapes = (
+                    original_validate
+                )
+
+        self.assertIn(
+            "signed evidence artifact digest references symlink artifact "
+            "logs/runtime.log",
+            errors,
+        )
+        self.assertNotIn(
+            "signed evidence artifact digest mismatch for logs/runtime.log",
+            errors,
+        )
+
     def test_production_metadata_rejects_signed_evidence_missing_required_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -3966,6 +5996,335 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn(str(secret_public_key), rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_verify_signature_rejects_secret_public_key_path_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_which = device_lab.shutil.which
+        try:
+            device_lab.shutil.which = lambda _command: None
+            with tempfile.TemporaryDirectory() as temp:
+                secret_public_key = Path(temp) / "token=supersecret-public.pem"
+                errors: list[str] = []
+
+                device_lab._verify_ed25519_signature(  # type: ignore[attr-defined]
+                    public_key_path=secret_public_key,
+                    payload=b"payload",
+                    signature=b"signature",
+                    errors=errors,
+                    label="signer public key",
+                )
+                rendered = "\n".join(errors)
+        finally:
+            device_lab.shutil.which = original_which
+
+        self.assertEqual(
+            errors,
+            ["signer public key path must not contain secret-looking material"],
+        )
+        self.assertNotIn("openssl is required", rendered)
+        self.assertNotIn(str(secret_public_key), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_openssl_public_key_der_rejects_spawn_failure_after_path_shape(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = device_lab.subprocess.run
+
+        def failing_run(*args, **kwargs):
+            raise OSError("simulated OpenSSL spawn failure")
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            device_lab.subprocess.run = failing_run
+            with tempfile.TemporaryDirectory() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                der = device_lab._openssl_public_key_der(  # type: ignore[attr-defined]
+                    public_key,
+                    errors=errors,
+                    label="trusted signer public key",
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            device_lab.subprocess.run = original_run
+
+        self.assertIsNone(der)
+        self.assertEqual(
+            errors,
+            ["trusted signer public key OpenSSL public key command could not be run"],
+        )
+
+    def test_openssl_public_key_der_rejects_invalid_public_key_after_openssl_failure(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = device_lab.subprocess.run
+
+        def failing_run(*args, **kwargs):
+            raise subprocess.CalledProcessError(1, args[0])
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            device_lab.subprocess.run = failing_run
+            with tempfile.TemporaryDirectory() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_text("invalid public key data\n", encoding="utf-8")
+                errors: list[str] = []
+
+                der = device_lab._openssl_public_key_der(  # type: ignore[attr-defined]
+                    public_key,
+                    errors=errors,
+                    label="trusted signer public key",
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            device_lab.subprocess.run = original_run
+
+        self.assertIsNone(der)
+        self.assertEqual(
+            errors,
+            ["trusted signer public key must be a valid OpenSSL public key"],
+        )
+
+    def test_openssl_public_key_der_rejects_missing_public_key_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+
+        def unexpected_require_openssl(_errors: list[str]) -> str | None:
+            raise AssertionError("OpenSSL should not be looked up for a missing public key")
+
+        try:
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
+            with tempfile.TemporaryDirectory() as temp:
+                missing_public_key = Path(temp) / "missing-public.pem"
+                errors: list[str] = []
+
+                der = device_lab._openssl_public_key_der(  # type: ignore[attr-defined]
+                    missing_public_key,
+                    errors=errors,
+                    label="trusted signer public key",
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+
+        self.assertIsNone(der)
+        self.assertEqual(
+            errors,
+            ["trusted signer public key must point to an existing public key file"],
+        )
+
+    def test_openssl_public_key_der_rejects_non_regular_public_key_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+
+        def unexpected_require_openssl(_errors: list[str]) -> str | None:
+            raise AssertionError("OpenSSL should not be looked up for a public key directory")
+
+        try:
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
+            with tempfile.TemporaryDirectory() as temp:
+                public_key_directory = Path(temp) / "public-directory.pem"
+                public_key_directory.mkdir()
+                errors: list[str] = []
+
+                der = device_lab._openssl_public_key_der(  # type: ignore[attr-defined]
+                    public_key_directory,
+                    errors=errors,
+                    label="trusted signer public key",
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+
+        self.assertIsNone(der)
+        self.assertEqual(errors, ["trusted signer public key must be a regular file"])
+
+    def test_openssl_public_key_der_rejects_file_metadata_failure_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        def unexpected_require_openssl(_errors: list[str]) -> str | None:
+            raise AssertionError("OpenSSL should not be looked up after public key metadata failure")
+
+        try:
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
+            with tempfile.TemporaryDirectory() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == public_key:
+                        raise OSError("simulated public key lstat failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                der = device_lab._openssl_public_key_der(  # type: ignore[attr-defined]
+                    public_key,
+                    errors=errors,
+                    label="trusted signer public key",
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            path_type.lstat = original_lstat
+
+        self.assertIsNone(der)
+        self.assertEqual(
+            errors,
+            ["trusted signer public key file metadata could not be read"],
+        )
+        self.assertNotIn(str(public_key), "\n".join(errors))
+
+    def test_verify_signature_rejects_staging_write_failure_before_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = device_lab.subprocess.run
+        original_write_bytes = Path.write_bytes
+
+        def unexpected_run(*args, **kwargs):
+            raise AssertionError("OpenSSL should not run after staging write failure")
+
+        def failing_payload_write(path: Path, data: bytes) -> int:
+            if path.name == "payload.bin":
+                raise OSError("simulated payload staging failure")
+            return original_write_bytes(path, data)
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            device_lab.subprocess.run = unexpected_run
+            Path.write_bytes = failing_payload_write
+            with tempfile.TemporaryDirectory() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                device_lab._verify_ed25519_signature(  # type: ignore[attr-defined]
+                    public_key_path=public_key,
+                    payload=b"payload",
+                    signature=b"signature",
+                    errors=errors,
+                    label="signer public key",
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            device_lab.subprocess.run = original_run
+            Path.write_bytes = original_write_bytes
+
+        self.assertEqual(
+            errors,
+            ["signature verification staging files could not be written"],
+        )
+
+    def test_verify_signature_rejects_tempdir_failure_before_staging(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = device_lab.subprocess.run
+        original_tempdir = device_lab.tempfile.TemporaryDirectory
+
+        def failing_tempdir(*args, **kwargs):
+            raise OSError("simulated temporary directory failure")
+
+        def unexpected_run(*args, **kwargs):
+            raise AssertionError("OpenSSL should not run after tempdir failure")
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            device_lab.subprocess.run = unexpected_run
+            device_lab.tempfile.TemporaryDirectory = failing_tempdir
+            with original_tempdir() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                device_lab._verify_ed25519_signature(  # type: ignore[attr-defined]
+                    public_key_path=public_key,
+                    payload=b"payload",
+                    signature=b"signature",
+                    errors=errors,
+                    label="signer public key",
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            device_lab.subprocess.run = original_run
+            device_lab.tempfile.TemporaryDirectory = original_tempdir
+
+        self.assertEqual(
+            errors,
+            ["signature verification temporary directory could not be created"],
+        )
+
+    def test_verify_signature_rejects_spawn_failure_after_staging(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = device_lab.subprocess.run
+
+        def failing_run(*args, **kwargs):
+            raise OSError("simulated OpenSSL spawn failure")
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            device_lab.subprocess.run = failing_run
+            with tempfile.TemporaryDirectory() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                device_lab._verify_ed25519_signature(  # type: ignore[attr-defined]
+                    public_key_path=public_key,
+                    payload=b"payload",
+                    signature=b"signature",
+                    errors=errors,
+                    label="signer public key",
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            device_lab.subprocess.run = original_run
+
+        self.assertEqual(errors, ["signature verification command could not be run"])
+
+    def test_private_public_pair_preserves_public_key_path_error_before_mismatch(
+        self,
+    ) -> None:
+        original_which = device_lab.shutil.which
+        try:
+            device_lab.shutil.which = lambda _command: None
+            with tempfile.TemporaryDirectory() as temp:
+                secret_public_key = Path(temp) / "token=supersecret-public.pem"
+                errors: list[str] = []
+
+                evidence_signer._validate_private_public_pair(  # type: ignore[attr-defined]
+                    secret_public_key,
+                    b"payload",
+                    b"signature",
+                    errors,
+                )
+                rendered = "\n".join(errors)
+        finally:
+            device_lab.shutil.which = original_which
+
+        self.assertEqual(
+            errors,
+            ["signer public key path must not contain secret-looking material"],
+        )
+        self.assertNotIn(
+            "private key did not produce a signature accepted by the signer public key",
+            rendered,
+        )
+        self.assertNotIn("openssl is required", rendered)
+        self.assertNotIn(str(secret_public_key), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
     def test_trusted_signer_public_key_rejects_symlinked_ancestor_without_path_leak(
         self,
     ) -> None:
@@ -4006,6 +6365,46 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(trusted, {})
         self.assertEqual(errors, ["trusted signer public key must not be hardlinked"])
         self.assertNotIn(str(public_key_link), "\n".join(errors))
+
+    def test_trusted_signer_public_key_rejects_hardlink_metadata_failure_before_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        def unexpected_require_openssl(_errors: list[str]) -> str | None:
+            raise AssertionError("OpenSSL should not be looked up after metadata failure")
+
+        try:
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
+            with tempfile.TemporaryDirectory() as temp:
+                signer = create_test_signer(Path(temp) / "keys")
+                public_key = signer["public_key"]
+                public_key_stat_calls = 0
+
+                def failing_public_key_stat(path: Path, *args, **kwargs):
+                    nonlocal public_key_stat_calls
+                    if path == public_key:
+                        public_key_stat_calls += 1
+                        if public_key_stat_calls > 0:
+                            raise OSError("simulated public key stat failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_public_key_stat
+                trusted, errors = device_lab.load_trusted_signer_public_keys(
+                    [public_key]
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            path_type.stat = original_stat
+
+        self.assertEqual(trusted, {})
+        self.assertEqual(
+            errors,
+            ["trusted signer public key hardlink metadata could not be read"],
+        )
+        self.assertNotIn(str(public_key), "\n".join(errors))
 
     def test_signer_helper_rejects_symlinked_private_key_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -4245,6 +6644,90 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn("slot directory missing", rendered)
 
+    def test_signer_helper_rejects_slot_directory_metadata_failure_before_read(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(root / "slots", "pixel8")
+            stderr = io.StringIO()
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == slot:
+                    raise OSError("simulated slot directory lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = evidence_signer.main(
+                        [
+                            "--slot",
+                            str(slot),
+                            "--private-key",
+                            str(signer["private_key"]),
+                            "--public-key",
+                            str(signer["public_key"]),
+                            "--signer-key-id",
+                            "android-lab-release-signer-v1",
+                            "--signed-at-utc",
+                            "2026-06-06T00:00:00Z",
+                        ]
+                    )
+            finally:
+                path_type.lstat = original_lstat
+
+        self.assertEqual(status, 1)
+        self.assertIn("slot directory metadata could not be read", stderr.getvalue())
+        self.assertNotIn("slot.json could not be read", stderr.getvalue())
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
+    def test_signer_helper_rejects_slot_parent_metadata_failure_before_read(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(root / "slots", "pixel8")
+            stderr = io.StringIO()
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == slot.parent:
+                    raise OSError("simulated slot parent lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = evidence_signer.main(
+                        [
+                            "--slot",
+                            str(slot),
+                            "--private-key",
+                            str(signer["private_key"]),
+                            "--public-key",
+                            str(signer["public_key"]),
+                            "--signer-key-id",
+                            "android-lab-release-signer-v1",
+                            "--signed-at-utc",
+                            "2026-06-06T00:00:00Z",
+                        ]
+                    )
+            finally:
+                path_type.lstat = original_lstat
+
+        self.assertEqual(status, 1)
+        self.assertIn("slot parent directory metadata could not be read", stderr.getvalue())
+        self.assertNotIn("slot.json could not be read", stderr.getvalue())
+        self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
+
     def test_signer_helper_rejects_secret_looking_output_before_metadata_read(
         self,
     ) -> None:
@@ -4395,6 +6878,73 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertFalse((slot / "evidence" / "signed-evidence-copy.json").exists())
         self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
 
+    def test_signer_output_normalise_rejects_output_resolve_failure(self) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = Path(temp) / "slots" / "pixel8"
+                slot.mkdir(parents=True)
+                output = slot / "evidence" / "signed-evidence.json"
+                errors: list[str] = []
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    if path == output:
+                        raise OSError("simulated output resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+
+                result = evidence_signer._normalise_output_path(  # type: ignore[attr-defined]
+                    slot,
+                    {},
+                    str(output),
+                    errors,
+                )
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertIsNone(result)
+        self.assertEqual(errors, ["signed evidence output path could not be resolved"])
+        self.assertFalse(output.exists())
+
+    def test_signer_output_normalise_rejects_slot_resolve_failure(self) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = Path(temp) / "slots" / "pixel8"
+                slot.mkdir(parents=True)
+                output = slot / "evidence" / "signed-evidence.json"
+                output_resolved = False
+                errors: list[str] = []
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    nonlocal output_resolved
+                    if path == output and not output_resolved:
+                        output_resolved = True
+                        return original_resolve(path, *args, **kwargs)
+                    if path == slot:
+                        raise OSError("simulated slot resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+
+                result = evidence_signer._normalise_output_path(  # type: ignore[attr-defined]
+                    slot,
+                    {},
+                    str(output),
+                    errors,
+                )
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertIsNone(result)
+        self.assertEqual(errors, ["signed evidence output path could not be resolved"])
+        self.assertFalse(output.exists())
+
     def test_signer_write_json_rejects_symlinked_output_parent_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -4415,6 +6965,65 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             ["signed evidence output path parent directory must not be a symlink"],
         )
         self.assertFalse((external / "signed-evidence.json").exists())
+
+    def test_signer_write_json_uses_lstat_before_parent_is_dir_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+                output.parent.mkdir(parents=True)
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == output.parent:
+                        raise OSError("simulated output parent is_dir preflight failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+                output_text = output.read_text(encoding="utf-8")
+        finally:
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(errors, [])
+        self.assertEqual(output_text, '{\n  "schema": "test"\n}\n')
+
+    def test_signer_write_json_rejects_parent_metadata_failure_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+                output.parent.mkdir(parents=True)
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == output.parent:
+                        raise OSError("simulated output parent metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+                output_exists = output.exists()
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(
+            errors,
+            ["signed evidence output path parent directory metadata could not be read"],
+        )
+        self.assertFalse(output_exists)
 
     def test_signer_write_json_rejects_symlinked_output_ancestor_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -4497,6 +7106,72 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["signed evidence output path must not be hardlinked"])
         self.assertEqual(target_text, "external\n")
 
+    def test_signer_write_json_rejects_hardlink_metadata_failure_before_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+                write_text(output, "placeholder\n")
+
+                def failing_stat(path: Path, *args, **kwargs):
+                    if path == output:
+                        raise OSError("simulated output hardlink metadata failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_stat
+
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+                output_text = output.read_text(encoding="utf-8")
+        finally:
+            path_type.stat = original_stat
+
+        self.assertEqual(
+            errors,
+            ["signed evidence output path hardlink metadata could not be read"],
+        )
+        self.assertEqual(output_text, "placeholder\n")
+
+    def test_signer_write_json_rejects_file_metadata_failure_before_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+                write_text(output, "placeholder\n")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == output:
+                        raise OSError("simulated output file metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+                output_text = output.read_text(encoding="utf-8")
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(
+            errors,
+            ["signed evidence output path file metadata could not be read"],
+        )
+        self.assertEqual(output_text, "placeholder\n")
+
     def test_signer_write_json_rejects_secret_output_path_directly_without_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             output = (
@@ -4522,6 +7197,367 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(output), rendered)
 
+    def test_signer_write_json_rejects_write_failure_after_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+
+            errors = with_write_text_failure(
+                output,
+                lambda: evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                ),
+            )
+
+        self.assertEqual(errors, ["signed evidence output path could not be written"])
+        self.assertFalse(output.exists())
+
+    def test_signer_write_json_rejects_parent_create_failure_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+
+                def failing_mkdir(path: Path, *args, **kwargs):
+                    if path == output.parent:
+                        raise OSError("simulated signed evidence parent mkdir failure")
+                    return original_mkdir(path, *args, **kwargs)
+
+                path_type.mkdir = failing_mkdir
+
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+        finally:
+            path_type.mkdir = original_mkdir
+
+        self.assertEqual(
+            errors,
+            ["signed evidence output path parent directory could not be created"],
+        )
+        self.assertFalse(output.exists())
+
+    def test_signer_write_json_rechecks_parent_after_create_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                output = root / "late-linked-output" / "signed-evidence.json"
+                alias_target = root / "external-output"
+                alias_target.mkdir()
+
+                def replacing_mkdir(path: Path, *args, **kwargs):
+                    if path == output.parent:
+                        create_dir_symlink(self, path, alias_target)
+                        return None
+                    return original_mkdir(path, *args, **kwargs)
+
+                path_type.mkdir = replacing_mkdir
+
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+        finally:
+            path_type.mkdir = original_mkdir
+
+        self.assertEqual(
+            errors,
+            ["signed evidence output path parent directory must not be a symlink"],
+        )
+        self.assertFalse((alias_target / "signed-evidence.json").exists())
+
+    def test_signer_output_digest_rejects_secret_path_directly_without_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "token=supersecret-signed-evidence.json"
+            write_text(output, '{"schema":"test"}\n')
+
+            digest, errors = evidence_signer._output_file_sha256(
+                output,
+                "signed evidence output path",
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["signed evidence output path must not contain secret-looking material"],
+        )
+        self.assertNotIn(str(output), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_signer_output_digest_rejects_missing_parent_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+
+            digest, errors = evidence_signer._output_file_sha256(
+                output,
+                "signed evidence output path",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["signed evidence output path parent directory is missing"],
+        )
+
+    def test_signer_output_digest_uses_lstat_before_parent_is_dir_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+        payload = '{"schema":"test"}\n'
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+                write_text(output, payload)
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == output.parent:
+                        raise OSError("simulated output digest parent is_dir preflight failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+
+                digest, errors = evidence_signer._output_file_sha256(
+                    output,
+                    "signed evidence output path",
+                )
+        finally:
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(errors, [])
+        self.assertEqual(digest, hashlib.sha256(payload.encode("utf-8")).hexdigest())
+
+    def test_signer_output_digest_rejects_parent_metadata_failure_before_read(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+                write_text(output, '{"schema":"test"}\n')
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == output.parent:
+                        raise OSError("simulated output digest parent metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                digest, errors = evidence_signer._output_file_sha256(
+                    output,
+                    "signed evidence output path",
+                )
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["signed evidence output path parent directory metadata could not be read"],
+        )
+
+    def test_signer_output_digest_rejects_missing_leaf_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+            output.parent.mkdir(parents=True)
+
+            digest, errors = evidence_signer._output_file_sha256(
+                output,
+                "signed evidence output path",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["signed evidence output path must exist before digest"],
+        )
+
+    def test_signer_output_digest_rejects_symlinked_leaf_after_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "slot" / "evidence" / "signed-evidence.json"
+            target = root / "external-signed-evidence.json"
+            write_text(output, '{"schema":"test"}\n')
+            write_text(target, "external\n")
+            replace_with_symlink(self, output, target)
+
+            digest, errors = evidence_signer._output_file_sha256(
+                output,
+                "signed evidence output path",
+            )
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["signed evidence output path must not be a symlink"])
+        self.assertEqual(target_text, "external\n")
+
+    def test_signer_output_digest_rejects_hardlinked_leaf_after_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "slot" / "evidence" / "signed-evidence.json"
+            target = root / "external-signed-evidence.json"
+            write_text(output, '{"schema":"test"}\n')
+            write_text(target, "external\n")
+            replace_with_hardlink(self, output, target)
+
+            digest, errors = evidence_signer._output_file_sha256(
+                output,
+                "signed evidence output path",
+            )
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["signed evidence output path must not be hardlinked"])
+        self.assertEqual(target_text, "external\n")
+
+    def test_signer_output_digest_rejects_hardlink_metadata_failure_after_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+                write_text(output, '{"schema":"test"}\n')
+
+                def failing_stat(path: Path, *args, **kwargs):
+                    if path == output:
+                        raise OSError("simulated output digest hardlink metadata failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_stat
+
+                digest, errors = evidence_signer._output_file_sha256(
+                    output,
+                    "signed evidence output path",
+                )
+                output_text = output.read_text(encoding="utf-8")
+        finally:
+            path_type.stat = original_stat
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["signed evidence output path hardlink metadata could not be read"],
+        )
+        self.assertEqual(output_text, '{"schema":"test"}\n')
+
+    def test_signer_output_digest_rejects_file_metadata_failure_after_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+                write_text(output, '{"schema":"test"}\n')
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == output:
+                        raise OSError("simulated output digest file metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                digest, errors = evidence_signer._output_file_sha256(
+                    output,
+                    "signed evidence output path",
+                )
+                output_text = output.read_text(encoding="utf-8")
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["signed evidence output path file metadata could not be read"],
+        )
+        self.assertEqual(output_text, '{"schema":"test"}\n')
+
+    def test_signer_output_digest_rejects_read_failure_after_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+            write_text(output, '{"schema":"test"}\n')
+
+            digest, errors = with_read_bytes_failure(
+                output,
+                lambda: evidence_signer._output_file_sha256(
+                    output,
+                    "signed evidence output path",
+                ),
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["signed evidence output path could not be read"])
+
+    def test_signer_helper_revalidates_output_digest_before_slot_json_update(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root / "slots", "pixel8")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+            )
+            original_metadata = (slot / "slot.json").read_text(encoding="utf-8")
+            alias_target = root / "external-signed-evidence.json"
+            original_build_signed_evidence = evidence_signer.build_signed_evidence
+            original_write_json = evidence_signer._write_json
+
+            def fake_build_signed_evidence(*_args, **_kwargs):
+                return {"schema": device_lab.SIGNED_EVIDENCE_SCHEMA}
+
+            def write_json_then_alias(path: Path, payload: dict, label: str) -> list[str]:
+                errors = original_write_json(path, payload, label)
+                if not errors and label == "signed evidence output path":
+                    alias_target.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+                    path.unlink()
+                    try:
+                        path.symlink_to(alias_target)
+                    except (NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"symlinks are not available in this test environment: {exc}"
+                        )
+                return errors
+
+            try:
+                evidence_signer.build_signed_evidence = fake_build_signed_evidence
+                evidence_signer._write_json = write_json_then_alias
+                status, output_relative, errors = evidence_signer.sign_slot_evidence(
+                    slot_path=slot,
+                    private_key_path=root / "private.pem",
+                    public_key_path=root / "public.pem",
+                    signer_key_id="android-lab-release-signer-v1",
+                    signed_at_utc="2026-06-06T00:00:00Z",
+                    output=None,
+                    update_slot_json=True,
+                    update_sha256sum=False,
+                )
+            finally:
+                evidence_signer.build_signed_evidence = original_build_signed_evidence
+                evidence_signer._write_json = original_write_json
+            metadata_after = (slot / "slot.json").read_text(encoding="utf-8")
+
+        self.assertEqual(status, 1)
+        self.assertEqual(output_relative, "evidence/signed-evidence.json")
+        self.assertEqual(errors, ["signed evidence output path must not be a symlink"])
+        self.assertEqual(metadata_after, original_metadata)
+
     def test_signer_write_text_rejects_symlinked_manifest_leaf_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -4543,6 +7579,28 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(errors, ["sha256sum.txt must not be a symlink"])
         self.assertEqual(target_text, "external\n")
+
+    def test_signer_write_text_rejects_dangling_symlinked_manifest_leaf_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "slot" / "sha256sum.txt"
+            target = root / "missing-sha256sum.txt"
+            output.parent.mkdir(parents=True)
+            try:
+                output.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+
+            errors = evidence_signer._write_text(
+                output,
+                "replacement\n",
+                "sha256sum.txt",
+            )
+
+        self.assertEqual(errors, ["sha256sum.txt must not be a symlink"])
+        self.assertFalse(target.exists())
 
     def test_signer_write_text_rejects_hardlinked_manifest_leaf_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -4582,6 +7640,22 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertFalse(output.parent.exists())
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(output), rendered)
+
+    def test_signer_write_text_rejects_write_failure_after_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "sha256sum.txt"
+
+            errors = with_write_text_failure(
+                output,
+                lambda: evidence_signer._write_text(
+                    output,
+                    "replacement\n",
+                    "sha256sum.txt",
+                ),
+            )
+
+        self.assertEqual(errors, ["sha256sum.txt could not be written"])
+        self.assertFalse(output.exists())
 
     def test_rewrite_sha256_manifest_rejects_symlinked_artifact_when_called_directly(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -4647,6 +7721,210 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(manifest_after, original_manifest)
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(slot), rendered)
+
+    def test_rewrite_sha256_manifest_rejects_slot_directory_metadata_failure_without_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp) / "slots", "pixel8")
+            original_manifest = (slot / "sha256sum.txt").read_text(encoding="utf-8")
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == slot:
+                    raise OSError("simulated slot directory lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                errors = evidence_signer.rewrite_sha256_manifest(slot)
+            finally:
+                path_type.lstat = original_lstat
+            manifest_after = (slot / "sha256sum.txt").read_text(encoding="utf-8")
+
+        self.assertEqual(errors, ["slot directory metadata could not be read"])
+        self.assertEqual(manifest_after, original_manifest)
+
+    def test_rewrite_sha256_manifest_rejects_slot_parent_metadata_failure_without_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp) / "slots", "pixel8")
+            original_manifest = (slot / "sha256sum.txt").read_text(encoding="utf-8")
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == slot.parent:
+                    raise OSError("simulated slot parent lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                errors = evidence_signer.rewrite_sha256_manifest(slot)
+            finally:
+                path_type.lstat = original_lstat
+            manifest_after = (slot / "sha256sum.txt").read_text(encoding="utf-8")
+
+        self.assertEqual(errors, ["slot parent directory metadata could not be read"])
+        self.assertEqual(manifest_after, original_manifest)
+
+    def test_signer_slot_artifact_digest_rejects_secret_relative_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            secret_relative = "logs/token=supersecret.log"
+            write_text(slot / secret_relative, "must not be hashed\n")
+
+            digest, errors = evidence_signer._slot_artifact_sha256(
+                slot,
+                secret_relative,
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["slot artifacts must not contain secret-looking material"])
+        self.assertNotIn(secret_relative, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_signer_slot_artifact_digest_rejects_symlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "pixel8")
+            target = root / "outside-runtime.log"
+            write_text(target, "kagemusha device-lab run complete\n")
+            replace_with_symlink(self, slot / "logs" / "runtime.log", target)
+
+            digest, errors = evidence_signer._slot_artifact_sha256(
+                slot,
+                "logs/runtime.log",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["slot artifact logs/runtime.log must not be a symlink"])
+
+    def test_signer_slot_artifact_digest_rejects_hardlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root, "pixel8")
+            target = root / "outside-runtime.log"
+            write_text(target, "kagemusha device-lab run complete\n")
+            replace_with_hardlink(self, slot / "logs" / "runtime.log", target)
+
+            digest, errors = evidence_signer._slot_artifact_sha256(
+                slot,
+                "logs/runtime.log",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["slot artifact logs/runtime.log must not be hardlinked"])
+
+    def test_signer_slot_artifact_digest_rejects_hardlink_metadata_failure_after_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            target = slot / "logs" / "runtime.log"
+
+            def failing_stat(path: Path, *args, **kwargs):
+                if path == target:
+                    raise OSError("simulated slot artifact stat failure")
+                return original_stat(path, *args, **kwargs)
+
+            try:
+                path_type.stat = failing_stat
+                digest, errors = evidence_signer._slot_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+            finally:
+                path_type.stat = original_stat
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["slot artifact logs/runtime.log hardlink metadata could not be read"],
+        )
+
+    def test_signer_slot_artifact_digest_rejects_file_metadata_failure_after_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            target = slot / "logs" / "runtime.log"
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == target:
+                    raise OSError("simulated slot artifact lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.lstat = failing_lstat
+                digest, errors = evidence_signer._slot_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+            finally:
+                path_type.lstat = original_lstat
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["slot artifact logs/runtime.log file metadata could not be read"],
+        )
+
+    def test_signer_slot_artifact_digest_rejects_read_failure_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            target = slot / "logs" / "runtime.log"
+
+            digest, errors = with_read_bytes_failure(
+                target,
+                lambda: evidence_signer._slot_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                ),
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["slot artifact logs/runtime.log could not be read"])
+
+    def test_rewrite_sha256_manifest_revalidates_artifact_before_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root / "slots", "pixel8")
+            original_manifest = (slot / "sha256sum.txt").read_text(encoding="utf-8")
+            target = root / "outside-runtime.log"
+            write_text(target, "kagemusha device-lab run complete\n")
+            original_validate = evidence_signer._validate_slot_for_manifest_rewrite
+
+            def validate_then_alias(slot_path: Path) -> list[str]:
+                errors = original_validate(slot_path)
+                if not errors:
+                    replace_with_symlink(self, slot_path / "logs" / "runtime.log", target)
+                return errors
+
+            try:
+                evidence_signer._validate_slot_for_manifest_rewrite = validate_then_alias
+                errors = evidence_signer.rewrite_sha256_manifest(slot)
+            finally:
+                evidence_signer._validate_slot_for_manifest_rewrite = original_validate
+            manifest_after = (slot / "sha256sum.txt").read_text(encoding="utf-8")
+
+        self.assertEqual(errors, ["slot artifact logs/runtime.log must not be a symlink"])
+        self.assertEqual(manifest_after, original_manifest)
 
     def test_signer_metadata_loader_rejects_secret_slot_path_directly_without_parse(
         self,
@@ -5752,6 +9030,305 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn(str(secret_private_key), rendered)
         self.assertNotIn("private_key=supersecret", rendered)
 
+    def test_sign_ed25519_rejects_missing_private_key_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+
+        def unexpected_require_openssl(_errors: list[str]) -> str | None:
+            raise AssertionError("OpenSSL should not be looked up for a missing private key")
+
+        try:
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
+            with tempfile.TemporaryDirectory() as temp:
+                missing_private_key = Path(temp) / "missing-signer.pem"
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    missing_private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["private key must point to an existing file"])
+
+    def test_sign_ed25519_rejects_non_regular_private_key_before_openssl_lookup(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+
+        def unexpected_require_openssl(_errors: list[str]) -> str | None:
+            raise AssertionError("OpenSSL should not be looked up for a private key directory")
+
+        try:
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
+            with tempfile.TemporaryDirectory() as temp:
+                private_key_directory = Path(temp) / "signer-directory.pem"
+                private_key_directory.mkdir()
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key_directory,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["private key must be a regular file"])
+
+    def test_sign_ed25519_rejects_private_key_file_metadata_failure_before_openssl(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+
+        def unexpected_require_openssl(_errors: list[str]) -> str | None:
+            raise AssertionError("OpenSSL should not be looked up for unreadable key metadata")
+
+        try:
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == private_key:
+                        raise OSError("simulated private key lstat failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            path_type.lstat = original_lstat
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["private key file metadata could not be read"])
+        self.assertNotIn(str(private_key), "\n".join(errors))
+
+    def test_sign_ed25519_rejects_private_key_hardlink_metadata_failure_before_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        def unexpected_require_openssl(_errors: list[str]) -> str | None:
+            raise AssertionError("OpenSSL should not be looked up after metadata failure")
+
+        try:
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                private_key_stat_calls = 0
+
+                def failing_private_key_stat(path: Path, *args, **kwargs):
+                    nonlocal private_key_stat_calls
+                    if path == private_key:
+                        private_key_stat_calls += 1
+                        if private_key_stat_calls > 0:
+                            raise OSError("simulated private key stat failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_private_key_stat
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            path_type.stat = original_stat
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["private key hardlink metadata could not be read"])
+        self.assertNotIn(str(private_key), "\n".join(errors))
+
+    def test_sign_ed25519_rejects_signature_read_failure_after_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+        original_read_bytes = Path.read_bytes
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args=args, returncode=0)
+
+        def failing_signature_read(path: Path) -> bytes:
+            if path.name == "signature.bin":
+                raise OSError("simulated signature read failure")
+            return original_read_bytes(path)
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = fake_run
+            Path.read_bytes = failing_signature_read
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+            Path.read_bytes = original_read_bytes
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["signature output could not be read"])
+
+    def test_sign_ed25519_rejects_tempdir_failure_before_payload_staging(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+        original_tempdir = evidence_signer.tempfile.TemporaryDirectory
+
+        def failing_tempdir(*args, **kwargs):
+            raise OSError("simulated temporary directory failure")
+
+        def unexpected_run(*args, **kwargs):
+            raise AssertionError("OpenSSL should not run after tempdir failure")
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = unexpected_run
+            evidence_signer.tempfile.TemporaryDirectory = failing_tempdir
+            with original_tempdir() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+            evidence_signer.tempfile.TemporaryDirectory = original_tempdir
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["signature temporary directory could not be created"])
+
+    def test_sign_ed25519_rejects_spawn_failure_after_payload_staging(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+
+        def failing_run(*args, **kwargs):
+            raise OSError("simulated OpenSSL spawn failure")
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = failing_run
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["signature command could not be run"])
+
+    def test_sign_ed25519_rejects_invalid_private_key_after_openssl_failure(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+
+        def failing_run(*args, **kwargs):
+            raise subprocess.CalledProcessError(1, args[0])
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = failing_run
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("invalid key data\n", encoding="utf-8")
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+
+        self.assertIsNone(signature)
+        self.assertEqual(
+            errors,
+            ["private key must be a valid OpenSSL Ed25519 private key"],
+        )
+
+    def test_sign_ed25519_rejects_payload_staging_write_failure_before_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+        original_write_bytes = Path.write_bytes
+
+        def unexpected_run(*args, **kwargs):
+            raise AssertionError("OpenSSL should not run after staging write failure")
+
+        def failing_payload_write(path: Path, data: bytes) -> int:
+            if path.name == "payload.bin":
+                raise OSError("simulated payload staging failure")
+            return original_write_bytes(path, data)
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = unexpected_run
+            Path.write_bytes = failing_payload_write
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+            Path.write_bytes = original_write_bytes
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["signature payload could not be staged"])
+
     def test_standard_matrix_accepts_all_kagemusha_device_families(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
@@ -5948,6 +9525,219 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertFalse(secret_summary_path.exists())
         self.assertNotIn(str(secret_summary_path), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_validate_summary_output_path_uses_lstat_before_parent_is_dir_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary-parent" / "summary.json"
+                summary_path.parent.mkdir()
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        raise OSError("simulated scanner summary parent is_dir failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+
+                errors = device_lab.validate_summary_output_path(
+                    summary_path,
+                    "--json-out",
+                )
+        finally:
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(errors, [])
+        self.assertFalse(summary_path.exists())
+
+    def test_validate_summary_output_path_rejects_parent_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary-parent" / "summary.json"
+                summary_path.parent.mkdir()
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        raise OSError("simulated scanner summary parent metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = device_lab.validate_summary_output_path(
+                    summary_path,
+                    "--json-out",
+                )
+                output_exists = summary_path.exists()
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["--json-out parent directory metadata could not be read"])
+        self.assertFalse(output_exists)
+
+    def test_write_summary_uses_lstat_before_parent_is_dir_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary-parent" / "summary.json"
+                summary_path.parent.mkdir()
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        raise OSError("simulated scanner summary writer parent is_dir failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+                summary_text = summary_path.read_text(encoding="utf-8")
+        finally:
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(errors, [])
+        self.assertIn('"ok": false', summary_text)
+
+    def test_write_summary_rejects_parent_metadata_failure_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary-parent" / "summary.json"
+                summary_path.parent.mkdir()
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        raise OSError("simulated scanner summary writer parent metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+                output_exists = summary_path.exists()
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["--json-out parent directory metadata could not be read"])
+        self.assertFalse(output_exists)
+
+    def test_write_summary_rejects_parent_create_failure_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "missing-parent" / "summary.json"
+
+                def failing_mkdir(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        raise OSError("simulated summary parent mkdir failure")
+                    return original_mkdir(path, *args, **kwargs)
+
+                path_type.mkdir = failing_mkdir
+
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+        finally:
+            path_type.mkdir = original_mkdir
+
+        self.assertEqual(errors, ["--json-out parent directory could not be created"])
+        self.assertFalse(summary_path.exists())
+
+    def test_write_summary_rejects_file_metadata_failure_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
+                summary_path.write_text("existing summary\n", encoding="utf-8")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == summary_path:
+                        raise OSError("simulated summary lstat failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+                summary_text = summary_path.read_text(encoding="utf-8")
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["--json-out file metadata could not be read"])
+        self.assertEqual(summary_text, "existing summary\n")
+
+    def test_write_summary_rejects_hardlink_metadata_failure_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
+                summary_path.write_text("existing summary\n", encoding="utf-8")
+
+                def failing_stat(path: Path, *args, **kwargs):
+                    if path == summary_path:
+                        raise OSError("simulated summary stat failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_stat
+
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+                summary_text = summary_path.read_text(encoding="utf-8")
+        finally:
+            path_type.stat = original_stat
+
+        self.assertEqual(errors, ["--json-out hardlink metadata could not be read"])
+        self.assertEqual(summary_text, "existing summary\n")
+
+    def test_write_summary_rejects_write_failure_after_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+
+            errors = with_write_text_failure(
+                summary_path,
+                lambda: device_lab.write_summary(summary_path, {"ok": False}),
+            )
+
+        self.assertEqual(errors, ["--json-out could not be written"])
+        self.assertFalse(summary_path.exists())
+
+    def test_write_summary_rechecks_parent_after_create_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                summary_path = root / "late-linked-summary" / "summary.json"
+                alias_target = root / "external-summary"
+                alias_target.mkdir()
+
+                def replacing_mkdir(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        create_dir_symlink(self, path, alias_target)
+                        return None
+                    return original_mkdir(path, *args, **kwargs)
+
+                path_type.mkdir = replacing_mkdir
+
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+        finally:
+            path_type.mkdir = original_mkdir
+
+        self.assertEqual(errors, ["--json-out parent directory must not be a symlink"])
+        self.assertFalse((alias_target / "summary.json").exists())
 
     def test_json_summary_rejects_symlinked_output_without_following_alias(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

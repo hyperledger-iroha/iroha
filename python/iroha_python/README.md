@@ -72,10 +72,28 @@ print("offline notes", readiness.offline_note)
 
 The `iroha_python.kagemusha` module exposes ABI-6 recursive Kagemusha
 spend-again-offline helpers when the compiled `_crypto` extension is present.
-ABI 7 keeps the reserved `recursive_compact_v1` compact-token symbols
-source-stable, but public compact proving and receiver verification fail closed
-until that token proof composes the private-hop verifier-slice relation
-in-circuit. `preferred_kagemusha_offline_spend_mode()` selects
+ABI 7 exposes source-stable `recursive_compact_v1` compact-token symbols for
+`kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Use
+`kagemusha_prove_verified_recursive_compact_payment_token` and
+`kagemusha_verify_recursive_compact_payment_token`; gate them with
+`is_kagemusha_recursive_compact_payment_token_prover_available()` and
+`is_kagemusha_recursive_compact_payment_token_verifier_available()`. The
+recursive-spend compact projection verifier is exposed separately as
+`kagemusha_verify_recursive_spend_compact_payment_token_projection(...)`; gate
+it with
+`is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available()`.
+It accepts raw Norito compact-token and verifier-record archives, rejects empty,
+malformed, oversized, or negative-height inputs before native dispatch, and
+returns the native boolean receiver result. ABI 7 now
+carries the one-hop LEN=4 compact-token proof path when the native extension
+includes the packaged compact one-hop proving-key archive and matching
+verifier-slice material. Production defaults still stay on ABI 6
+Reserved-lineage recursive spend until that archive is shipped and signed for
+release. A missing packaged key, the generic compact-token reservation, and the
+multi-hop verifier-batch reservation still reach the proof-composition
+reservation and remain reserved ABI-7 state; unavailable compact surfaces raise
+`RuntimeError` before wallet code can treat reserved admission as success.
+`preferred_kagemusha_offline_spend_mode()` selects
 `recursive_spend_v1` when the native extension reports bridge ABI 6 or later
 and every required recursive-spend method rejects the malformed availability
 probe, and otherwise falls back to `checked_prefold_v1`:
@@ -106,6 +124,9 @@ material: Python wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The PyO3 host validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
+Native append streams the previous recursive proof bytes into
+`recursive_proof_chain_digest`; SDK code must not derive or patch the
+accumulator state.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
@@ -797,6 +818,43 @@ draft.transfer_rwa(
     destination="sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
 )
 ```
+
+Create and operate native asset locks for escrow-style conditional payments:
+
+```python
+client.open_asset_lock_and_wait(
+    chain_id="dev-chain",
+    authority="<source-account-id>",
+    private_key_hex="<source-private-key-hex>",
+    escrow_id="merchant-lock-001",
+    asset_definition_id="<asset-definition-base58>",
+    destination="<destination-account-id>",
+    amount="2500",
+    release_authority="<trusted-release-account-id>",  # omit for 2-party locks
+    expires_at_ms=1_704_000_000_000,
+)
+client.drawdown_asset_lock_and_wait(
+    chain_id="dev-chain",
+    authority="<trusted-release-account-id>",
+    private_key_hex="<trusted-release-private-key-hex>",
+    escrow_id="merchant-lock-001",
+    amount="1000",
+)
+client.cancel_asset_lock_and_wait(
+    chain_id="dev-chain",
+    authority="<source-account-id>",
+    private_key_hex="<source-private-key-hex>",
+    escrow_id="merchant-lock-001",
+)
+```
+
+`OpenAssetLock` moves source funds into deterministic native custody.
+`DrawdownAssetLock` releases funds to the destination, signed either by the
+destination account for two-party locks or by `release_authority` when one is
+configured. `CancelAssetLock` refunds the opener while the lock is still active;
+`ExpireAssetLock` refunds remaining custody after the optional expiry deadline.
+Zero, negative, NaN, and infinite amounts are rejected by the SDK before
+transaction construction.
 
 ### Repo settlement helpers
 

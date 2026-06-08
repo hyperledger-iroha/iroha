@@ -44,6 +44,8 @@ _BACKEND_TAGS = {
     "stark": (3, "Stark"),
     "starkfri": (3, "Stark"),
     "starkfrisha256goldilocks": (3, "Stark"),
+    "starkfriposeidon2goldilocks": (3, "Stark"),
+    "starkfrisha256goldilocksv1": (3, "Stark"),
     "unsupported": (4, "Unsupported"),
     "halo2ipaorchard": (5, "Halo2IpaOrchard"),
     "orchard": (5, "Halo2IpaOrchard"),

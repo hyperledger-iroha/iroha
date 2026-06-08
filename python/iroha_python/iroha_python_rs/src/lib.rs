@@ -45,10 +45,12 @@ use iroha_data_model::{
         CertPhase, Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, default_chain_order_hash,
     },
     domain::prelude::{Domain, DomainId},
+    escrow::EscrowId,
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
         Burn, ExecuteTrigger, Grant, InstructionBox, Mint, Register, RemoveKeyValue, Revoke,
         SetKeyValue, Transfer, Unregister,
+        escrow::{CancelAssetLock, DrawdownAssetLock, ExpireAssetLock, OpenAssetLock},
         repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
@@ -4058,15 +4060,27 @@ fn zk_ace_build_transfer_authorization_v1_py(
     )
 }
 
+const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+fn ensure_kagemusha_recursive_archive_len(archive_len: usize, archive_name: &str) -> PyResult<()> {
+    if archive_len == 0 {
+        return Err(PyValueError::new_err(format!(
+            "{archive_name} must not be empty"
+        )));
+    }
+    if archive_len > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES {
+        return Err(PyValueError::new_err(format!(
+            "{archive_name} must not exceed {KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
 fn decode_kagemusha_recursive_archive<T>(archive: &[u8], context: &str) -> PyResult<T>
 where
     T: for<'de> norito::core::NoritoDeserialize<'de>,
 {
-    if archive.is_empty() {
-        return Err(PyValueError::new_err(format!(
-            "{context} archive must not be empty"
-        )));
-    }
+    ensure_kagemusha_recursive_archive_len(archive.len(), &format!("{context} archive"))?;
     decode_from_bytes(archive)
         .map_err(|err| PyValueError::new_err(format!("invalid {context} archive: {err}")))
 }
@@ -4081,7 +4095,19 @@ where
 {
     let bytes = norito::to_bytes(value)
         .map_err(|err| PyRuntimeError::new_err(format!("{context}: {err}")))?;
+    if bytes.len() > KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES {
+        return Err(PyRuntimeError::new_err(format!(
+            "{context}: encoded Kagemusha archive exceeds {KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES} bytes"
+        )));
+    }
     Ok(Py::from(PyBytes::new(py, &bytes)))
+}
+
+fn ensure_kagemusha_recursive_spend_pallas_archive(archive: &[u8]) -> PyResult<()> {
+    ensure_kagemusha_recursive_archive_len(
+        archive.len(),
+        "Kagemusha recursive spend Pallas open-envelope archive",
+    )
 }
 
 fn is_kagemusha_recursive_compact_unavailable_error(err: &str) -> bool {
@@ -4132,11 +4158,10 @@ fn kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_and_
             record_bundle_archive,
             "Kagemusha recursive aggregation record bundle",
         )?;
-    if pallas_open_envelopes_archive.is_empty() {
-        return Err(PyValueError::new_err(
-            "Kagemusha recursive aggregation Pallas open-envelope archive must not be empty",
-        ));
-    }
+    ensure_kagemusha_recursive_archive_len(
+        pallas_open_envelopes_archive.len(),
+        "Kagemusha recursive aggregation Pallas open-envelope archive",
+    )?;
     let vk_box = iroha_core::zk::kagemusha_recursive_aggregation_proof_vk_box()
         .map_err(PyRuntimeError::new_err)?;
     let bundle =
@@ -4169,11 +4194,10 @@ fn kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pal
             record_bundle_archive,
             "Kagemusha recursive compact record bundle",
         )?;
-    if pallas_open_envelopes_archive.is_empty() {
-        return Err(PyValueError::new_err(
-            "pallas_open_envelopes_archive must not be empty",
-        ));
-    }
+    ensure_kagemusha_recursive_archive_len(
+        pallas_open_envelopes_archive.len(),
+        "pallas_open_envelopes_archive",
+    )?;
     let token =
         iroha_core::zk::prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(
             &record_bundle,
@@ -4196,6 +4220,95 @@ fn kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pal
         py,
         &token,
         "failed to encode Kagemusha recursive compact payment token",
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_recursive_spend_compact_payment_token_from_bundle")]
+fn kagemusha_recursive_spend_compact_payment_token_from_bundle_py(
+    py: Python<'_>,
+    bundle_archive: &[u8],
+) -> PyResult<Py<PyBytes>> {
+    let bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 =
+        decode_kagemusha_recursive_archive(
+            bundle_archive,
+            "Kagemusha recursive spend compact-token bundle",
+        )?;
+    let token =
+        iroha_data_model::offline::kagemusha_recursive_spend_compact_payment_token_from_bundle(
+            &bundle,
+        )
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    encode_kagemusha_recursive_archive(
+        py,
+        &token,
+        "failed to encode Kagemusha recursive spend compact payment token",
+    )
+}
+
+fn verify_kagemusha_recursive_spend_compact_payment_token_projection_inner(
+    compact_token_archive: &[u8],
+    verifier_record_archive: &[u8],
+    block_height: Option<u64>,
+) -> PyResult<bool> {
+    let token: iroha_data_model::offline::KagemushaCompactPaymentToken =
+        decode_kagemusha_recursive_archive(
+            compact_token_archive,
+            "Kagemusha recursive spend compact projection token",
+        )?;
+    let record: iroha_data_model::proof::VerifyingKeyRecord = decode_kagemusha_recursive_archive(
+        verifier_record_archive,
+        "Kagemusha recursive spend compact projection verifier record",
+    )?;
+    match block_height {
+        Some(height) => iroha_core::zk::preverify_kagemusha_recursive_spend_compact_payment_token_projection_with_record_at_height(
+            &token,
+            &record,
+            height,
+        ),
+        None => iroha_core::zk::preverify_kagemusha_recursive_spend_compact_payment_token_projection_with_record(
+            &token,
+            &record,
+        ),
+    }
+    .map_err(PyValueError::new_err)?;
+    Ok(match block_height {
+        Some(height) => iroha_core::zk::verify_kagemusha_recursive_spend_compact_payment_token_projection_with_record_at_height(
+            &token,
+            &record,
+            height,
+        ),
+        None => iroha_core::zk::verify_kagemusha_recursive_spend_compact_payment_token_projection_with_record(
+            &token,
+            &record,
+        ),
+    })
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_verify_recursive_spend_compact_payment_token_projection")]
+fn kagemusha_verify_recursive_spend_compact_payment_token_projection_py(
+    compact_token_archive: &[u8],
+    verifier_record_archive: &[u8],
+) -> PyResult<bool> {
+    verify_kagemusha_recursive_spend_compact_payment_token_projection_inner(
+        compact_token_archive,
+        verifier_record_archive,
+        None,
+    )
+}
+
+#[pyfunction]
+#[pyo3(name = "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height")]
+fn kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height_py(
+    compact_token_archive: &[u8],
+    verifier_record_archive: &[u8],
+    block_height: u64,
+) -> PyResult<bool> {
+    verify_kagemusha_recursive_spend_compact_payment_token_projection_inner(
+        compact_token_archive,
+        verifier_record_archive,
+        Some(block_height),
     )
 }
 
@@ -4238,6 +4351,7 @@ fn kagemusha_recursive_spend_init_py(
 ) -> PyResult<Py<PyBytes>> {
     let request: iroha_data_model::offline::KagemushaRecursiveSpendInitRequestV1 =
         decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend init")?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
     request
         .validate_public_binding()
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -4290,6 +4404,7 @@ fn kagemusha_recursive_spend_append_py(
 ) -> PyResult<Py<PyBytes>> {
     let request: iroha_data_model::offline::KagemushaRecursiveSpendAppendRequestV1 =
         decode_kagemusha_recursive_archive(request_archive, "Kagemusha recursive spend append")?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
     request
         .validate_public_binding()
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -4382,6 +4497,7 @@ fn kagemusha_recursive_spend_transition_profile_init_py(
             request_archive,
             "Kagemusha recursive spend transition profile init",
         )?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
     request
         .validate_public_binding()
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -4431,6 +4547,7 @@ fn kagemusha_recursive_spend_transition_profile_append_py(
             request_archive,
             "Kagemusha recursive spend transition profile append",
         )?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
     request
         .validate_public_binding()
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
@@ -4538,6 +4655,7 @@ fn kagemusha_recursive_spend_lineage_witness_from_init_result_py(
             request_archive,
             "Kagemusha recursive spend lineage witness init request",
         )?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
     let bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 =
         decode_kagemusha_recursive_archive(
             bundle_archive,
@@ -4573,6 +4691,7 @@ fn kagemusha_recursive_spend_lineage_witness_append_result_py(
             request_archive,
             "Kagemusha recursive spend lineage witness append request",
         )?;
+    ensure_kagemusha_recursive_spend_pallas_archive(&request.pallas_open_envelopes_archive)?;
     let bundle: iroha_data_model::offline::KagemushaRecursiveSpendBundleV1 =
         decode_kagemusha_recursive_archive(
             bundle_archive,
@@ -4913,14 +5032,16 @@ mod tests {
     use iroha_data_model::offline::{
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         KAGEMUSHA_RECURSIVE_SPEND_ACCUMULATOR_DOMAIN,
-        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaRecursiveAggregationProof,
-        KagemushaRecursiveSpendAccumulatorV1, KagemushaRecursiveSpendAppendRequestV1,
-        KagemushaRecursiveSpendBundleV1, KagemushaRecursiveSpendInitRequestV1,
-        KagemushaRecursiveSpendLineageWitnessV1, KagemushaRecursiveSpendRedeemRequestV1,
-        KagemushaRecursiveSpendTransitionProfileV1, KagemushaRecursiveSpendVerifyRequestV1,
-        KagemushaRecursiveSpendVerifyResultV1, KagemushaSpendableNoteDescriptorV1,
-        KagemushaVerifiedFoldBundle, KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
+        KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1, KagemushaCompactPaymentToken,
+        KagemushaRecursiveAggregationProof, KagemushaRecursiveSpendAccumulatorV1,
+        KagemushaRecursiveSpendAppendRequestV1, KagemushaRecursiveSpendBundleV1,
+        KagemushaRecursiveSpendInitRequestV1, KagemushaRecursiveSpendLineageWitnessV1,
+        KagemushaRecursiveSpendRedeemRequestV1, KagemushaRecursiveSpendTransitionProfileV1,
+        KagemushaRecursiveSpendVerifyRequestV1, KagemushaRecursiveSpendVerifyResultV1,
+        KagemushaSpendableNoteDescriptorV1, KagemushaVerifiedFoldBundle,
+        KagemushaVerifiedFoldRecordBundle, KagemushaVerifiedFoldStep,
         KagemushaVerifiedFoldVerifierRecord,
+        kagemusha_recursive_spend_compact_payment_token_from_bundle,
         kagemusha_recursive_spend_public_inputs_from_accumulator,
     };
     use iroha_data_model::{
@@ -6250,6 +6371,7 @@ mod tests {
 
     #[test]
     fn privacy_native_archives_use_public_schema_hashes() {
+        Python::initialize();
         let mut capabilities_archive = Python::attach(|py| {
             let output = privacy_capabilities_v1_py(py).expect("encode privacy capabilities");
             output.bind(py).as_bytes().to_vec()
@@ -9176,8 +9298,9 @@ mod tests {
                 &evidence,
             )
             .expect("Python recursive compact proof public inputs");
-        recursive_public_inputs.recursive_verifier_scalar_projection_digest =
-            fixed_bytes(b"python-recursive-compact-shape-scalar-projection");
+        let mut scalar_projection = [0_u8; Hash::LENGTH];
+        scalar_projection[0] = 7;
+        recursive_public_inputs.recursive_verifier_scalar_projection_digest = scalar_projection;
 
         let compact_vk = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
             .expect("Python recursive compact vk");
@@ -9189,6 +9312,9 @@ mod tests {
             )
             .expect("Python recursive compact public instance values")
             .public_instance_columns();
+        instance_columns.push(vec![
+            recursive_public_inputs.recursive_verifier_scalar_projection_digest,
+        ]);
         if multi_row_instances {
             for (index, column) in instance_columns.iter_mut().enumerate() {
                 let mut row = [0_u8; Hash::LENGTH];
@@ -9644,6 +9770,215 @@ mod tests {
         });
     }
 
+    fn assert_oversized_archive_rejected_python(
+        label: &str,
+        result: PyResult<Py<PyBytes>>,
+        context: &str,
+    ) {
+        let err = result
+            .expect_err(
+                "recursive spend Python helper must reject oversized archives before decode",
+            )
+            .to_string();
+        assert!(
+            err.contains(context) && err.contains("must not exceed"),
+            "{label} oversized-archive error lost context: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_python_functions_reject_oversized_archives_before_decode() {
+        ensure_python();
+        Python::attach(|py| {
+            let oversized_archive = vec![0u8; KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1];
+            for (label, call, context) in [
+                (
+                    "init",
+                    kagemusha_recursive_spend_init_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                    "Kagemusha recursive spend init archive",
+                ),
+                (
+                    "append",
+                    kagemusha_recursive_spend_append_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                    "Kagemusha recursive spend append archive",
+                ),
+                (
+                    "transition profile init",
+                    kagemusha_recursive_spend_transition_profile_init_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                    "Kagemusha recursive spend transition profile init archive",
+                ),
+                (
+                    "transition profile append",
+                    kagemusha_recursive_spend_transition_profile_append_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                    "Kagemusha recursive spend transition profile append archive",
+                ),
+                (
+                    "lineage append boundary",
+                    kagemusha_recursive_spend_lineage_append_boundary_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                    "Kagemusha recursive spend lineage append boundary archive",
+                ),
+                (
+                    "verify",
+                    kagemusha_recursive_spend_verify_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                    "Kagemusha recursive spend verify archive",
+                ),
+                (
+                    "redeem",
+                    kagemusha_recursive_spend_redeem_py
+                        as fn(Python<'_>, &[u8]) -> PyResult<Py<PyBytes>>,
+                    "Kagemusha recursive spend redeem archive",
+                ),
+            ] {
+                assert_oversized_archive_rejected_python(
+                    label,
+                    call(py, &oversized_archive),
+                    context,
+                );
+            }
+
+            let init_request_archive =
+                norito::to_bytes(&sample_recursive_spend_transition_profile_init_request())
+                    .expect("encode Python init request archive");
+            let init_bundle_archive =
+                norito::to_bytes(&sample_verifying_semantic_recursive_spend_bundle())
+                    .expect("encode Python init bundle archive");
+            assert_oversized_archive_rejected_python(
+                "lineage witness init request",
+                kagemusha_recursive_spend_lineage_witness_from_init_result_py(
+                    py,
+                    &oversized_archive,
+                    &init_bundle_archive,
+                ),
+                "Kagemusha recursive spend lineage witness init request archive",
+            );
+            assert_oversized_archive_rejected_python(
+                "lineage witness init bundle",
+                kagemusha_recursive_spend_lineage_witness_from_init_result_py(
+                    py,
+                    &init_request_archive,
+                    &oversized_archive,
+                ),
+                "Kagemusha recursive spend lineage witness init bundle archive",
+            );
+
+            let append_request_archive =
+                norito::to_bytes(&sample_recursive_spend_transition_profile_append_request())
+                    .expect("encode Python append request archive");
+            let previous_witness_archive = {
+                let (_, witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
+                norito::to_bytes(&witness).expect("encode Python previous witness archive")
+            };
+            assert_oversized_archive_rejected_python(
+                "lineage witness append previous witness",
+                kagemusha_recursive_spend_lineage_witness_append_result_py(
+                    py,
+                    &oversized_archive,
+                    &append_request_archive,
+                    &init_bundle_archive,
+                ),
+                "Kagemusha recursive spend previous lineage witness archive",
+            );
+            assert_oversized_archive_rejected_python(
+                "lineage witness append request",
+                kagemusha_recursive_spend_lineage_witness_append_result_py(
+                    py,
+                    &previous_witness_archive,
+                    &oversized_archive,
+                    &init_bundle_archive,
+                ),
+                "Kagemusha recursive spend lineage witness append request archive",
+            );
+            assert_oversized_archive_rejected_python(
+                "lineage witness append bundle",
+                kagemusha_recursive_spend_lineage_witness_append_result_py(
+                    py,
+                    &previous_witness_archive,
+                    &append_request_archive,
+                    &oversized_archive,
+                ),
+                "Kagemusha recursive spend lineage witness append bundle archive",
+            );
+        });
+    }
+
+    fn assert_empty_nested_pallas_archive_rejected_python(
+        label: &str,
+        result: PyResult<Py<PyBytes>>,
+    ) {
+        let err = result
+            .expect_err("recursive spend Python helper must reject empty nested Pallas archives")
+            .to_string();
+        assert!(
+            err.contains(
+                "Kagemusha recursive spend Pallas open-envelope archive must not be empty"
+            ),
+            "{label} empty nested-Pallas error lost context: {err}"
+        );
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_python_functions_reject_empty_nested_pallas_archives_before_core()
+    {
+        ensure_python();
+        Python::attach(|py| {
+            let mut init_request = sample_recursive_spend_transition_profile_init_request();
+            init_request.pallas_open_envelopes_archive.clear();
+            let init_request_archive =
+                norito::to_bytes(&init_request).expect("encode empty-Pallas init request");
+            assert_empty_nested_pallas_archive_rejected_python(
+                "init",
+                kagemusha_recursive_spend_init_py(py, &init_request_archive),
+            );
+            assert_empty_nested_pallas_archive_rejected_python(
+                "transition profile init",
+                kagemusha_recursive_spend_transition_profile_init_py(py, &init_request_archive),
+            );
+            let init_bundle_archive =
+                norito::to_bytes(&sample_verifying_semantic_recursive_spend_bundle())
+                    .expect("encode Python init bundle archive");
+            assert_empty_nested_pallas_archive_rejected_python(
+                "lineage witness init",
+                kagemusha_recursive_spend_lineage_witness_from_init_result_py(
+                    py,
+                    &init_request_archive,
+                    &init_bundle_archive,
+                ),
+            );
+
+            let mut append_request = sample_recursive_spend_transition_profile_append_request();
+            append_request.pallas_open_envelopes_archive.clear();
+            let append_request_archive =
+                norito::to_bytes(&append_request).expect("encode empty-Pallas append request");
+            assert_empty_nested_pallas_archive_rejected_python(
+                "append",
+                kagemusha_recursive_spend_append_py(py, &append_request_archive),
+            );
+            assert_empty_nested_pallas_archive_rejected_python(
+                "transition profile append",
+                kagemusha_recursive_spend_transition_profile_append_py(py, &append_request_archive),
+            );
+            let previous_witness_archive = {
+                let (_, witness) = sample_verifying_semantic_recursive_spend_lineage_fixture();
+                norito::to_bytes(&witness).expect("encode Python previous witness archive")
+            };
+            assert_empty_nested_pallas_archive_rejected_python(
+                "lineage witness append",
+                kagemusha_recursive_spend_lineage_witness_append_result_py(
+                    py,
+                    &previous_witness_archive,
+                    &append_request_archive,
+                    &init_bundle_archive,
+                ),
+            );
+        });
+    }
+
     #[test]
     fn kagemusha_recursive_spend_bridge_abi_version_python_function_is_additive_seven() {
         assert_eq!(kagemusha_recursive_spend_bridge_abi_version_py(), 7);
@@ -9666,6 +10001,20 @@ mod tests {
                 "unexpected recursive compact malformed-input error: {err}"
             );
 
+            let oversized_archive = vec![0u8; KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES + 1];
+            let err =
+            kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                py,
+                &oversized_archive,
+                &[2],
+            )
+            .expect_err("oversized recursive compact record bundle must reject before Norito decode")
+            .to_string();
+            assert!(
+                err.contains("Kagemusha recursive compact record bundle archive must not exceed"),
+                "unexpected recursive compact oversized-record error: {err}"
+            );
+
             let record_archive = empty_kagemusha_record_bundle_archive();
             let err =
             kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
@@ -9678,6 +10027,19 @@ mod tests {
             assert!(
                 err.contains("invalid Kagemusha recursive compact Pallas open-envelope archive"),
                 "unexpected recursive compact malformed-Pallas error: {err}"
+            );
+
+            let err =
+            kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                py,
+                &record_archive,
+                &oversized_archive,
+            )
+            .expect_err("oversized recursive compact Pallas archive must reject before core preflight")
+            .to_string();
+            assert!(
+                err.contains("pallas_open_envelopes_archive must not exceed"),
+                "unexpected recursive compact oversized-Pallas error: {err}"
             );
 
             let detached_pallas_archive =
@@ -9745,6 +10107,7 @@ mod tests {
             let mut missing_pallas_open_envelopes: Vec<iroha_zkp_halo2::OpenVerifyEnvelope> =
                 norito::decode_from_bytes(&multi_hop_pallas_archive)
                     .expect("decode Python multi-hop Pallas archive");
+            let mut reordered_pallas_open_envelopes = missing_pallas_open_envelopes.clone();
             missing_pallas_open_envelopes.pop();
             let missing_pallas_archive = norito::to_bytes(&missing_pallas_open_envelopes)
                 .expect("encode Python missing Pallas archive");
@@ -9760,6 +10123,73 @@ mod tests {
                 err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
                     && err.contains("witness"),
                 "unexpected recursive compact missing-Pallas error: {err}"
+            );
+            let mut duplicated_pallas_open_envelopes = reordered_pallas_open_envelopes.clone();
+            duplicated_pallas_open_envelopes.push(
+                duplicated_pallas_open_envelopes
+                    .last()
+                    .expect("multi-hop Pallas archive contains envelopes")
+                    .clone(),
+            );
+            let duplicated_pallas_archive = norito::to_bytes(&duplicated_pallas_open_envelopes)
+                .expect("encode Python duplicated Pallas archive");
+            let err =
+            kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                py,
+                &multi_hop_record_archive,
+                &duplicated_pallas_archive,
+            )
+            .expect_err("recursive compact prover must reject duplicated multi-hop valid Pallas opening archive")
+            .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
+                    && !err.contains(
+                        iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE
+                    ),
+                "unexpected recursive compact duplicated-Pallas error: {err}"
+            );
+            let forged_metadata_domain =
+                fixed_bytes(b"python-recursive-compact-forged-multi-hop-domain");
+            let mut forged_metadata_pallas_open_envelopes = reordered_pallas_open_envelopes.clone();
+            forged_metadata_pallas_open_envelopes
+                .first_mut()
+                .expect("multi-hop Pallas archive contains envelopes")
+                .domain_tag = Some(forged_metadata_domain);
+            let forged_metadata_pallas_archive =
+                norito::to_bytes(&forged_metadata_pallas_open_envelopes)
+                    .expect("encode Python forged-metadata Pallas archive");
+            let err =
+                kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                    py,
+                    &multi_hop_record_archive,
+                    &forged_metadata_pallas_archive,
+                )
+                .expect_err("recursive compact prover must reject forged multi-hop Pallas metadata")
+                .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
+                    && !err.contains(
+                        iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE
+                    ),
+                "unexpected recursive compact forged-metadata Pallas error: {err}"
+            );
+            reordered_pallas_open_envelopes.reverse();
+            let reordered_pallas_archive = norito::to_bytes(&reordered_pallas_open_envelopes)
+                .expect("encode Python reordered Pallas archive");
+            let err =
+            kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
+                py,
+                &multi_hop_record_archive,
+                &reordered_pallas_archive,
+            )
+            .expect_err("recursive compact prover must reject reordered valid Pallas opening archive")
+            .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive compact record-backed Pallas preflight")
+                    && !err.contains(
+                        iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE
+                    ),
+                "unexpected recursive compact reordered-Pallas error: {err}"
             );
             let err =
             kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
@@ -9782,6 +10212,14 @@ mod tests {
             assert!(
                 err.contains("invalid Kagemusha recursive compact payment token archive"),
                 "unexpected recursive compact verifier malformed-input error: {err}"
+            );
+
+            let err = kagemusha_verify_recursive_compact_payment_token_py(&oversized_archive)
+                .expect_err("oversized recursive compact token must reject before Norito decode")
+                .to_string();
+            assert!(
+                err.contains("Kagemusha recursive compact payment token archive must not exceed"),
+                "unexpected recursive compact verifier oversized-token error: {err}"
             );
 
             let malformed_token = malformed_recursive_compact_token_archive_for_python();
@@ -9824,6 +10262,86 @@ mod tests {
             assert!(
                 err.contains("circuit id `forged::"),
                 "unexpected recursive compact sentinel-spoofed error: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_compact_projection_verifier_python_rejects_malformed_inputs() {
+        ensure_python();
+        Python::attach(|_| {
+            let err =
+                kagemusha_verify_recursive_spend_compact_payment_token_projection_py(&[1], &[2])
+                    .expect_err("malformed projection token must reject")
+                    .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive spend compact projection token archive"),
+                "unexpected malformed projection token error: {err}"
+            );
+
+            let token_archive = malformed_recursive_compact_token_archive_for_python();
+            let err =
+                kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height_py(
+                    &token_archive,
+                    &[2],
+                    2,
+                )
+                .expect_err("malformed projection verifier record must reject")
+                .to_string();
+            assert!(
+                err.contains(
+                    "invalid Kagemusha recursive spend compact projection verifier record archive"
+                ),
+                "unexpected malformed projection verifier record error: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_compact_projection_python_binds_bundle() {
+        ensure_python();
+        Python::attach(|py| {
+            let err = kagemusha_recursive_spend_compact_payment_token_from_bundle_py(py, &[1])
+                .expect_err("malformed recursive spend bundle must reject")
+                .to_string();
+            assert!(
+                err.contains("invalid Kagemusha recursive spend compact-token bundle archive"),
+                "unexpected malformed projection error: {err}"
+            );
+
+            let bundle = sample_kagemusha_recursive_spend_bundle();
+            let bundle_archive = norito::to_bytes(&bundle).expect("encode Python spend bundle");
+            let projected =
+                kagemusha_recursive_spend_compact_payment_token_from_bundle_py(py, &bundle_archive)
+                    .expect("project Python recursive spend compact token");
+            let projected = projected.bind(py);
+            let token: KagemushaCompactPaymentToken =
+                norito::decode_from_bytes(projected.as_bytes())
+                    .expect("decode projected Python compact token");
+            let expected = kagemusha_recursive_spend_compact_payment_token_from_bundle(&bundle)
+                .expect("expected Python compact projection");
+            assert_eq!(token.public_inputs, expected.public_inputs);
+            assert_eq!(
+                token.folded_proof.verifier_key_id,
+                bundle.recursive_proof.verifier_key_id
+            );
+            assert_eq!(
+                token.folded_proof.proof.bytes,
+                bundle.recursive_proof.proof.bytes
+            );
+
+            let mut forged_bundle = sample_kagemusha_recursive_spend_bundle();
+            forged_bundle.recursive_proof.public_inputs_hash =
+                Hash::new(b"python-forged-recursive-spend-public-input-hash");
+            let forged_archive =
+                norito::to_bytes(&forged_bundle).expect("encode forged Python spend bundle");
+            let err =
+                kagemusha_recursive_spend_compact_payment_token_from_bundle_py(py, &forged_archive)
+                    .expect_err("forged recursive proof public-input binding must reject")
+                    .to_string();
+            assert!(
+                err.contains("public-input hash"),
+                "unexpected forged projection error: {err}"
             );
         });
     }
@@ -10106,6 +10624,40 @@ mod tests {
             assert_ne!(
                 profile_digest, legacy_profile_digest,
                 "binding append opening preflight bytes must change the Python transition profile digest"
+            );
+        });
+    }
+
+    #[test]
+    fn kagemusha_recursive_spend_lineage_append_boundary_python_rejects_duplicate_current_outputs()
+    {
+        ensure_python();
+        Python::attach(|py| {
+            let request = sample_recursive_spend_transition_profile_append_request();
+            let profile_archive = kagemusha_recursive_spend_transition_profile_append_py(
+                py,
+                &to_bytes(&request).expect("encode Python append transition-profile request"),
+            )
+            .expect("Python append transition profile should build");
+            let mut profile: KagemushaRecursiveSpendTransitionProfileV1 =
+                decode_from_bytes(profile_archive.bind(py).as_bytes())
+                    .expect("decode Python append transition profile");
+            profile
+                .current_hop_statement
+                .output_commitments
+                .push(profile.current_hop_statement.output_commitments[0]);
+
+            let duplicate_output_profile_archive = to_bytes(&profile)
+                .expect("encode Python append transition profile with duplicate output");
+            let err = kagemusha_recursive_spend_lineage_append_boundary_py(
+                py,
+                &duplicate_output_profile_archive,
+            )
+            .expect_err("Python append-boundary helper must reject duplicate current-hop outputs")
+            .to_string();
+            assert!(
+                err.contains("repeats an output commitment"),
+                "Python duplicate-output append-boundary error lost context: {err}"
             );
         });
     }
@@ -13379,6 +13931,27 @@ fn parse_numeric(quantity: &str) -> PyResult<Numeric> {
         })
 }
 
+fn parse_escrow_id(value: &str, context: &str) -> PyResult<EscrowId> {
+    let text = value.trim();
+    if text.is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "{context} must be non-empty"
+        )));
+    }
+    Ok(EscrowId::new(Hash::new(text.as_bytes())))
+}
+
+fn parse_optional_hashes(value: Option<&Bound<'_, PyAny>>, context: &str) -> PyResult<Vec<Hash>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    if value.is_none() {
+        return Ok(Vec::new());
+    }
+    py_fixed_array_list(value, context)
+        .map(|items| items.into_iter().map(Hash::prehashed).collect())
+}
+
 fn numeric_from_py(value: &Bound<'_, PyAny>) -> PyResult<Numeric> {
     if let Ok(s) = value.extract::<String>() {
         return parse_numeric(&s);
@@ -14336,6 +14909,74 @@ impl Instruction {
         ensure_ed25519_account(&destination)?;
         let quantity = parse_numeric(quantity)?;
         let instruction = Transfer::asset_numeric(asset_id, quantity, destination);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    #[pyo3(signature = (escrow_id, asset_definition_id, destination, amount, *, release_authority=None, expires_at_ms=None, evidence_hashes=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn open_asset_lock<'py>(
+        _cls: &Bound<'py, PyType>,
+        escrow_id: &str,
+        asset_definition_id: &str,
+        destination: &str,
+        amount: &str,
+        release_authority: Option<&str>,
+        expires_at_ms: Option<u64>,
+        evidence_hashes: Option<&Bound<'py, PyAny>>,
+    ) -> PyResult<Self> {
+        let escrow_id = parse_escrow_id(escrow_id, "escrow_id")?;
+        let asset_definition: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+            PyValueError::new_err(format!(
+                "invalid asset definition id `{asset_definition_id}`: {err}"
+            ))
+        })?;
+        let destination = parse_account_id(destination)?;
+        ensure_ed25519_account(&destination)?;
+        let release_authority = match release_authority {
+            Some(value) => {
+                let account = parse_account_id(value)?;
+                ensure_ed25519_account(&account)?;
+                Some(account)
+            }
+            None => None,
+        };
+        let amount = parse_numeric(amount)?;
+        let evidence_hashes = parse_optional_hashes(evidence_hashes, "evidence_hashes")?;
+        let instruction = OpenAssetLock::with_options(
+            escrow_id,
+            asset_definition,
+            destination,
+            amount,
+            release_authority,
+            expires_at_ms,
+            evidence_hashes,
+        );
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn drawdown_asset_lock(
+        _cls: &Bound<'_, PyType>,
+        escrow_id: &str,
+        amount: &str,
+    ) -> PyResult<Self> {
+        let instruction = DrawdownAssetLock::new(
+            parse_escrow_id(escrow_id, "escrow_id")?,
+            parse_numeric(amount)?,
+        );
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn cancel_asset_lock(_cls: &Bound<'_, PyType>, escrow_id: &str) -> PyResult<Self> {
+        let instruction = CancelAssetLock::new(parse_escrow_id(escrow_id, "escrow_id")?);
+        Ok(Instruction::new(instruction.into()))
+    }
+
+    #[classmethod]
+    fn expire_asset_lock(_cls: &Bound<'_, PyType>, escrow_id: &str) -> PyResult<Self> {
+        let instruction = ExpireAssetLock::new(parse_escrow_id(escrow_id, "escrow_id")?);
         Ok(Instruction::new(instruction.into()))
     }
 
@@ -16335,14 +16976,29 @@ const PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS: &[&str] = &[
     "mainnetcomplete",
     "mainnetclaim",
     "claimedmainnet",
+    "mainnetcertified",
+    "mainnetapproved",
+    "mainnetrelease",
     "auditedproduction",
     "externallyaudited",
+    "thirdpartyaudited",
+    "boiaudited",
+    "auditedmainnet",
+    "externalaudit",
     "auditpassed",
     "auditapproved",
     "auditsignoff",
     "auditclaim",
     "claimedaudit",
     "securityreviewpassed",
+    "securityauditpassed",
+    "securityaudited",
+    "externalsecurityreview",
+    "certifiedproduction",
+    "certifiedmainnet",
+    "releaseready",
+    "releaseapproved",
+    "releasecertified",
 ];
 
 #[derive(Clone, Copy)]
@@ -17418,195 +18074,205 @@ fn privacy_production_disabled_result(request: &PrivacyProofRequestV1) -> Privac
     )
 }
 
+fn privacy_clear_request_byte_fields(request: &mut PrivacyProofRequestV1) {
+    request.public_inputs.fill(0);
+    request.witness.fill(0);
+    request.proof.fill(0);
+}
+
 fn privacy_result_for_request(
-    request: PrivacyProofRequestV1,
+    mut request: PrivacyProofRequestV1,
     operation: PrivacyProofOperationV1,
 ) -> PrivacyProofResultV1 {
-    if privacy_request_has_oversized_text_field(&request) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request text fields exceed maximum length",
-            None,
-        );
-    }
+    let result = (|| -> PrivacyProofResultV1 {
+        if privacy_request_has_oversized_text_field(&request) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request text fields exceed maximum length",
+                None,
+            );
+        }
 
-    if privacy_request_has_control_text_field(&request) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request text fields must not contain control characters",
-            None,
-        );
-    }
+        if privacy_request_has_control_text_field(&request) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request text fields must not contain control characters",
+                None,
+            );
+        }
 
-    if privacy_request_has_non_ascii_text_field(&request) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request text fields must be printable ASCII",
-            None,
-        );
-    }
+        if privacy_request_has_non_ascii_text_field(&request) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request text fields must be printable ASCII",
+                None,
+            );
+        }
 
-    if privacy_request_has_unportable_text_field(&request) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request text fields must use portable identifier characters",
-            None,
-        );
-    }
+        if privacy_request_has_unportable_text_field(&request) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request text fields must use portable identifier characters",
+                None,
+            );
+        }
 
-    if privacy_request_has_exposed_production_claim_text_field(&request) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request text fields must not claim production/mainnet/audit readiness",
-            None,
-        );
-    }
+        if privacy_request_has_exposed_production_claim_text_field(&request) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request text fields must not claim production/mainnet/audit readiness",
+                None,
+            );
+        }
 
-    if request.public_inputs.len() > PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request public_inputs exceeds maximum length",
-            None,
-        );
-    }
+        if request.public_inputs.len() > PRIVACY_REQUEST_PUBLIC_INPUTS_MAX_BYTES {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request public_inputs exceeds maximum length",
+                None,
+            );
+        }
 
-    if request.witness.len() > PRIVACY_REQUEST_WITNESS_MAX_BYTES {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request witness exceeds maximum length",
-            None,
-        );
-    }
+        if request.witness.len() > PRIVACY_REQUEST_WITNESS_MAX_BYTES {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request witness exceeds maximum length",
+                None,
+            );
+        }
 
-    if request.proof.len() > PRIVACY_REQUEST_PROOF_MAX_BYTES {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request proof exceeds maximum length",
-            None,
-        );
-    }
+        if request.proof.len() > PRIVACY_REQUEST_PROOF_MAX_BYTES {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request proof exceeds maximum length",
+                None,
+            );
+        }
 
-    if request.algorithm_id.trim().is_empty() || request.entrypoint.trim().is_empty() {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request must include non-empty algorithm_id and entrypoint",
-            None,
-        );
-    }
+        if request.algorithm_id.trim().is_empty() || request.entrypoint.trim().is_empty() {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request must include non-empty algorithm_id and entrypoint",
+                None,
+            );
+        }
 
-    if privacy_request_has_invalid_catalog_shape(&request) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request algorithm_id and entrypoint must use catalog identifier shapes",
-            None,
-        );
-    }
+        if privacy_request_has_invalid_catalog_shape(&request) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request algorithm_id and entrypoint must use catalog identifier shapes",
+                None,
+            );
+        }
 
-    if request.vk_ref.trim().is_empty() {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request must include non-empty vk_ref",
-            None,
-        );
-    }
+        if request.vk_ref.trim().is_empty() {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request must include non-empty vk_ref",
+                None,
+            );
+        }
 
-    if !privacy_vk_ref_is_well_formed(&request.vk_ref) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request vk_ref must use backend:name with portable verifier-key components",
-            None,
-        );
-    }
+        if !privacy_vk_ref_is_well_formed(&request.vk_ref) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request vk_ref must use backend:name with portable verifier-key components",
+                None,
+            );
+        }
 
-    let Some(entry) = privacy_algorithm_entry(&request.algorithm_id) else {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM,
-            "unsupported privacy algorithm id",
-            Some(&request),
-        );
-    };
+        let Some(entry) = privacy_algorithm_entry(&request.algorithm_id) else {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_UNSUPPORTED_ALGORITHM,
+                "unsupported privacy algorithm id",
+                Some(&request),
+            );
+        };
 
-    if privacy_entrypoint_planned(entry, &request.entrypoint) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request entrypoint is planned but not executable until the production gate passes",
-            Some(&request),
-        );
-    }
+        if privacy_entrypoint_planned(entry, &request.entrypoint) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request entrypoint is planned but not executable until the production gate passes",
+                Some(&request),
+            );
+        }
 
-    if !privacy_entrypoint_supported(entry, &request.entrypoint) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request entrypoint is not registered for the algorithm",
-            Some(&request),
-        );
-    }
+        if !privacy_entrypoint_supported(entry, &request.entrypoint) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request entrypoint is not registered for the algorithm",
+                Some(&request),
+            );
+        }
 
-    if !privacy_entrypoint_is_production_proof_builder(&request.entrypoint) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request entrypoint must be a production proof builder",
-            Some(&request),
-        );
-    }
+        if !privacy_entrypoint_is_production_proof_builder(&request.entrypoint) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request entrypoint must be a production proof builder",
+                Some(&request),
+            );
+        }
 
-    if !privacy_vk_ref_matches_backend(entry, &request.vk_ref) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request vk_ref backend must match algorithm backend family",
-            Some(&request),
-        );
-    }
+        if !privacy_vk_ref_matches_backend(entry, &request.vk_ref) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request vk_ref backend must match algorithm backend family",
+                Some(&request),
+            );
+        }
 
-    if !privacy_vk_ref_name_matches_algorithm(entry, &request.vk_ref) {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request vk_ref name must match algorithm verifier key name",
-            Some(&request),
-        );
-    }
+        if !privacy_vk_ref_name_matches_algorithm(entry, &request.vk_ref) {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request vk_ref name must match algorithm verifier key name",
+                Some(&request),
+            );
+        }
 
-    if request.public_inputs.is_empty() {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof request must include non-empty public_inputs",
-            Some(&request),
-        );
-    }
+        if request.public_inputs.is_empty() {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof request must include non-empty public_inputs",
+                Some(&request),
+            );
+        }
 
-    if operation == PrivacyProofOperationV1::Build && !request.proof.is_empty() {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof build request must not include proof bytes",
-            Some(&request),
-        );
-    }
+        if operation == PrivacyProofOperationV1::Build && !request.proof.is_empty() {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof build request must not include proof bytes",
+                Some(&request),
+            );
+        }
 
-    if operation == PrivacyProofOperationV1::Verify && !request.witness.is_empty() {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof verify request must not include witness bytes",
-            Some(&request),
-        );
-    }
+        if operation == PrivacyProofOperationV1::Verify && !request.witness.is_empty() {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof verify request must not include witness bytes",
+                Some(&request),
+            );
+        }
 
-    if operation == PrivacyProofOperationV1::Build && request.witness.is_empty() {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof build request must include witness bytes",
-            Some(&request),
-        );
-    }
+        if operation == PrivacyProofOperationV1::Build && request.witness.is_empty() {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof build request must include witness bytes",
+                Some(&request),
+            );
+        }
 
-    if operation == PrivacyProofOperationV1::Verify && request.proof.is_empty() {
-        return privacy_failure_result(
-            PRIVACY_FFI_ERROR_INVALID_REQUEST,
-            "privacy proof verify request must include proof bytes",
-            Some(&request),
-        );
-    }
+        if operation == PrivacyProofOperationV1::Verify && request.proof.is_empty() {
+            return privacy_failure_result(
+                PRIVACY_FFI_ERROR_INVALID_REQUEST,
+                "privacy proof verify request must include proof bytes",
+                Some(&request),
+            );
+        }
 
-    privacy_production_disabled_result(&request)
+        privacy_production_disabled_result(&request)
+    })();
+    privacy_clear_request_byte_fields(&mut request);
+    result
 }
 
 fn privacy_result_for_request_archive(
@@ -17642,9 +18308,12 @@ fn privacy_decode_public_request_archive(
         &mut normalized,
         <PrivacyProofRequestV1 as norito::NoritoSerialize>::schema_hash(),
     ) {
+        normalized.fill(0);
         return Err(());
     }
-    norito::decode_from_bytes(&normalized).map_err(|_| ())
+    let decoded = norito::decode_from_bytes(&normalized).map_err(|_| ());
+    normalized.fill(0);
+    decoded
 }
 
 fn encode_privacy_archive_py<T>(
@@ -17659,16 +18328,20 @@ where
     let mut bytes = norito::to_bytes(value)
         .map_err(|err| PyRuntimeError::new_err(format!("{context}: {err}")))?;
     if !privacy_patch_archive_repeated_schema_byte(&mut bytes, schema_byte) {
+        bytes.fill(0);
         return Err(PyRuntimeError::new_err(format!(
             "{context}: encoded privacy archive is missing a Norito schema slot"
         )));
     }
     if bytes.len() > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES {
+        bytes.fill(0);
         return Err(PyRuntimeError::new_err(format!(
             "{context}: encoded privacy archive exceeds {PRIVACY_NATIVE_ARCHIVE_MAX_BYTES} bytes"
         )));
     }
-    Ok(Py::from(PyBytes::new(py, &bytes)))
+    let output = Py::from(PyBytes::new(py, &bytes));
+    bytes.fill(0);
+    Ok(output)
 }
 
 #[pyfunction]
@@ -17809,6 +18482,18 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_recursive_spend_compact_payment_token_from_bundle_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_verify_recursive_spend_compact_payment_token_projection_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

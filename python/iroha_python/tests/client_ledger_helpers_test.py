@@ -73,6 +73,8 @@ def test_privacy_backend_pending_classifier_rejects_adversarial_splices() -> Non
         "halo2/ipa/masp",
         "halo2/ipa/monero",
         "halo2/ipa/curve-tree",
+        "fcmp++",
+        "monero-fcmp++",
     ):
         assert _is_pending_production_backend_label(label)
 
@@ -83,6 +85,13 @@ def test_privacy_backend_pending_classifier_rejects_adversarial_splices() -> Non
         "sis-hints-anoncred-pq-v0-devfixture",
         "groth16/bls12-377/../../prod",
         "post-quantum-masp/audit-claimed",
+        "halo2/ipa/orchard:kzg",
+        "orchard:universal-srs",
+        "penumbra-masp:kzg",
+        "jindo-lattice-pcs-zk:trusted-setup",
+        "miden-stark:ptau",
+        "sis-with-hints:groth16",
+        "pq-masp-stark-fri:kzg",
     ):
         assert not _is_pending_production_backend_label(label)
 
@@ -94,9 +103,12 @@ def test_privacy_backend_production_verify_classifier_parity() -> None:
         "halo2/pasta/ivm-execution-v1",
         "halo2/pasta/kagemusha-folded-v1",
         "halo2/pasta/kaigi-roster-v1",
+        "halo2/pasta/kagemusha-recursive-compact-v1",
         "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
         "stark/fri",
         "stark/fri/sha256-goldilocks",
+        "stark/fri/poseidon2-goldilocks",
+        "stark/fri/sha256_goldilocks.v1",
     )
     for backend in supported:
         assert _is_production_verify_backend_label(backend), backend
@@ -119,6 +131,14 @@ def test_privacy_backend_production_verify_classifier_parity() -> None:
         "halo2/\u200Bipa",
         "h\u0430lo2/ipa",
         "halo2/ipa\0",
+        "HALO2/IPA",
+        "stark/FRI",
+        "halo2/ipa::ivm-execution-v1",
+        "halo2//ipa",
+        "halo2/ipa:",
+        "halo2/ipa.",
+        "halo2/ipa/.ivm-execution-v1",
+        "halo2/ipa:ivm..execution-v1",
         "../halo2/ipa",
         "halo2/ipa/orchard",
         "halo2-ipa-orchard",
@@ -140,14 +160,34 @@ def test_privacy_backend_production_verify_classifier_parity() -> None:
         "stark/fri/audit-proof-v1",
         "stark/fri/sha256 goldilocks",
         "stark/fri/sha256+goldilocks",
+        "fcmp++",
         "halo2/ipa+mock",
         "halo2/ipa:production-ready",
         "halo2/ipa:claimed-production",
         "halo2/ipa:mainnet-ready",
+        "halo2/ipa:release-ready",
+        "halo2/ipa:certified-mainnet",
+        "halo2/ipa:third-party-audited",
+        "halo2/ipa/orchard:production-ready",
+        "orchard:mainnet-ready",
+        "penumbra-masp:external-security-review",
+        "jindo-lattice-pcs-zk:release-ready",
+        "miden-stark:dev-fixture",
+        "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+        "halo2/ipa/orchard:kzg",
+        "orchard:universal-srs",
+        "penumbra-masp:kzg",
+        "jindo-lattice-pcs-zk:trusted-setup",
+        "miden-stark:ptau",
+        "sis-with-hints:groth16",
+        "pq-masp-stark-fri:kzg",
         "stark/fri/audit-signoff",
         "stark/fri/externally-audited",
+        "stark/fri/boi-audited",
+        "stark/fri/external-security-review",
         "stark/fri/security-review-passed",
         "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+        "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
         "stark/fri/a-u-d-i-t-c-l-a-i-m",
         "stark/fri/dev-fixture",
         "stark/fri/d-e-v-f-i-x-t-u-r-e",
@@ -1599,6 +1639,88 @@ def test_zk_instruction_helpers_accept_tuple_inputs() -> None:
     )
 
     assert Instruction.from_json(instruction.to_json()).to_json() == instruction.to_json()
+
+
+def test_asset_lock_instruction_helpers_serialize_full_surface() -> None:
+    asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
+    source = account_address(0x70)
+    destination = account_address(0x71)
+    release_authority = account_address(0x72)
+
+    instructions = [
+        Instruction.open_asset_lock(
+            "lock-sdk-1",
+            asset_definition_id,
+            destination,
+            "12.5",
+            release_authority=release_authority,
+            expires_at_ms=1_234_567,
+            evidence_hashes=["11" * 32],
+        ),
+        Instruction.drawdown_asset_lock("lock-sdk-1", "2.5"),
+        Instruction.cancel_asset_lock("lock-sdk-1"),
+        Instruction.expire_asset_lock("lock-sdk-1"),
+    ]
+    encoded = [instruction.to_json() for instruction in instructions]
+    assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
+
+    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=source))
+    draft.open_asset_lock(
+        "lock-sdk-2",
+        asset_definition_id,
+        destination,
+        Decimal("12.500"),
+        release_authority=release_authority,
+        expires_at_ms=1_234_567,
+        evidence_hashes=("22" * 32,),
+    )
+    draft.drawdown_asset_lock("lock-sdk-2", Decimal("2.500"))
+    draft.cancel_asset_lock("lock-sdk-2")
+    draft.expire_asset_lock("lock-sdk-2")
+
+    draft_encoded = [instruction.to_json() for instruction in draft.instructions]
+    assert len(draft_encoded) == 4
+    assert [Instruction.from_json(payload).to_json() for payload in draft_encoded] == draft_encoded
+
+
+@pytest.mark.parametrize(
+    ("method_name", "args"),
+    [
+        (
+            "open_asset_lock",
+            ("lock-sdk-bad", "7MBRDd8cGFBZkFGdDMwV7S6FPwbw", account_address(0x73)),
+        ),
+        ("drawdown_asset_lock", ("lock-sdk-bad",)),
+    ],
+)
+@pytest.mark.parametrize("amount", [0, "0", "-1", Decimal("-0.1"), "NaN", "Infinity"])
+def test_asset_lock_transaction_draft_rejects_non_positive_amounts(
+    method_name: str,
+    args: tuple[object, ...],
+    amount: object,
+) -> None:
+    account = account_address(0x74)
+    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=account))
+    method = getattr(draft, method_name)
+
+    with pytest.raises(ValueError, match="amount must be positive|quantity must be a finite"):
+        method(*args, amount)
+
+
+def test_asset_lock_transaction_draft_rejects_empty_identifiers() -> None:
+    account = account_address(0x75)
+    draft = TransactionDraft(TransactionConfig(chain_id="chain", authority=account))
+
+    with pytest.raises(ValueError, match="escrow_id"):
+        draft.cancel_asset_lock("")
+    with pytest.raises(ValueError, match="release_authority"):
+        draft.open_asset_lock(
+            "lock-sdk-empty-authority",
+            "7MBRDd8cGFBZkFGdDMwV7S6FPwbw",
+            account_address(0x76),
+            1,
+            release_authority="",
+        )
 
 
 def test_transaction_draft_shield_accepts_raw_text_ciphertext() -> None:

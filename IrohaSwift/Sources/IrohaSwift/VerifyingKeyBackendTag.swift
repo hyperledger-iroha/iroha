@@ -172,6 +172,7 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         "halo2/pasta/offline-note-recursive",
         "halo2/pasta/kagemusha-folded-v1",
         "halo2/pasta/kagemusha-recursive-aggregation-v1",
+        "halo2/pasta/kagemusha-recursive-compact-v1",
         "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
         "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
         "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
@@ -192,6 +193,8 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         "stark": .stark,
         "starkfri": .stark,
         "starkfrisha256goldilocks": .stark,
+        "starkfriposeidon2goldilocks": .stark,
+        "starkfrisha256goldilocksv1": .stark,
         "halo2ipaorchard": .halo2IpaOrchard,
         "orchard": .halo2IpaOrchard,
         "zcashorchard": .halo2IpaOrchard,
@@ -304,14 +307,29 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
         "mainnetcomplete",
         "mainnetclaim",
         "claimedmainnet",
+        "mainnetcertified",
+        "mainnetapproved",
+        "mainnetrelease",
         "auditedproduction",
         "externallyaudited",
+        "thirdpartyaudited",
+        "boiaudited",
+        "auditedmainnet",
+        "externalaudit",
         "auditpassed",
         "auditapproved",
         "auditsignoff",
         "auditclaim",
         "claimedaudit",
-        "securityreviewpassed"
+        "securityreviewpassed",
+        "securityauditpassed",
+        "securityaudited",
+        "externalsecurityreview",
+        "certifiedproduction",
+        "certifiedmainnet",
+        "releaseready",
+        "releaseapproved",
+        "releasecertified"
     ]
 
     private static func isTrustedSetupBackendLabel(_ raw: String) -> Bool {
@@ -414,16 +432,30 @@ public enum VerifyingKeyBackendTag: UInt32, CaseIterable, Sendable, Equatable {
     }
 
     private static func isPortableVerifierBackendLabel(_ value: String) -> Bool {
-        value.unicodeScalars.allSatisfy { scalar in
+        guard let first = value.unicodeScalars.first, let last = value.unicodeScalars.last else {
+            return false
+        }
+        let isLowerAsciiAlphanumeric: (Unicode.Scalar) -> Bool = { scalar in
+            let codepoint = scalar.value
+            return (48...57).contains(codepoint) || (97...122).contains(codepoint)
+        }
+        guard isLowerAsciiAlphanumeric(first), isLowerAsciiAlphanumeric(last) else {
+            return false
+        }
+        guard value.unicodeScalars.allSatisfy({ scalar in
             let codepoint = scalar.value
             return (48...57).contains(codepoint)
-                || (65...90).contains(codepoint)
                 || (97...122).contains(codepoint)
                 || scalar == "/"
                 || scalar == ":"
                 || scalar == "."
                 || scalar == "_"
                 || scalar == "-"
+        }) else {
+            return false
+        }
+        return !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"].contains { separator in
+            value.contains(separator)
         }
     }
 

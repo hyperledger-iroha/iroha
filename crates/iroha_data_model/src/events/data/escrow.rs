@@ -36,6 +36,8 @@ pub enum EscrowEvent {
     Released(AssetEscrowRecord),
     /// Escrow cancelled and refunded to the seller.
     Cancelled(AssetEscrowRecord),
+    /// Generic lock expired and refunded remaining custody.
+    Expired(AssetEscrowRecord),
     /// Dispute opened for court moderation.
     Disputed(AssetEscrowDisputed),
     /// Court resolved a disputed escrow.
@@ -51,7 +53,8 @@ impl EscrowEvent {
             | Self::Accepted(escrow)
             | Self::PaymentSent(escrow)
             | Self::Released(escrow)
-            | Self::Cancelled(escrow) => escrow,
+            | Self::Cancelled(escrow)
+            | Self::Expired(escrow) => escrow,
             Self::Disputed(payload) => &payload.escrow,
             Self::Resolved(payload) => &payload.escrow,
         }

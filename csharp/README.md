@@ -89,11 +89,27 @@ and final-root/current-note binding.
 Use `PreferredMode(...)` to select `recursive_spend_v1` when the complete
 ABI-6-or-later native surface is available, otherwise fall back to
 `checked_prefold_v1`.
-The ABI-7 compact-token symbols remain source-stable but fail closed until the
-compact token proof composes the private-hop verifier-slice relation in-circuit.
-The native bridge reports that reserved path with error code `-312`, and the
-C# wrapper surfaces it as a recursive compact proof-composition unavailable
-diagnostic instead of a generic proof rejection. For
+The ABI-7 `recursive_compact_v1` compact-token symbols remain source-stable and
+probe `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend.
+Use `ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(...)`
+and `VerifyRecursiveCompactPaymentToken(...)`; gate them with
+`IsRecursiveCompactPaymentTokenProverAvailable()` and
+`IsRecursiveCompactPaymentTokenVerifierAvailable()`. The recursive-spend
+compact projection verifier is exposed separately as
+`VerifyRecursiveSpendCompactPaymentTokenProjection(...)`; gate it with
+`IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable()`. It accepts
+raw Norito compact-token and verifier-record archives, rejects empty,
+malformed, oversized, or invalid-height inputs before P/Invoke dispatch, and
+returns the native boolean receiver result. ABI 7 now carries the
+one-hop LEN=4 compact-token proof path when the native bundle includes the
+packaged compact one-hop proving-key archive and matching verifier-slice
+material. Production defaults still stay on ABI 6 Reserved-lineage recursive
+spend until that archive is shipped and signed for release. When the
+proof-composition reservation is reached for a missing packaged key, the
+generic compact-token reservation, or the multi-hop verifier-batch reservation,
+bridge error code `-312` marks reserved ABI-7 state. The C# wrapper surfaces
+that as `InvalidOperationException` instead of a generic proof rejection, while
+empty or malformed local archives fail as `ArgumentException`. For
 Reserved-lineage branching, use `CanRedeemWitnessless(...)`,
 `RequiresLineageWitnessForRedeem(...)`, `PreferredAppendOutputCircuitId(...)`,
 `CanProveAppendOutputCircuitId(...)`, and
@@ -112,6 +128,9 @@ material: C# wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
+Native append streams the previous recursive proof bytes into
+`recursive_proof_chain_digest`; SDK code must not derive or patch the
+accumulator state.
 Verify request archives must pass the same public-binding preflight before the
 native bridge returns a recursive spend verify result: Reserved-lineage bundles
 require a matching active `lineage_verifier_record`, semantic bundles must omit

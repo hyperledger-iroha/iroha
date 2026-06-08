@@ -6,10 +6,12 @@ import importlib.util
 import hashlib
 import io
 import json
+import shutil
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
@@ -27,6 +29,24 @@ EVIDENCE_HELPER_SPEC = importlib.util.spec_from_file_location(
 assert EVIDENCE_HELPER_SPEC and EVIDENCE_HELPER_SPEC.loader  # pragma: no cover - import guard
 evidence_helper = importlib.util.module_from_spec(EVIDENCE_HELPER_SPEC)
 EVIDENCE_HELPER_SPEC.loader.exec_module(evidence_helper)  # type: ignore[misc]
+
+COMPACT_KEY_HELPER_PATH = SCRIPT_DIR / "kagemusha_recursive_compact_key_evidence.py"
+COMPACT_KEY_HELPER_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_recursive_compact_key_evidence",
+    COMPACT_KEY_HELPER_PATH,
+)
+assert COMPACT_KEY_HELPER_SPEC and COMPACT_KEY_HELPER_SPEC.loader  # pragma: no cover
+compact_key_helper = importlib.util.module_from_spec(COMPACT_KEY_HELPER_SPEC)
+COMPACT_KEY_HELPER_SPEC.loader.exec_module(compact_key_helper)  # type: ignore[misc]
+
+RELEASE_BUNDLE_HELPER_PATH = SCRIPT_DIR / "kagemusha_release_bundle.py"
+RELEASE_BUNDLE_HELPER_SPEC = importlib.util.spec_from_file_location(
+    "kagemusha_release_bundle",
+    RELEASE_BUNDLE_HELPER_PATH,
+)
+assert RELEASE_BUNDLE_HELPER_SPEC and RELEASE_BUNDLE_HELPER_SPEC.loader  # pragma: no cover
+release_bundle = importlib.util.module_from_spec(RELEASE_BUNDLE_HELPER_SPEC)
+RELEASE_BUNDLE_HELPER_SPEC.loader.exec_module(release_bundle)  # type: ignore[misc]
 
 SLOT_HELPER_PATH = SCRIPT_DIR / "tests" / "check_android_device_lab_slot_test.py"
 SLOT_HELPER_SPEC = importlib.util.spec_from_file_location(
@@ -53,6 +73,7 @@ def write_json(path: Path, payload: dict) -> None:
 
 def create_lineage_proof_evidence(root: Path) -> Path:
     create_lineage_artifact_files(root)
+    create_compact_key_evidence(root)
     proof_log = root / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
     write_passing_lineage_proof_log(proof_log)
     evidence_path = root / "lineage-proof-evidence.json"
@@ -69,6 +90,10 @@ def create_lineage_proof_evidence(root: Path) -> Path:
             "circuit_ids": dict(readiness.EXPECTED_LINEAGE_CIRCUIT_IDS),
             "artifacts": {
                 artifact: hashlib.sha256((root / artifact).read_bytes()).hexdigest()
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            },
+            "artifact_size_bytes": {
+                artifact: (root / artifact).stat().st_size
                 for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
             },
             "tests": {
@@ -98,6 +123,59 @@ def create_lineage_artifact_files(root: Path) -> None:
         path.write_bytes(f"lineage artifact {artifact}\n".encode("utf-8"))
 
 
+def create_compact_key_artifact_files(root: Path) -> None:
+    for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS:
+        path = root / artifact
+        path.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256(f"fixture compact artifact {artifact}".encode("utf-8")).digest()
+        path.write_bytes(b"KCGK\x00\x01" + digest + digest[::-1])
+    write_compact_key_generator_log(root)
+
+
+def write_compact_key_generator_log(root: Path) -> Path:
+    log_path = root / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+    sizes = {
+        artifact: (root / artifact).stat().st_size
+        for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS
+    }
+    log_path.write_text(
+        readiness.expected_compact_key_generator_log_line(sizes) + "\n",
+        encoding="utf-8",
+    )
+    return log_path
+
+
+def create_compact_key_evidence(root: Path) -> Path:
+    create_compact_key_artifact_files(root)
+    generator_log = root / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+    evidence_path = root / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+    write_json(
+        evidence_path,
+        {
+            "schema": readiness.COMPACT_KEY_EVIDENCE_SCHEMA,
+            "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            "opening_len": readiness.EXPECTED_COMPACT_KEY_OPENING_LEN,
+            "ipa_k": readiness.EXPECTED_COMPACT_KEY_IPA_K,
+            "verifier_backend": readiness.EXPECTED_COMPACT_KEY_BACKEND,
+            "circuit_id": readiness.EXPECTED_COMPACT_KEY_CIRCUIT_ID,
+            "record_namespace": readiness.EXPECTED_COMPACT_KEY_RECORD_NAMESPACE,
+            "record_version": readiness.EXPECTED_COMPACT_KEY_RECORD_VERSION,
+            "command": readiness.expected_compact_key_command(),
+            "generator_log_path": readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME,
+            "generator_log_sha256": hashlib.sha256(generator_log.read_bytes()).hexdigest(),
+            "artifacts": {
+                artifact: hashlib.sha256((root / artifact).read_bytes()).hexdigest()
+                for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS
+            },
+            "artifact_size_bytes": {
+                artifact: (root / artifact).stat().st_size
+                for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS
+            },
+        },
+    )
+    return evidence_path
+
+
 def write_passing_lineage_proof_log(path: Path) -> None:
     test_name = readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
     path.write_text(
@@ -120,10 +198,73 @@ def write_abi7_fail_closed_marker_files(repo: Path) -> None:
         "\n".join(
             (
                 "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE",
-                "semantic ABI-7 compact tokens are disabled for production",
+                "multi-hop proving requires the append verifier batch to be composed into the compact proof",
                 "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+                "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN",
+                "KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES",
+                "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope",
+                "duplicated multi-hop compact Pallas archive must reject before unavailable",
+                "height-aware duplicated multi-hop compact Pallas archive must reject before unavailable",
+                "forged multi-hop compact Pallas metadata must reject before unavailable",
+                "reordered multi-hop compact Pallas archive must reject before unavailable",
+                "height-aware reordered multi-hop compact Pallas archive must reject before unavailable",
+                "fn prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive(",
+                ") -> Result<(), String> {",
+                "    decode_kagemusha_recursive_compact_pallas_open_envelopes();",
+                "    kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs();",
+                "    validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding();",
+                "    if evidence.aggregation_statement.steps.len() != 1 {",
+                "        return Err(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE.to_owned());",
+                "    }",
+                "    match preflight.opening_len {",
+                "        4 => prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope::<4>(),",
+                "        _ => Err(\"unsupported\".to_owned()),",
+                "    }",
+                "}",
+                "pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(",
+                ") -> Result<(), String> {",
+                "    prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive();",
+                "    proving_key_bytes;",
+                "    None",
+                "}",
+                "pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_at_height(",
+                ") -> Result<(), String> {",
+                "    prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive();",
+                "    proving_key_bytes;",
+                "    Some(block_height);",
+                "}",
+                "pub fn preverify_kagemusha_recursive_compact_payment_token(",
+                ") -> Result<(), String> {",
+                "    preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id();",
+                "    KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
+                "}",
                 "pub fn verify_kagemusha_recursive_compact_payment_token(",
-                "false",
+                ") -> bool {",
+                "    preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id();",
+                "    verify_backend();",
+                "}",
+                "pub fn preverify_kagemusha_recursive_compact_payment_token_with_record(",
+                ") -> Result<(), String> {",
+                "    preverify_kagemusha_recursive_compact_payment_token_with_record_at_optional_height_and_expected_circuit_id();",
+                "    KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
+                "}",
+                "pub fn preverify_kagemusha_recursive_compact_payment_token_with_record_at_height(",
+                ") -> Result<(), String> {",
+                "    preverify_kagemusha_recursive_compact_payment_token_with_record_at_optional_height_and_expected_circuit_id();",
+                "    Some(block_height);",
+                "    KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
+                "}",
+                "pub fn verify_kagemusha_recursive_compact_payment_token_with_record(",
+                ") -> bool {",
+                "    preverify_kagemusha_recursive_compact_payment_token_with_record_at_optional_height_and_expected_circuit_id();",
+                "    verify_backend();",
+                "}",
+                "pub fn verify_kagemusha_recursive_compact_payment_token_with_record_at_height(",
+                ") -> bool {",
+                "    preverify_kagemusha_recursive_compact_payment_token_with_record_at_optional_height_and_expected_circuit_id();",
+                "    Some(block_height);",
+                "    verify_backend();",
+                "}",
             )
         )
         + "\n",
@@ -132,7 +273,34 @@ def write_abi7_fail_closed_marker_files(repo: Path) -> None:
     bridge_path = repo / "crates/connect_norito_bridge/src/lib.rs"
     bridge_path.parent.mkdir(parents=True, exist_ok=True)
     bridge_path.write_text(
-        "ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE\n",
+        "\n".join(
+            (
+                "ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE",
+                "pub unsafe extern \"C\" fn connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(",
+                ") -> c_int {",
+                "    prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive()",
+                "        .map_err(|err| {",
+                "            if is_kagemusha_recursive_compact_unavailable_error(&err) {",
+                "                BridgeError::KagemushaRecursiveCompactUnavailable",
+                "            } else {",
+                "                BridgeError::KagemushaProve",
+                "            }",
+                "        })?;",
+                "    0",
+                "}",
+                "pub unsafe extern \"C\" fn connect_norito_kagemusha_verify_recursive_compact_payment_token(",
+                ") -> c_int {",
+                "    match preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {",
+                "        Err(err) if is_kagemusha_recursive_compact_unavailable_error(&err) => {}",
+                "        _ => {}",
+                "    }",
+                "    verify_kagemusha_recursive_compact_payment_token(&token, &vk_box);",
+                "    *out_valid = 0;",
+                "    0",
+                "}",
+            )
+        )
+        + "\n",
         encoding="utf-8",
     )
 
@@ -202,12 +370,88 @@ def copy_slot_binding(
     slot_helpers.refresh_signed_evidence_hash(target)
 
 
+def create_ready_release_bundle_fixture(root: Path) -> dict[str, object]:
+    bundle_root = root / "bundle"
+    device_lab_root = bundle_root / "artifacts" / "android" / "device_lab"
+    lineage_evidence = create_lineage_proof_evidence(
+        bundle_root / "artifacts" / "kagemusha"
+    )
+    compact_key_evidence = lineage_evidence.parent / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+    signer = slot_helpers.create_test_signer(root / "keys")
+    create_complete_matrix(device_lab_root, signer)
+    trusted, signer_errors = slot_helpers.device_lab.load_trusted_signer_public_keys(
+        [str(signer["public_key"])]
+    )
+    assert not signer_errors
+    summary = readiness.build_summary(
+        repo_root=REPO_ROOT,
+        device_lab_root=device_lab_root,
+        lineage_proof_evidence_path=lineage_evidence,
+        compact_key_evidence_path=compact_key_evidence,
+        trusted_signer_public_keys=trusted,
+        min_signed_at=readiness.parse_utc_timestamp(
+            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            "fixture min signed_at",
+        )[0],
+        min_lineage_proof_evidence_at=readiness.parse_utc_timestamp(
+            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            "fixture min lineage evidence",
+        )[0],
+        min_compact_key_evidence_at=readiness.parse_utc_timestamp(
+            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            "fixture min compact evidence",
+        )[0],
+    )
+    assert summary["ready"], summary["blockers"]
+    summary_path = bundle_root / "dist" / "kagemusha-production-readiness.json"
+    write_json(summary_path, summary)
+    return {
+        "bundle_root": bundle_root,
+        "device_lab_root": device_lab_root,
+        "lineage_evidence": lineage_evidence,
+        "compact_key_evidence": compact_key_evidence,
+        "signer": signer,
+        "summary_path": summary_path,
+        "summary": summary,
+    }
+
+
+def release_bundle_args(fixture: dict[str, object], *, out: Path | None = None) -> list[str]:
+    bundle_root = fixture["bundle_root"]
+    signer = fixture["signer"]
+    assert isinstance(bundle_root, Path)
+    assert isinstance(signer, dict)
+    if out is None:
+        out_arg = "dist/kagemusha-production-release-bundle.json"
+    else:
+        out_arg = str(out)
+    return [
+        "--repo-root",
+        str(REPO_ROOT),
+        "--bundle-root",
+        str(bundle_root),
+        "--readiness-summary",
+        "dist/kagemusha-production-readiness.json",
+        "--lineage-proof-evidence",
+        f"artifacts/kagemusha/{readiness.LINEAGE_PROOF_EVIDENCE_FILENAME}",
+        "--compact-key-evidence",
+        f"artifacts/kagemusha/{readiness.COMPACT_KEY_EVIDENCE_FILENAME}",
+        "--device-lab-root",
+        "artifacts/android/device_lab",
+        "--trusted-signer-public-key",
+        str(signer["public_key"]),
+        "--out",
+        out_arg,
+    ]
+
+
 class KagemushaProductionReadinessTest(unittest.TestCase):
     def test_complete_signed_android_matrix_passes_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
             summary_path = Path(temp) / "summary.json"
             lineage_evidence = create_lineage_proof_evidence(Path(temp) / "lineage")
+            compact_key_evidence = create_compact_key_evidence(lineage_evidence.parent)
             signer = slot_helpers.create_test_signer(Path(temp) / "keys")
             create_complete_matrix(root, signer)
 
@@ -220,6 +464,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                         str(root),
                         "--lineage-proof-evidence",
                         str(lineage_evidence),
+                        "--compact-key-evidence",
+                        str(compact_key_evidence),
                         "--trusted-signer-public-key",
                         str(signer["public_key"]),
                         "--summary-out",
@@ -233,6 +479,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 ).hexdigest()
                 for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
             }
+            expected_artifact_sizes = {
+                artifact: (lineage_evidence.parent / artifact).stat().st_size
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            }
+            expected_compact_artifact_sha256 = {
+                artifact: hashlib.sha256(
+                    (lineage_evidence.parent / artifact).read_bytes()
+                ).hexdigest()
+                for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS
+            }
+            expected_compact_artifact_sizes = {
+                artifact: (lineage_evidence.parent / artifact).stat().st_size
+                for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS
+            }
+            expected_compact_generator_log_sha256 = hashlib.sha256(
+                (
+                    lineage_evidence.parent
+                    / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+                ).read_bytes()
+            ).hexdigest()
             expected_log_sha256 = hashlib.sha256(
                 (
                     lineage_evidence.parent
@@ -262,7 +528,10 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(summary["status"], "ready")
         self.assertEqual(summary["schema"], readiness.SUMMARY_SCHEMA)
         self.assertTrue(summary["abi6_reserved_lineage"]["ok"])
-        self.assertEqual(summary["abi7_recursive_compact"]["state"], "fail_closed")
+        self.assertEqual(
+            summary["abi7_recursive_compact"]["state"],
+            "one_hop_wired_multi_hop_reserved",
+        )
         self.assertEqual(
             summary["lineage_key_release_tooling"]["state"],
             "record_artifacts_wired",
@@ -280,10 +549,40 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             expected_artifact_sha256,
         )
         self.assertEqual(
+            summary["lineage_proof_evidence"]["artifact_size_bytes"],
+            expected_artifact_sizes,
+        )
+        self.assertEqual(
             summary["lineage_proof_evidence"]["test_log_sha256"],
             {"record_archive_proof": expected_log_sha256},
         )
         self.assertIsNotNone(summary["lineage_proof_evidence"]["max_generated_at_utc"])
+        self.assertEqual(
+            summary["compact_key_evidence"]["state"],
+            "compact_key_artifacts_validated",
+        )
+        self.assertEqual(
+            summary["compact_key_evidence"]["generated_at_utc"],
+            readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+        )
+        self.assertEqual(
+            summary["compact_key_evidence"]["artifact_sha256"],
+            expected_compact_artifact_sha256,
+        )
+        self.assertEqual(
+            summary["compact_key_evidence"]["artifact_size_bytes"],
+            expected_compact_artifact_sizes,
+        )
+        self.assertEqual(
+            summary["compact_key_evidence"]["generator_log_sha256"],
+            expected_compact_generator_log_sha256,
+        )
+        self.assertEqual(
+            summary["compact_key_evidence"]["generator_log_artifact_size_bytes"],
+            expected_compact_artifact_sizes,
+        )
+        self.assertTrue(summary["compact_key_evidence"]["command_validated"])
+        self.assertIsNotNone(summary["compact_key_evidence"]["max_generated_at_utc"])
         self.assertEqual(
             summary["android_device_lab"]["root"],
             readiness.ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL,
@@ -298,6 +597,1193 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary["android_device_lab"]["signed_evidence"],
             expected_android_signed_evidence,
         )
+
+    def test_kagemusha_release_bundle_manifest_passes_ready_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            rendered = json.dumps(manifest, sort_keys=True)
+            expected_lineage_artifact_sizes = {
+                artifact: (
+                    bundle_root / "artifacts" / "kagemusha" / artifact
+                ).stat().st_size
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            }
+            expected_lineage_artifact_sha256 = {
+                artifact: hashlib.sha256(
+                    (bundle_root / "artifacts" / "kagemusha" / artifact).read_bytes()
+                ).hexdigest()
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            }
+            expected_compact_artifact_sizes = {
+                artifact: (
+                    bundle_root / "artifacts" / "kagemusha" / artifact
+                ).stat().st_size
+                for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS
+            }
+            expected_compact_artifact_sha256 = {
+                artifact: hashlib.sha256(
+                    (bundle_root / "artifacts" / "kagemusha" / artifact).read_bytes()
+                ).hexdigest()
+                for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS
+            }
+            expected_lineage_log_sha256 = hashlib.sha256(
+                (
+                    bundle_root
+                    / "artifacts"
+                    / "kagemusha"
+                    / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+                ).read_bytes()
+            ).hexdigest()
+            expected_lineage_log_size = (
+                bundle_root
+                / "artifacts"
+                / "kagemusha"
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            ).stat().st_size
+            compact_generator_log = (
+                bundle_root
+                / "artifacts"
+                / "kagemusha"
+                / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+            )
+            expected_compact_generator_log_sha256 = hashlib.sha256(
+                compact_generator_log.read_bytes()
+            ).hexdigest()
+            expected_compact_generator_log_size = compact_generator_log.stat().st_size
+
+        self.assertEqual(status, 0)
+        self.assertTrue(manifest["ready"])
+        self.assertEqual(manifest["schema"], release_bundle.RELEASE_BUNDLE_SCHEMA)
+        self.assertEqual(manifest["blockers"], [])
+        self.assertEqual(
+            manifest["evidence"]["readiness_summary"]["path"],
+            "dist/kagemusha-production-readiness.json",
+        )
+        self.assertEqual(
+            manifest["evidence"]["lineage_proof_evidence"]["path"],
+            "artifacts/kagemusha/lineage-proof-evidence.json",
+        )
+        self.assertEqual(
+            manifest["evidence"]["compact_key_evidence"]["path"],
+            "artifacts/kagemusha/recursive-compact-key-evidence.json",
+        )
+        self.assertNotIn(str(bundle_root), rendered)
+        self.assertEqual(
+            manifest["android_device_lab"]["missing_device_families"],
+            [],
+        )
+        self.assertEqual(
+            manifest["lineage_proof_evidence"]["artifact_size_bytes"],
+            expected_lineage_artifact_sizes,
+        )
+        self.assertEqual(
+            set(manifest["evidence"]["lineage_artifacts"]),
+            set(readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS),
+        )
+        for artifact, entry in manifest["evidence"]["lineage_artifacts"].items():
+            self.assertEqual(entry["path"], f"artifacts/kagemusha/{artifact}")
+            self.assertEqual(entry["sha256"], expected_lineage_artifact_sha256[artifact])
+            self.assertEqual(entry["size_bytes"], expected_lineage_artifact_sizes[artifact])
+        self.assertEqual(
+            set(manifest["evidence"]["compact_key_artifacts"]),
+            set(readiness.COMPACT_KEY_REQUIRED_ARTIFACTS),
+        )
+        for artifact, entry in manifest["evidence"]["compact_key_artifacts"].items():
+            self.assertEqual(entry["path"], f"artifacts/kagemusha/{artifact}")
+            self.assertEqual(entry["sha256"], expected_compact_artifact_sha256[artifact])
+            self.assertEqual(entry["size_bytes"], expected_compact_artifact_sizes[artifact])
+        self.assertEqual(
+            manifest["compact_key_evidence"]["generator_log_sha256"],
+            expected_compact_generator_log_sha256,
+        )
+        self.assertEqual(
+            manifest["compact_key_evidence"]["generator_log_artifact_size_bytes"],
+            expected_compact_artifact_sizes,
+        )
+        self.assertEqual(
+            manifest["evidence"]["compact_key_generator_log"],
+            {
+                "path": "artifacts/kagemusha/recursive-compact-key-artifacts.log",
+                "sha256": expected_compact_generator_log_sha256,
+                "size_bytes": expected_compact_generator_log_size,
+            },
+        )
+        self.assertEqual(
+            manifest["evidence"]["lineage_proof_logs"]["record_archive_proof"],
+            {
+                "path": "artifacts/kagemusha/record-archive-proof.log",
+                "sha256": expected_lineage_log_sha256,
+                "size_bytes": expected_lineage_log_size,
+            },
+        )
+        self.assertEqual(
+            set(manifest["evidence"]["android_signed_evidence"]),
+            set(manifest["android_device_lab"]["signed_evidence"]),
+        )
+        for slot, entry in manifest["evidence"]["android_signed_evidence"].items():
+            self.assertEqual(
+                entry["path"],
+                f"artifacts/android/device_lab/{slot}/evidence/signed-evidence.json",
+            )
+            self.assertEqual(
+                entry["sha256"],
+                manifest["android_device_lab"]["signed_evidence"][slot][
+                    "artifact_sha256"
+                ],
+            )
+
+    def test_kagemusha_release_bundle_rejects_placeholder_compact_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            compact_key_evidence = fixture["compact_key_evidence"]
+            summary_path = fixture["summary_path"]
+            assert isinstance(bundle_root, Path)
+            assert isinstance(compact_key_evidence, Path)
+            assert isinstance(summary_path, Path)
+            artifact = bundle_root / "artifacts" / "kagemusha" / "recursive-compact-len4.pk"
+            placeholder = b"recursive compact key artifact recursive-compact-len4.pk\n"
+            artifact.write_bytes(placeholder)
+            placeholder_sha256 = hashlib.sha256(placeholder).hexdigest()
+            compact_evidence = json.loads(compact_key_evidence.read_text(encoding="utf-8"))
+            compact_evidence["artifacts"][artifact.name] = placeholder_sha256
+            compact_evidence["artifact_size_bytes"][artifact.name] = len(placeholder)
+            write_json(compact_key_evidence, compact_evidence)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["compact_key_evidence"]["artifact_sha256"][
+                artifact.name
+            ] = placeholder_sha256
+            summary["compact_key_evidence"]["artifact_size_bytes"][artifact.name] = len(
+                placeholder
+            )
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        rendered = stderr.getvalue()
+        self.assertIn("compact_key_evidence_artifact_placeholder", rendered)
+        self.assertIn("kagemusha_release_compact_artifact_placeholder", rendered)
+
+    def test_kagemusha_release_bundle_verify_existing_passes_ready_fixture(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            original_manifest = out.read_text(encoding="utf-8")
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+            final_manifest = out.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 0)
+        self.assertEqual(final_manifest, original_manifest)
+        self.assertIn("[kagemusha-release-bundle] verified", stdout.getvalue())
+
+    def test_kagemusha_release_bundle_verify_existing_allows_timestamp_refresh(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["generated_at_utc"] = "2026-01-08T00:00:00Z"
+            write_json(out, manifest)
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 0)
+        self.assertIn("[kagemusha-release-bundle] verified", stdout.getvalue())
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_manifest_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["evidence"]["readiness_summary"]["sha256"] = "0" * 64
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_drift",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_unexpected_field(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["unexpected_release_claim"] = "production-ready"
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_unexpected_field",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_secret_material(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            manifest["evidence"]["readiness_summary"]["path"] = "evidence/token=abc123.json"
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_secret_material",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_outside_manifest_before_scanners(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            outside = Path(temp) / "outside-release-bundle.json"
+            outside.write_text('{"leak": "token=supersecret"}\n', encoding="utf-8")
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.object(
+                    release_bundle,
+                    "_load_local_json",
+                    side_effect=AssertionError("outside release bundle must not be loaded"),
+                ) as load_json,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_lineage_proof_evidence",
+                    side_effect=AssertionError("lineage evidence must not be scanned"),
+                ) as lineage_scan,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_compact_key_evidence",
+                    side_effect=AssertionError("compact evidence must not be scanned"),
+                ) as compact_scan,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_android_device_lab",
+                    side_effect=AssertionError("device lab must not be scanned"),
+                ) as android_scan,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(
+                        [
+                            *release_bundle_args(fixture),
+                            "--verify-existing",
+                            str(outside),
+                        ]
+                    )
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        load_json.assert_not_called()
+        lineage_scan.assert_not_called()
+        compact_scan.assert_not_called()
+        android_scan.assert_not_called()
+        self.assertIn("kagemusha_release_bundle_path_outside_root", rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_release_bundle_artifact_inventory_rejects_digest_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            artifact_root = bundle_root / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(artifact_root)
+            artifact_sha256 = {
+                artifact: hashlib.sha256((artifact_root / artifact).read_bytes()).hexdigest()
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            }
+            artifact_size_bytes = {
+                artifact: (artifact_root / artifact).stat().st_size
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            }
+            artifact_sha256["lineage-init-len128.pk"] = "0" * 64
+
+            entries, blockers = release_bundle._artifact_inventory_entries(
+                artifact_root,
+                bundle_root,
+                artifact_names=readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS,
+                artifact_sha256=artifact_sha256,
+                artifact_size_bytes=artifact_size_bytes,
+                label_prefix="Reserved-lineage proof evidence",
+                code_prefix="kagemusha_release_lineage_artifact",
+            )
+
+        self.assertNotIn("lineage-init-len128.pk", entries)
+        self.assertIn(
+            "kagemusha_release_lineage_artifact_digest_drift",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "kagemusha_release_lineage_artifact_inventory",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_artifact_inventory_rejects_size_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            artifact_root = bundle_root / "artifacts" / "kagemusha"
+            create_lineage_artifact_files(artifact_root)
+            artifact_sha256 = {
+                artifact: hashlib.sha256((artifact_root / artifact).read_bytes()).hexdigest()
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            }
+            artifact_size_bytes = {
+                artifact: (artifact_root / artifact).stat().st_size
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            }
+            artifact_size_bytes["lineage-init-len128.pk"] += 1
+
+            entries, blockers = release_bundle._artifact_inventory_entries(
+                artifact_root,
+                bundle_root,
+                artifact_names=readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS,
+                artifact_sha256=artifact_sha256,
+                artifact_size_bytes=artifact_size_bytes,
+                label_prefix="Reserved-lineage proof evidence",
+                code_prefix="kagemusha_release_lineage_artifact",
+            )
+
+        self.assertNotIn("lineage-init-len128.pk", entries)
+        self.assertIn(
+            "kagemusha_release_lineage_artifact_size_drift",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "kagemusha_release_lineage_artifact_inventory",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_artifact_inventory_rejects_outside_bundle_root(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            bundle_root = root / "bundle"
+            artifact_root = root / "outside-artifacts"
+            bundle_root.mkdir()
+            create_lineage_artifact_files(artifact_root)
+            artifact_sha256 = {
+                artifact: hashlib.sha256((artifact_root / artifact).read_bytes()).hexdigest()
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            }
+            artifact_size_bytes = {
+                artifact: (artifact_root / artifact).stat().st_size
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            }
+
+            entries, blockers = release_bundle._artifact_inventory_entries(
+                artifact_root,
+                bundle_root,
+                artifact_names=readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS,
+                artifact_sha256=artifact_sha256,
+                artifact_size_bytes=artifact_size_bytes,
+                label_prefix="Reserved-lineage proof evidence",
+                code_prefix="kagemusha_release_lineage_artifact",
+            )
+
+        self.assertEqual(entries, {})
+        self.assertIn(
+            "kagemusha_release_bundle_path_outside_root",
+            {item["code"] for item in blockers},
+        )
+
+    def test_kagemusha_release_bundle_rejects_blocked_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["ready"] = False
+            summary["status"] = "blocked"
+            summary["blockers"] = [
+                {"code": "fixture_blocker", "message": "fixture blocked"}
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_not_ready", stderr.getvalue())
+        self.assertIn(
+            "kagemusha_release_summary_blockers_present",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_output_overwriting_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            original_summary = summary_path.read_text(encoding="utf-8")
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(
+                    release_bundle_args(fixture, out=summary_path)
+                )
+            rendered = stderr.getvalue()
+            final_summary = summary_path.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 1)
+        self.assertEqual(final_summary, original_summary)
+        self.assertIn("kagemusha_release_bundle_out_invalid", rendered)
+        self.assertIn("--out must not overwrite bundled evidence input", rendered)
+
+    def test_write_release_bundle_preserves_existing_output_on_replace_failure(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            out.parent.mkdir(parents=True)
+            out.write_text("stale manifest\n", encoding="utf-8")
+
+            with mock.patch.object(
+                release_bundle.os,
+                "replace",
+                side_effect=OSError("replace failed"),
+            ):
+                errors = release_bundle.write_release_bundle(
+                    out,
+                    {
+                        "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                        "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "ready": True,
+                        "evidence": {},
+                        "blockers": [],
+                    },
+                    bundle_root,
+                )
+
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+            final_text = out.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [error["code"] for error in errors],
+            ["kagemusha_release_bundle_out_invalid"],
+        )
+        self.assertEqual(final_text, "stale manifest\n")
+        self.assertEqual(temp_outputs, [])
+
+    def test_write_release_bundle_rejects_readback_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            bundle = {
+                "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                "ready": True,
+                "evidence": {},
+                "blockers": [],
+            }
+            original_read_text = Path.read_text
+
+            def corrupt_read_text(
+                path: Path,
+                *args: object,
+                **kwargs: object,
+            ) -> str:
+                if path == out:
+                    return "corrupted manifest\n"
+                return original_read_text(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "read_text", corrupt_read_text):
+                errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
+
+            written = out.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            [error["code"] for error in errors],
+            ["kagemusha_release_bundle_out_invalid"],
+        )
+        self.assertIn("readback did not match", errors[0]["message"])
+        self.assertEqual(written, json.dumps(bundle, indent=2, sort_keys=True) + "\n")
+
+    def test_kagemusha_release_bundle_rejects_summary_digest_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["compact_key_evidence"]["artifact_sha256"][
+                "recursive-compact-len4.pk"
+            ] = "0" * 64
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_drift", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_compact_generator_log_inventory_digest_drift(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            original_entry_with_size = release_bundle._evidence_entry_with_size
+
+            def forged_entry_with_size(path: Path, *args: object, **kwargs: object):
+                entry, blockers = original_entry_with_size(path, *args, **kwargs)
+                if (
+                    path.name == readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+                    and entry is not None
+                ):
+                    entry = {**entry, "sha256": "0" * 64}
+                return entry, blockers
+
+            stderr = io.StringIO()
+            with mock.patch.object(
+                release_bundle,
+                "_evidence_entry_with_size",
+                forged_entry_with_size,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_compact_generator_log_digest_drift",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_lineage_size_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["lineage_proof_evidence"]["artifact_size_bytes"][
+                "lineage-init-len128.pk"
+            ] += 1
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_drift", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_android_summary_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            device_lab_root = fixture["device_lab_root"]
+            signer = fixture["signer"]
+            assert isinstance(device_lab_root, Path)
+            assert isinstance(signer, dict)
+            resign_slot_evidence_with_timestamp(
+                device_lab_root / "slot-0",
+                signer,
+                "2026-06-06T00:00:01Z",
+            )
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_drift", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_abi6_summary_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["abi6_reserved_lineage"]["operation_count"] = 999
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_drift", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_abi7_summary_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["abi7_recursive_compact"]["circuit_id"] = "forged-circuit"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_drift", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_lineage_tooling_summary_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["lineage_key_release_tooling"]["checked_files"] = []
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_drift", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_wrong_repo_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            fake_repo = Path(temp) / "fake-repo"
+            fake_repo.mkdir()
+            args = release_bundle_args(fixture)
+            args[args.index("--repo-root") + 1] = str(fake_repo)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn("abi6", stderr.getvalue())
+        self.assertIn("abi7", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_unexpected_summary_field(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["production_ready_claim"] = "skip remaining release evidence"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_unexpected_field",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_unexpected_summary_section_field(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["lineage_proof_evidence"]["production_ready_claim"] = (
+                "operator-approved without release packet evidence"
+            )
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_unexpected_section_field",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_ready_summary_section_blockers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["abi7_recursive_compact"]["blockers"] = [
+                {"code": "hidden_blocker", "message": "must not be hidden"}
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_section_blockers_present",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_secret_summary_material_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            summary["lineage_proof_evidence"]["local_debug_path"] = (
+                "token=supersecret"
+            )
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_secret_material",
+            rendered,
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_release_bundle_rejects_duplicate_summary_json_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary_text = summary_path.read_text(encoding="utf-8")
+            summary_path.write_text(
+                summary_text.replace(
+                    '"schema": "iroha.kagemusha.production_readiness.v1"',
+                    (
+                        '"schema": "iroha.kagemusha.production_readiness.v1", '
+                        '"schema": "shadow"'
+                    ),
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_invalid_json", stderr.getvalue())
+        self.assertIn("duplicate JSON object key schema", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_evidence_outside_bundle_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            outside = Path(temp) / "outside-summary.json"
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            outside.write_text(summary_path.read_text(encoding="utf-8"), encoding="utf-8")
+            args = release_bundle_args(fixture)
+            args[args.index("--readiness-summary") + 1] = str(outside)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_path_outside_root",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_outside_summary_before_json_load(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            outside = Path(temp) / "outside-summary.json"
+            outside.write_text(
+                json.dumps({"leak": "token=supersecret"}) + "\n",
+                encoding="utf-8",
+            )
+            args = release_bundle_args(fixture)
+            args[args.index("--readiness-summary") + 1] = str(outside)
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.object(
+                    release_bundle,
+                    "_load_local_json",
+                    side_effect=AssertionError("outside summary must not be loaded"),
+                ) as load_json,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_lineage_proof_evidence",
+                    side_effect=AssertionError("lineage evidence must not be scanned"),
+                ) as lineage_scan,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_compact_key_evidence",
+                    side_effect=AssertionError("compact evidence must not be scanned"),
+                ) as compact_scan,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_android_device_lab",
+                    side_effect=AssertionError("device lab must not be scanned"),
+                ) as android_scan,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        load_json.assert_not_called()
+        lineage_scan.assert_not_called()
+        compact_scan.assert_not_called()
+        android_scan.assert_not_called()
+        self.assertIn("kagemusha_release_bundle_path_outside_root", rendered)
+        self.assertNotIn("kagemusha_release_summary_secret_material", rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_release_bundle_rejects_outside_evidence_before_scanners(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            outside = Path(temp) / "outside"
+            outside.mkdir()
+            outside_lineage = outside / "lineage-proof-evidence.json"
+            outside_compact = outside / "recursive-compact-key-evidence.json"
+            outside_device_lab = outside / "device_lab"
+            outside_lineage.write_text('{"leak": "token=supersecret"}\n', encoding="utf-8")
+            outside_compact.write_text('{"leak": "token=supersecret"}\n', encoding="utf-8")
+            outside_device_lab.mkdir()
+            args = release_bundle_args(fixture)
+            args[args.index("--lineage-proof-evidence") + 1] = str(outside_lineage)
+            args[args.index("--compact-key-evidence") + 1] = str(outside_compact)
+            args[args.index("--device-lab-root") + 1] = str(outside_device_lab)
+            stderr = io.StringIO()
+
+            with (
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_lineage_proof_evidence",
+                    side_effect=AssertionError("outside lineage evidence must not be scanned"),
+                ) as lineage_scan,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_compact_key_evidence",
+                    side_effect=AssertionError("outside compact evidence must not be scanned"),
+                ) as compact_scan,
+                mock.patch.object(
+                    release_bundle.readiness,
+                    "check_android_device_lab",
+                    side_effect=AssertionError("outside device lab must not be scanned"),
+                ) as android_scan,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        lineage_scan.assert_not_called()
+        compact_scan.assert_not_called()
+        android_scan.assert_not_called()
+        self.assertIn("kagemusha_release_bundle_path_outside_root", rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_release_bundle_rejects_android_evidence_outside_bundle_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            device_lab_root = fixture["device_lab_root"]
+            assert isinstance(device_lab_root, Path)
+            outside_lab_root = Path(temp) / "outside-device-lab"
+            shutil.copytree(device_lab_root, outside_lab_root)
+            args = release_bundle_args(fixture)
+            args[args.index("--device-lab-root") + 1] = str(outside_lab_root)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_path_outside_root",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_forged_android_slot_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            assert isinstance(summary, dict)
+            android = json.loads(json.dumps(summary["android_device_lab"]))
+            android["slots"][0]["slot"] = "../outside"
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                release_bundle.readiness,
+                "check_android_device_lab",
+                return_value=android,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_android_signed_evidence_slot",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_secret_android_slot_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            assert isinstance(summary, dict)
+            android = json.loads(json.dumps(summary["android_device_lab"]))
+            android["slots"][0]["slot"] = "token=supersecret"
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                release_bundle.readiness,
+                "check_android_device_lab",
+                return_value=android,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(release_bundle_args(fixture))
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_android_signed_evidence_slot",
+            rendered,
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_release_bundle_rejects_output_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            target = bundle_root / "dist" / "outside.json"
+            write_json(target, {"stale": True})
+            write_json(out, {"stale": True})
+            slot_helpers.replace_with_symlink(self, out, target)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_bundle_out_invalid", stderr.getvalue())
+        self.assertIn("--out must not be a symlink", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_output_hardlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            target = bundle_root / "dist" / "outside.json"
+            write_json(target, {"external": True})
+            write_json(out, {"stale": True})
+            slot_helpers.replace_with_hardlink(self, out, target)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 1)
+        self.assertEqual(json.loads(target_text), {"external": True})
+        self.assertIn("kagemusha_release_bundle_out_invalid", stderr.getvalue())
+        self.assertIn("--out must not be hardlinked", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_output_parent_symlink_after_create(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out_parent = bundle_root / "release-out"
+            out = out_parent / "kagemusha-production-release-bundle.json"
+            external_parent = Path(temp) / "external-release-out"
+            external_parent.mkdir()
+            original_mkdir = Path.mkdir
+
+            def replacing_mkdir(
+                path: Path,
+                mode: int = 0o777,
+                parents: bool = False,
+                exist_ok: bool = False,
+            ) -> None:
+                if path == out_parent:
+                    path.symlink_to(external_parent, target_is_directory=True)
+                    return
+                original_mkdir(path, mode=mode, parents=parents, exist_ok=exist_ok)
+
+            stderr = io.StringIO()
+            with mock.patch.object(Path, "mkdir", replacing_mkdir):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(release_bundle_args(fixture, out=out))
+
+        self.assertEqual(status, 1)
+        self.assertFalse((external_parent / out.name).exists())
+        self.assertIn("kagemusha_release_bundle_out_invalid", stderr.getvalue())
+        self.assertIn("--out parent directory must not be a symlink", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_bundle_root_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            linked_root = Path(temp) / "linked-bundle"
+            slot_helpers.create_dir_symlink(self, linked_root, bundle_root)
+            args = release_bundle_args(fixture)
+            args[args.index("--bundle-root") + 1] = str(linked_root)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_bundle_root_invalid", stderr.getvalue())
+        self.assertIn("--bundle-root must not be a symlink", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_secret_summary_path_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            args = release_bundle_args(fixture)
+            args[args.index("--readiness-summary") + 1] = "token=supersecret.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_summary_path_invalid", rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_release_bundle_rejects_secret_repo_root_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            args = release_bundle_args(fixture)
+            args[args.index("--repo-root") + 1] = "token=supersecret-repo"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_repo_root_path_invalid", rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_release_bundle_rejects_missing_trusted_signer(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            args = release_bundle_args(fixture)
+            signer_index = args.index("--trusted-signer-public-key")
+            del args[signer_index : signer_index + 2]
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(args)
+
+        self.assertEqual(status, 1)
+        self.assertIn("android_trusted_signer_missing", stderr.getvalue())
+
+    def test_kagemusha_release_bundle_rejects_secret_signer_path_before_load(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            args = release_bundle_args(fixture)
+            args[args.index("--trusted-signer-public-key") + 1] = (
+                str(Path(temp) / "token=supersecret-public.pem")
+            )
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                release_bundle.device_lab,
+                "load_trusted_signer_public_keys",
+                side_effect=AssertionError("trusted signer loader should not run"),
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(args)
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn("android_trusted_signer_path_invalid", rendered)
+        self.assertNotIn("token=supersecret", rendered)
 
     def test_missing_android_root_blocks_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -336,6 +1822,46 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             readiness.DEFAULT_MIN_SIGNED_AT_UTC,
         )
         self.assertIsNotNone(summary["android_device_lab"]["max_signed_at_utc"])
+
+    def test_missing_android_root_uses_lstat_before_exists_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_exists = path_type.exists
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
+                signer = slot_helpers.create_test_signer(Path(temp) / "keys")
+                missing_root = Path(temp) / "missing-slots"
+
+                def failing_exists(path: Path, *args, **kwargs):
+                    if path == missing_root:
+                        raise OSError("simulated device-lab root exists failure")
+                    return original_exists(path, *args, **kwargs)
+
+                path_type.exists = failing_exists
+
+                with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                    status = readiness.main(
+                        [
+                            "--repo-root",
+                            str(REPO_ROOT),
+                            "--device-lab-root",
+                            str(missing_root),
+                            "--trusted-signer-public-key",
+                            str(signer["public_key"]),
+                            "--summary-out",
+                            str(summary_path),
+                        ]
+                    )
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        finally:
+            path_type.exists = original_exists
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "android_device_lab_root_missing",
+            {item["code"] for item in summary["blockers"]},
+        )
 
     def test_symlinked_android_root_blocks_rollup_without_path_leak(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -431,6 +1957,50 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             "device-lab root ancestor directory must not be a symlink",
             {item["message"] for item in summary["blockers"]},
         )
+
+    def test_android_root_discovery_failure_blocks_rollup_without_traceback(self) -> None:
+        original_iterdir = Path.iterdir
+
+        def failing_iterdir(path: Path):
+            if path == device_lab_root:
+                raise OSError("simulated root discovery failure")
+            return original_iterdir(path)
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                temp_path = Path(temp)
+                device_lab_root = temp_path / "device_lab"
+                device_lab_root.mkdir()
+                signer = slot_helpers.create_test_signer(temp_path / "keys")
+                lineage_evidence = create_lineage_proof_evidence(temp_path / "lineage")
+                trusted, errors = slot_helpers.device_lab.load_trusted_signer_public_keys(
+                    [signer["public_key"]]
+                )
+                self.assertEqual(errors, [])
+
+                Path.iterdir = failing_iterdir
+                summary = readiness.build_summary(
+                    repo_root=REPO_ROOT,
+                    device_lab_root=device_lab_root,
+                    lineage_proof_evidence_path=lineage_evidence,
+                    trusted_signer_public_keys=trusted,
+                )
+                rendered = json.dumps(summary)
+        finally:
+            Path.iterdir = original_iterdir
+
+        self.assertFalse(summary["ready"])
+        self.assertEqual(summary["android_device_lab"]["slots"], [])
+        self.assertIn(
+            "android_device_lab_root_unreadable",
+            {item["code"] for item in summary["blockers"]},
+        )
+        self.assertIn(
+            "device-lab root could not be listed",
+            {item["message"] for item in summary["blockers"]},
+        )
+        self.assertNotIn(str(device_lab_root), rendered)
+        self.assertNotIn("Traceback", rendered)
 
     def test_missing_standard_family_blocks_rollup(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -760,17 +2330,22 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             root.mkdir(parents=True)
             original_slot_reports = readiness._slot_reports
 
-            def fake_slot_reports(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
-                return [
-                    {
-                        "slot": "token=supersecret-slot",
-                        "status": "error",
-                        "errors": ["artifact path token=supersecret-artifact"],
-                        "present": {},
-                        "file_counts": {},
-                        "kagemusha": {"required": True},
-                    }
-                ]
+            def fake_slot_reports(
+                *_args: object, **_kwargs: object
+            ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+                return (
+                    [
+                        {
+                            "slot": "token=supersecret-slot",
+                            "status": "error",
+                            "errors": ["artifact path token=supersecret-artifact"],
+                            "present": {},
+                            "file_counts": {},
+                            "kagemusha": {"required": True},
+                        }
+                    ],
+                    [],
+                )
 
             readiness._slot_reports = fake_slot_reports
             try:
@@ -975,6 +2550,27 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn(str(external_manifest), rendered)
 
+    def test_abi6_manifest_rejects_non_utf8_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            manifest_path = repo / readiness.ABI6_MANIFEST_PATH
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            manifest_path.write_bytes(b"\xff\xfe\xfd")
+
+            result = readiness.check_abi6_reserved_lineage(repo)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi6_manifest_unreadable",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-6 manifest could not be read",
+            {item["message"] for item in result["blockers"]},
+        )
+        self.assertNotIn(str(manifest_path), rendered)
+
     def test_release_local_json_validator_rejects_secret_path_directly_without_parse(
         self,
     ) -> None:
@@ -1001,6 +2597,68 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(str(manifest_path), rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_release_local_json_validator_rejects_hardlink_metadata_failure_before_parse(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                manifest_path = Path(temp) / "repo" / readiness.ABI6_MANIFEST_PATH
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_path.write_text("{not-json", encoding="utf-8")
+
+                def failing_stat(path: Path, *args, **kwargs):
+                    if path == manifest_path:
+                        raise OSError("simulated release JSON hardlink metadata failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_stat
+
+                errors = readiness.validate_release_local_json_file(
+                    manifest_path,
+                    "ABI-6 manifest",
+                )
+                rendered = json.dumps(errors)
+        finally:
+            path_type.stat = original_stat
+
+        self.assertEqual(errors, ["ABI-6 manifest hardlink metadata could not be read"])
+        self.assertNotIn("not valid JSON", rendered)
+        self.assertNotIn(str(manifest_path), rendered)
+
+    def test_release_local_json_validator_rejects_file_metadata_failure_before_parse(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                manifest_path = Path(temp) / "repo" / readiness.ABI6_MANIFEST_PATH
+                manifest_path.parent.mkdir(parents=True, exist_ok=True)
+                manifest_path.write_text("{not-json", encoding="utf-8")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == manifest_path:
+                        raise OSError("simulated release JSON file metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = readiness.validate_release_local_json_file(
+                    manifest_path,
+                    "ABI-6 manifest",
+                )
+                rendered = json.dumps(errors)
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["ABI-6 manifest file metadata could not be read"])
+        self.assertNotIn("not valid JSON", rendered)
+        self.assertNotIn(str(manifest_path), rendered)
+
     def test_repo_source_marker_validator_rejects_secret_path_directly_without_metadata(
         self,
     ) -> None:
@@ -1023,6 +2681,150 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn("is missing", rendered)
         self.assertNotIn(str(marker_path), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_repo_source_marker_text_rejects_symlink_directly_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            marker_path = root / "repo" / "crates/iroha_core/src/zk.rs"
+            marker_path.parent.mkdir(parents=True)
+            marker_path.write_text("placeholder\n", encoding="utf-8")
+            external_marker = root / "external-core-marker.rs"
+            external_marker.write_text(
+                "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE\n",
+                encoding="utf-8",
+            )
+            slot_helpers.replace_with_symlink(self, marker_path, external_marker)
+
+            text, errors = readiness._repo_source_marker_text(
+                marker_path,
+                "ABI-7 core marker file",
+                "ABI-7 source marker file could not be read",
+            )
+
+        self.assertIsNone(text)
+        self.assertEqual(errors, ["ABI-7 core marker file must not be a symlink"])
+
+    def test_repo_source_marker_text_rejects_hardlink_directly_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            marker_path = root / "repo" / "crates/iroha_cli/src/zk.rs"
+            marker_path.parent.mkdir(parents=True)
+            marker_path.write_text("placeholder\n", encoding="utf-8")
+            external_marker = root / "external-lineage-cli.rs"
+            external_marker.write_text(
+                "KagemushaCommand::LineageKeyArtifacts\n",
+                encoding="utf-8",
+            )
+            slot_helpers.replace_with_hardlink(self, marker_path, external_marker)
+
+            text, errors = readiness._repo_source_marker_text(
+                marker_path,
+                "Reserved-lineage release-tooling marker file",
+                "Reserved-lineage release-tooling file could not be read",
+            )
+
+        self.assertIsNone(text)
+        self.assertEqual(
+            errors,
+            ["Reserved-lineage release-tooling marker file must not be hardlinked"],
+        )
+
+    def test_repo_source_marker_text_rejects_hardlink_metadata_failure_before_read(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                marker_path = Path(temp) / "repo" / "crates/iroha_cli/src/zk.rs"
+                marker_path.parent.mkdir(parents=True)
+                marker_path.write_text(
+                    "KagemushaCommand::LineageKeyArtifacts\n",
+                    encoding="utf-8",
+                )
+
+                def failing_stat(path: Path, *args, **kwargs):
+                    if path == marker_path:
+                        raise OSError("simulated source marker hardlink metadata failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_stat
+
+                text, errors = readiness._repo_source_marker_text(
+                    marker_path,
+                    "Reserved-lineage release-tooling marker file",
+                    "Reserved-lineage release-tooling file could not be read",
+                )
+                rendered = json.dumps(errors)
+        finally:
+            path_type.stat = original_stat
+
+        self.assertIsNone(text)
+        self.assertEqual(
+            errors,
+            [
+                "Reserved-lineage release-tooling marker file "
+                "hardlink metadata could not be read"
+            ],
+        )
+        self.assertNotIn(str(marker_path), rendered)
+
+    def test_repo_source_marker_text_rejects_file_metadata_failure_before_read(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                marker_path = Path(temp) / "repo" / "crates/iroha_cli/src/zk.rs"
+                marker_path.parent.mkdir(parents=True)
+                marker_path.write_text(
+                    "KagemushaCommand::LineageKeyArtifacts\n",
+                    encoding="utf-8",
+                )
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == marker_path:
+                        raise OSError("simulated source marker file metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                text, errors = readiness._repo_source_marker_text(
+                    marker_path,
+                    "Reserved-lineage release-tooling marker file",
+                    "Reserved-lineage release-tooling file could not be read",
+                )
+                rendered = json.dumps(errors)
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertIsNone(text)
+        self.assertEqual(
+            errors,
+            [
+                "Reserved-lineage release-tooling marker file "
+                "file metadata could not be read"
+            ],
+        )
+        self.assertNotIn(str(marker_path), rendered)
+
+    def test_repo_source_marker_text_rejects_non_utf8_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            marker_path = Path(temp) / "repo" / "crates/iroha_core/src/zk.rs"
+            marker_path.parent.mkdir(parents=True)
+            marker_path.write_bytes(b"\xff\xfe KAGEMUSHA marker")
+
+            text, errors = readiness._repo_source_marker_text(
+                marker_path,
+                "ABI-7 core marker file",
+                "ABI-7 source marker file could not be read",
+            )
+
+        self.assertIsNone(text)
+        self.assertEqual(errors, ["ABI-7 source marker file could not be read"])
 
     def test_abi7_fail_closed_rejects_symlinked_source_marker_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1071,6 +2873,176 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["message"] for item in result["blockers"]},
         )
         self.assertNotIn(str(external_marker), rendered)
+
+    def test_abi7_fail_closed_rejects_non_utf8_source_marker_without_traceback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fail_closed_marker_files(repo)
+            marker_path = repo / "crates/iroha_core/src/zk.rs"
+            marker_path.write_bytes(b"\xff\xfe invalid source marker")
+
+            result = readiness.check_abi7_fail_closed(repo)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_source_marker_file_unreadable",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 source marker file could not be read",
+            {item["message"] for item in result["blockers"]},
+        )
+        self.assertNotIn("UnicodeDecodeError", rendered)
+
+    def test_rust_function_body_ignores_braces_inside_strings_and_comments(self) -> None:
+        source = "\n".join(
+            (
+                "fn target() -> bool {",
+                '    let _quoted = "{ not a body brace }";',
+                '    let _raw = r#"{ not a body brace }"#;',
+                '    let _raw_bytes = br##"}"##;',
+                "    let _lifetime: &'static str = \"ready\";",
+                "    // }",
+                "    /* { */",
+                "    false",
+                "}",
+                "fn other() -> bool { true }",
+            )
+        )
+
+        body = readiness._rust_function_body(source, "fn target(")
+
+        self.assertIsNotNone(body)
+        assert body is not None
+        self.assertIn("false", body)
+        self.assertNotIn("fn other", body)
+
+    def test_abi7_fail_closed_accepts_strict_function_contracts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fail_closed_marker_files(repo)
+
+            result = readiness.check_abi7_fail_closed(repo)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual("one_hop_wired_multi_hop_reserved", result["state"])
+        self.assertEqual([], result["blockers"])
+
+    def test_abi7_fail_closed_rejects_preverify_contract_without_unavailable_error(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fail_closed_marker_files(repo)
+            core_path = repo / "crates/iroha_core/src/zk.rs"
+            core_text = core_path.read_text(encoding="utf-8")
+            core_path.write_text(
+                core_text.replace(
+                    "\n".join(
+                        (
+                            "pub fn preverify_kagemusha_recursive_compact_payment_token(",
+                            ") -> Result<(), String> {",
+                            "    preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id();",
+                            "    KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
+                            "}",
+                        )
+                    ),
+                    "\n".join(
+                        (
+                            "pub fn preverify_kagemusha_recursive_compact_payment_token(",
+                            ") -> Result<(), String> {",
+                            "    preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id();",
+                            "    KAGEMUSHA_RECURSIVE_AGGREGATION_CIRCUIT_ID_V1",
+                            "}",
+                        )
+                    ),
+                ),
+                encoding="utf-8",
+            )
+
+            result = readiness.check_abi7_fail_closed(repo)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fail_closed_contract_missing",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "pub fn preverify_kagemusha_recursive_compact_payment_token(",
+            {item.get("function") for item in result["blockers"]},
+        )
+
+    def test_abi7_fail_closed_rejects_verify_contract_without_backend_call(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fail_closed_marker_files(repo)
+            core_path = repo / "crates/iroha_core/src/zk.rs"
+            core_text = core_path.read_text(encoding="utf-8")
+            core_path.write_text(
+                core_text.replace(
+                    "\n".join(
+                        (
+                            "pub fn verify_kagemusha_recursive_compact_payment_token(",
+                            ") -> bool {",
+                            "    preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id();",
+                            "    verify_backend();",
+                            "}",
+                        )
+                    ),
+                    "\n".join(
+                        (
+                            "pub fn verify_kagemusha_recursive_compact_payment_token(",
+                            ") -> bool {",
+                            "    preverify_kagemusha_recursive_compact_payment_token_with_expected_circuit_id();",
+                            "    soft_invalid_without_backend();",
+                            "}",
+                        )
+                    ),
+                ),
+                encoding="utf-8",
+            )
+
+            result = readiness.check_abi7_fail_closed(repo)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_fail_closed_contract_missing",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "pub fn verify_kagemusha_recursive_compact_payment_token(",
+            {item.get("function") for item in result["blockers"]},
+        )
+
+    def test_abi7_fail_closed_rejects_bridge_contract_without_unavailable_mapping(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fail_closed_marker_files(repo)
+            bridge_path = repo / "crates/connect_norito_bridge/src/lib.rs"
+            bridge_path.write_text(
+                bridge_path.read_text(encoding="utf-8").replace(
+                    "BridgeError::KagemushaRecursiveCompactUnavailable",
+                    "BridgeError::KagemushaProve",
+                ),
+                encoding="utf-8",
+            )
+
+            result = readiness.check_abi7_fail_closed(repo)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi7_bridge_unavailable_contract_missing",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "native bridge must map ABI-7 recursive compact unavailable separately",
+            {item["message"] for item in result["blockers"]},
+        )
 
     def test_lineage_key_release_tooling_drift_blocks_rollup_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1143,6 +3115,1039 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["message"] for item in result["blockers"]},
         )
         self.assertNotIn(str(external_marker), rendered)
+
+    def test_lineage_key_release_tooling_rejects_non_utf8_marker_without_traceback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_lineage_key_release_tooling_marker_files(repo)
+            marker_path = repo / "crates/iroha_cli/src/zk.rs"
+            marker_path.write_bytes(b"\xff\xfe invalid release tooling marker")
+
+            result = readiness.check_lineage_key_release_tooling(repo)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "lineage_key_release_file_unreadable",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "Reserved-lineage release-tooling file could not be read",
+            {item["message"] for item in result["blockers"]},
+        )
+        self.assertNotIn("UnicodeDecodeError", rendered)
+
+    def test_missing_compact_key_evidence_blocks_rollup_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            result = readiness.check_compact_key_evidence(
+                Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_missing",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_compact_key_evidence_rejects_noncanonical_filename(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            noncanonical_path = evidence_path.with_name("recursive-compact-key-copy.json")
+            evidence_path.rename(noncanonical_path)
+
+            result = readiness.check_compact_key_evidence(noncanonical_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_filename",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn(str(noncanonical_path.parent), json.dumps(result))
+
+    def test_compact_key_evidence_rejects_symlinked_evidence_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            evidence_path = create_compact_key_evidence(root / "real-compact")
+            evidence_link = root / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            try:
+                evidence_link.symlink_to(evidence_path)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+
+            result = readiness.check_compact_key_evidence(evidence_link)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 recursive compact key evidence file must not be a symlink",
+            {item["message"] for item in result["blockers"]},
+        )
+        self.assertNotIn(str(evidence_path.parent), rendered)
+
+    def test_compact_key_evidence_rejects_duplicate_json_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence_path.write_text(
+                '{"schema":"x","schema":"y"}\n',
+                encoding="utf-8",
+            )
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_invalid_json",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_compact_key_evidence_rejects_secret_duplicate_json_key(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence_path.write_text(
+                '{"token=supersecret":"x","token=supersecret":"y"}\n',
+                encoding="utf-8",
+            )
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        self.assertIn("compact_key_evidence_invalid_json", rendered)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_stale_compact_key_evidence_blocks_rollup_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["generated_at_utc"] = "2026-06-05T23:59:59Z"
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(
+                evidence_path,
+                min_generated_at=readiness.parse_utc_timestamp(
+                    readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                    "test cutoff",
+                )[0],
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_stale",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_compact_key_evidence_rejects_noncanonical_timestamp(self) -> None:
+        for generated_at in ("2026-06-06 00:00:00Z", "2026-06-06T00:00:00+00:00"):
+            with tempfile.TemporaryDirectory() as temp:
+                evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+                evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                evidence["generated_at_utc"] = generated_at
+                write_json(evidence_path, evidence)
+
+                result = readiness.check_compact_key_evidence(evidence_path)
+
+            self.assertFalse(result["ok"])
+            self.assertIn(
+                "compact_key_evidence_timestamp_noncanonical",
+                {item["code"] for item in result["blockers"]},
+            )
+
+    def test_future_compact_key_evidence_blocks_rollup_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["generated_at_utc"] = "2026-06-06T00:05:01Z"
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(
+                evidence_path,
+                max_generated_at=readiness.parse_utc_timestamp(
+                    "2026-06-06T00:05:00Z",
+                    "test max timestamp",
+                )[0],
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_future_dated",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_compact_key_evidence_drift_blocks_rollup_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["opening_len"] = 8
+            evidence["ipa_k"] = 9
+            evidence["record_version"] = 2
+            evidence["verifier_backend"] = "mock"
+            evidence["circuit_id"] = "kagemusha-recursive-compact-v2"
+            evidence["record_namespace"] = "test"
+            evidence["command"] = "python3 fake_runner.py recursive-compact-key-artifacts"
+            evidence["artifacts"]["recursive-compact-len4.pk"] = "0" * 64
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        codes = {item["code"] for item in result["blockers"]}
+        self.assertIn("compact_key_evidence_opening_len", codes)
+        self.assertIn("compact_key_evidence_ipa_k", codes)
+        self.assertIn("compact_key_evidence_record_version", codes)
+        self.assertIn("compact_key_evidence_verifier_backend", codes)
+        self.assertIn("compact_key_evidence_circuit_id", codes)
+        self.assertIn("compact_key_evidence_record_namespace", codes)
+        self.assertIn("compact_key_evidence_command", codes)
+        self.assertIn("compact_key_evidence_artifact_digest", codes)
+
+    def test_compact_key_evidence_rejects_float_scalar_claims(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["opening_len"] = 4.0
+            evidence["ipa_k"] = 8.0
+            evidence["record_version"] = 1.0
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        codes = {item["code"] for item in result["blockers"]}
+        self.assertIn("compact_key_evidence_opening_len", codes)
+        self.assertIn("compact_key_evidence_ipa_k", codes)
+        self.assertIn("compact_key_evidence_record_version", codes)
+
+    def test_compact_key_evidence_rejects_missing_artifact_size_map(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence.pop("artifact_size_bytes")
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        codes = {item["code"] for item in result["blockers"]}
+        self.assertIn("compact_key_evidence_artifact_sizes", codes)
+        self.assertIn("compact_key_evidence_artifact_size", codes)
+
+    def test_compact_key_evidence_rejects_artifact_size_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_size_bytes"]["recursive-compact-len4.pk"] += 1
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        blockers = result["blockers"]
+        self.assertIn(
+            "compact_key_evidence_artifact_size",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "recursive-compact-len4.pk",
+            {item.get("artifact") for item in blockers},
+        )
+        self.assertNotIn(
+            "recursive-compact-len4.pk",
+            result["artifact_size_bytes"],
+        )
+
+    def test_compact_key_evidence_rejects_missing_generator_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            (evidence_path.parent / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME).unlink()
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_generator_log_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIsNone(result["generator_log_sha256"])
+
+    def test_compact_key_evidence_rejects_generator_log_digest_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            log_path = evidence_path.parent / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+            log_path.write_text(
+                log_path.read_text(encoding="utf-8").replace("pk=70", "pk=71"),
+                encoding="utf-8",
+            )
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        codes = {item["code"] for item in result["blockers"]}
+        self.assertIn("compact_key_evidence_generator_log_digest", codes)
+        self.assertIn("compact_key_evidence_generator_log_artifact_size", codes)
+
+    def test_compact_key_evidence_rejects_generator_log_extra_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            log_path = evidence_path.parent / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+            log_path.write_text(
+                log_path.read_text(encoding="utf-8") + "test recursive compact key ok\n",
+                encoding="utf-8",
+            )
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["generator_log_sha256"] = hashlib.sha256(
+                log_path.read_bytes()
+            ).hexdigest()
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_generator_log_format",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_compact_key_evidence_rejects_noncanonical_generator_log_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["generator_log_path"] = "copy.log"
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_generator_log_path",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_compact_key_evidence_rejects_secret_size_field_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_size_bytes"]["token=supersecret"] = 123
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+            rendered = json.dumps(result["blockers"])
+
+        self.assertFalse(result["ok"])
+        self.assertIn("compact_key_evidence_artifact_sizes_unexpected_field", rendered)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_compact_key_evidence_rejects_appended_shell_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["command"] += " ; echo ok"
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "--command must exactly match the production ABI-7 recursive compact keygen command",
+            {item.get("issue") for item in result["blockers"]},
+        )
+
+    def test_compact_key_evidence_rejects_shell_equivalent_noncanonical_command(self) -> None:
+        canonical = readiness.expected_compact_key_command()
+        for command in (
+            canonical.replace("iroha app", "'iroha' app", 1),
+            canonical.replace(" --vk-out ", "\n--vk-out ", 1),
+            f" {canonical} ",
+        ):
+            with tempfile.TemporaryDirectory() as temp:
+                evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+                evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                evidence["command"] = command
+                write_json(evidence_path, evidence)
+
+                result = readiness.check_compact_key_evidence(evidence_path)
+
+            self.assertFalse(result["ok"])
+            self.assertIn(
+                "--command must exactly match the canonical ABI-7 recursive compact keygen command string",
+                {item.get("issue") for item in result["blockers"]},
+            )
+
+    def test_compact_key_evidence_rejects_secret_looking_command_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["command"] += " token=supersecret"
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+            rendered = json.dumps(result["blockers"])
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "--command must not contain secret-looking material",
+            {item.get("issue") for item in result["blockers"]},
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_compact_key_evidence_rejects_unexpected_secret_field_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["token=supersecret"] = "do not print"
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+            rendered = json.dumps(result["blockers"])
+
+        self.assertFalse(result["ok"])
+        self.assertIn("compact_key_evidence_unexpected_field", rendered)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_compact_key_evidence_rejects_missing_local_artifact_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            (evidence_path.parent / "recursive-compact-len4.pk").unlink()
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        blockers = result["blockers"]
+        self.assertIn(
+            "compact_key_evidence_artifact_missing",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "recursive-compact-len4.pk",
+            {item.get("artifact") for item in blockers},
+        )
+
+    def test_compact_key_evidence_rejects_symlinked_local_artifact_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            evidence_path = create_compact_key_evidence(root / "compact")
+            artifact = evidence_path.parent / "recursive-compact-len4.vk"
+            external = root / "external-recursive-compact-len4.vk"
+            external.write_bytes(artifact.read_bytes())
+            slot_helpers.replace_with_symlink(self, artifact, external)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        blockers = result["blockers"]
+        self.assertIn(
+            "compact_key_evidence_artifact_file_shape",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "ABI-7 recursive compact key evidence artifact file must not be a symlink",
+            {item["message"] for item in blockers},
+        )
+        self.assertNotIn(str(evidence_path.parent), json.dumps(blockers))
+
+    def test_compact_key_evidence_rejects_hardlinked_local_artifact_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            evidence_path = create_compact_key_evidence(root / "compact")
+            artifact = evidence_path.parent / "recursive-compact-len4.vk"
+            external = root / "external-recursive-compact-len4.vk"
+            external.write_bytes(artifact.read_bytes())
+            slot_helpers.replace_with_hardlink(self, artifact, external)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        blockers = result["blockers"]
+        self.assertIn(
+            "compact_key_evidence_artifact_file_shape",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "ABI-7 recursive compact key evidence artifact file must not be hardlinked",
+            {item["message"] for item in blockers},
+        )
+        self.assertNotIn(str(evidence_path.parent), json.dumps(blockers))
+
+    def test_compact_key_evidence_rejects_local_artifact_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            (evidence_path.parent / "recursive-compact-len4.pk").write_bytes(
+                b"tampered compact proving key\n"
+            )
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        blockers = result["blockers"]
+        self.assertIn(
+            "compact_key_evidence_artifact_file_digest",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "recursive-compact-len4.pk",
+            {item.get("artifact") for item in blockers},
+        )
+        self.assertNotIn(
+            "recursive-compact-len4.pk",
+            result["artifact_sha256"],
+        )
+        self.assertNotIn(str(evidence_path.parent), json.dumps(result))
+
+    def test_compact_key_evidence_rejects_empty_local_artifact_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            artifact = evidence_path.parent / "recursive-compact-len4.record.norito"
+            artifact.write_bytes(b"")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifacts"][artifact.name] = hashlib.sha256(b"").hexdigest()
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_artifact_empty",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_compact_key_evidence_rejects_placeholder_local_artifact_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            artifact = evidence_path.parent / "recursive-compact-len4.pk"
+            placeholder = b"recursive compact key artifact recursive-compact-len4.pk\n"
+            artifact.write_bytes(placeholder)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifacts"][artifact.name] = hashlib.sha256(placeholder).hexdigest()
+            evidence["artifact_size_bytes"][artifact.name] = len(placeholder)
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_artifact_placeholder",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertNotIn(artifact.name, result["artifact_sha256"])
+        self.assertNotIn(artifact.name, result["artifact_size_bytes"])
+
+    def test_compact_key_evidence_helper_generates_validator_accepted_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            out = artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = compact_key_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            evidence = json.loads(out.read_text(encoding="utf-8"))
+            result = readiness.check_compact_key_evidence(out)
+            expected_sizes = {
+                artifact: (artifact_dir / artifact).stat().st_size
+                for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS
+            }
+
+        self.assertEqual(status, 0)
+        self.assertEqual(evidence["artifact_size_bytes"], expected_sizes)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["state"], "compact_key_artifacts_validated")
+
+    def test_compact_key_evidence_helper_rejects_missing_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            (artifact_dir / "recursive-compact-len4.pk").unlink()
+
+            evidence, errors = compact_key_helper.build_evidence(
+                artifact_dir=artifact_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+
+        self.assertIsNone(evidence)
+        self.assertIn("missing recursive compact key artifact recursive-compact-len4.pk", errors)
+
+    def test_compact_key_evidence_helper_rejects_empty_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            (artifact_dir / "recursive-compact-len4.pk").write_bytes(b"")
+
+            evidence, errors = compact_key_helper.build_evidence(
+                artifact_dir=artifact_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+
+        self.assertIsNone(evidence)
+        self.assertIn("recursive compact key artifact recursive-compact-len4.pk must be non-empty", errors)
+
+    def test_compact_key_evidence_helper_rejects_placeholder_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            (artifact_dir / "recursive-compact-len4.pk").write_bytes(
+                b"recursive compact key artifact recursive-compact-len4.pk\n"
+            )
+
+            evidence, errors = compact_key_helper.build_evidence(
+                artifact_dir=artifact_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+
+        self.assertIsNone(evidence)
+        self.assertIn(
+            (
+                "recursive compact key artifact recursive-compact-len4.pk must be "
+                "generated key material, not a placeholder fixture"
+            ),
+            errors,
+        )
+
+    def test_compact_key_evidence_helper_rejects_missing_generator_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            (artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME).unlink()
+
+            evidence, errors = compact_key_helper.build_evidence(
+                artifact_dir=artifact_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+
+        self.assertIsNone(evidence)
+        self.assertIn("missing recursive compact key generator log", errors)
+
+    def test_compact_key_evidence_helper_rejects_generator_log_size_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            log_path = artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+            log_path.write_text(
+                log_path.read_text(encoding="utf-8").replace("record=70", "record=71"),
+                encoding="utf-8",
+            )
+
+            evidence, errors = compact_key_helper.build_evidence(
+                artifact_dir=artifact_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+
+        self.assertIsNone(evidence)
+        self.assertIn(
+            (
+                "recursive compact key generator log size does not match local artifact "
+                "recursive-compact-len4.record.norito"
+            ),
+            errors,
+        )
+
+    def test_compact_key_evidence_helper_rejects_noncanonical_generated_at_utc(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+
+            evidence, errors = compact_key_helper.build_evidence(
+                artifact_dir=artifact_dir,
+                command=readiness.expected_compact_key_command(),
+                generated_at_utc="2026-06-06T00:00:00+00:00",
+            )
+
+        self.assertIsNone(evidence)
+        self.assertIn(
+            "--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+            errors,
+        )
+
+    def test_compact_key_evidence_helper_rejects_appended_shell_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+
+            evidence, errors = compact_key_helper.build_evidence(
+                artifact_dir=artifact_dir,
+                command=f"{readiness.expected_compact_key_command()} ; echo ok",
+                generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+            )
+
+        self.assertIsNone(evidence)
+        self.assertIn(
+            "--command must exactly match the production ABI-7 recursive compact keygen command",
+            errors,
+        )
+
+    def test_compact_key_evidence_helper_rejects_outside_artifact_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            artifact_dir.mkdir(parents=True)
+            out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+
+            errors = compact_key_helper.validate_output_corridor(out, artifact_dir)
+
+        self.assertIn("--out must be written directly under --artifact-dir", errors)
+
+    def test_compact_key_evidence_helper_rejects_symlinked_output_leaf(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            out = artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            target = artifact_dir / "aliased-recursive-compact-key-evidence.json"
+            target.write_text("external\n", encoding="utf-8")
+            try:
+                out.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = compact_key_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+            target_text = target.read_text(encoding="utf-8")
+
+        self.assertEqual(status, 1)
+        self.assertIn("--out must not be a symlink", stderr.getvalue())
+        self.assertEqual(target_text, "external\n")
+
+    def test_compact_key_evidence_helper_rejects_dangling_symlinked_output_leaf(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            artifact_dir.mkdir()
+            out = artifact_dir / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            target = artifact_dir / "missing-recursive-compact-key-evidence.json"
+            try:
+                out.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+
+            errors = compact_key_helper.write_evidence(out, {"schema": "test"})
+
+        self.assertEqual(errors, ["--out must not be a symlink"])
+        self.assertFalse(target.exists())
+
+    def test_compact_key_output_preflight_rejects_parent_create_failure_before_write(
+        self,
+    ) -> None:
+        original_mkdir = Path.mkdir
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            out = root / "missing-compact" / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+
+            def failing_mkdir(path: Path, *args, **kwargs):
+                if path == out.parent:
+                    raise OSError("simulated compact output parent create failure")
+                return original_mkdir(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "mkdir", failing_mkdir):
+                errors = compact_key_helper.preflight_output_path(out, "--out")
+            parent_exists = out.parent.exists()
+            output_exists = out.exists()
+
+        self.assertEqual(errors, ["--out parent directory could not be created"])
+        self.assertFalse(parent_exists)
+        self.assertFalse(output_exists)
+
+    def test_compact_key_output_preflight_rejects_file_metadata_failure_before_write(
+        self,
+    ) -> None:
+        original_lstat = Path.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            out.write_text("existing evidence\n", encoding="utf-8")
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == out:
+                    raise OSError("simulated compact output file metadata failure")
+                return original_lstat(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "lstat", failing_lstat):
+                errors = compact_key_helper.preflight_output_path(out, "--out")
+            output_text = out.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, ["--out file metadata could not be read"])
+        self.assertEqual(output_text, "existing evidence\n")
+
+    def test_compact_key_output_preflight_rejects_hardlink_metadata_failure_before_write(
+        self,
+    ) -> None:
+        original_stat = Path.stat
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            out.write_text("existing evidence\n", encoding="utf-8")
+
+            def failing_stat(path: Path, *args, **kwargs):
+                if path == out:
+                    raise OSError("simulated compact output hardlink metadata failure")
+                return original_stat(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "stat", failing_stat):
+                errors = compact_key_helper.preflight_output_path(out, "--out")
+            output_text = out.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, ["--out hardlink metadata could not be read"])
+        self.assertEqual(output_text, "existing evidence\n")
+
+    def test_compact_key_write_evidence_rejects_write_failure_after_preflight(
+        self,
+    ) -> None:
+        original_write_text = Path.write_text
+
+        def failing_write_text(path: Path, *args, **kwargs):
+            if path.name == readiness.COMPACT_KEY_EVIDENCE_FILENAME:
+                raise OSError("simulated write failure")
+            return original_write_text(path, *args, **kwargs)
+
+        try:
+            Path.write_text = failing_write_text
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+
+                errors = compact_key_helper.write_evidence(out, {"schema": "test"})
+        finally:
+            Path.write_text = original_write_text
+
+        self.assertEqual(errors, ["--out could not be written"])
+        self.assertFalse(out.exists())
+
+    def test_compact_key_evidence_document_validator_rejects_artifact_dir_create_failure_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+
+            with mock.patch.object(
+                Path,
+                "mkdir",
+                side_effect=OSError("simulated compact artifact dir create failure"),
+            ):
+                errors = compact_key_helper.validate_evidence_document({}, artifact_dir)
+
+            self.assertEqual(
+                errors,
+                ["--artifact-dir could not be created for evidence validation"],
+            )
+            self.assertFalse(artifact_dir.exists())
+
+    def test_compact_key_evidence_document_validator_rejects_temp_write_failure_after_preflight(
+        self,
+    ) -> None:
+        class FailingValidationTempFile:
+            def __init__(self, path: Path) -> None:
+                self.path = path
+                self.name = str(path)
+                self._handle = None
+
+            def __enter__(self):
+                self._handle = self.path.open("w", encoding="utf-8")
+                return self
+
+            def __exit__(self, exc_type, exc, traceback) -> bool:
+                if self._handle is not None:
+                    self._handle.close()
+                return False
+
+            def write(self, _text: str) -> int:
+                raise OSError("simulated compact validation temp write failure")
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            artifact_dir.mkdir()
+            created_path: Path | None = None
+
+            def failing_named_temp_file(*args, **kwargs):
+                nonlocal created_path
+                created_path = (
+                    Path(kwargs["dir"])
+                    / ".recursive-compact-key-evidence-failing-write.json"
+                )
+                return FailingValidationTempFile(created_path)
+
+            with mock.patch.object(
+                compact_key_helper.tempfile,
+                "NamedTemporaryFile",
+                side_effect=failing_named_temp_file,
+            ):
+                errors = compact_key_helper.validate_evidence_document({}, artifact_dir)
+
+            self.assertEqual(
+                errors,
+                ["recursive compact key evidence validation file could not be written"],
+            )
+            self.assertIsNotNone(created_path)
+            assert created_path is not None
+            self.assertFalse(created_path.exists())
+
+    def test_compact_key_evidence_document_validator_rejects_temp_cleanup_failure(
+        self,
+    ) -> None:
+        original_unlink = Path.unlink
+
+        def failing_unlink(path: Path, *args, **kwargs):
+            if path.name.startswith(".recursive-compact-key-evidence-"):
+                raise OSError("simulated compact validation temp cleanup failure")
+            return original_unlink(path, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            artifact_dir.mkdir()
+
+            with mock.patch.object(Path, "unlink", failing_unlink):
+                errors = compact_key_helper.validate_evidence_document(
+                    {"schema": "invalid"},
+                    artifact_dir,
+                )
+
+        self.assertEqual(
+            errors,
+            ["recursive compact key evidence validation file could not be removed"],
+        )
+
+    def test_compact_key_artifact_dir_validator_rejects_secret_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            secret_dir = Path(temp) / "token=supersecret-compact"
+
+            errors = compact_key_helper.validate_artifact_dir_path(secret_dir)
+            rendered = "\n".join(errors)
+
+        self.assertEqual(errors, ["--artifact-dir must not contain secret-looking material"])
+        self.assertFalse(secret_dir.exists())
+        self.assertNotIn(str(secret_dir), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_compact_key_artifact_dir_validator_rejects_metadata_failure_directly(
+        self,
+    ) -> None:
+        original_lstat = Path.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == artifact_dir:
+                    raise OSError("simulated compact artifact dir metadata failure")
+                return original_lstat(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "lstat", failing_lstat):
+                errors = compact_key_helper.validate_artifact_dir_path(artifact_dir)
+
+        self.assertEqual(errors, ["--artifact-dir metadata could not be read"])
+        self.assertFalse(artifact_dir.exists())
+
+    def test_compact_key_sha256_file_rejects_secret_path_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            secret_file = Path(temp) / "token=supersecret-compact.vk"
+
+            digest, errors = compact_key_helper._sha256_file(
+                secret_file,
+                "recursive compact key artifact",
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["recursive compact key artifact path must not contain secret-looking material"],
+        )
+        self.assertFalse(secret_file.exists())
+        self.assertNotIn(str(secret_file), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_compact_key_sha256_file_rejects_symlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.vk"
+            source.write_text("external\n", encoding="utf-8")
+            link = root / "recursive-compact-len4.vk"
+            try:
+                link.symlink_to(source)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+
+            digest, errors = compact_key_helper._sha256_file(
+                link,
+                "recursive compact key artifact",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["recursive compact key artifact must not be a symlink"])
+
+    def test_compact_key_sha256_file_rejects_hardlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source.vk"
+            source.write_text("external\n", encoding="utf-8")
+            link = root / "recursive-compact-len4.vk"
+            link.write_text("placeholder\n", encoding="utf-8")
+            slot_helpers.replace_with_hardlink(self, link, source)
+
+            digest, errors = compact_key_helper._sha256_file(
+                link,
+                "recursive compact key artifact",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["recursive compact key artifact must not be hardlinked"])
+
+    def test_compact_key_sha256_file_rejects_read_failure_without_traceback(
+        self,
+    ) -> None:
+        original_open = Path.open
+
+        def failing_open(path: Path, *args, **kwargs):
+            if path.name == "recursive-compact-len4.vk":
+                raise OSError("simulated compact key artifact read failure")
+            return original_open(path, *args, **kwargs)
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact = Path(temp) / "recursive-compact-len4.vk"
+                artifact.write_text("artifact\n", encoding="utf-8")
+                Path.open = failing_open
+
+                digest, errors = compact_key_helper._sha256_file(
+                    artifact,
+                    "recursive compact key artifact",
+                )
+        finally:
+            Path.open = original_open
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["recursive compact key artifact could not be read"])
 
     def test_missing_lineage_proof_evidence_blocks_rollup_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1245,6 +4250,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn("lineage_proof_evidence_invalid_json", rendered)
         self.assertNotIn(str(evidence_path), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_lineage_proof_evidence_rejects_non_utf8_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = Path(temp) / "lineage" / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+            evidence_path.parent.mkdir(parents=True, exist_ok=True)
+            evidence_path.write_bytes(b"\xff\xfe\xfd")
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "lineage_proof_evidence_unreadable",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "Reserved-lineage proof evidence could not be read",
+            {item["message"] for item in result["blockers"]},
+        )
+        self.assertNotIn(str(evidence_path), rendered)
 
     def test_lineage_proof_evidence_rejects_duplicate_json_keys(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1384,6 +4409,59 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         codes = {item["code"] for item in result["blockers"]}
         self.assertIn("lineage_proof_evidence_opening_len", codes)
         self.assertIn("lineage_proof_evidence_ipa_k", codes)
+
+    def test_lineage_proof_evidence_rejects_missing_artifact_size_map(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence.pop("artifact_size_bytes")
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        codes = {item["code"] for item in result["blockers"]}
+        self.assertIn("lineage_proof_evidence_artifact_sizes", codes)
+        self.assertIn("lineage_proof_evidence_artifact_size", codes)
+
+    def test_lineage_proof_evidence_rejects_artifact_size_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_size_bytes"]["lineage-init-len128.pk"] += 1
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        blockers = result["blockers"]
+        self.assertIn(
+            "lineage_proof_evidence_artifact_size",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "lineage-init-len128.pk",
+            {item.get("artifact") for item in blockers},
+        )
+        self.assertNotIn(
+            "lineage-init-len128.pk",
+            result["artifact_size_bytes"],
+        )
+
+    def test_lineage_proof_evidence_rejects_secret_size_field_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifact_size_bytes"]["token=supersecret"] = 123
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+            rendered = json.dumps(result["blockers"])
+
+        self.assertFalse(result["ok"])
+        self.assertIn("lineage_proof_evidence_artifact_sizes_unexpected_field", rendered)
+        self.assertIn(slot_helpers.device_lab.SECRET_PATH_REDACTION, rendered)
+        self.assertNotIn("token=supersecret", rendered)
 
     def test_lineage_proof_evidence_rejects_runtime_keygen_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1570,6 +4648,49 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn(str(evidence_path.parent), json.dumps(result))
 
+    def test_lineage_proof_evidence_rejects_empty_local_artifact_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            artifact = evidence_path.parent / "lineage-init-len128.record.norito"
+            artifact.write_bytes(b"")
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifacts"][artifact.name] = hashlib.sha256(b"").hexdigest()
+            evidence["artifact_size_bytes"][artifact.name] = 0
+            write_json(evidence_path, evidence)
+
+            result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "lineage_proof_evidence_artifact_empty",
+            {item["code"] for item in result["blockers"]},
+        )
+
+    def test_lineage_proof_evidence_uses_local_file_validation_before_artifact_is_file_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_file = path_type.is_file
+
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            artifact_path = evidence_path.parent / "lineage-init-len128.vk"
+
+            def failing_is_file(path: Path, *args, **kwargs):
+                if path == artifact_path:
+                    raise OSError("simulated lineage artifact is_file failure")
+                return original_is_file(path, *args, **kwargs)
+
+            try:
+                path_type.is_file = failing_is_file
+
+                result = readiness.check_lineage_proof_evidence(evidence_path)
+            finally:
+                path_type.is_file = original_is_file
+
+        self.assertTrue(result["ok"])
+        self.assertIn("lineage-init-len128.vk", result["artifact_sha256"])
+
     def test_lineage_proof_evidence_rejects_missing_local_proof_log_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
@@ -1584,6 +4705,55 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn(
             "lineage_proof_evidence_test_log_missing",
             {item["code"] for item in result["blockers"]},
+        )
+
+    def test_lineage_proof_evidence_uses_log_validation_before_is_file_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_file = path_type.is_file
+        original_lstat = path_type.lstat
+
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            log_path = (
+                evidence_path.parent
+                / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS["record_archive_proof"]
+            )
+
+            def failing_is_file(path: Path, *args, **kwargs):
+                if path == log_path:
+                    raise OSError("simulated lineage proof log is_file failure")
+                return original_is_file(path, *args, **kwargs)
+
+            def failing_lstat(path: Path, *args, **kwargs):
+                if path == log_path:
+                    raise OSError("simulated lineage proof log lstat failure")
+                return original_lstat(path, *args, **kwargs)
+
+            try:
+                path_type.is_file = failing_is_file
+                path_type.lstat = failing_lstat
+
+                result = readiness.check_lineage_proof_evidence(evidence_path)
+            finally:
+                path_type.is_file = original_is_file
+                path_type.lstat = original_lstat
+
+        codes = {item["code"] for item in result["blockers"]}
+        content_issues = {
+            item.get("issue")
+            for item in result["blockers"]
+            if item["code"] == "lineage_proof_evidence_test_log_content"
+        }
+        self.assertIn("lineage_proof_evidence_test_log_unreadable", codes)
+        self.assertIn(
+            "production proof log file metadata could not be read",
+            content_issues,
+        )
+        self.assertNotIn(
+            "lineage_proof_evidence_test_log_missing",
+            codes,
         )
 
     def test_lineage_proof_evidence_rejects_symlinked_local_proof_log_file(self) -> None:
@@ -1656,6 +4826,212 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn("FAILED", rendered)
         self.assertNotIn(str(log_path), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_lineage_proof_log_rejects_metadata_read_failure_after_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        with tempfile.TemporaryDirectory() as temp:
+            log_path = Path(temp) / "record-archive-proof.log"
+            write_passing_lineage_proof_log(log_path)
+            proof_log_stat_calls = 0
+
+            def failing_stat(path: Path, *args, **kwargs):
+                nonlocal proof_log_stat_calls
+                if path == log_path:
+                    proof_log_stat_calls += 1
+                    if proof_log_stat_calls > 1:
+                        raise OSError("simulated proof log metadata failure")
+                return original_stat(path, *args, **kwargs)
+
+            try:
+                path_type.stat = failing_stat
+                digest, errors = readiness.validate_lineage_proof_log(
+                    log_path,
+                    readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"],
+                )
+            finally:
+                path_type.stat = original_stat
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["production proof log metadata could not be read"])
+
+    def test_lineage_local_text_rejects_symlink_directly_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log_path = root / "record-archive-proof.log"
+            log_path.write_text("placeholder\n", encoding="utf-8")
+            external = root / "external-record-archive-proof.log"
+            external.write_text("test result: ok. forged marker\n", encoding="utf-8")
+            slot_helpers.replace_with_symlink(self, log_path, external)
+
+            text, errors = readiness._lineage_local_text(
+                log_path,
+                "production proof log",
+                "production proof log could not be read",
+                decode_errors="replace",
+            )
+
+        self.assertIsNone(text)
+        self.assertEqual(errors, ["production proof log must not be a symlink"])
+
+    def test_lineage_local_text_rejects_hardlink_directly_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            log_path = root / "record-archive-proof.log"
+            log_path.write_text("placeholder\n", encoding="utf-8")
+            external = root / "external-record-archive-proof.log"
+            external.write_text("test result: ok. forged marker\n", encoding="utf-8")
+            slot_helpers.replace_with_hardlink(self, log_path, external)
+
+            text, errors = readiness._lineage_local_text(
+                log_path,
+                "production proof log",
+                "production proof log could not be read",
+                decode_errors="replace",
+            )
+
+        self.assertIsNone(text)
+        self.assertEqual(errors, ["production proof log must not be hardlinked"])
+
+    def test_lineage_readiness_sha256_file_rejects_secret_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            secret_path = Path(temp) / "token=supersecret-artifact.norito"
+            secret_path.write_bytes(b"lineage artifact bytes\n")
+
+            digest, errors = readiness._sha256_file(
+                secret_path,
+                "lineage rollup artifact",
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["lineage rollup artifact path must not contain secret-looking material"],
+        )
+        self.assertNotIn(str(secret_path), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_lineage_readiness_sha256_file_rejects_symlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            external = root / "external-lineage-artifact.norito"
+            external.write_bytes(b"external lineage artifact bytes\n")
+            artifact = root / "lineage-artifact.norito"
+            artifact.write_bytes(b"placeholder\n")
+            slot_helpers.replace_with_symlink(self, artifact, external)
+
+            digest, errors = readiness._sha256_file(
+                artifact,
+                "lineage rollup artifact",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["lineage rollup artifact must not be a symlink"])
+
+    def test_lineage_readiness_sha256_file_rejects_hardlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            external = root / "external-lineage-artifact.norito"
+            external.write_bytes(b"external lineage artifact bytes\n")
+            artifact = root / "lineage-artifact.norito"
+            artifact.write_bytes(b"placeholder\n")
+            slot_helpers.replace_with_hardlink(self, artifact, external)
+
+            digest, errors = readiness._sha256_file(
+                artifact,
+                "lineage rollup artifact",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["lineage rollup artifact must not be hardlinked"])
+
+    def test_lineage_readiness_sha256_file_rejects_hardlink_metadata_failure_directly(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact = Path(temp) / "lineage-artifact.norito"
+                artifact.write_bytes(b"lineage artifact bytes\n")
+
+                def failing_stat(path: Path, *args, **kwargs):
+                    if path == artifact:
+                        raise OSError("simulated lineage local hardlink metadata failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_stat
+
+                digest, errors = readiness._sha256_file(
+                    artifact,
+                    "lineage rollup artifact",
+                )
+        finally:
+            path_type.stat = original_stat
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["lineage rollup artifact hardlink metadata could not be read"],
+        )
+
+    def test_lineage_readiness_sha256_file_rejects_file_metadata_failure_directly(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact = Path(temp) / "lineage-artifact.norito"
+                artifact.write_bytes(b"lineage artifact bytes\n")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == artifact:
+                        raise OSError("simulated lineage local file metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                digest, errors = readiness._sha256_file(
+                    artifact,
+                    "lineage rollup artifact",
+                )
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["lineage rollup artifact file metadata could not be read"],
+        )
+
+    def test_lineage_readiness_sha256_file_rejects_read_failure_without_traceback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / "lineage-artifact.norito"
+            artifact.write_bytes(b"lineage artifact bytes\n")
+
+            with mock.patch.object(
+                Path,
+                "open",
+                side_effect=OSError("simulated read failure"),
+            ):
+                digest, errors = readiness._sha256_file(
+                    artifact,
+                    "lineage rollup artifact",
+                )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["lineage rollup artifact could not be read"])
 
     def test_lineage_proof_log_rejects_symlinked_ancestor_before_digest(
         self,
@@ -1901,9 +5277,14 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             result = readiness.check_lineage_proof_evidence(out)
             evidence = json.loads(out.read_text(encoding="utf-8"))
             proof_log_hash = hashlib.sha256(proof_log.read_bytes()).hexdigest()
+            expected_sizes = {
+                artifact: (artifact_dir / artifact).stat().st_size
+                for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS
+            }
 
         self.assertEqual(status, 0)
         self.assertTrue(result["ok"])
+        self.assertEqual(evidence["artifact_size_bytes"], expected_sizes)
         self.assertEqual(
             evidence["artifacts"]["lineage-init-len128.vk"],
             hashlib.sha256(b"lineage artifact lineage-init-len128.vk\n").hexdigest(),
@@ -1940,6 +5321,99 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(str(secret_dir), rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_lineage_proof_evidence_document_validator_rejects_artifact_dir_create_failure_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+
+            with mock.patch.object(
+                Path,
+                "mkdir",
+                side_effect=OSError("simulated artifact dir create failure"),
+            ):
+                errors = evidence_helper.validate_evidence_document({}, artifact_dir)
+
+            self.assertEqual(
+                errors,
+                ["--artifact-dir could not be created for evidence validation"],
+            )
+            self.assertFalse(artifact_dir.exists())
+
+    def test_lineage_proof_evidence_document_validator_rejects_temp_write_failure_after_preflight(
+        self,
+    ) -> None:
+        class FailingValidationTempFile:
+            def __init__(self, path: Path) -> None:
+                self.path = path
+                self.name = str(path)
+                self._handle = None
+
+            def __enter__(self):
+                self._handle = self.path.open("w", encoding="utf-8")
+                return self
+
+            def __exit__(self, exc_type, exc, traceback) -> bool:
+                if self._handle is not None:
+                    self._handle.close()
+                return False
+
+            def write(self, _text: str) -> int:
+                raise OSError("simulated validation temp write failure")
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+            created_path: Path | None = None
+
+            def failing_named_temp_file(*args, **kwargs):
+                nonlocal created_path
+                created_path = (
+                    Path(kwargs["dir"])
+                    / ".lineage-proof-evidence-failing-write.json"
+                )
+                return FailingValidationTempFile(created_path)
+
+            with mock.patch.object(
+                evidence_helper.tempfile,
+                "NamedTemporaryFile",
+                side_effect=failing_named_temp_file,
+            ):
+                errors = evidence_helper.validate_evidence_document({}, artifact_dir)
+
+            self.assertEqual(
+                errors,
+                ["lineage proof evidence validation file could not be written"],
+            )
+            self.assertIsNotNone(created_path)
+            assert created_path is not None
+            self.assertFalse(created_path.exists())
+
+    def test_lineage_proof_evidence_document_validator_rejects_temp_cleanup_failure(
+        self,
+    ) -> None:
+        original_unlink = Path.unlink
+
+        def failing_unlink(path: Path, *args, **kwargs):
+            if path.name.startswith(".lineage-proof-evidence-"):
+                raise OSError("simulated validation temp cleanup failure")
+            return original_unlink(path, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+
+            with mock.patch.object(Path, "unlink", failing_unlink):
+                errors = evidence_helper.validate_evidence_document(
+                    {"schema": "invalid"},
+                    artifact_dir,
+                )
+
+        self.assertEqual(
+            errors,
+            ["lineage proof evidence validation file could not be removed"],
+        )
+
     def test_lineage_proof_artifact_dir_validator_rejects_secret_path_directly(
         self,
     ) -> None:
@@ -1953,6 +5427,107 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(secret_dir.exists())
         self.assertNotIn(str(secret_dir), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_lineage_proof_artifact_dir_validator_rejects_metadata_failure_directly(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "artifacts"
+                artifact_dir.mkdir()
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == artifact_dir:
+                        raise OSError("simulated artifact-dir metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = evidence_helper.validate_artifact_dir_path(artifact_dir)
+                artifact_dir_exists = artifact_dir.exists()
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["--artifact-dir metadata could not be read"])
+        self.assertTrue(artifact_dir_exists)
+
+    def test_lineage_proof_sha256_file_rejects_secret_path_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            secret_path = Path(temp) / "token=supersecret-artifact.norito"
+            secret_path.write_bytes(b"lineage artifact bytes\n")
+
+            digest, errors = evidence_helper._sha256_file(
+                secret_path,
+                "lineage artifact secret",
+            )
+            rendered = "\n".join(errors)
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["lineage artifact secret path must not contain secret-looking material"],
+        )
+        self.assertNotIn(str(secret_path), rendered)
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_lineage_proof_sha256_file_rejects_symlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            external = root / "external-lineage-artifact.norito"
+            external.write_bytes(b"external lineage artifact bytes\n")
+            artifact = root / "lineage-artifact.norito"
+            artifact.write_bytes(b"placeholder\n")
+            slot_helpers.replace_with_symlink(self, artifact, external)
+
+            digest, errors = evidence_helper._sha256_file(
+                artifact,
+                "lineage artifact direct hash",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["lineage artifact direct hash must not be a symlink"])
+
+    def test_lineage_proof_sha256_file_rejects_hardlink_directly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            external = root / "external-lineage-artifact.norito"
+            external.write_bytes(b"external lineage artifact bytes\n")
+            artifact = root / "lineage-artifact.norito"
+            artifact.write_bytes(b"placeholder\n")
+            slot_helpers.replace_with_hardlink(self, artifact, external)
+
+            digest, errors = evidence_helper._sha256_file(
+                artifact,
+                "lineage artifact direct hash",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["lineage artifact direct hash must not be hardlinked"])
+
+    def test_lineage_proof_sha256_file_rejects_read_failure_without_traceback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / "lineage-artifact.norito"
+            artifact.write_bytes(b"lineage artifact bytes\n")
+
+            with mock.patch.object(
+                Path,
+                "open",
+                side_effect=OSError("simulated read failure"),
+            ):
+                digest, errors = evidence_helper._sha256_file(
+                    artifact,
+                    "lineage artifact direct hash",
+                )
+
+        self.assertIsNone(digest)
+        self.assertEqual(errors, ["lineage artifact direct hash could not be read"])
 
     def test_lineage_proof_evidence_helper_rejects_missing_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1985,6 +5560,41 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertFalse(out.exists())
         self.assertIn("missing lineage artifact lineage-append-len128.pk", stderr.getvalue())
+
+    def test_lineage_proof_evidence_helper_rejects_empty_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            create_lineage_artifact_files(artifact_dir)
+            (artifact_dir / "lineage-append-len128.pk").write_bytes(b"")
+            proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                "record_archive_proof"
+            ]
+            write_passing_lineage_proof_log(proof_log)
+            out = artifact_dir / "lineage-proof-evidence.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = evidence_helper.main(
+                    [
+                        "--artifact-dir",
+                        str(artifact_dir),
+                        "--proof-log",
+                        str(proof_log),
+                        "--elapsed-seconds",
+                        "14400.5",
+                        "--generated-at-utc",
+                        readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                        "--out",
+                        str(out),
+                    ]
+                )
+
+        self.assertEqual(status, 1)
+        self.assertFalse(out.exists())
+        self.assertIn(
+            "lineage artifact lineage-append-len128.pk must be non-empty",
+            stderr.getvalue(),
+        )
 
     def test_lineage_proof_evidence_helper_rejects_symlinked_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2345,6 +5955,63 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             stderr.getvalue(),
         )
 
+    def test_lineage_proof_output_corridor_rejects_parent_resolve_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "artifacts"
+                artifact_dir.mkdir()
+                out = artifact_dir / "lineage-proof-evidence.json"
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    if path == out.parent:
+                        raise OSError("simulated output parent resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+
+                errors = evidence_helper.validate_output_corridor(out, artifact_dir)
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertEqual(errors, ["--out parent could not be resolved"])
+        self.assertFalse(out.exists())
+
+    def test_lineage_proof_output_corridor_rejects_artifact_dir_resolve_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "artifacts"
+                artifact_dir.mkdir()
+                out = artifact_dir / "lineage-proof-evidence.json"
+                output_parent_resolved = False
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    nonlocal output_parent_resolved
+                    if path == out.parent and not output_parent_resolved:
+                        output_parent_resolved = True
+                        return original_resolve(path, *args, **kwargs)
+                    if path == artifact_dir:
+                        raise OSError("simulated artifact-dir resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+
+                errors = evidence_helper.validate_output_corridor(out, artifact_dir)
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertEqual(errors, ["--artifact-dir could not be resolved"])
+        self.assertFalse(out.exists())
+
     def test_lineage_proof_evidence_helper_rejects_noncanonical_output_filename(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             artifact_dir = Path(temp) / "artifacts"
@@ -2512,6 +6179,257 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(str(secret_out), rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_lineage_proof_output_preflight_uses_lstat_before_parent_is_dir_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / "lineage" / "lineage-proof-evidence.json"
+                out.parent.mkdir(parents=True)
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == out.parent:
+                        raise OSError("simulated lineage output parent is_dir preflight failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+
+                errors = evidence_helper.preflight_output_path(out, "--out")
+        finally:
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(errors, [])
+        self.assertFalse(out.exists())
+
+    def test_lineage_proof_output_preflight_rejects_parent_metadata_failure_before_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / "lineage" / "lineage-proof-evidence.json"
+                out.parent.mkdir(parents=True)
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == out.parent:
+                        raise OSError("simulated lineage output parent metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = evidence_helper.preflight_output_path(out, "--out")
+                output_exists = out.exists()
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["--out parent directory metadata could not be read"])
+        self.assertFalse(output_exists)
+
+    def test_lineage_proof_output_validator_uses_lstat_before_parent_is_dir_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / "lineage" / "lineage-proof-evidence.json"
+                out.parent.mkdir(parents=True)
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == out.parent:
+                        raise OSError("simulated lineage output validator parent is_dir failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+
+                errors = evidence_helper.validate_output_path(out, "--out")
+        finally:
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(errors, [])
+        self.assertFalse(out.exists())
+
+    def test_lineage_proof_output_validator_rejects_parent_metadata_failure_before_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / "lineage" / "lineage-proof-evidence.json"
+                out.parent.mkdir(parents=True)
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == out.parent:
+                        raise OSError("simulated lineage output validator parent metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = evidence_helper.validate_output_path(out, "--out")
+                output_exists = out.exists()
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["--out parent directory metadata could not be read"])
+        self.assertFalse(output_exists)
+
+    def test_lineage_proof_output_preflight_rejects_parent_create_failure_before_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                out = root / "missing-lineage" / "lineage-proof-evidence.json"
+
+                def failing_mkdir(path: Path, *args, **kwargs):
+                    if path == out.parent:
+                        raise OSError("simulated lineage output parent create failure")
+                    return original_mkdir(path, *args, **kwargs)
+
+                path_type.mkdir = failing_mkdir
+
+                errors = evidence_helper.preflight_output_path(out, "--out")
+                parent_exists = out.parent.exists()
+                output_exists = out.exists()
+        finally:
+            path_type.mkdir = original_mkdir
+
+        self.assertEqual(errors, ["--out parent directory could not be created"])
+        self.assertFalse(parent_exists)
+        self.assertFalse(output_exists)
+
+    def test_lineage_proof_output_preflight_rechecks_parent_after_create(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                out = root / "late-linked-lineage" / "lineage-proof-evidence.json"
+                alias_target = root / "external-lineage"
+                alias_target.mkdir()
+
+                def replacing_mkdir(path: Path, *args, **kwargs):
+                    if path == out.parent:
+                        slot_helpers.create_dir_symlink(self, path, alias_target)
+                        return None
+                    return original_mkdir(path, *args, **kwargs)
+
+                path_type.mkdir = replacing_mkdir
+
+                errors = evidence_helper.preflight_output_path(out, "--out")
+        finally:
+            path_type.mkdir = original_mkdir
+
+        self.assertEqual(errors, ["--out parent directory must not be a symlink"])
+        self.assertFalse((alias_target / "lineage-proof-evidence.json").exists())
+
+    def test_lineage_proof_output_validator_rejects_parent_create_failure_after_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
+        original_preflight = evidence_helper.preflight_output_path
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                out = root / "late-missing-lineage" / "lineage-proof-evidence.json"
+                mkdir_calls = 0
+
+                def failing_second_mkdir(path: Path, *args, **kwargs):
+                    nonlocal mkdir_calls
+                    if path == out.parent:
+                        mkdir_calls += 1
+                        if mkdir_calls == 2:
+                            raise OSError("simulated lineage output validator parent create failure")
+                    return original_mkdir(path, *args, **kwargs)
+
+                def removing_preflight(path: Path, label: str) -> list[str]:
+                    errors = original_preflight(path, label)
+                    if path == out and not errors and out.parent.exists():
+                        out.parent.rmdir()
+                    return errors
+
+                path_type.mkdir = failing_second_mkdir
+                evidence_helper.preflight_output_path = removing_preflight
+
+                errors = evidence_helper.validate_output_path(out, "--out")
+                parent_exists = out.parent.exists()
+                output_exists = out.exists()
+        finally:
+            evidence_helper.preflight_output_path = original_preflight
+            path_type.mkdir = original_mkdir
+
+        self.assertEqual(errors, ["--out parent directory could not be created"])
+        self.assertFalse(parent_exists)
+        self.assertFalse(output_exists)
+
+    def test_lineage_proof_output_preflight_rejects_file_metadata_failure_before_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / "lineage-proof-evidence.json"
+                out.write_text("existing evidence\n", encoding="utf-8")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == out:
+                        raise OSError("simulated lineage output file metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = evidence_helper.preflight_output_path(out, "--out")
+                output_text = out.read_text(encoding="utf-8")
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(errors, ["--out file metadata could not be read"])
+        self.assertEqual(output_text, "existing evidence\n")
+
+    def test_lineage_proof_output_preflight_rejects_hardlink_metadata_failure_before_write(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / "lineage-proof-evidence.json"
+                out.write_text("existing evidence\n", encoding="utf-8")
+
+                def failing_stat(path: Path, *args, **kwargs):
+                    if path == out:
+                        raise OSError("simulated lineage output hardlink metadata failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_stat
+
+                errors = evidence_helper.preflight_output_path(out, "--out")
+                output_text = out.read_text(encoding="utf-8")
+        finally:
+            path_type.stat = original_stat
+
+        self.assertEqual(errors, ["--out hardlink metadata could not be read"])
+        self.assertEqual(output_text, "existing evidence\n")
+
     def test_lineage_proof_write_evidence_rejects_secret_output_path_before_write(
         self,
     ) -> None:
@@ -2525,6 +6443,28 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(secret_out.exists())
         self.assertNotIn(str(secret_out), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_lineage_proof_write_evidence_rejects_write_failure_after_preflight(
+        self,
+    ) -> None:
+        original_write_text = Path.write_text
+
+        def failing_write_text(path: Path, *args, **kwargs):
+            if path.name == "lineage-proof-evidence.json":
+                raise OSError("simulated write failure")
+            return original_write_text(path, *args, **kwargs)
+
+        try:
+            Path.write_text = failing_write_text
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / "lineage-proof-evidence.json"
+
+                errors = evidence_helper.write_evidence(out, {"schema": "test"})
+        finally:
+            Path.write_text = original_write_text
+
+        self.assertEqual(errors, ["--out could not be written"])
+        self.assertFalse(out.exists())
 
     def test_lineage_proof_evidence_helper_rejects_symlinked_output_leaf(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2563,6 +6503,24 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("--out must not be a symlink", stderr.getvalue())
         self.assertEqual(target_text, "external\n")
+
+    def test_lineage_proof_evidence_helper_rejects_dangling_symlinked_output_leaf(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            artifact_dir.mkdir()
+            out = artifact_dir / "lineage-proof-evidence.json"
+            target = artifact_dir / "missing-lineage-proof-evidence.json"
+            try:
+                out.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+
+            errors = evidence_helper.write_evidence(out, {"schema": "test"})
+
+        self.assertEqual(errors, ["--out must not be a symlink"])
+        self.assertFalse(target.exists())
 
     def test_lineage_proof_evidence_helper_rejects_hardlinked_output_leaf(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2700,6 +6658,37 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn(str(proof_log), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_lineage_proof_input_validator_rejects_parent_resolve_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                artifact_dir = Path(temp) / "artifacts"
+                artifact_dir.mkdir()
+                proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                    "record_archive_proof"
+                ]
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    if path == proof_log.parent:
+                        raise OSError("simulated proof-log parent resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+
+                errors = evidence_helper.validate_lineage_input_paths(
+                    artifact_dir,
+                    proof_log,
+                )
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertEqual(errors, ["--proof-log parent could not be resolved"])
+        self.assertFalse(proof_log.exists())
 
     def test_lineage_proof_evidence_helper_rejects_log_without_test_name(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2845,6 +6834,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             root = Path(temp) / "slots"
             summary_path = Path(temp) / "summary.json"
             lineage_evidence = create_lineage_proof_evidence(Path(temp) / "lineage")
+            compact_key_evidence = create_compact_key_evidence(lineage_evidence.parent)
             signer = slot_helpers.create_test_signer(Path(temp) / "keys")
             create_complete_matrix(root, signer)
 
@@ -2857,6 +6847,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                         str(root),
                         "--lineage-proof-evidence",
                         str(lineage_evidence),
+                        "--compact-key-evidence",
+                        str(compact_key_evidence),
                         "--trusted-signer-public-key",
                         str(signer["public_key"]),
                         "--summary-out",
@@ -2875,6 +6867,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             root = Path(temp) / "slots"
             summary_path = Path(temp) / "summary.json"
             lineage_evidence = create_lineage_proof_evidence(Path(temp) / "lineage")
+            compact_key_evidence = create_compact_key_evidence(lineage_evidence.parent)
             signer = slot_helpers.create_test_signer(Path(temp) / "keys")
             create_complete_matrix(root, signer)
             stdout = io.StringIO()
@@ -2888,6 +6881,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                         str(root),
                         "--lineage-proof-evidence",
                         str(lineage_evidence),
+                        "--compact-key-evidence",
+                        str(compact_key_evidence),
                         "--trusted-signer-public-key",
                         str(signer["public_key"]),
                         "--summary-out",
@@ -2949,6 +6944,80 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn(str(secret_repo_root), rendered)
         self.assertNotIn("token=supersecret", rendered)
+
+    def test_validate_repo_root_rejects_metadata_failure_directly_without_leak(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                repo_root = Path(temp) / "repo"
+                repo_root.mkdir()
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == repo_root:
+                        raise OSError("simulated repo-root metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = readiness.validate_repo_root_path(repo_root)
+                rendered = json.dumps(errors)
+                repo_root_exists = repo_root.exists()
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_repo_root_path_invalid",
+                    "message": "--repo-root metadata could not be read",
+                }
+            ],
+        )
+        self.assertTrue(repo_root_exists)
+        self.assertNotIn(str(repo_root), rendered)
+
+    def test_main_rejects_repo_root_resolve_failure_without_traceback(self) -> None:
+        path_type = type(Path("."))
+        original_resolve = path_type.resolve
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                repo_root = root / "repo"
+                repo_root.mkdir()
+                summary_path = root / "summary.json"
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+
+                def failing_resolve(path: Path, *args, **kwargs):
+                    if path == repo_root:
+                        raise OSError("simulated repo-root resolve failure")
+                    return original_resolve(path, *args, **kwargs)
+
+                path_type.resolve = failing_resolve
+
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    status = readiness.main(
+                        [
+                            "--repo-root",
+                            str(repo_root),
+                            "--summary-out",
+                            str(summary_path),
+                        ]
+                    )
+                summary_text = summary_path.read_text(encoding="utf-8")
+                rendered = stdout.getvalue() + stderr.getvalue() + summary_text
+        finally:
+            path_type.resolve = original_resolve
+
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_repo_root_path_invalid", rendered)
+        self.assertIn("--repo-root could not be resolved", rendered)
+        self.assertNotIn("Traceback", rendered)
+        self.assertNotIn(str(repo_root), rendered)
 
     def test_trust_root_sections_reject_secret_repo_root_before_reads(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -3094,6 +7163,318 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(str(secret_summary_path), rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_write_summary_rejects_non_regular_output_leaf_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            summary_path.mkdir()
+
+            errors = readiness.write_summary(
+                summary_path,
+                {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+            )
+
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out must be a regular file",
+                }
+            ],
+        )
+
+    def test_validate_summary_output_path_uses_lstat_before_parent_is_dir_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary-parent" / "summary.json"
+                summary_path.parent.mkdir()
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        raise OSError("simulated summary parent is_dir preflight failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+
+                errors = readiness.validate_summary_output_path(summary_path)
+        finally:
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(errors, [])
+        self.assertFalse(summary_path.exists())
+
+    def test_validate_summary_output_path_rejects_parent_metadata_failure(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary-parent" / "summary.json"
+                summary_path.parent.mkdir()
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        raise OSError("simulated summary parent metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = readiness.validate_summary_output_path(summary_path)
+                output_exists = summary_path.exists()
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out parent directory metadata could not be read",
+                }
+            ],
+        )
+        self.assertFalse(output_exists)
+
+    def test_write_summary_uses_lstat_before_parent_is_dir_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_is_dir = path_type.is_dir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary-parent" / "summary.json"
+                summary_path.parent.mkdir()
+
+                def failing_is_dir(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        raise OSError("simulated summary writer parent is_dir failure")
+                    return original_is_dir(path, *args, **kwargs)
+
+                path_type.is_dir = failing_is_dir
+
+                errors = readiness.write_summary(
+                    summary_path,
+                    {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+                )
+                summary_text = summary_path.read_text(encoding="utf-8")
+        finally:
+            path_type.is_dir = original_is_dir
+
+        self.assertEqual(errors, [])
+        self.assertIn('"ready": false', summary_text)
+
+    def test_write_summary_rejects_parent_metadata_failure_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary-parent" / "summary.json"
+                summary_path.parent.mkdir()
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        raise OSError("simulated summary writer parent metadata failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = readiness.write_summary(
+                    summary_path,
+                    {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+                )
+                output_exists = summary_path.exists()
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out parent directory metadata could not be read",
+                }
+            ],
+        )
+        self.assertFalse(output_exists)
+
+    def test_write_summary_rejects_file_metadata_failure_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_lstat = path_type.lstat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
+                summary_path.write_text("existing summary\n", encoding="utf-8")
+
+                def failing_lstat(path: Path, *args, **kwargs):
+                    if path == summary_path:
+                        raise OSError("simulated summary lstat failure")
+                    return original_lstat(path, *args, **kwargs)
+
+                path_type.lstat = failing_lstat
+
+                errors = readiness.write_summary(
+                    summary_path,
+                    {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+                )
+                summary_text = summary_path.read_text(encoding="utf-8")
+        finally:
+            path_type.lstat = original_lstat
+
+        self.assertEqual(summary_text, "existing summary\n")
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out file metadata could not be read",
+                }
+            ],
+        )
+
+    def test_write_summary_rejects_hardlink_metadata_failure_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
+                summary_path.write_text("existing summary\n", encoding="utf-8")
+
+                def failing_stat(path: Path, *args, **kwargs):
+                    if path == summary_path:
+                        raise OSError("simulated summary stat failure")
+                    return original_stat(path, *args, **kwargs)
+
+                path_type.stat = failing_stat
+
+                errors = readiness.write_summary(
+                    summary_path,
+                    {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+                )
+                summary_text = summary_path.read_text(encoding="utf-8")
+        finally:
+            path_type.stat = original_stat
+
+        self.assertEqual(summary_text, "existing summary\n")
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out hardlink metadata could not be read",
+                }
+            ],
+        )
+
+    def test_write_summary_rejects_write_failure_after_preflight(self) -> None:
+        original_write_text = Path.write_text
+
+        def failing_write_text(path: Path, *args, **kwargs):
+            if path.name == "summary.json":
+                raise OSError("simulated write failure")
+            return original_write_text(path, *args, **kwargs)
+
+        try:
+            Path.write_text = failing_write_text
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
+
+                errors = readiness.write_summary(
+                    summary_path,
+                    {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+                )
+        finally:
+            Path.write_text = original_write_text
+
+        self.assertFalse(summary_path.exists())
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out could not be written",
+                }
+            ],
+        )
+
+    def test_write_summary_rejects_parent_create_failure_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "missing-summary-parent" / "summary.json"
+
+                def failing_mkdir(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        raise OSError("simulated readiness summary parent mkdir failure")
+                    return original_mkdir(path, *args, **kwargs)
+
+                path_type.mkdir = failing_mkdir
+
+                errors = readiness.write_summary(
+                    summary_path,
+                    {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+                )
+        finally:
+            path_type.mkdir = original_mkdir
+
+        self.assertFalse(summary_path.exists())
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out parent directory could not be created",
+                }
+            ],
+        )
+
+    def test_write_summary_rechecks_parent_after_create_before_write(self) -> None:
+        path_type = type(Path("."))
+        original_mkdir = path_type.mkdir
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                summary_path = root / "late-linked-summary" / "summary.json"
+                alias_target = root / "external-summary"
+                alias_target.mkdir()
+
+                def replacing_mkdir(path: Path, *args, **kwargs):
+                    if path == summary_path.parent:
+                        slot_helpers.create_dir_symlink(self, path, alias_target)
+                        return None
+                    return original_mkdir(path, *args, **kwargs)
+
+                path_type.mkdir = replacing_mkdir
+
+                errors = readiness.write_summary(
+                    summary_path,
+                    {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+                )
+        finally:
+            path_type.mkdir = original_mkdir
+
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out parent directory must not be a symlink",
+                }
+            ],
+        )
+        self.assertFalse((alias_target / "summary.json").exists())
+
     def test_symlinked_summary_out_blocks_without_following_alias(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp) / "slots"
@@ -3130,6 +7511,31 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("--summary-out must not be a symlink", rendered)
         self.assertNotIn("[kagemusha-readiness] wrote summary", rendered)
         self.assertNotIn(str(summary_link), rendered)
+
+    def test_dangling_symlinked_summary_out_blocks_without_following_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_link = Path(temp) / "summary.json"
+            target = Path(temp) / "missing-summary.json"
+            try:
+                summary_link.symlink_to(target)
+            except (NotImplementedError, OSError) as exc:
+                self.skipTest(f"symlinks are not available in this test environment: {exc}")
+
+            errors = readiness.write_summary(
+                summary_link,
+                {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+            )
+
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out must not be a symlink",
+                }
+            ],
+        )
+        self.assertFalse(target.exists())
 
     def test_symlinked_summary_out_ancestor_blocks_before_creating_parent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -3255,6 +7661,57 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in summary["blockers"]},
         )
         self.assertIn("lineage_proof_evidence_max_timestamp_invalid", stderr.getvalue())
+
+    def test_negative_compact_key_future_skew_blocks_before_rollup(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = readiness.main(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--max-compact-key-evidence-future-skew-seconds",
+                        "-1",
+                        "--summary-out",
+                        str(summary_path),
+                    ]
+                )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(status, 1)
+        self.assertFalse(summary["ready"])
+        self.assertIn(
+            "compact_key_evidence_max_timestamp_invalid",
+            {item["code"] for item in summary["blockers"]},
+        )
+        self.assertIn("compact_key_evidence_max_timestamp_invalid", stderr.getvalue())
+
+    def test_secret_looking_compact_key_evidence_path_blocks_without_leak(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            secret_evidence_path = Path(temp) / "token=supersecret-compact.json"
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = readiness.main(
+                    [
+                        "--repo-root",
+                        str(REPO_ROOT),
+                        "--compact-key-evidence",
+                        str(secret_evidence_path),
+                        "--summary-out",
+                        str(summary_path),
+                    ]
+                )
+            summary_text = summary_path.read_text(encoding="utf-8")
+            rendered = stderr.getvalue() + summary_text
+
+        self.assertEqual(status, 1)
+        self.assertIn("compact_key_evidence_path_invalid", rendered)
+        self.assertIn("--compact-key-evidence must not contain secret-looking material", rendered)
+        self.assertNotIn("token=supersecret", rendered)
 
 
 if __name__ == "__main__":  # pragma: no cover
