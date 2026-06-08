@@ -2,6 +2,34 @@
 
 Last updated: 2026-06-08
 
+## 2026-06-08 WSL cargo-test Kagemusha compact preflight isolation
+
+- Root-caused the remaining WSL `cargo test` crash to default-suite execution
+  of the ABI-7 recursive compact record-bound Pallas preflight matrix. The test
+  builds real confidential-transfer hop proofs and record-bound Pallas opening
+  archives, matching the neighboring heavy Kagemusha Halo2 IPA proof-generation
+  tests rather than the cheap malformed-archive preflight checks.
+- Split
+  `kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable`
+  so the default suite still covers malformed archives, height-aware malformed
+  archives, wrong data-model envelope archives, tampered Pallas archives, and
+  detached Pallas archives before the unavailable gate.
+- Moved the one-hop and multi-hop record-bound Pallas archive matrix into
+  `kagemusha_recursive_compact_record_bound_pallas_preflights_before_unavailable`
+  and marked it ignored by default with the same explicit heavy Kagemusha Halo2
+  IPA proof-generation note used by the surrounding real-proof tests. The
+  Kagemusha policy guard now pins both test markers.
+- Validation:
+  - `rustfmt --edition 2024 crates/iroha_core/src/zk.rs`
+  - `bash -n ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh`
+  - `ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-compact-pallas-count`
+  - `cargo test -p iroha_core kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable --lib -- --test-threads=1`
+    (`1` test passed; focused test runtime `0.89s`; command max RSS
+    `9966992 KiB` during final compile)
+  - `cargo test -p iroha_core kagemusha_recursive_compact_record_bound_pallas_preflights_before_unavailable --lib -- --test-threads=1`
+    (`1` matching test ignored by default)
+
 ## 2026-06-08 Kagemusha recursive compact height-aware Pallas preflight guard
 
 - Added core coverage for the height-aware ABI-7 recursive compact prover so

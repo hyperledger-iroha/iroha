@@ -13,9 +13,11 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
-- Continue reducing local/CI compile memory after the WSL cargo-test hardening:
-  `iroha_data_model` still has a single stripped-debuginfo compile phase that
-  can peak around `10 GiB` RSS, so future work should split or simplify that
+- Continue reducing local/CI compile memory after the WSL cargo-test hardening
+  and Kagemusha record-bound compact preflight isolation: plain default tests no
+  longer run the heavy ABI-7 recursive compact record-bound Pallas proof matrix,
+  but `iroha_data_model` still has a single stripped-debuginfo compile phase
+  that can peak around `10 GiB` RSS. Future work should split or simplify that
   compile surface rather than reintroducing broad Cargo parallelism or
   one-file-one-binary integration-test discovery.
 - Native asset locks are now first-class ISIs for escrow-style conditional
