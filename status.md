@@ -2,6 +2,12 @@
 
 Last updated: 2026-06-08
 
+## 2026-06-08 SCCP Substrate/Polkadot launch-scope note
+
+- Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+- Kept the active SCCP launch scope limited to Ethereum, BSC, Solana, TON, and
+  TRON in the public bridge-proof, backlog, and roadmap notes.
+
 ## 2026-06-08 Sumeragi BlockCreated admission aggregate exactness
 
 - Split the direct `BlockCreated` payload admission model into
