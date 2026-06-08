@@ -291,8 +291,123 @@ TypeInvariant ==
   /\ tried \subseteq Candidates
   /\ \A candidate \in tried: ImplementationActions(candidate) \subseteq Actions
 
-Safety ==
+PostCommitRbcCases == {
+  CommittedRbcUndeliveredDaRetained,
+  CommittedRbcSettledDrained,
+  CommittedRbcInvalidDrained,
+  CommittedRbcNoDaDrained
+}
+
+PostCommitPendingDescendantCases == {
+  DescendantExtendsTipKept,
+  DescendantDivergesRequeued,
+  DescendantUnknownParentRequeued,
+  CommittedDuplicateDroppedNoRequeue,
+  CommittedKuraDuplicateDroppedNoRequeue
+}
+
+PostCommitStalePendingCases == {
+  StalePendingAtOrBelowDropped,
+  StalePendingValidationCleared,
+  StalePendingRbcCleaned
+}
+
+PostCommitQcProposalCases == {
+  QcCacheKeepsCommittedHash,
+  QcCacheDropsStaleConflict,
+  ProposalHintsDropButSeenKept,
+  ProposalCachePruneCommitted
+}
+
+PostCommitMissingRequestCases == {
+  MissingCommittedPayloadCleared,
+  MissingStaleObsoleteCleared,
+  MissingUncommittedPayloadClearDenied,
+  MissingObsoleteClearAllowedWithoutPayload
+}
+
+PostCommitVoteCacheCases == {
+  VoteCacheDropsCommittedHeight,
+  VoteCachePreservesLocalActive,
+  VoteCachePreservesActivePending,
+  VoteCachePreservesNewViewWindow,
+  VoteCacheDropsAncientNewView
+}
+
+PostCommitSlotViewCases == {
+  SlotTrackerPrunesCommitted,
+  ForcedViewPrunedAtCommitted
+}
+
+PostCommitRecoveryFrontierCases == {
+  OnCommitClearsRecoveryForHeight,
+  CommittedEdgeKeepsCanonicalFrontierEvidence,
+  CommittedEdgeClearsNoEvidenceFrontier
+}
+
+PostCommitValidationInflightCases == {
+  ValidationWithoutPendingPruned
+}
+
+PostCommitCleanupGroupedCases ==
+  PostCommitRbcCases \cup
+  PostCommitPendingDescendantCases \cup
+  PostCommitStalePendingCases \cup
+  PostCommitQcProposalCases \cup
+  PostCommitMissingRequestCases \cup
+  PostCommitVoteCacheCases \cup
+  PostCommitSlotViewCases \cup
+  PostCommitRecoveryFrontierCases \cup
+  PostCommitValidationInflightCases
+
+PostCommitCleanupCaseGroupsComplete ==
+  PostCommitCleanupGroupedCases = Candidates
+
+PostCommitActionExactFor(cases) ==
   \A candidate \in tried:
-    ImplementationActions(candidate) = SpecActions(candidate)
+    candidate \in cases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+PostCommitRbcCleanupExactness ==
+  PostCommitActionExactFor(PostCommitRbcCases)
+
+PostCommitPendingDescendantExactness ==
+  PostCommitActionExactFor(PostCommitPendingDescendantCases)
+
+PostCommitStalePendingExactness ==
+  PostCommitActionExactFor(PostCommitStalePendingCases)
+
+PostCommitQcProposalExactness ==
+  PostCommitActionExactFor(PostCommitQcProposalCases)
+
+PostCommitMissingRequestExactness ==
+  PostCommitActionExactFor(PostCommitMissingRequestCases)
+
+PostCommitVoteCacheExactness ==
+  PostCommitActionExactFor(PostCommitVoteCacheCases)
+
+PostCommitSlotViewExactness ==
+  PostCommitActionExactFor(PostCommitSlotViewCases)
+
+PostCommitRecoveryFrontierExactness ==
+  PostCommitActionExactFor(PostCommitRecoveryFrontierCases)
+
+PostCommitValidationInflightExactness ==
+  PostCommitActionExactFor(PostCommitValidationInflightCases)
+
+PostCommitCleanupExactness ==
+  /\ PostCommitCleanupCaseGroupsComplete
+  /\ PostCommitRbcCleanupExactness
+  /\ PostCommitPendingDescendantExactness
+  /\ PostCommitStalePendingExactness
+  /\ PostCommitQcProposalExactness
+  /\ PostCommitMissingRequestExactness
+  /\ PostCommitVoteCacheExactness
+  /\ PostCommitSlotViewExactness
+  /\ PostCommitRecoveryFrontierExactness
+  /\ PostCommitValidationInflightExactness
+
+Safety ==
+  PostCommitCleanupExactness
 
 ====

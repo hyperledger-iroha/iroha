@@ -172,6 +172,11 @@ source of truth for the edge upstreams too:
 - add `edge_torii_upstream = "<host>:<port>"` for each validator entry
 - render the nginx snippet from that roster instead of hand-editing ports:
   - `python3 scripts/render_taira_edge_nginx_conf.py --roster configs/soranexus/taira/validator_roster.local.toml --output dist/taira-edge/taira.sora.org.conf`
+- add `[[soracloud_alias_routes]]` entries to the same local roster for
+  dedicated runtime aliases that should terminate at local service listeners.
+  For the Solswap indexer on the shared host:
+  - `alias = "solswap-indexer.sora"`
+  - `edge_upstream = "127.0.0.1:8788"`
 
 That avoids the common drift where the copied nginx snippet still points at
 `127.0.0.1:18080..18083` while the live validator listeners have moved to
@@ -827,6 +832,11 @@ From `../iroha2-block-explorer-web`:
    - `corepack enable && pnpm i && pnpm build`
 3. Render and install the nginx snippet from the same validator roster you use
    for the validator configs:
+   - preferred edge-host helper for the Solswap indexer binding:
+     `bash configs/soranexus/taira/install_taira_edge_nginx_conf.sh --roster configs/soranexus/taira/validator_roster.local.toml --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 --require-alias solswap-indexer.sora --install --reload`
+   - the helper renders the same config as the manual command below, refuses
+     stale backup `.conf` files in the nginx include directory by default,
+     runs `nginx -t`, and reloads nginx only when `--reload` is explicit
    - `python3 scripts/render_taira_edge_nginx_conf.py --roster configs/soranexus/taira/validator_roster.local.toml --output dist/taira-edge/taira.sora.org.conf`
    - `sudo cp dist/taira-edge/taira.sora.org.conf /etc/nginx/conf.d/taira.conf`
    - on the shared macOS/Homebrew host, install the rendered file as
@@ -835,15 +845,17 @@ From `../iroha2-block-explorer-web`:
      real Torii listener the edge should proxy to, for example the current
      shared-host `127.0.0.1:29080..29083` layout rather than the old
      `127.0.0.1:18080..18083` default
-  - pass `--soracloud-alias-route <alias>=<host>:<port>` for every dedicated
-    Soracloud runtime that is served from the shared edge instead of Torii's
-    generic public alias path. For the Solswap indexer on the shared host, the
-    route binding is currently:
-    `--soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788`.
-    This renders the exact Mon host
+  - add `[[soracloud_alias_routes]]` entries to the same local roster for
+    every dedicated Soracloud runtime that is served from the shared edge
+    instead of Torii's generic public alias path. For the Solswap indexer on
+    the shared host, the local roster entry is currently:
+    `alias = "solswap-indexer.sora"` with
+    `edge_upstream = "127.0.0.1:8788"`. This renders the exact Mon host
     `solswap-indexer.sora.mon.taira.sora.net` and both `/soradns/` debug
     fallbacks to that service upstream while leaving unknown aliases on the
-    generic Mon fallback.
+    generic Mon fallback. You can also pass
+    `--soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788` directly to
+    the renderer for one-off overrides.
   - keep the shared `taira_public_edge_upstream` wired to every live validator
     and use it for the generic public API surface, public SoraFS/app-api
     routes, and the explorer's `/status` fallback.
@@ -908,9 +920,10 @@ From `../iroha2-block-explorer-web`:
    - keep Mon gateway routing generic with the apex `mon.taira.sora.net`
      server block plus the regex alias server block for
      `<alias>.mon.taira.sora.net`, and add dedicated service bindings through
-     repeatable `--soracloud-alias-route <alias>=<host>:<port>` flags when an
-     alias must terminate at a runtime process instead of the generic Torii
-     alias path. Do not add per-service path rewrites such as
+     local-roster `[[soracloud_alias_routes]]` entries or repeatable
+     `--soracloud-alias-route <alias>=<host>:<port>` flags when an alias must
+     terminate at a runtime process instead of the generic Torii alias path.
+     Do not add per-service path rewrites such as
      `/solswap-indexer/...`.
    - do not leave backup `.conf` files under the nginx `servers/` include
      directory. Homebrew nginx deployments often include the whole directory,

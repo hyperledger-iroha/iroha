@@ -148,8 +148,29 @@ Next ==
 TypeInvariant ==
   checked = 0
 
-SafetyFast ==
+TrustedArtifactExact ==
+  \A c \in Cases:
+    ActualTrustedArtifact(c) = SpecTrustedArtifact(c)
+
+WitnessRootsExact ==
+  \A c \in Cases:
+    ActualRootsMatchWitness(c) = SpecRootsMatchWitness(c)
+
+CommitAcceptsExact ==
+  \A c \in Cases:
+    ActualCommitAccepts(c) = SpecCommitAccepts(c)
+
+PrevalidatedCommitArtifactExactness ==
+  /\ TrustedArtifactExact
+  /\ WitnessRootsExact
+  /\ CommitAcceptsExact
+
+CaseTupleExact ==
   \A c \in Cases: ActualCase(c) = SpecCase(c)
+
+SafetyFast ==
+  /\ PrevalidatedCommitArtifactExactness
+  /\ CaseTupleExact
 
 BugRequiresArtifact ==
   ActualCase("no_artifact") = SpecCase("no_artifact")

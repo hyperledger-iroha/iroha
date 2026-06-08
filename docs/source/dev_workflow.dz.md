@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   ཐོན་སྐྱེད་ `serde`/`serde_json` `AGENTS_BASE_REF` དང་འབྲེལ་བ་ཡོད། སྡེ༌ཚན
   `SERDE_GUARD_ALLOW=1` གནས་སྤོ་འཆར་གཞི་བཙུགས་པའི་ཤུལ་ལས་ CI བརྟག་དཔྱད་ཚུ་གི་དོན་ལུ་རྐྱངམ་ཅིག་ཨིན།
 - `make guards` གིས་ Norito རིམ་སྒྲིག་སྲིད་བྱུས་: གསརཔ་ ངོས་ལེན་མི་འབད།
-  Norito/`serde_json` ལག་ལེན་དང་ ad-hoc AoS གྲོགས་རམ་པ་ དེ་ལས་ SCALE བརྟེན་པའི་གནས་སྟངས་ཚུ་ ཕྱི་ཁར་ཨིན།
+  Norito/`serde_json` ལག་ལེན་དང་ ad-hoc AoS གྲོགས་རམ་པ་ དེ་ལས་ retired codec བརྟེན་པའི་གནས་སྟངས་ཚུ་ ཕྱི་ཁར་ཨིན།
   the Norito བཞུགས་ཁྲི་ (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **Proc-macro UI སྲིད་བྱུས་:** proc-macro crete རེ་རེ་གིས་ `trybuild` ཅིག་བཏང་དགོ།
   harness (`tests/ui.rs` དང་མཉམ་པའི་ ཆོག་མཆན/འཐུས་ཤོར་) གི་རྒྱབ་ལྗོངས་ `swift test` གི་རྒྱབ་ལྗོངས།
   ཁྱད་ཆོས། `tests/ui/pass` གི་འོག་ལུ་ བདེ་སྐྱིད་ཀྱི་ལམ་གྱི་དཔེ་ཚད་ཚུ་ གཤམ་གསལ་ལྟར་ བཀག་ཆ་འབད་བའི་གནད་དོན་ཚུ་ འོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།

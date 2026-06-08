@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   `serde`/`serde_json` етештереү `AGENTS_BASE_REF`-ҡа ҡарағанда. Йыйылма
   `SERDE_GUARD_ALLOW=1` тик CI тәжрибәләре өсөн генә миграция планы тапшырғандан һуң.
 - `make guards` Norito сериялаштырыу сәйәсәтен үтәй: ул яңы инҡар итә.
-  `serde`/`serde_json` ҡулланыу, махсус AoS ярҙамсылары һәм SCALE бәйлелектәре ситтә
+  `serde`/`serde_json` ҡулланыу, махсус AoS ярҙамсылары һәм retired codec бәйлелектәре ситтә
   Norito эскәмйәләре (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **Прок-макрослы UI сәйәсәте:** һәр прок-макро йәшник `trybuild`E йөк ташырға тейеш.
   йүгән (`tests/ui.rs` менән үткәреү/уңышһыҙлыҡҡа осраған глобтар) `trybuild-tests`-тән артында
   сифат. Урын бәхетле-юл өлгөләре буйынса `tests/ui/pass`, кире ҡағыу осраҡтары буйынса .

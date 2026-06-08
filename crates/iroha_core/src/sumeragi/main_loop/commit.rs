@@ -61,6 +61,57 @@ pub(super) const fn known_block_commit_qc_recovery_request_plan(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MaterializeQcResult {
+    Cached,
+    Recovered,
+    Formed,
+    Rebuilt,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MaterializeQcDecision {
+    try_form_votes: bool,
+    attempts_kura_recovery: bool,
+    result: MaterializeQcResult,
+    caches_materialized_qc: bool,
+}
+
+fn materialize_qc_decision(
+    cached_existing: bool,
+    empty_roster: bool,
+    formed_after_try: bool,
+    kura_recovery_available: bool,
+    rebuild_from_votes_available: bool,
+) -> MaterializeQcDecision {
+    let try_form_votes = !cached_existing && !empty_roster;
+    let attempts_kura_recovery =
+        !cached_existing && (empty_roster || (!formed_after_try && kura_recovery_available));
+    let result = if cached_existing {
+        MaterializeQcResult::Cached
+    } else if attempts_kura_recovery && kura_recovery_available {
+        MaterializeQcResult::Recovered
+    } else if formed_after_try {
+        MaterializeQcResult::Formed
+    } else if rebuild_from_votes_available {
+        MaterializeQcResult::Rebuilt
+    } else {
+        MaterializeQcResult::None
+    };
+    MaterializeQcDecision {
+        try_form_votes,
+        attempts_kura_recovery,
+        result,
+        caches_materialized_qc: matches!(
+            result,
+            MaterializeQcResult::Recovered
+                | MaterializeQcResult::Formed
+                | MaterializeQcResult::Rebuilt
+        ),
+    }
+}
+
 fn pending_allows_stale_view_commit_qc_fetch(
     pending: &PendingBlock,
     block_hash: HashOf<BlockHeader>,
@@ -7408,9 +7459,18 @@ impl Actor {
                             manifest_guard_reason(&err),
                         );
                     }
-                    let reason = err.gate_reason();
+                    let manifest_reason = err.gate_reason();
+                    let reason = if missing_local_data {
+                        GateReason::MissingLocalData
+                    } else {
+                        manifest_reason
+                    };
                     let previous = pending.last_gate;
-                    let satisfaction = super::da::gate_satisfaction(previous, Some(reason));
+                    let satisfaction = if missing_local_data {
+                        None
+                    } else {
+                        super::da::gate_satisfaction(previous, Some(reason))
+                    };
                     if let Some(satisfied) = satisfaction {
                         pending.last_gate_satisfied = Some(satisfied);
                     }
@@ -7737,14 +7797,37 @@ impl Actor {
             qc.view,
             qc.epoch,
         ) {
+            let decision = materialize_qc_decision(
+                /*cached_existing*/ true, /*empty_roster*/ false,
+                /*formed_after_try*/ false, /*kura_recovery_available*/ false,
+                /*rebuild_from_votes_available*/ false,
+            );
+            debug_assert_eq!(decision.result, MaterializeQcResult::Cached);
+            debug_assert!(!decision.caches_materialized_qc);
             return Some(existing);
         }
         if topology_peers.is_empty() {
             if let Some(recovered) = self.recover_highest_qc_from_kura(&qc) {
+                let decision = materialize_qc_decision(
+                    /*cached_existing*/ false, /*empty_roster*/ true,
+                    /*formed_after_try*/ false, /*kura_recovery_available*/ true,
+                    /*rebuild_from_votes_available*/ false,
+                );
+                debug_assert!(decision.attempts_kura_recovery);
+                debug_assert_eq!(decision.result, MaterializeQcResult::Recovered);
+                debug_assert!(decision.caches_materialized_qc);
                 self.qc_cache
                     .insert(Self::qc_tally_key(&recovered), recovered.clone());
                 return Some(recovered);
             }
+            let decision = materialize_qc_decision(
+                /*cached_existing*/ false, /*empty_roster*/ true,
+                /*formed_after_try*/ false, /*kura_recovery_available*/ false,
+                /*rebuild_from_votes_available*/ false,
+            );
+            debug_assert!(!decision.try_form_votes);
+            debug_assert!(decision.attempts_kura_recovery);
+            debug_assert_eq!(decision.result, MaterializeQcResult::None);
             debug!(
                 height = qc.height,
                 view = qc.view,
@@ -7755,6 +7838,12 @@ impl Actor {
             return None;
         }
         let topology = super::network_topology::Topology::new(topology_peers.to_vec());
+        let preform_decision = materialize_qc_decision(
+            /*cached_existing*/ false, /*empty_roster*/ false,
+            /*formed_after_try*/ false, /*kura_recovery_available*/ false,
+            /*rebuild_from_votes_available*/ false,
+        );
+        debug_assert!(preform_decision.try_form_votes);
         self.try_form_qc_from_votes(
             qc.phase,
             qc.subject_block_hash,
@@ -7771,9 +7860,24 @@ impl Actor {
             qc.view,
             qc.epoch,
         ) {
+            let decision = materialize_qc_decision(
+                /*cached_existing*/ false, /*empty_roster*/ false,
+                /*formed_after_try*/ true, /*kura_recovery_available*/ false,
+                /*rebuild_from_votes_available*/ false,
+            );
+            debug_assert_eq!(decision.result, MaterializeQcResult::Formed);
+            debug_assert!(decision.caches_materialized_qc);
             return Some(formed);
         }
         if let Some(recovered) = self.recover_highest_qc_from_kura(&qc) {
+            let decision = materialize_qc_decision(
+                /*cached_existing*/ false, /*empty_roster*/ false,
+                /*formed_after_try*/ false, /*kura_recovery_available*/ true,
+                /*rebuild_from_votes_available*/ false,
+            );
+            debug_assert!(decision.attempts_kura_recovery);
+            debug_assert_eq!(decision.result, MaterializeQcResult::Recovered);
+            debug_assert!(decision.caches_materialized_qc);
             self.qc_cache
                 .insert(Self::qc_tally_key(&recovered), recovered.clone());
             return Some(recovered);
@@ -8004,6 +8108,13 @@ impl Actor {
             aggregate_signature,
             roots,
         );
+        let decision = materialize_qc_decision(
+            /*cached_existing*/ false, /*empty_roster*/ false,
+            /*formed_after_try*/ false, /*kura_recovery_available*/ false,
+            /*rebuild_from_votes_available*/ true,
+        );
+        debug_assert_eq!(decision.result, MaterializeQcResult::Rebuilt);
+        debug_assert!(decision.caches_materialized_qc);
         self.qc_cache
             .insert(Self::qc_tally_key(&rebuilt), rebuilt.clone());
         Some(rebuilt)
@@ -9513,6 +9624,190 @@ mod tests {
     const COMMIT_WORKER_TIMEOUT: Duration = Duration::from_secs(180);
 
     #[test]
+    fn materialize_qc_formal_gate_matrix() {
+        #[derive(Debug, Clone, Copy)]
+        struct Case {
+            label: &'static str,
+            cached_existing: bool,
+            empty_roster: bool,
+            formed_after_try: bool,
+            kura_recovery_available: bool,
+            rebuild_from_votes_available: bool,
+        }
+
+        let cases = [
+            Case {
+                label: "cached_existing",
+                cached_existing: true,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "empty_roster_recovery",
+                cached_existing: false,
+                empty_roster: true,
+                formed_after_try: false,
+                kura_recovery_available: true,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "empty_roster_no_recovery",
+                cached_existing: false,
+                empty_roster: true,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "formed_from_votes",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: true,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "recover_after_form_miss",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: true,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "npos_missing_stake_roster",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "commit_root_filter_empty",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "no_votes",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "permissioned_under_quorum",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "permissioned_quorum",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: true,
+            },
+            Case {
+                label: "prepare_quorum",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: true,
+            },
+            Case {
+                label: "npos_signer_map_error",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "npos_stake_quorum_false",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "aggregate_error",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+            Case {
+                label: "canonical_mapping_incomplete",
+                cached_existing: false,
+                empty_roster: false,
+                formed_after_try: false,
+                kura_recovery_available: false,
+                rebuild_from_votes_available: false,
+            },
+        ];
+
+        for case in cases {
+            let spec_try_form = !case.cached_existing && !case.empty_roster;
+            let spec_attempts_kura_recovery = !case.cached_existing
+                && (case.empty_roster || (!case.formed_after_try && case.kura_recovery_available));
+            let spec_result = if case.cached_existing {
+                MaterializeQcResult::Cached
+            } else if spec_attempts_kura_recovery && case.kura_recovery_available {
+                MaterializeQcResult::Recovered
+            } else if case.formed_after_try {
+                MaterializeQcResult::Formed
+            } else if case.rebuild_from_votes_available {
+                MaterializeQcResult::Rebuilt
+            } else {
+                MaterializeQcResult::None
+            };
+            let spec_cache_insert = matches!(
+                spec_result,
+                MaterializeQcResult::Recovered
+                    | MaterializeQcResult::Formed
+                    | MaterializeQcResult::Rebuilt
+            );
+
+            let actual = materialize_qc_decision(
+                case.cached_existing,
+                case.empty_roster,
+                case.formed_after_try,
+                case.kura_recovery_available,
+                case.rebuild_from_votes_available,
+            );
+
+            assert_eq!(
+                actual.try_form_votes, spec_try_form,
+                "{} try_form_votes mismatch",
+                case.label
+            );
+            assert_eq!(
+                actual.attempts_kura_recovery, spec_attempts_kura_recovery,
+                "{} attempts_kura_recovery mismatch",
+                case.label
+            );
+            assert_eq!(actual.result, spec_result, "{} result mismatch", case.label);
+            assert_eq!(
+                actual.caches_materialized_qc, spec_cache_insert,
+                "{} caches_materialized_qc mismatch",
+                case.label
+            );
+        }
+    }
+
+    #[test]
     fn prevalidated_roots_match_witness_matches_formal_boundaries() {
         use crate::sumeragi::consensus::{ExecKv, ExecWitness};
 
@@ -10863,6 +11158,229 @@ mod tests {
         assert!(targets.iter().all(|peer| peers.contains(peer)));
     }
 
+    #[test]
+    fn block_sync_update_targets_formal_gate_matrix() {
+        let local = PeerId::new(KeyPair::random().public_key().clone());
+        let world_a = PeerId::new(KeyPair::random().public_key().clone());
+        let world_b = PeerId::new(KeyPair::random().public_key().clone());
+        let world_offline = PeerId::new(KeyPair::random().public_key().clone());
+        let registered_stray = PeerId::new(KeyPair::random().public_key().clone());
+        let trusted_stray = PeerId::new(KeyPair::random().public_key().clone());
+        let unregistered_stray = PeerId::new(KeyPair::random().public_key().clone());
+        let seed = [0xA5; 32];
+        let set = |peers: &[PeerId]| peers.iter().cloned().collect::<BTreeSet<_>>();
+
+        let world = vec![local.clone(), world_a.clone()];
+        let registered = vec![local.clone(), world_a.clone()];
+        let online = vec![local.clone(), world_a.clone()];
+        assert!(
+            Actor::block_sync_update_targets_for_peers(
+                &local,
+                0,
+                &world,
+                &registered,
+                &[],
+                &online,
+                &seed,
+            )
+            .is_empty(),
+            "zero gossip limit should fail closed"
+        );
+        assert!(
+            Actor::block_sync_update_targets_for_peers(
+                &local,
+                2,
+                &[],
+                &registered,
+                &[],
+                &online,
+                &seed,
+            )
+            .is_empty(),
+            "empty world-peer input should not target online strays"
+        );
+
+        let world = vec![local.clone(), world_a.clone()];
+        let registered = vec![local.clone(), world_a.clone(), registered_stray.clone()];
+        let trusted = vec![trusted_stray.clone()];
+        let online = vec![
+            local.clone(),
+            world_a.clone(),
+            registered_stray.clone(),
+            trusted_stray.clone(),
+        ];
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            2,
+            &world,
+            &registered,
+            &trusted,
+            &online,
+            &seed,
+        );
+        assert_eq!(
+            set(&targets),
+            BTreeSet::from([registered_stray.clone(), trusted_stray.clone()]),
+            "registered and trusted strays should fill the cap before world peers"
+        );
+
+        let world = vec![local.clone(), world_a.clone(), world_b.clone()];
+        let registered = vec![
+            local.clone(),
+            world_a.clone(),
+            world_b.clone(),
+            registered_stray.clone(),
+        ];
+        let online = vec![
+            local.clone(),
+            world_a.clone(),
+            world_b.clone(),
+            registered_stray.clone(),
+        ];
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            3,
+            &world,
+            &registered,
+            &[],
+            &online,
+            &seed,
+        );
+        assert_eq!(
+            set(&targets),
+            BTreeSet::from([registered_stray.clone(), world_a.clone(), world_b.clone()]),
+            "stray priority should still backfill remaining capacity with online world peers"
+        );
+
+        let world = vec![local.clone(), world_a.clone()];
+        let registered = vec![local.clone(), world_a.clone()];
+        let online = vec![local.clone(), world_a.clone(), unregistered_stray.clone()];
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            2,
+            &world,
+            &registered,
+            &[],
+            &online,
+            &seed,
+        );
+        assert_eq!(
+            set(&targets),
+            BTreeSet::from([world_a.clone()]),
+            "unregistered online strays should be ignored"
+        );
+        assert!(
+            !targets.contains(&unregistered_stray),
+            "unregistered stray should never be selected"
+        );
+
+        let world = vec![local.clone()];
+        let registered = vec![local.clone()];
+        let trusted = vec![trusted_stray.clone()];
+        let online = vec![local.clone(), trusted_stray.clone()];
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            1,
+            &world,
+            &registered,
+            &trusted,
+            &online,
+            &seed,
+        );
+        assert_eq!(
+            targets,
+            vec![trusted_stray.clone()],
+            "trusted online strays should be eligible even when absent from world peers"
+        );
+
+        let world = vec![local.clone(), world_a.clone(), world_offline.clone()];
+        let registered = world.clone();
+        let online = vec![local.clone(), world_a.clone()];
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            2,
+            &world,
+            &registered,
+            &[],
+            &online,
+            &seed,
+        );
+        assert_eq!(
+            targets,
+            vec![world_a.clone()],
+            "online world peers should be preferred over offline world fallback"
+        );
+
+        let online = vec![local.clone()];
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            1,
+            &world,
+            &registered,
+            &[],
+            &online,
+            &seed,
+        );
+        assert_eq!(
+            targets.len(),
+            1,
+            "world fallback should fill when no world peer is online"
+        );
+        assert!(
+            !targets.contains(&local),
+            "world fallback must not target local"
+        );
+        assert!(
+            targets.iter().all(|peer| world.contains(peer)),
+            "world fallback should use only world peers"
+        );
+
+        let world = vec![local.clone(), world_a.clone(), world_b.clone()];
+        let registered = world.clone();
+        let online = vec![local.clone(), world_a.clone(), world_b.clone()];
+        let targets = Actor::block_sync_update_targets_for_peers(
+            &local,
+            1,
+            &world,
+            &registered,
+            &[],
+            &online,
+            &seed,
+        );
+        assert_eq!(
+            targets.len(),
+            1,
+            "world-only selection must obey the gossip cap"
+        );
+        assert!(
+            !targets.contains(&local),
+            "world-only selection must exclude local"
+        );
+        assert!(
+            targets
+                .iter()
+                .all(|peer| [world_a.clone(), world_b.clone()].contains(peer)),
+            "world-only selection should use eligible remote world peers"
+        );
+
+        let world = vec![local.clone()];
+        let registered = vec![local.clone()];
+        let online = vec![local.clone()];
+        assert!(
+            Actor::block_sync_update_targets_for_peers(
+                &local,
+                2,
+                &world,
+                &registered,
+                &[],
+                &online,
+                &seed,
+            )
+            .is_empty(),
+            "only-local world and online inputs should yield no targets"
+        );
+    }
+
     fn qc_preimage(
         chain_id: &ChainId,
         mode_tag: &str,
@@ -11729,6 +12247,551 @@ mod tests {
 
         assert_eq!(update.commit_votes.len(), 1);
         assert_eq!(update.commit_votes[0].signer, 0);
+    }
+
+    #[test]
+    fn apply_cached_qcs_to_block_sync_update_formal_gate_matrix() {
+        let _guard = crate::sumeragi::status::commit_history_test_guard();
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+
+        let chain: ChainId = "apply-cached-qcs-formal-gate"
+            .parse()
+            .expect("chain id parses");
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let validator_set: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let alternate_keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let alternate_validator_set: Vec<_> = alternate_keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let signers_bitmap = vec![0b0000_0111];
+        let zero_roots = (
+            Hash::prehashed([0u8; Hash::LENGTH]),
+            Hash::prehashed([1u8; Hash::LENGTH]),
+        );
+        let make_qc = |block_hash: HashOf<BlockHeader>,
+                       height: u64,
+                       view: u64,
+                       epoch: u64,
+                       mode_tag: &str,
+                       roots: (Hash, Hash),
+                       roster: &[PeerId],
+                       keys: &[KeyPair]| {
+            let validator_set = roster.to_vec();
+            crate::sumeragi::consensus::Qc {
+                phase: crate::sumeragi::consensus::Phase::Commit,
+                subject_block_hash: block_hash,
+                parent_state_root: roots.0,
+                post_state_root: roots.1,
+                height,
+                view,
+                epoch,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
+                mode_tag: mode_tag.to_string(),
+                highest_qc: None,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set,
+                aggregate: crate::sumeragi::consensus::QcAggregate {
+                    signers_bitmap: signers_bitmap.clone(),
+                    bls_aggregate_signature: aggregate_signature_for_bitmap(
+                        &chain,
+                        mode_tag,
+                        crate::sumeragi::consensus::Phase::Commit,
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                        &signers_bitmap,
+                        keys,
+                    ),
+                },
+            }
+        };
+        let make_checkpoint = |qc: &crate::sumeragi::consensus::Qc| {
+            ValidatorSetCheckpoint::new(
+                qc.height,
+                qc.view,
+                qc.subject_block_hash,
+                qc.parent_state_root,
+                qc.post_state_root,
+                qc.validator_set.clone(),
+                qc.aggregate.signers_bitmap.clone(),
+                qc.aggregate.bls_aggregate_signature.clone(),
+                qc.validator_set_hash_version,
+                None,
+            )
+        };
+        let make_vote =
+            |block_hash: HashOf<BlockHeader>, height: u64, view: u64, epoch: u64, signer: u32| {
+                crate::sumeragi::consensus::Vote {
+                    phase: crate::sumeragi::consensus::Phase::Commit,
+                    block_hash,
+                    parent_state_root: zero_roots.0,
+                    post_state_root: zero_roots.1,
+                    height,
+                    view,
+                    epoch,
+                    chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                    rechain_seq: 0,
+                    highest_qc: None,
+                    signer,
+                    bls_sig: vec![u8::try_from(signer).expect("test signer fits u8"); 96],
+                }
+            };
+        let insert_vote =
+            |vote_log: &mut BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+             vote: crate::sumeragi::consensus::Vote| {
+                vote_log.insert(
+                    (
+                        vote.phase,
+                        vote.height,
+                        vote.view,
+                        vote.epoch,
+                        vote.signer,
+                        vote.chain_order_hash,
+                        vote.rechain_seq,
+                    ),
+                    vote,
+                );
+            };
+        let raw_cache = |qc: crate::sumeragi::consensus::Qc| {
+            let mut cache = BTreeMap::new();
+            cache.insert(
+                (
+                    qc.phase,
+                    qc.subject_block_hash,
+                    qc.height,
+                    qc.view,
+                    qc.epoch,
+                    qc.chain_order_hash,
+                    qc.rechain_seq,
+                ),
+                qc,
+            );
+            cache
+        };
+        let empty_votes = BTreeMap::new();
+
+        let block = sample_block(12, 1);
+        let block_hash = block.hash();
+        let existing_qc = make_qc(
+            block_hash,
+            12,
+            1,
+            0,
+            super::super::PERMISSIONED_TAG,
+            zero_roots,
+            &validator_set,
+            &keypairs,
+        );
+        let raw_qc = make_qc(
+            block_hash,
+            12,
+            1,
+            0,
+            super::super::PERMISSIONED_TAG,
+            (
+                Hash::prehashed([2u8; Hash::LENGTH]),
+                Hash::prehashed([3u8; Hash::LENGTH]),
+            ),
+            &alternate_validator_set,
+            &alternate_keypairs,
+        );
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        update.commit_qc = Some(existing_qc.clone());
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &raw_cache(raw_qc),
+            &empty_votes,
+            block_hash,
+            12,
+            1,
+            0,
+            &state,
+            ConsensusMode::Permissioned,
+        );
+        assert_eq!(
+            update.commit_qc,
+            Some(existing_qc.clone()),
+            "existing commit QC must not be overwritten by cached evidence"
+        );
+        assert_eq!(
+            update
+                .validator_checkpoint
+                .as_ref()
+                .expect("checkpoint synthesized from existing QC")
+                .validator_set,
+            existing_qc.validator_set
+        );
+
+        let block = sample_block(13, 2);
+        let block_hash = block.hash();
+        let raw_qc = make_qc(
+            block_hash,
+            13,
+            2,
+            0,
+            super::super::PERMISSIONED_TAG,
+            zero_roots,
+            &validator_set,
+            &keypairs,
+        );
+        let existing_checkpoint = ValidatorSetCheckpoint::new(
+            99,
+            7,
+            block_hash,
+            Hash::prehashed([4u8; Hash::LENGTH]),
+            Hash::prehashed([5u8; Hash::LENGTH]),
+            alternate_validator_set.clone(),
+            signers_bitmap.clone(),
+            vec![9; 96],
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        );
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        update.validator_checkpoint = Some(existing_checkpoint.clone());
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &raw_cache(raw_qc.clone()),
+            &empty_votes,
+            block_hash,
+            13,
+            2,
+            0,
+            &state,
+            ConsensusMode::Permissioned,
+        );
+        assert_eq!(update.commit_qc, Some(raw_qc));
+        assert_eq!(
+            update.validator_checkpoint,
+            Some(existing_checkpoint),
+            "existing validator checkpoint must not be overwritten"
+        );
+
+        let block = sample_block(14, 0);
+        let block_hash = block.hash();
+        let raw_qc = make_qc(
+            block_hash,
+            14,
+            0,
+            0,
+            super::super::PERMISSIONED_TAG,
+            zero_roots,
+            &validator_set,
+            &keypairs,
+        );
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &raw_cache(raw_qc.clone()),
+            &empty_votes,
+            block_hash,
+            14,
+            0,
+            0,
+            &state,
+            ConsensusMode::Permissioned,
+        );
+        assert_eq!(update.commit_qc, Some(raw_qc.clone()));
+        assert_eq!(
+            update.validator_checkpoint,
+            Some(make_checkpoint(&raw_qc)),
+            "missing checkpoint should be synthesized from the final QC"
+        );
+
+        let block = sample_block(15, 0);
+        let block_hash = block.hash();
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &BTreeMap::new(),
+            &empty_votes,
+            block_hash,
+            15,
+            0,
+            0,
+            &state,
+            ConsensusMode::Permissioned,
+        );
+        assert!(update.commit_qc.is_none());
+        assert!(
+            update.validator_checkpoint.is_none(),
+            "helper must not synthesize a checkpoint without a QC"
+        );
+        assert!(update.commit_votes.is_empty());
+
+        let block = sample_block(16, 0);
+        let block_hash = block.hash();
+        let npos_qc = make_qc(
+            block_hash,
+            16,
+            0,
+            0,
+            super::super::NPOS_TAG,
+            zero_roots,
+            &validator_set,
+            &keypairs,
+        );
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &raw_cache(npos_qc.clone()),
+            &empty_votes,
+            block_hash,
+            16,
+            0,
+            0,
+            &state,
+            ConsensusMode::Npos,
+        );
+        assert_eq!(update.commit_qc, Some(npos_qc.clone()));
+        assert!(
+            update
+                .stake_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.matches_roster(&validator_set)),
+            "NPoS update with commit QC should repair a missing stake snapshot"
+        );
+        let repaired_snapshot = update
+            .stake_snapshot
+            .clone()
+            .expect("NPoS stake snapshot repaired");
+
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        update.stake_snapshot = Some(repaired_snapshot.clone());
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &raw_cache(npos_qc.clone()),
+            &empty_votes,
+            block_hash,
+            16,
+            0,
+            0,
+            &state,
+            ConsensusMode::Npos,
+        );
+        assert_eq!(
+            update.stake_snapshot,
+            Some(repaired_snapshot.clone()),
+            "matching NPoS stake snapshot should be preserved"
+        );
+
+        let mismatched_snapshot = crate::sumeragi::stake_snapshot::CommitStakeSnapshot {
+            validator_set_hash: HashOf::new(&alternate_validator_set),
+            entries: alternate_validator_set
+                .iter()
+                .cloned()
+                .map(
+                    |peer_id| crate::sumeragi::stake_snapshot::CommitStakeSnapshotEntry {
+                        peer_id,
+                        stake: Numeric::from(1_u64),
+                    },
+                )
+                .collect(),
+        };
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        update.stake_snapshot = Some(mismatched_snapshot.clone());
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &raw_cache(npos_qc.clone()),
+            &empty_votes,
+            block_hash,
+            16,
+            0,
+            0,
+            &state,
+            ConsensusMode::Npos,
+        );
+        assert_ne!(
+            update.stake_snapshot,
+            Some(mismatched_snapshot.clone()),
+            "mismatched NPoS stake snapshot should be repaired"
+        );
+        assert!(
+            update
+                .stake_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.matches_roster(&validator_set))
+        );
+
+        let permissioned_qc = make_qc(
+            block_hash,
+            16,
+            0,
+            0,
+            super::super::PERMISSIONED_TAG,
+            zero_roots,
+            &validator_set,
+            &keypairs,
+        );
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        update.stake_snapshot = Some(mismatched_snapshot.clone());
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &raw_cache(permissioned_qc),
+            &empty_votes,
+            block_hash,
+            16,
+            0,
+            0,
+            &state,
+            ConsensusMode::Permissioned,
+        );
+        assert_eq!(
+            update.stake_snapshot,
+            Some(mismatched_snapshot),
+            "permissioned updates should not repair stake snapshots"
+        );
+
+        let block = sample_block(17, 1);
+        let block_hash = block.hash();
+        let record_stake_snapshot =
+            crate::sumeragi::stake_snapshot::CommitStakeSnapshot::from_roster(
+                state.view().world(),
+                &validator_set,
+            )
+            .expect("record stake snapshot");
+        let signers: BTreeSet<_> = [0_u32, 1_u32, 2_u32].into_iter().collect();
+        let aggregate_signature = aggregate_signature_for_bitmap(
+            &chain,
+            super::super::NPOS_TAG,
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            17,
+            1,
+            0,
+            &signers_bitmap,
+            &keypairs,
+        );
+        crate::sumeragi::status::record_precommit_signers(
+            crate::sumeragi::status::PrecommitSignerRecord {
+                block_hash,
+                height: 17,
+                view: 1,
+                epoch: 0,
+                chain_order_hash: crate::sumeragi::consensus::default_chain_order_hash(),
+                rechain_seq: 0,
+                parent_state_root: zero_roots.0,
+                post_state_root: zero_roots.1,
+                signers,
+                bls_aggregate_signature: aggregate_signature,
+                roster_len: validator_set.len(),
+                mode_tag: super::super::NPOS_TAG.to_string(),
+                validator_set: validator_set.clone(),
+                stake_snapshot: Some(record_stake_snapshot.clone()),
+            },
+        );
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &BTreeMap::new(),
+            &empty_votes,
+            block_hash,
+            17,
+            1,
+            0,
+            &state,
+            ConsensusMode::Npos,
+        );
+        assert!(update.commit_qc.is_some());
+        assert_eq!(
+            update.stake_snapshot,
+            Some(record_stake_snapshot),
+            "NPoS signer-history derivation should clone the recorded stake snapshot"
+        );
+        crate::sumeragi::status::reset_precommit_signer_history_for_tests();
+
+        let block = sample_block(18, 0);
+        let block_hash = block.hash();
+        let mut vote_log = BTreeMap::new();
+        let matching_vote = make_vote(block_hash, 18, 0, 0, 0);
+        insert_vote(&mut vote_log, matching_vote.clone());
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &BTreeMap::new(),
+            &vote_log,
+            block_hash,
+            18,
+            0,
+            0,
+            &state,
+            ConsensusMode::Permissioned,
+        );
+        assert_eq!(
+            update.commit_votes,
+            vec![matching_vote],
+            "matching cached commit votes should attach when update votes are empty"
+        );
+
+        let existing_vote = make_vote(block_hash, 18, 0, 0, 1);
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        update.commit_votes = vec![existing_vote.clone()];
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &BTreeMap::new(),
+            &vote_log,
+            block_hash,
+            18,
+            0,
+            0,
+            &state,
+            ConsensusMode::Permissioned,
+        );
+        assert_eq!(
+            update.commit_votes,
+            vec![existing_vote],
+            "existing commit votes must not be overwritten by cached votes"
+        );
+
+        let mut wrong_context_votes = BTreeMap::new();
+        insert_vote(&mut wrong_context_votes, make_vote(block_hash, 19, 0, 0, 0));
+        insert_vote(&mut wrong_context_votes, make_vote(block_hash, 18, 1, 0, 1));
+        insert_vote(&mut wrong_context_votes, make_vote(block_hash, 18, 0, 1, 2));
+        let other_block_hash = sample_block(20, 0).hash();
+        insert_vote(
+            &mut wrong_context_votes,
+            make_vote(other_block_hash, 18, 0, 0, 3),
+        );
+        let mut update = super::super::message::BlockSyncUpdate::from(&block);
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &BTreeMap::new(),
+            &wrong_context_votes,
+            block_hash,
+            18,
+            0,
+            0,
+            &state,
+            ConsensusMode::Permissioned,
+        );
+        assert!(
+            update.commit_votes.is_empty(),
+            "wrong block/height/view cached votes should be ignored"
+        );
+
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+        crate::sumeragi::status::reset_precommit_signer_history_for_tests();
     }
 
     #[test]

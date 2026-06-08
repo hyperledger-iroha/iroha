@@ -59,11 +59,11 @@ Kotodama toolchain၊ ထို့ကြောင့် စာချုပ်မ
 
 ## Norito (Serialization Codec)
 
-Norito သည် workspace serialization codec ဖြစ်သည်။ ကျွန်ုပ်တို့သည် `parity-scale-codec` ကို အသုံးမပြုပါ။
-(SCALE)။ စာရွက်စာတမ်း သို့မဟုတ် စံသတ်မှတ်ချက်များသည် SCALE နှင့် နှိုင်းယှဉ်ပါက၊ ၎င်းသည် အားလုံးအတွက်ဖြစ်သည်။
+Norito သည် workspace serialization codec ဖြစ်သည်။ ကျွန်ုပ်တို့သည် `retired codec` ကို အသုံးမပြုပါ။
+(retired codec)။ စာရွက်စာတမ်း သို့မဟုတ် စံသတ်မှတ်ချက်များသည် retired codec နှင့် နှိုင်းယှဉ်ပါက၊ ၎င်းသည် အားလုံးအတွက်ဖြစ်သည်။
 အကြောင်းအရာ; ထုတ်လုပ်မှုလမ်းကြောင်းအားလုံး Norito ကိုအသုံးပြုသည်။ `norito::codec::{Encode, Decode}`
 API များသည် ခေါင်းစီးမဲ့ ("bare") Norito payload ကို hashing နှင့် wire အတွက် ပေးသည်
-ထိရောက်မှု — ၎င်းသည် Norito၊ SCALE မဟုတ်ပါ။
+ထိရောက်မှု — ၎င်းသည် Norito၊ retired codec မဟုတ်ပါ။
 
 နောက်ဆုံးအခြေအနေ-
 
@@ -87,4 +87,4 @@ API များသည် ခေါင်းစီးမဲ့ ("bare") Norito p
 အခြေအနေအဆုံးမှတ် ကုဒ်သွင်းခြင်း မှတ်စုများ
 - Torii `/status` ကိုယ်ထည်သည် ကျစ်လစ်သိပ်သည်းမှုအတွက် ဦးခေါင်းမဲ့ ("bare") ပေးဆောင်မှုဖြင့် ပုံမှန်အားဖြင့် Norito ကို အသုံးပြုထားသည်။ ဖောက်သည်များသည် Norito ကုဒ်ကို ဦးစွာကြိုးစားသင့်သည်။
 - တောင်းဆိုသောအခါ ဆာဗာများသည် JSON ကို ပြန်ပေးနိုင်သည်။ `content-type` သည် `application/json` ဖြစ်ပါက client များသည် JSON သို့ ပြန်သွားကြသည်။
-- ဝိုင်ယာဖော်မတ်သည် Norito၊ SCALE မဟုတ်ပါ။ `norito::codec::{Encode,Decode}` APIs များကို ဗလာဗားရှင်းအတွက် အသုံးပြုပါသည်။
+- ဝိုင်ယာဖော်မတ်သည် Norito၊ retired codec မဟုတ်ပါ။ `norito::codec::{Encode,Decode}` APIs များကို ဗလာဗားရှင်းအတွက် အသုံးပြုပါသည်။

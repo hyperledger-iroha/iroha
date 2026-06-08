@@ -16,6 +16,8 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.LongSupplier
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
+import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AccountAddressException
 import org.hyperledger.iroha.sdk.client.ClientObserver
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.HttpErrorMessageExtractor
@@ -257,35 +259,63 @@ class Halo2OfflineNoteProofVerifier : OfflineNoteProofVerifier {
         OfflineNoteHalo2Prover.verifyRedeem(redemption)
 }
 
-/** Verifies issuer trust and attestation shape for Offline Note key certificates. */
+/** Verifies trust and attestation shape for Offline Note key certificates. */
 interface OfflineNoteCertificateVerifier {
-    fun verifyCertificate(certificate: OfflineNote.KeyCertificate): Boolean
+    /** Verifies a certificate signed by a trusted issuer for topup/issue paths. */
+    fun verifyIssuerCertificate(certificate: OfflineNote.KeyCertificate): Boolean
+
+    /** Verifies a certificate self-signed by the account named in its accountId for P2P output paths. */
+    fun verifyOwnerCertificate(certificate: OfflineNote.KeyCertificate): Boolean
 }
 
 /** Fails closed until a wallet is configured with trusted issuer roots. */
 class RejectingOfflineNoteCertificateVerifier : OfflineNoteCertificateVerifier {
-    override fun verifyCertificate(certificate: OfflineNote.KeyCertificate): Boolean = false
+    override fun verifyIssuerCertificate(certificate: OfflineNote.KeyCertificate): Boolean = false
+
+    override fun verifyOwnerCertificate(certificate: OfflineNote.KeyCertificate): Boolean = false
 }
 
-/** Ed25519 verifier for issuer-signed Offline Note key certificates. */
+/** Ed25519 verifier for issuer-signed and owner-self-signed Offline Note key certificates. */
 class Ed25519OfflineNoteCertificateVerifier(
     trustedIssuerPublicKeys: Collection<ByteArray>,
 ) : OfflineNoteCertificateVerifier {
     private val trustedIssuerPublicKeys = trustedIssuerPublicKeys.map { it.copyOf() }
 
-    override fun verifyCertificate(certificate: OfflineNote.KeyCertificate): Boolean {
+    override fun verifyIssuerCertificate(certificate: OfflineNote.KeyCertificate): Boolean {
         if (trustedIssuerPublicKeys.isEmpty()) return false
-        if (certificate.platform.trim().isEmpty()) return false
-        if (certificate.keyId.trim().isEmpty()) return false
-        if (certificate.deviceId.trim().isEmpty()) return false
-        if (certificate.assertionScheme.trim().isEmpty()) return false
-        if (certificate.assertionKeyAlgorithm.trim().isEmpty()) return false
-        if (certificate.assertionPublicKey().isEmpty()) return false
+        if (!hasValidAttestationShape(certificate)) return false
         val message = certificate.signingBytes()
         val signature = certificate.issuerSignature()
         return trustedIssuerPublicKeys.any { root ->
             root.size == 32 && verifyEd25519(root, message, signature)
         }
+    }
+
+    override fun verifyOwnerCertificate(certificate: OfflineNote.KeyCertificate): Boolean {
+        if (!hasValidAttestationShape(certificate)) return false
+        val ownerKey = ownerSignatoryKey(certificate.accountId) ?: return false
+        return verifyEd25519(ownerKey, certificate.signingBytes(), certificate.issuerSignature())
+    }
+
+    private fun hasValidAttestationShape(certificate: OfflineNote.KeyCertificate): Boolean =
+        certificate.platform.trim().isNotEmpty() &&
+            certificate.keyId.trim().isNotEmpty() &&
+            certificate.deviceId.trim().isNotEmpty() &&
+            certificate.assertionScheme.trim().isNotEmpty() &&
+            certificate.assertionKeyAlgorithm.trim().isNotEmpty() &&
+            certificate.assertionPublicKey().isNotEmpty()
+
+    private fun ownerSignatoryKey(accountId: String): ByteArray? {
+        val singleKey = try {
+            AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null)
+                .address
+                .singleKeyPayloadIgnoringCurveSupport()
+        } catch (ex: AccountAddressException) {
+            return null
+        } ?: return null
+        if (singleKey.curveId != ED25519_CURVE_ID) return null
+        if (singleKey.publicKey.size != 32) return null
+        return singleKey.publicKey
     }
 
     private fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean =
@@ -297,6 +327,10 @@ class Ed25519OfflineNoteCertificateVerifier(
         } catch (ex: RuntimeException) {
             false
         }
+
+    private companion object {
+        private const val ED25519_CURVE_ID = 0x01
+    }
 }
 
 /** JVM Halo2 proof provider backed by the SDK's native Offline Note prover. */
@@ -1207,6 +1241,7 @@ class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(
 class OfflineNoteWallet @JvmOverloads constructor(
     private val chainId: String,
     private val accountId: String,
+    @Suppress("unused")
     private val attestationProvider: OfflineNoteAttestationProvider,
     private val store: OfflineNoteStore = InMemoryOfflineNoteStore(),
     private val issuerClient: OfflineNoteIssuerClient? = null,
@@ -1219,6 +1254,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
     private val idGenerator: OfflineNoteIdGenerator = UuidOfflineNoteIdGenerator(),
     private val clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
     private val bearerCashPolicy: OfflineBearerCashPolicyV1 = OfflineBearerCashPolicyV1.DEFAULT,
+    private val ownerCertificateSigner: OfflineNoteOwnerCertificateSigner? = null,
 ) {
     private companion object {
         private val loadThreadIds = AtomicInteger()
@@ -1260,7 +1296,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
                     val noteCommitment: ByteArray
                     val request: OfflineNoteIssueRequest
                     try {
-                        requireTrustedCertificate(context.keyCertificate, accountId)
+                        requireTrustedIssuerCertificate(context.keyCertificate, accountId)
                         noteSecret = random32()
                         origin = OfflineNote.CommitmentOrigin.IssuerLoad(
                             operationId = context.operationId,
@@ -1310,7 +1346,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
                                     "issuer returned a different Offline Note commitment"
                                 }
                                 val issuedCertificate = response.keyCertificate ?: context.keyCertificate
-                                requireTrustedCertificate(issuedCertificate, accountId)
+                                requireTrustedIssuerCertificate(issuedCertificate, accountId)
                                 val now = clock.getAsLong()
                                 val issued = OfflineNoteWalletNote(
                                     chainId = chainId,
@@ -1339,8 +1375,8 @@ class OfflineNoteWallet @JvmOverloads constructor(
 
     fun prepareReceive(assetDefinitionId: String, amount: String): OfflineNoteReceiveRequest {
         val paymentRequestId = idGenerator.nextId("payment-request")
-        val keyCertificate = attestationProvider.currentKeyCertificate()
-        requireTrustedCertificate(keyCertificate, accountId)
+        val keyCertificate = requireOwnerCertificateSigner().freshOwnerCertificate(accountId)
+        requireTrustedOwnerCertificate(keyCertificate, accountId)
         val assetId = walletAssetId(assetDefinitionId, accountId)
         val noteSecret = random32()
         val origin = OfflineNote.CommitmentOrigin.P2pOutput(
@@ -1382,7 +1418,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
 
     fun pay(receiveRequest: OfflineNoteReceiveRequest): OfflineNotePaymentToken {
         require(receiveRequest.chainId == chainId) { "receive request chainId does not match wallet chainId" }
-        requireTrustedCertificate(receiveRequest.keyCertificate, receiveRequest.accountId)
+        requireTrustedOwnerCertificate(receiveRequest.keyCertificate, receiveRequest.accountId)
         rejectReusedReceiveRequest(receiveRequest.paymentRequestId)
         val createdAtMs = clock.getAsLong()
         val requestedAmount = decimal(receiveRequest.canonicalAmount)
@@ -1391,12 +1427,13 @@ class OfflineNoteWallet @JvmOverloads constructor(
         val changeAmount = inputAmount.subtract(requestedAmount)
         require(changeAmount.signum() >= 0) { "selected input amount is below requested amount" }
 
-        val senderCertificate = selected.first().keyCertificate
-        requireTrustedCertificate(senderCertificate, accountId)
+        val senderNote = selected.first()
+        val senderCertificate = senderNote.keyCertificate
+        requireTrustedCertificateForOrigin(senderCertificate, senderNote.origin, accountId)
         val senderCertificateHash = senderCertificate.payloadHash()
         selected.forEach {
             bearerAuditTrail(it)
-            requireTrustedCertificate(it.keyCertificate, accountId)
+            requireTrustedCertificateForOrigin(it.keyCertificate, it.origin, accountId)
             require(it.keyCertificate.payloadHash().contentEquals(senderCertificateHash)) {
                 "selected input notes must use the same key certificate"
             }
@@ -1416,12 +1453,14 @@ class OfflineNoteWallet @JvmOverloads constructor(
         if (changeAmount.signum() > 0) {
             val changeSecret = random32()
             val changeAssetId = walletAssetId(receiveRequest.assetDefinitionId, accountId)
+            val changeCertificate = requireOwnerCertificateSigner().freshOwnerCertificate(accountId)
+            requireTrustedOwnerCertificate(changeCertificate, accountId)
             val changeOrigin = OfflineNote.CommitmentOrigin.P2pOutput(
                 paymentRequestId = receiveRequest.paymentRequestId,
                 outputIndex = 1,
             )
             val changeCommitment = deriveNoteCommitment(
-                keyCertificate = senderCertificate,
+                keyCertificate = changeCertificate,
                 assetId = changeAssetId,
                 amount = canonicalDecimal(changeAmount),
                 noteSecret = changeSecret,
@@ -1432,7 +1471,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
                 accountId = accountId,
                 assetId = changeAssetId,
                 amount = canonicalDecimal(changeAmount),
-                keyCertificate = senderCertificate,
+                keyCertificate = changeCertificate,
                 noteCommitment = changeCommitment,
                 noteSecret = changeSecret,
                 origin = changeOrigin,
@@ -1443,7 +1482,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
             outputClaims.add(
                 OfflineNote.AuditOutputClaim(
                     noteCommitment = changeCommitment,
-                    keyCertificate = senderCertificate,
+                    keyCertificate = changeCertificate,
                     assetId = changeAssetId,
                     amount = changeNote.canonicalAmount,
                 )
@@ -1621,7 +1660,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
             "only spendable Offline Note notes can be redeemed"
         }
         val bearerAuditTrail = bearerAuditTrail(current)
-        requireTrustedCertificate(current.keyCertificate, current.accountId)
+        requireTrustedCertificateForOrigin(current.keyCertificate, current.origin, current.accountId)
         val inputNullifier = deriveInputNullifier(current)
         val redeemPublicInputs = OfflineNote.RedeemPublicInputs(
             sourceNoteCommitment = current.noteCommitment(),
@@ -1642,7 +1681,7 @@ class OfflineNoteWallet @JvmOverloads constructor(
         )
         val redemption = draft.replacingRecursiveProof(proofProvider.proveRedeem(draft))
         redemption.validateProofBinding()
-        requireTrustedCertificate(redemption.senderKeyCertificate, current.accountId)
+        requireTrustedCertificateForOrigin(redemption.senderKeyCertificate, current.origin, current.accountId)
         require(proofVerifier.verifyRedeem(redemption)) {
             "Offline Note recursive redeem proof verification failed"
         }
@@ -1829,30 +1868,77 @@ class OfflineNoteWallet @JvmOverloads constructor(
     }
 
     private fun requireTrustedAuditCertificates(audit: OfflineNote.AuditBundle) {
-        requireTrustedCertificate(audit.senderKeyCertificate, null)
+        requireTrustedEitherCertificate(audit.senderKeyCertificate, null)
         val senderHash = audit.senderKeyCertificate.payloadHash()
         audit.inputClaims.forEach { input ->
             require(input.keyCertificatePayloadHash().contentEquals(senderHash)) {
                 "Offline Note input claim certificate does not match sender certificate"
             }
-            requireTrustedCertificate(audit.senderKeyCertificate, assetAccount(input.assetId))
+            requireTrustedEitherCertificate(audit.senderKeyCertificate, assetAccount(input.assetId))
         }
         audit.outputClaims.forEach { output ->
-            requireTrustedCertificate(output.keyCertificate, assetAccount(output.assetId))
+            requireTrustedOwnerCertificate(output.keyCertificate, assetAccount(output.assetId))
         }
     }
 
-    private fun requireTrustedCertificate(
+    private fun requireTrustedCertificateForOrigin(
+        certificate: OfflineNote.KeyCertificate,
+        origin: OfflineNote.CommitmentOrigin,
+        expectedAccountId: String?,
+    ) {
+        when (origin) {
+            is OfflineNote.CommitmentOrigin.IssuerLoad ->
+                requireTrustedIssuerCertificate(certificate, expectedAccountId)
+            is OfflineNote.CommitmentOrigin.P2pOutput ->
+                requireTrustedOwnerCertificate(certificate, expectedAccountId)
+        }
+    }
+
+    private fun requireTrustedIssuerCertificate(
+        certificate: OfflineNote.KeyCertificate,
+        expectedAccountId: String?,
+    ) {
+        requireMatchingAccount(certificate, expectedAccountId)
+        require(certificateVerifier.verifyIssuerCertificate(certificate)) {
+            "Offline Note key certificate is not trusted for this wallet operation"
+        }
+    }
+
+    private fun requireTrustedOwnerCertificate(
+        certificate: OfflineNote.KeyCertificate,
+        expectedAccountId: String?,
+    ) {
+        requireMatchingAccount(certificate, expectedAccountId)
+        require(certificateVerifier.verifyOwnerCertificate(certificate)) {
+            "Offline Note key certificate is not trusted for this wallet operation"
+        }
+    }
+
+    private fun requireTrustedEitherCertificate(
+        certificate: OfflineNote.KeyCertificate,
+        expectedAccountId: String?,
+    ) {
+        requireMatchingAccount(certificate, expectedAccountId)
+        require(
+            certificateVerifier.verifyIssuerCertificate(certificate) ||
+                certificateVerifier.verifyOwnerCertificate(certificate)
+        ) {
+            "Offline Note key certificate is not trusted for this wallet operation"
+        }
+    }
+
+    private fun requireMatchingAccount(
         certificate: OfflineNote.KeyCertificate,
         expectedAccountId: String?,
     ) {
         require(expectedAccountId == null || certificate.accountId == expectedAccountId) {
             "Offline Note key certificate account does not match wallet operation"
         }
-        require(certificateVerifier.verifyCertificate(certificate)) {
-            "Offline Note key certificate is not trusted for this wallet operation"
-        }
     }
+
+    private fun requireOwnerCertificateSigner(): OfflineNoteOwnerCertificateSigner =
+        ownerCertificateSigner
+            ?: throw IllegalStateException("Offline Note owner certificate signer is required for P2P outputs")
 
     private fun random32(): ByteArray {
         val bytes = randomSource.nextBytes(32)

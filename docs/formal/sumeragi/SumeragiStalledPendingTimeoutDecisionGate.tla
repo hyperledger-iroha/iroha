@@ -464,26 +464,44 @@ DecisionProjectionAnchors ==
   /\ SpecDecision("validation_inflight_not_pending") =
        <<BaseClass, 1000, 0, 3, TRUE, FALSE>>
 
-SafetyFast ==
-  /\ DecisionMatchesSpec
+StalledPendingTimeoutBaseNearExact ==
   /\ BaseTimeoutMatchesSpec
   /\ NearTimeoutMatchesSpec
-  /\ NearCommitQuorumMatchesSpec
-  /\ MissingLocalDataMatchesSpec
-  /\ NearFastGateMatchesSpec
-  /\ ValidationRecoveryMatchesSpec
-  /\ CommitPipelineBacklogMatchesSpec
-  /\ RecoveryBacklogMatchesSpec
-  /\ ClassMatchesSpec
   /\ TimeoutMatchesSpec
   /\ BaseTimeoutAnchors
   /\ NearTimeoutAnchors
+  /\ TimeoutAnchors
+
+StalledPendingTimeoutNearGateExact ==
+  /\ NearCommitQuorumMatchesSpec
+  /\ MissingLocalDataMatchesSpec
+  /\ NearFastGateMatchesSpec
   /\ NearCommitQuorumAnchors
   /\ MissingLocalDataAnchors
+
+StalledPendingTimeoutRecoveryExact ==
+  /\ ValidationRecoveryMatchesSpec
+  /\ CommitPipelineBacklogMatchesSpec
+  /\ RecoveryBacklogMatchesSpec
   /\ RecoveryBacklogAnchors
+
+StalledPendingTimeoutClassExact ==
+  /\ ClassMatchesSpec
   /\ ClassPriorityAnchors
-  /\ TimeoutAnchors
+
+StalledPendingTimeoutDecisionExact ==
+  /\ DecisionMatchesSpec
   /\ DecisionProjectionAnchors
+
+StalledPendingTimeoutExactness ==
+  /\ StalledPendingTimeoutBaseNearExact
+  /\ StalledPendingTimeoutNearGateExact
+  /\ StalledPendingTimeoutRecoveryExact
+  /\ StalledPendingTimeoutClassExact
+  /\ StalledPendingTimeoutDecisionExact
+
+SafetyFast ==
+  StalledPendingTimeoutExactness
 
 BugBaseTimeoutNoFloor ==
   ActualDecision("base_zero_quorum") = SpecDecision("base_zero_quorum")

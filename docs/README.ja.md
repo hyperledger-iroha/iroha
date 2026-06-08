@@ -40,7 +40,7 @@
 
 ## Norito（シリアライゼーションコーデック）
 
-Norito はワークスペースで使用するシリアライゼーションコーデックです。SCALE（`parity-scale-codec`）は使用しません。SCALE との比較はあくまで性能比較や参考情報に留まります。運用経路では常に Norito が利用されます。
+Norito はワークスペースで使用するシリアライゼーションコーデックです。retired codec（`retired codec`）は使用しません。retired codec との比較はあくまで性能比較や参考情報に留まります。運用経路では常に Norito が利用されます。
 
 `norito::codec::{Encode, Decode}` API はヘッダレス（いわゆる "bare"）形式の Norito ペイロードを提供し、ハッシュ計算や効率的なワイヤフォーマットに利用します。
 
@@ -62,7 +62,7 @@ Norito はワークスペースで使用するシリアライゼーションコ�
 
 - Torii `/status` エンドポイントはデフォルトで Norito（ヘッダレス）のレスポンスを返します。クライアントはまず Norito デコードを試行してください。
 - `Content-Type: application/json` が設定されている場合、または JSON を要求した場合は JSON にフォールバックします。
-- ワイヤフォーマットはあくまで Norito であり、SCALE ではありません。
+- ワイヤフォーマットはあくまで Norito であり、retired codec ではありません。
 
 ## ドキュメントの進捗
 

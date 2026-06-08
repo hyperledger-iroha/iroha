@@ -7,11 +7,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Drop the SCALE shim; `norito::codec` is now implemented with native Norito serialization.
-- Replace `parity_scale_codec` usages with `norito::codec` across crates.
+- Drop the legacy binary codec shim; `norito::codec` is now implemented with native Norito serialization.
+- Replace legacy binary codec usages with `norito::codec` across crates.
 - Begin migrating tooling to native Norito serialization.
-- Remove remaining `parity-scale-codec` dependency from the workspace in favor of native Norito serialization.
-- Replace residual SCALE trait derivations with native Norito implementations and rename versioned codec module.
+- Remove the remaining legacy binary codec dependency from the workspace in favor of native Norito serialization.
+- Replace residual legacy binary codec trait derivations with native Norito implementations and rename versioned codec module.
 - Merge `iroha_config_base_derive` and `iroha_futures_derive` into `iroha_derive` with feature-gated macros.
 - *(multisig)* Reject direct signatures from multisig authorities with a stable error code/reason, enforce multisig TTL caps across nested relayers, and surface TTL caps in the CLI before submission (SDK parity pending).
 - Move FFI procedural macros into `iroha_ffi` and remove `iroha_ffi_derive` crate.
@@ -237,7 +237,7 @@ All notable changes to this project will be documented in this file.
 - rename TransactionValue into CommittedTransaction (#4610)
 - authenticate personal accounts by ID (#4411)
 - use multihash format for private keys (#4541)
- - rename `parity_scale_decoder` to `norito_cli`
+ - rename `legacy_codec_decoder` to `norito_cli`
 - send blocks to Set B validators
 - make `Role` transparent (#4886)
 - derive block hash from header (#4890)
@@ -1175,7 +1175,7 @@ All notable changes to this project will be documented in this file.
 - hyperledger#2309: Re-enable doc tests in CI.
 - hyperledger#2165 Remove codecov install.
 - Move to new container to prevent conflicts with current users.
- - hyperledger#2158 Upgrade `parity_scale_codec` and other dependencies. (Norito codec)
+ - hyperledger#2158 Upgrade legacy binary codec and other dependencies. (Norito codec)
 - Fix build.
 - hyperledger#2461 Improve iroha2 CI.
 - Update `syn`.

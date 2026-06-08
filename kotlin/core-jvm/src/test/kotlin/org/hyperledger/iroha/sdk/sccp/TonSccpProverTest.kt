@@ -2,6 +2,8 @@ package org.hyperledger.iroha.sdk.sccp
 
 import java.io.ByteArrayOutputStream
 import java.math.BigInteger
+import org.bouncycastle.crypto.digests.KeccakDigest
+import org.hyperledger.iroha.sdk.crypto.Blake2b
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -115,7 +117,8 @@ class TonSccpProverTest {
         assertContentEquals(body, submission.envelopeBytes)
 
         val proofBytes = byteArrayOf(1, 2)
-        val bundleBytes = byteArrayOf(3, 4)
+        val bundleBytes = sampleTonBundleBytes()
+        val expectedBundleBytes = bundleBytes.copyOf()
         val metadataBytes = byteArrayOf(5, 6)
         val copiedRequest = SccpTon.buildProofRequest(
             sampleProofRequestInput(
@@ -138,7 +141,7 @@ class TonSccpProverTest {
         copiedInput.bundleBytes[0] = 9
         copiedInput.metadataBytes[0] = 9
         assertContentEquals(byteArrayOf(1, 2), copiedInput.proofBytes)
-        assertContentEquals(byteArrayOf(3, 4), copiedInput.bundleBytes)
+        assertContentEquals(expectedBundleBytes, copiedInput.bundleBytes)
         assertContentEquals(byteArrayOf(5, 6), copiedInput.metadataBytes)
         val emptyBundle = assertFailsWith<IllegalArgumentException> {
             SccpTon.buildSubmission(sampleMessageBodyInput(bundleBytes = ByteArray(0)))
@@ -1964,7 +1967,7 @@ class TonSccpProverTest {
     @Test
     fun proverResolvesWitnessProviderBeforeBuildingRequest() {
         var resolved = false
-        val bundleBytes = byteArrayOf(5, 6, 7)
+        val bundleBytes = sampleTonBundleBytes()
         val input = sampleProofRequestInput(bundleBytes = bundleBytes)
         val prover = TonSccpProver(
             witnessProvider = TonSccpWitnessProvider { input ->
@@ -1972,7 +1975,7 @@ class TonSccpProverTest {
                 assertFalse(input.bundleBytes === bundleBytes)
                 input.bundleBytes[0] = 0x7f
                 resolved = true
-                input.copy(sourceProofBytes = byteArrayOf(9, 10))
+                input.copy(bundleBytes = sampleTonBundleBytes(), sourceProofBytes = byteArrayOf(9, 10))
             },
             proofEngine = TonSccpProofEngine { request ->
                 assertTrue(resolved)
@@ -1984,8 +1987,8 @@ class TonSccpProverTest {
         val result = prover.prove(input)
 
         assertContentEquals(byteArrayOf(9, 10), result.sourceProofBytes)
-        assertContentEquals(byteArrayOf(5, 6, 7), input.bundleBytes)
-        assertContentEquals(byteArrayOf(5, 6, 7), bundleBytes)
+        assertContentEquals(sampleTonBundleBytes(), input.bundleBytes)
+        assertContentEquals(sampleTonBundleBytes(), bundleBytes)
     }
 
     @Test
@@ -2024,13 +2027,13 @@ class TonSccpProverTest {
 
         val submissionInput = TonSccpMessageBodyInput(
             proofResult = result,
-            bundleBytes = byteArrayOf(5, 6, 7),
+            bundleBytes = sampleTonBundleBytes(),
             metadataBytes = byteArrayOf(8, 9),
             queryId = "7",
         )
         assertEquals(result.publicInputs, submissionInput.publicInputs)
         assertContentEquals(result.proofBytes, submissionInput.proofBytes)
-        assertContentEquals(byteArrayOf(5, 6, 7), result.bundleBytes)
+        assertContentEquals(sampleTonBundleBytes(), result.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), result.sourceProofBytes)
         assertEquals(result.proofContext.statementHash, submissionInput.statementHash)
         assertEquals(result.proofContext.destinationBindingHash, submissionInput.destinationBindingHash)
@@ -2045,7 +2048,7 @@ class TonSccpProverTest {
             SccpTon.buildSubmission(
                 TonSccpMessageBodyInput(
                     proofResult = oversizedTonMessageResult,
-                    bundleBytes = byteArrayOf(5, 6, 7),
+                    bundleBytes = sampleTonBundleBytes(),
                     metadataBytes = byteArrayOf(8, 9),
                 ),
             )
@@ -2058,7 +2061,7 @@ class TonSccpProverTest {
         val omittedSourceMessageBody = SccpTon.buildSubmission(
             TonSccpMessageBodyInput(
                 proofResult = omittedSourceProofResult,
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleTonBundleBytes(),
             ),
         )
         assertContentEquals(ByteArray(0), omittedSourceProofResult.sourceProofBytes)
@@ -2066,15 +2069,15 @@ class TonSccpProverTest {
         val mismatchedBundle = assertFailsWith<IllegalArgumentException> {
             TonSccpMessageBodyInput(
                 proofResult = result,
-                bundleBytes = byteArrayOf(5, 6, 8),
+                bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71, 0x73)),
             )
         }
         assertTrue(mismatchedBundle.message?.contains("proofResult.bundleBytes") == true)
 
         val tamperedResultBundle = assertFailsWith<IllegalArgumentException> {
             TonSccpMessageBodyInput(
-                proofResult = result.copy(bundleBytes = byteArrayOf(5, 6, 8)),
-                bundleBytes = byteArrayOf(5, 6, 8),
+                proofResult = result.copy(bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71, 0x73))),
+                bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71, 0x73)),
             )
         }
         assertTrue(tamperedResultBundle.message?.contains("requestHash") == true)
@@ -2082,7 +2085,7 @@ class TonSccpProverTest {
         val mismatchedProofBase64 = assertFailsWith<IllegalArgumentException> {
             TonSccpMessageBodyInput(
                 proofResult = result.copy(proofBase64 = "AAAA"),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleTonBundleBytes(),
             )
         }
         assertTrue(mismatchedProofBase64.message?.contains("proofBase64") == true)
@@ -2090,7 +2093,7 @@ class TonSccpProverTest {
         val missingEnvelope = assertFailsWith<IllegalArgumentException> {
             TonSccpMessageBodyInput(
                 proofResult = result.copy(envelopeHash = SccpSolana.ZERO_HASH_V1),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleTonBundleBytes(),
             )
         }
         assertTrue(missingEnvelope.message?.contains("proofResult.envelopeHash") == true)
@@ -2098,7 +2101,7 @@ class TonSccpProverTest {
         val tamperedEnvelope = assertFailsWith<IllegalArgumentException> {
             TonSccpMessageBodyInput(
                 proofResult = result.copy(envelopeHash = "0x" + "aa".repeat(32)),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleTonBundleBytes(),
             )
         }
         assertTrue(tamperedEnvelope.message?.contains("wrapped proof bytes") == true)
@@ -2108,7 +2111,7 @@ class TonSccpProverTest {
                 proofResult = result.copy(
                     proofContext = result.proofContext.copy(statementHash = "0x" + "99".repeat(32)),
                 ),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleTonBundleBytes(),
             )
         }
         assertTrue(mismatchedProofContext.message?.contains("proofContext") == true)
@@ -2116,7 +2119,7 @@ class TonSccpProverTest {
         val wrongSourceStateVerifier = assertFailsWith<IllegalArgumentException> {
             TonSccpMessageBodyInput(
                 proofResult = result.copy(sourceStateVerifierHash = SccpSolana.ZERO_HASH_V1),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleTonBundleBytes(),
             )
         }
         assertTrue(wrongSourceStateVerifier.message?.contains("sourceStateVerifierHash") == true)
@@ -2127,7 +2130,7 @@ class TonSccpProverTest {
                     sourceAdapterDeploymentBinding =
                         result.sourceAdapterDeploymentBinding.copy(targetDomain = SccpTon.DOMAIN_TON),
                 ),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleTonBundleBytes(),
             )
         }
         assertTrue(wrongResultDeploymentBinding.message?.contains("targetDomain") == true)
@@ -2170,12 +2173,12 @@ class TonSccpProverTest {
         )
         mutatedRequestView.bundleBytes[0] = 9
         SccpTon.wrapProofResult(byteArrayOf(1), mutatedRequestView)
-        assertContentEquals(byteArrayOf(5, 6, 7), mutatedRequestView.bundleBytes)
+        assertContentEquals(sampleTonBundleBytes(), mutatedRequestView.bundleBytes)
     }
 
     @Test
     fun proofRequestBindsRelayContextAndDeployment() {
-        val bundleBytes = byteArrayOf(5, 6, 7)
+        val bundleBytes = sampleTonBundleBytes()
         val sourceProofBytes = byteArrayOf(9, 10)
         val request = SccpTon.buildProofRequest(
             sampleProofRequestInput(
@@ -2212,7 +2215,7 @@ class TonSccpProverTest {
         val bindingRequest = SccpTon.buildProofRequest(
             TonSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleTonBundleBytes(),
                 sourceProofBytes = byteArrayOf(9, 10),
                 statementHash = "56".repeat(32),
                 destinationBindingHash = "78".repeat(32),
@@ -2224,7 +2227,7 @@ class TonSccpProverTest {
         val wrongBindingTarget = assertFailsWith<IllegalArgumentException> {
             TonSccpProofRequestInput(
                 publicInputs = samplePublicInputs(),
-                bundleBytes = byteArrayOf(5, 6, 7),
+                bundleBytes = sampleTonBundleBytes(),
                 statementHash = "56".repeat(32),
                 destinationBindingHash = "78".repeat(32),
                 sourceStateVerifierHash = "cc".repeat(32),
@@ -2243,7 +2246,7 @@ class TonSccpProverTest {
         assertNotEquals(request.requestHash, sourceStateBoundRequest.requestHash)
         val shiftedSplitRequest = SccpTon.buildProofRequest(
             sampleProofRequestInput(
-                bundleBytes = byteArrayOf(5, 6, 7, 9),
+                bundleBytes = sampleTonBundleBytes(finalityProof = byteArrayOf(0x71, 0x73)),
                 sourceProofBytes = byteArrayOf(10),
                 sourceAdapterDeploymentHash = "aa".repeat(32),
                 sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
@@ -2425,7 +2428,7 @@ class TonSccpProverTest {
 
         bundleBytes[0] = 99
         sourceProofBytes[0] = 99
-        assertContentEquals(byteArrayOf(5, 6, 7), request.bundleBytes)
+        assertContentEquals(sampleTonBundleBytes(), request.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
 
         val exposedPublicInputs = request.publicInputsBytes
@@ -2435,23 +2438,151 @@ class TonSccpProverTest {
         exposedBundle[0] = 99
         exposedSourceProof[0] = 99
         assertTrue(request.publicInputsBytes[0].toInt() != 99)
-        assertContentEquals(byteArrayOf(5, 6, 7), request.bundleBytes)
+        assertContentEquals(sampleTonBundleBytes(), request.bundleBytes)
         assertContentEquals(byteArrayOf(9, 10), request.sourceProofBytes)
     }
 
     @Test
-    fun proofRequestHashMatchesCrossSdkVector() {
-        val publicInputs = TonSccpPublicInputsInput(
-            messageId = "11".repeat(32),
-            payloadHash = "22".repeat(32),
-            commitmentRoot = "33".repeat(32),
-            finalityHeight = "123456789",
-            finalityBlockHash = "44".repeat(32),
+    fun proofRequestRejectsNoncanonicalOrMismatchedBundleBytes() {
+        val base = sampleProofRequestInput(
+            sourceAdapterDeploymentHash = "aa".repeat(32),
+            sourceAdapterDeploymentReceiptHash = "bb".repeat(32),
         )
+        val placeholder = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(base.copy(bundleBytes = byteArrayOf(5, 6, 7)))
+        }
+        assertTrue(placeholder.message?.contains("bundleBytes.version must be 1") == true)
+
+        val swapped = sampleTonBundleFixture(amount = BigInteger.valueOf(43))
+        val mismatchedPublicInputs = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(base.copy(bundleBytes = swapped.bundleBytes))
+        }
+        assertTrue(mismatchedPublicInputs.message?.contains("bundleBytes must match publicInputs") == true)
+
+        val tamperedCommitment = sampleTonBundleBytes()
+        tamperedCommitment[37 + 69] = (tamperedCommitment[37 + 69].toInt() xor 0x01).toByte()
+        val badCommitment = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(base.copy(bundleBytes = tamperedCommitment))
+        }
+        assertTrue(badCommitment.message?.contains("bundleBytes.commitment must match payload") == true)
+
+        val tamperedRoot = sampleTonBundleBytes()
+        tamperedRoot[1] = (tamperedRoot[1].toInt() xor 0x01).toByte()
+        val badRoot = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(base.copy(bundleBytes = tamperedRoot))
+        }
+        assertTrue(badRoot.message?.contains("bundleBytes.commitment_root must match merkle proof") == true)
+
+        val ranges = splitTestSccpMessageProofBundleBytes(sampleTonBundleBytes())
+        val payloadWithTrailingByte = ranges.getValue("payload").bytes + byteArrayOf(0)
+        val trailingPayload = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    bundleBytes = replaceTestSccpMessageProofBundleVec(
+                        sampleTonBundleBytes(),
+                        ranges.getValue("payload"),
+                        payloadWithTrailingByte,
+                    ),
+                ),
+            )
+        }
+        assertTrue(trailingPayload.message?.contains("bundleBytes.payload must not contain trailing bytes") == true)
+
+        val unsupportedPayloadKind = byteArrayOf(0xff.toByte()) + ranges.getValue("payload").bytes.copyOfRange(
+            1,
+            ranges.getValue("payload").bytes.size,
+        )
+        val unsupportedPayload = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    bundleBytes = replaceTestSccpMessageProofBundleVec(
+                        sampleTonBundleBytes(),
+                        ranges.getValue("payload"),
+                        unsupportedPayloadKind,
+                    ),
+                ),
+            )
+        }
+        assertTrue(
+            unsupportedPayload.message?.contains("bundleBytes.payload contains unsupported SCCP payload kind") == true,
+        )
+
+        val merkleProofWithTrailingByte = ranges.getValue("merkleProof").bytes + byteArrayOf(0)
+        val trailingMerkleProof = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    bundleBytes = replaceTestSccpMessageProofBundleVec(
+                        sampleTonBundleBytes(),
+                        ranges.getValue("merkleProof"),
+                        merkleProofWithTrailingByte,
+                    ),
+                ),
+            )
+        }
+        assertTrue(
+            trailingMerkleProof.message?.contains("bundleBytes.merkle_proof must not contain trailing bytes") == true,
+        )
+
+        val oneStep = sampleTonBundleFixture(
+            merkleProofSteps = listOf(hexBytes("cc".repeat(32)) to 1),
+        )
+        val oneStepRanges = splitTestSccpMessageProofBundleBytes(oneStep.bundleBytes)
+        val invalidDirection = oneStepRanges.getValue("merkleProof").bytes
+        invalidDirection[4 + 32] = 2
+        val badDirection = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    publicInputs = oneStep.publicInputs,
+                    bundleBytes = replaceTestSccpMessageProofBundleVec(
+                        oneStep.bundleBytes,
+                        oneStepRanges.getValue("merkleProof"),
+                        invalidDirection,
+                    ),
+                ),
+            )
+        }
+        assertTrue(badDirection.message?.contains("sibling_is_left must be 0 or 1") == true)
+
+        val nonSora = sampleTonBundleFixture(
+            sourceDomain = SccpSolana.DOMAIN_SOLANA,
+            senderCodec = SccpTon.CODEC_SOLANA_BASE58,
+            sender = "11111111111111111111111111111111",
+        )
+        val missingSourceProof = assertFailsWith<IllegalArgumentException> {
+            SccpTon.buildProofRequest(
+                base.copy(
+                    publicInputs = nonSora.publicInputs,
+                    bundleBytes = nonSora.bundleBytes,
+                    sourceProofBytes = ByteArray(0),
+                ),
+            )
+        }
+        assertTrue(missingSourceProof.message?.contains("sourceProofBytes required for non-SORA") == true)
+
+        val nonSoraRequest = SccpTon.buildProofRequest(
+            base.copy(
+                publicInputs = nonSora.publicInputs,
+                bundleBytes = nonSora.bundleBytes,
+                sourceProofBytes = byteArrayOf(9, 10),
+            ),
+        )
+        val nonSoraResult = SccpTon.wrapProofResult(byteArrayOf(1, 2, 3, 4), nonSoraRequest)
+        val strippedSourceProof = assertFailsWith<IllegalArgumentException> {
+            TonSccpMessageBodyInput(
+                proofResult = nonSoraResult.copy(sourceProofBytes = ByteArray(0)),
+                bundleBytes = nonSora.bundleBytes,
+            )
+        }
+        assertTrue(strippedSourceProof.message?.contains("sourceProofBytes required for non-SORA") == true)
+    }
+
+    @Test
+    fun proofRequestHashMatchesCrossSdkVector() {
+        val publicInputs = samplePublicInputs()
         val request = SccpTon.buildProofRequest(
             TonSccpProofRequestInput(
                 publicInputs = publicInputs,
-                bundleBytes = byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8, 9),
+                bundleBytes = sampleTonBundleBytes(),
                 sourceProofBytes = byteArrayOf(0x51, 0x52, 0x53),
                 statementHash = "55".repeat(32),
                 destinationBindingHash = "66".repeat(32),
@@ -2467,12 +2598,12 @@ class TonSccpProverTest {
         )
         val expectedPublicInputsBytes = hexBytes(
             "01" +
-                "11".repeat(32) +
-                "22".repeat(32) +
+                "806384e356636c10ee3bbbb90674a80410a86be034616abb811586b21ac81fc4367a4f" +
+                "9061f46a282eeeda95bc68c727888bde665bd89d0ebbc6dae266e3a264" +
                 "04000000" +
-                "33".repeat(32) +
-                "15cd5b0700000000" +
-                "44".repeat(32),
+                "377eb92928595d90759d66529f96acf34afd4ef64cd2327ab6f65876fb3cf93e" +
+                "1300000000000000" +
+                "aa".repeat(32),
         )
 
         assertContentEquals(expectedPublicInputsBytes, SccpTon.canonicalPublicInputsBytes(publicInputs))
@@ -2481,7 +2612,7 @@ class TonSccpProverTest {
             request.sourceAdapterDeploymentBindingHash,
         )
         assertEquals(
-            "0xb3a61f09923efd639a0263de6b45eec6ddd5de679bfaab1b6ec1c591fd1b1d1b",
+            "0x2a292741b8e8d8454699eda954592904e8260e6b8a41cc840f5d9c48732c3bbe",
             request.requestHash,
         )
         val proofResult = SccpTon.wrapProofResult(
@@ -2489,7 +2620,7 @@ class TonSccpProverTest {
             request,
         )
         assertEquals(
-            "0xa2bc6697b237fd4b2dd3f60f187a184793104a99372dcdf60c7ec585ef32f5ab",
+            "0x9ed8e54d81c13a61939dedffb36c487f33d32a128ba95a0d29b33c5d25be6489",
             proofResult.envelopeHash,
         )
     }
@@ -2497,7 +2628,7 @@ class TonSccpProverTest {
     private fun sampleMessageBodyInput(
         publicInputs: TonSccpPublicInputsInput = samplePublicInputs(),
         proofBytes: ByteArray = byteArrayOf(1, 2, 3, 4),
-        bundleBytes: ByteArray = byteArrayOf(5, 6, 7),
+        bundleBytes: ByteArray = sampleTonBundleBytes(),
         statementHash: String = "bb".repeat(32),
         destinationBindingHash: String = "56".repeat(32),
     ): TonSccpMessageBodyInput {
@@ -2522,7 +2653,7 @@ class TonSccpProverTest {
 
     private fun sampleProofRequestInput(
         publicInputs: TonSccpPublicInputsInput = samplePublicInputs(),
-        bundleBytes: ByteArray = byteArrayOf(5, 6, 7),
+        bundleBytes: ByteArray = sampleTonBundleBytes(),
         sourceProofBytes: ByteArray = ByteArray(0),
         statementHash: String = "56".repeat(32),
         destinationBindingHash: String = "78".repeat(32),
@@ -2548,13 +2679,199 @@ class TonSccpProverTest {
         )
 
     private fun samplePublicInputs(): TonSccpPublicInputsInput =
-        TonSccpPublicInputsInput(
-            messageId = "dd".repeat(32),
-            payloadHash = "ee".repeat(32),
-            commitmentRoot = "12".repeat(32),
-            finalityHeight = "19",
-            finalityBlockHash = "aa".repeat(32),
+        sampleTonBundleFixture().publicInputs
+
+    private fun sampleTonBundleBytes(
+        sourceDomain: Int = SccpSolana.DOMAIN_SORA,
+        senderCodec: Int = SccpTon.CODEC_TEXT_UTF8,
+        sender: String = "alice@sora",
+        nonce: Long = 327L,
+        amount: BigInteger = BigInteger.valueOf(42),
+        routeId: String = "sccp-ton-proof-request",
+        merkleProofSteps: List<Pair<ByteArray, Int>> = emptyList(),
+        finalityProof: ByteArray = byteArrayOf(0x71, 0x72),
+    ): ByteArray =
+        sampleTonBundleFixture(
+            sourceDomain = sourceDomain,
+            senderCodec = senderCodec,
+            sender = sender,
+            nonce = nonce,
+            amount = amount,
+            routeId = routeId,
+            merkleProofSteps = merkleProofSteps,
+            finalityProof = finalityProof,
+        ).bundleBytes
+
+    private fun sampleTonBundleFixture(
+        sourceDomain: Int = SccpSolana.DOMAIN_SORA,
+        senderCodec: Int = SccpTon.CODEC_TEXT_UTF8,
+        sender: String = "alice@sora",
+        nonce: Long = 327L,
+        amount: BigInteger = BigInteger.valueOf(42),
+        routeId: String = "sccp-ton-proof-request",
+        merkleProofSteps: List<Pair<ByteArray, Int>> = emptyList(),
+        finalityProof: ByteArray = byteArrayOf(0x71, 0x72),
+    ): SampleTonBundleFixture {
+        val payloadBody = ByteArrayOutputStream()
+        payloadBody.write(1)
+        writeTestU32Le(payloadBody, sourceDomain)
+        writeTestU32Le(payloadBody, SccpTon.DOMAIN_TON)
+        writeTestU64Le(payloadBody, BigInteger.valueOf(nonce))
+        writeTestU32Le(payloadBody, SccpSolana.DOMAIN_SORA)
+        payloadBody.write(SccpTon.CODEC_TEXT_UTF8)
+        writeTestBytes(payloadBody, "xor#ton".toByteArray(Charsets.UTF_8))
+        writeTestU128Le(payloadBody, amount)
+        payloadBody.write(senderCodec)
+        writeTestBytes(payloadBody, sender.toByteArray(Charsets.UTF_8))
+        payloadBody.write(SccpTon.CODEC_TON_RAW)
+        writeTestBytes(payloadBody, ("0:" + "12".repeat(32)).toByteArray(Charsets.UTF_8))
+        payloadBody.write(SccpTon.CODEC_TEXT_UTF8)
+        writeTestBytes(payloadBody, routeId.toByteArray(Charsets.UTF_8))
+
+        val payloadBodyBytes = payloadBody.toByteArray()
+        val payloadBytes = byteArrayOf(0x02) + payloadBodyBytes
+        val messageId = "0x" + hexLower(
+            prefixedKeccakBytes("sccp:transfer:v1", payloadBodyBytes),
         )
+        val payloadHash = "0x" + hexLower(
+            Blake2b.digest256("sccp:payload:v1".toByteArray(Charsets.UTF_8) + payloadBytes),
+        )
+
+        val commitment = ByteArrayOutputStream()
+        commitment.write(1)
+        commitment.write(6)
+        writeTestU32Le(commitment, SccpTon.DOMAIN_TON)
+        commitment.write(hexBytes(messageId.removePrefix("0x")))
+        commitment.write(hexBytes(payloadHash.removePrefix("0x")))
+        val commitmentBytes = commitment.toByteArray()
+
+        var currentRoot = Blake2b.digest256("sccp:hub:leaf:v1".toByteArray(Charsets.UTF_8) + commitmentBytes)
+        val merkleProof = ByteArrayOutputStream()
+        writeTestU32Le(merkleProof, merkleProofSteps.size)
+        for ((sibling, siblingIsLeft) in merkleProofSteps) {
+            require(sibling.size == 32) { "test Merkle sibling must be 32 bytes" }
+            merkleProof.write(sibling)
+            merkleProof.write(siblingIsLeft)
+            currentRoot = Blake2b.digest256(
+                "sccp:hub:node:v1".toByteArray(Charsets.UTF_8) +
+                    if (siblingIsLeft == 1) sibling + currentRoot else currentRoot + sibling,
+            )
+        }
+        val commitmentRoot = "0x" + hexLower(currentRoot)
+
+        val bundle = ByteArrayOutputStream()
+        bundle.write(1)
+        bundle.write(currentRoot)
+        writeTestBytes(bundle, commitmentBytes)
+        writeTestBytes(bundle, merkleProof.toByteArray())
+        writeTestBytes(bundle, payloadBytes)
+        writeTestBytes(bundle, finalityProof)
+
+        return SampleTonBundleFixture(
+            publicInputs = TonSccpPublicInputsInput(
+                version = 1,
+                messageId = messageId,
+                payloadHash = payloadHash,
+                targetDomain = SccpTon.DOMAIN_TON,
+                commitmentRoot = commitmentRoot,
+                finalityHeight = "19",
+                finalityBlockHash = "aa".repeat(32),
+            ),
+            bundleBytes = bundle.toByteArray(),
+        )
+    }
+
+    private fun splitTestSccpMessageProofBundleBytes(
+        bundleBytes: ByteArray,
+    ): Map<String, TestBundleVecRange> {
+        var offset = 33
+        val commitment = readTestCanonicalVecRange(bundleBytes, offset)
+        offset = commitment.nextOffset
+        val merkleProof = readTestCanonicalVecRange(bundleBytes, offset)
+        offset = merkleProof.nextOffset
+        val payload = readTestCanonicalVecRange(bundleBytes, offset)
+        offset = payload.nextOffset
+        val finalityProof = readTestCanonicalVecRange(bundleBytes, offset)
+        return mapOf(
+            "commitment" to commitment,
+            "merkleProof" to merkleProof,
+            "payload" to payload,
+            "finalityProof" to finalityProof,
+        )
+    }
+
+    private fun readTestCanonicalVecRange(bundleBytes: ByteArray, offset: Int): TestBundleVecRange {
+        val length = readTestU32Le(bundleBytes, offset)
+        val start = offset + 4
+        val end = start + length
+        require(end <= bundleBytes.size) { "test vector exceeds bundle length" }
+        return TestBundleVecRange(
+            lengthOffset = offset,
+            bytesStart = start,
+            bytesEnd = end,
+            bytes = bundleBytes.copyOfRange(start, end),
+            nextOffset = end,
+        )
+    }
+
+    private fun replaceTestSccpMessageProofBundleVec(
+        bundleBytes: ByteArray,
+        vecRange: TestBundleVecRange,
+        replacement: ByteArray,
+    ): ByteArray {
+        val out = ByteArrayOutputStream()
+        out.write(bundleBytes.copyOfRange(0, vecRange.lengthOffset))
+        writeTestU32Le(out, replacement.size)
+        out.write(replacement)
+        out.write(bundleBytes.copyOfRange(vecRange.bytesEnd, bundleBytes.size))
+        return out.toByteArray()
+    }
+
+    private fun writeTestBytes(out: ByteArrayOutputStream, value: ByteArray) {
+        writeTestU32Le(out, value.size)
+        out.write(value)
+    }
+
+    private fun writeTestU32Le(out: ByteArrayOutputStream, value: Int) {
+        require(value >= 0)
+        out.write(value and 0xff)
+        out.write((value ushr 8) and 0xff)
+        out.write((value ushr 16) and 0xff)
+        out.write((value ushr 24) and 0xff)
+    }
+
+    private fun writeTestU64Le(out: ByteArrayOutputStream, value: BigInteger) {
+        var working = value
+        repeat(8) {
+            out.write(working.and(BigInteger.valueOf(0xffL)).toInt())
+            working = working.shiftRight(8)
+        }
+    }
+
+    private fun writeTestU128Le(out: ByteArrayOutputStream, value: BigInteger) {
+        var working = value
+        repeat(16) {
+            out.write(working.and(BigInteger.valueOf(0xffL)).toInt())
+            working = working.shiftRight(8)
+        }
+    }
+
+    private fun readTestU32Le(raw: ByteArray, offset: Int): Int {
+        require(offset + 4 <= raw.size)
+        return (raw[offset].toInt() and 0xff) or
+            ((raw[offset + 1].toInt() and 0xff) shl 8) or
+            ((raw[offset + 2].toInt() and 0xff) shl 16) or
+            ((raw[offset + 3].toInt() and 0xff) shl 24)
+    }
+
+    private fun prefixedKeccakBytes(prefix: String, payload: ByteArray): ByteArray {
+        val digest = KeccakDigest(256)
+        val input = prefix.toByteArray(Charsets.UTF_8) + payload
+        digest.update(input, 0, input.size)
+        val out = ByteArray(32)
+        digest.doFinal(out, 0)
+        return out
+    }
 
     private fun sampleShardStateProofRequestInput(
         transactionRoot: String = "0x5a75fc0633903343b684ec73076c5a48cf6b453fc73aa316c2a6de900669e419",
@@ -2760,6 +3077,9 @@ class TonSccpProverTest {
         }
     }
 
+    private fun hexLower(bytes: ByteArray): String =
+        bytes.joinToString(separator = "") { "%02x".format(it.toInt() and 0xff) }
+
     private fun indexOfBytes(haystack: ByteArray, needle: ByteArray): Int {
         for (offset in 0..(haystack.size - needle.size)) {
             var matches = true
@@ -2770,4 +3090,17 @@ class TonSccpProverTest {
         }
         return -1
     }
+
+    private data class SampleTonBundleFixture(
+        val publicInputs: TonSccpPublicInputsInput,
+        val bundleBytes: ByteArray,
+    )
+
+    private data class TestBundleVecRange(
+        val lengthOffset: Int,
+        val bytesStart: Int,
+        val bytesEnd: Int,
+        val bytes: ByteArray,
+        val nextOffset: Int,
+    )
 }

@@ -279,11 +279,11 @@ const sampleNativeEvmProverBundleWithFixtureBytes = (
   };
 };
 
-const nativeEvmProverArtifactBytes = (label) => {
+const nativeEvmProverArtifactBytes = (label, size = 96 * 1024) => {
   const seed = Buffer.from(`${label}\n`, "utf8");
-  const out = Buffer.alloc(256);
+  const out = Buffer.alloc(size);
   for (let index = 0; index < out.length; index += 1) {
-    out[index] = seed[index % seed.length];
+    out[index] = (seed[index % seed.length] + index * 31 + (index >> 7)) & 0xff;
   }
   return out;
 };
@@ -4289,7 +4289,7 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /proofArtifactBytes must be at least 256 bytes/u,
+    /proofArtifactBytes must be at least 65536 bytes/u,
   );
   assert.throws(
     () =>
@@ -4309,8 +4309,9 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
     /crossSdkFixtureParityBytes sha256/u,
   );
   const flaggedArtifactBytes = nativeEvmProverArtifactBytes(
-    "native proof artifact imports proof.wasm",
+    "native proof artifact imports local prover code",
   );
+  flaggedArtifactBytes.set(Buffer.from("proof.wasm", "utf8"), 1024);
   const flaggedArtifactHash = sha256Hex(flaggedArtifactBytes);
   const {
     bundle: flaggedBundle,
@@ -4336,6 +4337,8 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
           verifierKeyBytes,
           crossSdkFixtureParityBytes: flaggedParityFixtureBytes,
           nativeProverSelfTestBytes: flaggedSelfTestFixtureBytes,
+          sdk: "javascript",
+          implementationBytes,
         },
         { destinationBinding: input.destinationBinding },
       ),
@@ -4433,6 +4436,14 @@ test("EthereumMainnetSccp rejects unsafe native EVM prover bundle manifests", ()
     () =>
       validateEthereumMainnetNativeEvmProverBundle({
         ...bundle,
+        proof_artifact: "artifacts/ethereum-mainnet/fixtures/proof-artifact.bin",
+      }),
+    /proofArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
         verifier_key: "/tmp/verifier-key.bin",
       }),
     /verifierKey must be a relative POSIX path/u,
@@ -4506,6 +4517,22 @@ test("EthereumMainnetSccp rejects unsafe native EVM prover bundle manifests", ()
         ),
       }),
     /implementationArtifact must be a relative POSIX path/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        native_sdk_artifacts: bundle.native_sdk_artifacts.map((artifact) =>
+          artifact.sdk === "javascript"
+            ? {
+                ...artifact,
+                implementation_artifact:
+                  "artifacts/ethereum-mainnet/mock/javascript.bin",
+              }
+            : artifact,
+        ),
+      }),
+    /nativeSdkArtifacts\[0\]\.implementationArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
   );
   assert.throws(
     () =>

@@ -21,7 +21,7 @@ DA-2 のブロブの認識を決定します。エスタ ノタ キャプチャ�
 正規の構造、パイプラインのフック、プルエバスの損失
 cliente ligero y las superficies Torii/RPC que deben aterrizar antes de que los
 バリダドレス プエダン コンフィア エン コンプロミソス DA デュランテ アドミッション オブ チェケオス
-ゴベルナンザ。 Todos los ペイロード estan codificados en Norito; sin SCALE に JSON 広告
+ゴベルナンザ。 Todos los ペイロード estan codificados en Norito; sin retired codec に JSON 広告
 ほら。
 
 ## オブジェクト

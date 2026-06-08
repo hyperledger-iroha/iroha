@@ -22,7 +22,7 @@ structures de donnees canoniques, les hooks du pipeline de blocs, les preuves de
 client leger, et les surfaces Torii/RPC qui doivent arriver avant que les
 validateurs puissent s'appuyer sur les engagements DA lors des checks
 d'admission ou de governance. Tous les payloads sont codes en Norito; pas de
-SCALE ב-JSON אד-הוק.
+retired codec ב-JSON אד-הוק.
 
 ## אובייקטים
 

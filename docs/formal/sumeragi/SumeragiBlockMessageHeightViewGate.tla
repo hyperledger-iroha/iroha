@@ -208,6 +208,32 @@ BlockMessageHeightViewSafetyAnchors ==
   /\ SourceSelectionAnchors
   /\ CompactWideningAnchors
 
-Safety == BlockMessageHeightViewSafetyAnchors
+BlockMessageNoSlotExactness ==
+  /\ NoSlotMessagesStayUnfiltered
+  /\ NoSlotProjectionAnchors
+
+BlockMessageSlotProjectionExactness ==
+  /\ SlotMessagesRemainFutureWindowEligible
+  /\ ProjectionSourcePreserved
+  /\ HeightViewOrderPreserved
+  /\ SlotProjectionAnchors
+
+BlockMessageSourceSelectionExactness ==
+  /\ ProjectionSourcePreserved
+  /\ SourceSelectionAnchors
+
+BlockMessageCompactWideningExactness ==
+  /\ CompactChunkWidensSlot
+  /\ CompactWideningAnchors
+
+BlockMessageHeightViewExactness ==
+  /\ SafetyFast
+  /\ BlockMessageNoSlotExactness
+  /\ BlockMessageSlotProjectionExactness
+  /\ BlockMessageSourceSelectionExactness
+  /\ BlockMessageCompactWideningExactness
+  /\ BlockMessageHeightViewSafetyAnchors
+
+Safety == BlockMessageHeightViewExactness
 
 ====

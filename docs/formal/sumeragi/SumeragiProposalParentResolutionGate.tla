@@ -277,25 +277,37 @@ DaInlineBackupSeedsAndUsesRbc ==
     /\ seed_backup_transport
     /\ use_rbc_transport
 
-Safety ==
+ProposalParentSelectionExact ==
   /\ ParentSourceMatchesSpec
   /\ ParentMissingDeferralMatchesSpec
-  /\ KuraLookupMatchesSpec
-  /\ PendingFallbackMatchesSpec
-  /\ OverflowLoggingMatchesSpec
-  /\ BackupSeedMatchesSpec
-  /\ RbcTransportMatchesSpec
   /\ KuraParentTakesPrecedence
   /\ PendingParentRequiresMatchingSubjectAndHeight
   /\ ParentMissingDefersOnlyAboveGenesis
   /\ HeightZeroAndOneDoNotResolveParentOrDefer
   /\ MissingParentAboveGenesisDefers
+
+ProposalParentLookupExact ==
+  /\ KuraLookupMatchesSpec
+  /\ PendingFallbackMatchesSpec
+  /\ OverflowLoggingMatchesSpec
   /\ OverflowStillAllowsPendingFallback
+
+ProposalBackupTransportExact ==
+  /\ BackupSeedMatchesSpec
+  /\ RbcTransportMatchesSpec
   /\ BackupSeedRequiresDaInlineAndConfig
   /\ RbcTransportRequiresDaAndEitherPrimaryOrBackup
   /\ InlineWithoutBackupDoesNotUseRbc
   /\ DaRbcPrimaryUsesRbcWithoutSeedingBackup
   /\ DaInlineBackupSeedsAndUsesRbc
+
+ProposalParentResolutionExactness ==
+  /\ ProposalParentSelectionExact
+  /\ ProposalParentLookupExact
+  /\ ProposalBackupTransportExact
+
+Safety ==
+  ProposalParentResolutionExactness
 
 =============================================================================
 ====

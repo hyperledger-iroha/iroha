@@ -47,6 +47,7 @@ import {
   validateBscTestnetNativeEvmProverBundle,
   validateBscTestnetNativeEvmProverParityFixture,
   validateBscTestnetNativeEvmProverSelfTestFixture,
+  verifyBscMainnetNativeEvmProverArtifacts,
   verifyBscTestnetNativeEvmProverArtifacts,
   verifyBscTestnetNativeEvmProverArtifactsFromBundle,
   wrapBscMainnetSccpDestinationProofResult,
@@ -397,6 +398,117 @@ const sampleVerifiedBscTestnetNativeEvmProverFixture = () => {
     },
   );
   const nativeProverArtifacts = verifyBscTestnetNativeEvmProverArtifacts(
+    {
+      nativeProverBundle: bundle,
+      proofArtifactBytes,
+      provingKeyBytes,
+      verifierKeyBytes,
+      crossSdkFixtureParityBytes: parityFixtureBytes,
+      nativeProverSelfTestBytes: selfTestFixtureBytes,
+      sdk: "javascript",
+      implementationBytes,
+    },
+    { destinationBinding },
+  );
+  return {
+    bundle,
+    destinationBinding,
+    nativeProverArtifacts,
+    proofArtifactBytes,
+    provingKeyBytes,
+    verifierKeyBytes,
+    parityFixtureBytes,
+    parityFixtureHash,
+    selfTestFixtureBytes,
+    selfTestFixtureHash,
+    implementationBytes,
+    implementationHash,
+  };
+};
+
+const sampleVerifiedBscMainnetNativeEvmProverFixture = () => {
+  const proofArtifactBytes = nativeEvmProverArtifactBytes(
+    "sccp bsc mainnet proof artifact v1",
+  );
+  const provingKeyBytes = nativeEvmProverArtifactBytes(
+    "sccp bsc mainnet proving key v1",
+  );
+  const verifierKeyBytes = nativeEvmProverArtifactBytes(
+    "sccp bsc mainnet verifier key v1",
+  );
+  const implementationBytes = nativeEvmProverArtifactBytes(
+    "sccp bsc mainnet pure typescript prover artifact v1",
+  );
+  const proofArtifactHash = sha256Hex(proofArtifactBytes);
+  const provingKeyHash = sha256Hex(provingKeyBytes);
+  const verifierKeyHash = sha256Hex(verifierKeyBytes);
+  const implementationHash = sha256Hex(implementationBytes);
+  const destinationBinding = bscMainnetSccpDestinationBinding(
+    sampleDestinationBindingInput({ verifierKeyHash }),
+  );
+  const bundleBase = {
+    bundle_id: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1,
+    chain: "bsc-mainnet",
+    proof_artifact: "artifacts/bsc-mainnet/proof-artifact.bin",
+    proof_artifact_hash: proofArtifactHash,
+    proving_key: "artifacts/bsc-mainnet/proving-key.bin",
+    proving_key_hash: provingKeyHash,
+    verifier_key: "artifacts/bsc-mainnet/verifier-key.bin",
+    verifier_key_hash: verifierKeyHash,
+    cross_sdk_fixture_parity_artifact:
+      "artifacts/bsc-mainnet/cross-sdk-fixture-parity.json",
+    native_prover_self_test_artifact:
+      "artifacts/bsc-mainnet/native-prover-self-test.json",
+    native_sdk_artifacts: Object.entries(
+      SCCP_ETH_NATIVE_EVM_PROVER_REQUIRED_IMPLEMENTATIONS_V1,
+    ).map(([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      prover_artifact_hash: proofArtifactHash,
+      proving_key_hash: provingKeyHash,
+      implementation_artifact: `artifacts/bsc-mainnet/${sdk}-implementation.bin`,
+      implementation_hash:
+        sdk === "javascript"
+          ? implementationHash
+          : hex32((index + 0x41).toString(16).padStart(2, "0")),
+    })),
+  };
+  const draftBundle = sampleBscTestnetNativeEvmProverBundle(
+    destinationBinding.bindingHash,
+    bundleBase,
+  );
+  const parityFixtureBytes = Buffer.from(
+    JSON.stringify(
+      sampleBscTestnetNativeEvmProverParityFixture(draftBundle, {
+        schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
+        chain: "bsc-mainnet",
+      }),
+    ),
+    "utf8",
+  );
+  const selfTestFixtureBytes = Buffer.from(
+    JSON.stringify(
+      sampleBscTestnetNativeEvmProverSelfTestFixture(draftBundle, {
+        schema: SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_SELF_TEST_SCHEMA_V1,
+        chain: "bsc-mainnet",
+      }),
+    ),
+    "utf8",
+  );
+  const parityFixtureHash = sha256Hex(parityFixtureBytes);
+  const selfTestFixtureHash = sha256Hex(selfTestFixtureBytes);
+  const bundle = sampleBscTestnetNativeEvmProverBundle(
+    destinationBinding.bindingHash,
+    {
+      ...bundleBase,
+      audit_hashes: {
+        ...draftBundle.audit_hashes,
+        cross_sdk_fixture_parity: parityFixtureHash,
+        native_prover_self_test: selfTestFixtureHash,
+      },
+    },
+  );
+  const nativeProverArtifacts = verifyBscMainnetNativeEvmProverArtifacts(
     {
       nativeProverBundle: bundle,
       proofArtifactBytes,
@@ -1049,6 +1161,89 @@ test("BscTestnetSccp validates native prover bundles and binds artifact hashes",
   );
 });
 
+test("BscTestnetSccp rejects native prover bundle artifact path aliasing", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        {
+          ...fixture.bundle,
+          proving_key: fixture.bundle.proof_artifact,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /artifact paths must be role-separated: provingKey reuses proofArtifact/u,
+  );
+
+  const sdkArtifacts = fixture.bundle.native_sdk_artifacts.map((artifact) => ({
+    ...artifact,
+  }));
+  sdkArtifacts[1].implementation_artifact =
+    sdkArtifacts[0].implementation_artifact;
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        {
+          ...fixture.bundle,
+          native_sdk_artifacts: sdkArtifacts,
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /nativeSdkArtifacts\[.*\]\.implementationArtifact reuses nativeSdkArtifacts\[.*\]\.implementationArtifact/u,
+  );
+});
+
+test("BscTestnetSccp rejects native prover bundles that label executable artifacts as fixtures", () => {
+  const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        {
+          ...fixture.bundle,
+          proof_artifact: "artifacts/bsc-testnet/fixtures/proof-artifact.bin",
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /proofArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+  );
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        {
+          ...fixture.bundle,
+          verifier_key: "artifacts/bsc-testnet/diagnostic/verifier-key.bin",
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /verifierKey must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+  );
+
+  assert.throws(
+    () =>
+      validateBscTestnetNativeEvmProverBundle(
+        {
+          ...fixture.bundle,
+          native_sdk_artifacts: fixture.bundle.native_sdk_artifacts.map(
+            (artifact) =>
+              artifact.sdk === "javascript"
+                ? {
+                    ...artifact,
+                    implementation_artifact:
+                      "artifacts/bsc-testnet/mock/javascript-implementation.bin",
+                  }
+                : artifact,
+          ),
+        },
+        { destinationBinding: fixture.destinationBinding },
+      ),
+    /nativeSdkArtifacts\[0\]\.implementationArtifact must not reference diagnostic, fixture, mock, placeholder, sample, stub, or test-only material/u,
+  );
+});
+
 test("BscTestnetSccp rejects tiny native prover material even when hashes are self-consistent", () => {
   const fixture = sampleVerifiedBscTestnetNativeEvmProverFixture();
   const tinyProofArtifactBytes = nativeEvmProverArtifactBytes(
@@ -1163,8 +1358,15 @@ test("BscMainnetSccp validates native prover bundle manifests with mainnet liter
 });
 
 test("BscMainnetSccp calldata requires a wrapped BSC mainnet proof result", () => {
-  const sdk = new BscMainnetSccp();
-  const request = sdk.buildOutboundProofRequest(sampleOutboundInput());
+  const { destinationBinding, nativeProverArtifacts } =
+    sampleVerifiedBscMainnetNativeEvmProverFixture();
+  const sdk = new BscMainnetSccp({ nativeProverArtifacts });
+  const request = sdk.buildOutboundProofRequest(
+    sampleOutboundInput(
+      SCCP_DOMAIN_BSC,
+      destinationBindingInputFromBinding(destinationBinding),
+    ),
+  );
   const proofResult = wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
   const submission = sdk.buildBscCalldata({ proofResult });
 
@@ -1207,11 +1409,20 @@ test("BscMainnetSccp calldata requires a wrapped BSC mainnet proof result", () =
 });
 
 test("BscMainnetSccp binds custom outbound proof results to the requested proof", async () => {
-  const input = sampleOutboundInput();
-  const referenceSdk = new BscMainnetSccp();
+  const { destinationBinding, nativeProverArtifacts } =
+    sampleVerifiedBscMainnetNativeEvmProverFixture();
+  const input = sampleOutboundInput(
+    SCCP_DOMAIN_BSC,
+    destinationBindingInputFromBinding(destinationBinding),
+  );
+  const nativeProverSelfTest = (context) => context.expectedResult;
+  const referenceSdk = new BscMainnetSccp({ nativeProverArtifacts });
   const expectedRequest = referenceSdk.buildOutboundProofRequest(input);
   const wrongRequest = referenceSdk.buildOutboundProofRequest({
-    ...sampleOutboundInput(),
+    ...sampleOutboundInput(
+      SCCP_DOMAIN_BSC,
+      destinationBindingInputFromBinding(destinationBinding),
+    ),
     bundleBytes: [9, 8, 7],
   });
   const wrongProofResult = wrapBscMainnetSccpDestinationProofResult(
@@ -1220,6 +1431,8 @@ test("BscMainnetSccp binds custom outbound proof results to the requested proof"
   );
   let seenRequest;
   const rejectingSdk = new BscMainnetSccp({
+    nativeProverArtifacts,
+    nativeProverSelfTest,
     outboundProver: {
       async prove(request) {
         seenRequest = request;
@@ -1243,6 +1456,8 @@ test("BscMainnetSccp binds custom outbound proof results to the requested proof"
     /proofBytes must not be all zero/u,
   );
   const zeroProofSdk = new BscMainnetSccp({
+    nativeProverArtifacts,
+    nativeProverSelfTest,
     outboundProver: {
       async prove() {
         return { proofBytes: zeroProofBytes };
@@ -1256,6 +1471,8 @@ test("BscMainnetSccp binds custom outbound proof results to the requested proof"
 
   let acceptedRequest;
   const acceptingSdk = new BscMainnetSccp({
+    nativeProverArtifacts,
+    nativeProverSelfTest,
     outboundProver: {
       async prove(request) {
         acceptedRequest = request;
@@ -1269,6 +1486,8 @@ test("BscMainnetSccp binds custom outbound proof results to the requested proof"
 });
 
 test("BscMainnetSccp outbound provider path derives target from wrapped proof result", async () => {
+  const { destinationBinding, nativeProverArtifacts } =
+    sampleVerifiedBscMainnetNativeEvmProverFixture();
   const submittedTxs = [];
   const provider = {
     async request({ method, params }) {
@@ -1280,21 +1499,29 @@ test("BscMainnetSccp outbound provider path derives target from wrapped proof re
       throw new Error(`unexpected RPC method ${method}`);
     },
   };
-  const sdk = new BscMainnetSccp({ executionProvider: provider });
-  const request = sdk.buildOutboundProofRequest(sampleOutboundInput());
+  const sdk = new BscMainnetSccp({
+    executionProvider: provider,
+    nativeProverArtifacts,
+  });
+  const request = sdk.buildOutboundProofRequest(
+    sampleOutboundInput(
+      SCCP_DOMAIN_BSC,
+      destinationBindingInputFromBinding(destinationBinding),
+    ),
+  );
   const proofResult = wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
 
   assert.equal(await sdk.submitOutboundToBsc({ proofResult }), "0xbsc1");
   assert.equal(submittedTxs[0].to, request.destinationBinding.bridgeAddress);
   assert.equal(submittedTxs[0].data, sdk.buildBscCalldata({ proofResult }).callDataHex);
 
-  const { destinationBinding, ...proofResultWithoutBinding } = proofResult;
-  const { bridgeAddress: _bridgeAddress, ...bindingWithoutBridge } = destinationBinding;
+  const { destinationBinding: proofDestinationBinding, ...proofResultWithoutBinding } = proofResult;
+  const { bridgeAddress: _bridgeAddress, ...bindingWithoutBridge } = proofDestinationBinding;
   const snakeProofResult = {
     ...proofResultWithoutBinding,
     destination_binding: {
       ...bindingWithoutBridge,
-      bridge_address: destinationBinding.bridgeAddress,
+      bridge_address: proofDestinationBinding.bridgeAddress,
     },
   };
   assert.equal(await sdk.submitOutboundToBsc({ proof_result: snakeProofResult }), "0xbsc2");
@@ -1317,12 +1544,22 @@ test("BscMainnetSccp outbound provider path derives target from wrapped proof re
 });
 
 test("BscMainnetSccp validates configured providers before app-owned submit callbacks", async () => {
-  const request = new BscMainnetSccp().buildOutboundProofRequest(sampleOutboundInput());
+  const { destinationBinding, nativeProverArtifacts } =
+    sampleVerifiedBscMainnetNativeEvmProverFixture();
+  const request = new BscMainnetSccp({
+    nativeProverArtifacts,
+  }).buildOutboundProofRequest(
+    sampleOutboundInput(
+      SCCP_DOMAIN_BSC,
+      destinationBindingInputFromBinding(destinationBinding),
+    ),
+  );
   const proofResult = wrapBscMainnetSccpDestinationProofResult(GROTH16_PROOF_BYTES, request);
   let called = false;
   await assert.rejects(
     () =>
       new BscMainnetSccp({
+        nativeProverArtifacts,
         executionProvider: {
           async request({ method }) {
             assert.equal(method, "eth_chainId");
@@ -1340,6 +1577,7 @@ test("BscMainnetSccp validates configured providers before app-owned submit call
 
   const methods = [];
   const sdk = new BscMainnetSccp({
+    nativeProverArtifacts,
     executionProvider: {
       async request({ method }) {
         methods.push(method);
@@ -1360,6 +1598,7 @@ test("BscMainnetSccp validates configured providers before app-owned submit call
   let callbackOnlyCalled = false;
   assert.equal(
     await new BscMainnetSccp({
+      nativeProverArtifacts,
       submitOutboundToBsc(submission) {
         callbackOnlyCalled = true;
         return submission.targetDomain;

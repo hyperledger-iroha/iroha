@@ -10,6 +10,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
+import org.bouncycastle.crypto.digests.KeccakDigest;
 import org.hyperledger.iroha.android.crypto.Blake2b;
 
 /** TON SCCP proof request and internal-message helpers for local-first Android proof generation. */
@@ -19,6 +20,12 @@ public final class TonSccpProver {
   public static final String MESSAGE_BODY_BOC_V1 = "ton_message_body_boc_v1";
   public static final String STARK_FRI_PROOF_FAMILY_V1 = "stark-fri-v1";
   public static final int NATIVE_RECURSIVE_MAX_PROOF_BYTES = 2 * 1024 * 1024;
+  public static final int CODEC_TEXT_UTF8 = 1;
+  public static final int CODEC_EVM_HEX = 2;
+  public static final int CODEC_SOLANA_BASE58 = 3;
+  public static final int CODEC_TON_RAW = 4;
+  public static final int CODEC_TRON_BASE58CHECK = 5;
+  public static final int CODEC_SORA_ASSET_ID = 6;
   public static final String MAINNET_SHARD_STATE_VERIFIER_ID_V1 =
       "sccp:ton:source-state-verifier:shard-state-light-client-mainnet:v1";
   public static final String SHARD_STATE_OPEN_VERIFY_CIRCUIT_ID_V1 =
@@ -99,6 +106,19 @@ public final class TonSccpProver {
       "sccp:ton:full-light-client-audit:statement:v1";
   private static final String ROUTE_CANARY_LIVE_ACCOUNT_PREFIX_V1 =
       "iroha:sccp:ton-route-canary-live-account:v1";
+  private static final String SCCP_MSG_PREFIX_ASSET_REGISTER_V1 =
+      "sccp:asset:register:v1";
+  private static final String SCCP_MSG_PREFIX_ROUTE_ACTIVATE_V1 =
+      "sccp:route:activate:v1";
+  private static final String SCCP_MSG_PREFIX_TRANSFER_V1 = "sccp:transfer:v1";
+  private static final String SCCP_MSG_PREFIX_TOKEN_ADD_V1 = "sccp:token:add:v1";
+  private static final String SCCP_MSG_PREFIX_TOKEN_PAUSE_V1 = "sccp:token:pause:v1";
+  private static final String SCCP_MSG_PREFIX_TOKEN_RESUME_V1 = "sccp:token:resume:v1";
+  private static final String SCCP_HUB_LEAF_PREFIX_V1 = "sccp:hub:leaf:v1";
+  private static final String SCCP_HUB_NODE_PREFIX_V1 = "sccp:hub:node:v1";
+  private static final String SCCP_PAYLOAD_HASH_PREFIX_V1 = "sccp:payload:v1";
+  private static final String BASE58_ALPHABET =
+      "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   private static final long SUBMIT_OP_V1 = 0x53434350L;
   private static final int MESSAGE_SCHEMA_VERSION_V1 = 1;
   private static final int MAX_CELL_DATA_BYTES = 127;
@@ -2484,6 +2504,10 @@ public final class TonSccpProver {
       throw new IllegalArgumentException("publicInputs.targetDomain must be TON");
     }
     final byte[] bundleBytes = requireNativeRecursivePayloadBytes(input.bundleBytes(), "bundleBytes");
+    final byte[] sourceProofBytes =
+        requireOptionalSourceProofBytes(input.sourceProofBytes(), "sourceProofBytes");
+    requireSccpProofRequestBundleMatchesPublicInputs(
+        input.publicInputs(), bundleBytes, sourceProofBytes);
     final byte[] publicInputsBytes = canonicalPublicInputsBytes(input.publicInputs());
     final ProofContext proofContext =
         normalizeProofContext(input.statementHash(), input.destinationBindingHash());
@@ -2516,8 +2540,6 @@ public final class TonSccpProver {
     final ByteArrayOutputStream preimage = new ByteArrayOutputStream();
     write(preimage, publicInputsBytes);
     writeVector(preimage, bundleBytes);
-    final byte[] sourceProofBytes =
-        requireOptionalSourceProofBytes(input.sourceProofBytes(), "sourceProofBytes");
     writeVector(preimage, sourceProofBytes);
     writeString(preimage, sourceStateVerifierId, "sourceStateVerifierId");
     write(preimage, sourceStateVerifierHashBytes);
@@ -2737,6 +2759,631 @@ public final class TonSccpProver {
     }
     requireOptionalNonZeroBytes(copy, label);
     return copy;
+  }
+
+  private static SccpBundleSummary requireSccpProofRequestBundleMatchesPublicInputs(
+      final PublicInputsInput publicInputs,
+      final byte[] bundleBytes,
+      final byte[] sourceProofBytes) {
+    final SccpBundleSummary summary =
+        decodeCanonicalSccpMessageProofBundleSummary(bundleBytes, "bundleBytes");
+    final String messageId = normalizeHex32(publicInputs.messageId(), "publicInputs.messageId");
+    final String payloadHash = normalizeHex32(publicInputs.payloadHash(), "publicInputs.payloadHash");
+    final String commitmentRoot =
+        normalizeHex32(publicInputs.commitmentRoot(), "publicInputs.commitmentRoot");
+    if (summary.targetDomain != publicInputs.targetDomain()
+        || !summary.messageId.equals(messageId)
+        || !summary.payloadHash.equals(payloadHash)
+        || !summary.commitmentRoot.equals(commitmentRoot)) {
+      throw new IllegalArgumentException("bundleBytes must match publicInputs");
+    }
+    if (summary.sourceDomain != SolanaSccpProver.DOMAIN_SORA && sourceProofBytes.length == 0) {
+      throw new IllegalArgumentException("sourceProofBytes required for non-SORA source bundle");
+    }
+    return summary;
+  }
+
+  private static SccpBundleSummary decodeCanonicalSccpMessageProofBundleSummary(
+      final byte[] bundleBytes, final String label) {
+    int offset = 0;
+    final int version = readU8At(bundleBytes, offset, label + ".version");
+    offset += 1;
+    if (version != 1) {
+      throw new IllegalArgumentException(label + ".version must be 1");
+    }
+    if (offset + 32 > bundleBytes.length) {
+      throw new IllegalArgumentException(label + ".commitment_root is too short");
+    }
+    final String commitmentRoot =
+        "0x" + hexLower(Arrays.copyOfRange(bundleBytes, offset, offset + 32));
+    offset += 32;
+    final ReadVec commitmentVec = readCanonicalSccpVec(bundleBytes, offset, label + ".commitment");
+    offset = commitmentVec.nextOffset;
+    final ReadVec merkleProofVec =
+        readCanonicalSccpVec(bundleBytes, offset, label + ".merkle_proof");
+    offset = merkleProofVec.nextOffset;
+    final ReadVec payloadVec = readCanonicalSccpVec(bundleBytes, offset, label + ".payload");
+    offset = payloadVec.nextOffset;
+    final ReadVec finalityProofVec =
+        readCanonicalSccpVec(bundleBytes, offset, label + ".finality_proof");
+    offset = finalityProofVec.nextOffset;
+    requireExactPayloadEnd(offset, bundleBytes, label);
+
+    final SccpPayloadSummary payload =
+        decodeCanonicalSccpBundlePayloadSummary(payloadVec.bytes, label + ".payload");
+    final byte[] expectedCommitmentBytes =
+        canonicalSccpCommitmentBytes(
+            payload.kind, payload.targetDomain, payload.messageId, payload.payloadHash);
+    if (!Arrays.equals(commitmentVec.bytes, expectedCommitmentBytes)) {
+      throw new IllegalArgumentException(label + ".commitment must match payload");
+    }
+    final SccpCommitmentSummary commitment =
+        decodeCanonicalSccpBundleCommitmentSummary(commitmentVec.bytes, label);
+    if (commitment.kindCode != sccpMessageKindCode(payload.kind)) {
+      throw new IllegalArgumentException(label + ".commitment kind must match payload");
+    }
+    final String expectedRoot =
+        merkleRootFromCanonicalCommitmentBytes(
+            commitmentVec.bytes, merkleProofVec.bytes, label + ".merkle_proof");
+    if (!commitmentRoot.equals(expectedRoot)) {
+      throw new IllegalArgumentException(label + ".commitment_root must match merkle proof");
+    }
+    return new SccpBundleSummary(
+        payload.sourceDomain,
+        commitment.targetDomain,
+        commitment.messageId,
+        commitment.payloadHash,
+        commitmentRoot);
+  }
+
+  private static SccpPayloadSummary decodeCanonicalSccpBundlePayloadSummary(
+      final byte[] payloadBytes, final String label) {
+    if (payloadBytes.length < 2) {
+      throw new IllegalArgumentException(label + " is too short");
+    }
+    final int discriminant = readU8At(payloadBytes, 0, label + ".kind");
+    final byte[] body = Arrays.copyOfRange(payloadBytes, 1, payloadBytes.length);
+    final int version = readU8At(body, 0, label + ".version");
+    if (version != 1) {
+      throw new IllegalArgumentException(label + ".version must be 1");
+    }
+    final Cursor cursor = new Cursor(1);
+
+    switch (discriminant) {
+      case 0: {
+        final int targetDomain = readDomainAndAdvance(body, cursor, label, "target_domain");
+        final int sourceDomain = readDomainAndAdvance(body, cursor, label, "home_domain");
+        readU64AndAdvance(body, cursor, label, "nonce");
+        final int assetIdCodec = readCodecAndAdvance(body, cursor, label, "asset_id_codec");
+        readCodecValueAndAdvance(body, cursor, label, assetIdCodec, "asset_id");
+        readU8At(body, cursor.offset, label + ".decimals");
+        cursor.offset += 1;
+        requireExactPayloadEnd(cursor.offset, body, label);
+        return sccpPayloadSummary(
+            "AssetRegister",
+            sourceDomain,
+            targetDomain,
+            SCCP_MSG_PREFIX_ASSET_REGISTER_V1,
+            body,
+            payloadBytes);
+      }
+      case 1: {
+        final int sourceDomain = readDomainAndAdvance(body, cursor, label, "source_domain");
+        final int targetDomain = readDomainAndAdvance(body, cursor, label, "target_domain");
+        if (sourceDomain == targetDomain) {
+          throw new IllegalArgumentException(
+              label + ".target_domain must differ from source_domain");
+        }
+        readU64AndAdvance(body, cursor, label, "nonce");
+        final int assetIdCodec = readCodecAndAdvance(body, cursor, label, "asset_id_codec");
+        readCodecValueAndAdvance(body, cursor, label, assetIdCodec, "asset_id");
+        final int routeIdCodec = readCodecAndAdvance(body, cursor, label, "route_id_codec");
+        readCodecValueAndAdvance(body, cursor, label, routeIdCodec, "route_id");
+        requireExactPayloadEnd(cursor.offset, body, label);
+        return sccpPayloadSummary(
+            "RouteActivate",
+            sourceDomain,
+            targetDomain,
+            SCCP_MSG_PREFIX_ROUTE_ACTIVATE_V1,
+            body,
+            payloadBytes);
+      }
+      case 2: {
+        final int sourceDomain = readDomainAndAdvance(body, cursor, label, "source_domain");
+        final int targetDomain = readDomainAndAdvance(body, cursor, label, "dest_domain");
+        if (sourceDomain == targetDomain) {
+          throw new IllegalArgumentException(label + ".dest_domain must differ from source_domain");
+        }
+        readU64AndAdvance(body, cursor, label, "nonce");
+        readDomainAndAdvance(body, cursor, label, "asset_home_domain");
+        final int assetIdCodec = readCodecAndAdvance(body, cursor, label, "asset_id_codec");
+        readCodecValueAndAdvance(body, cursor, label, assetIdCodec, "asset_id");
+        final BigInteger amount = readU128LeAt(body, cursor.offset, label + ".amount");
+        cursor.offset += 16;
+        if (amount.compareTo(BigInteger.ZERO) <= 0) {
+          throw new IllegalArgumentException(label + ".amount must be greater than zero");
+        }
+        final int senderCodec = readCodecAndAdvance(body, cursor, label, "sender_codec");
+        if (senderCodec != sccpCounterpartyAccountCodec(sourceDomain)) {
+          throw new IllegalArgumentException(label + ".sender_codec must match source_domain");
+        }
+        readCodecValueAndAdvance(body, cursor, label, senderCodec, "sender");
+        final int recipientCodec = readCodecAndAdvance(body, cursor, label, "recipient_codec");
+        if (recipientCodec != sccpCounterpartyAccountCodec(targetDomain)) {
+          throw new IllegalArgumentException(label + ".recipient_codec must match dest_domain");
+        }
+        readCodecValueAndAdvance(body, cursor, label, recipientCodec, "recipient");
+        final int routeIdCodec = readCodecAndAdvance(body, cursor, label, "route_id_codec");
+        readCodecValueAndAdvance(body, cursor, label, routeIdCodec, "route_id");
+        requireExactPayloadEnd(cursor.offset, body, label);
+        return sccpPayloadSummary(
+            "Transfer",
+            sourceDomain,
+            targetDomain,
+            SCCP_MSG_PREFIX_TRANSFER_V1,
+            body,
+            payloadBytes);
+      }
+      case 3: {
+        final int targetDomain = readDomainAndAdvance(body, cursor, label, "target_domain");
+        readU64AndAdvance(body, cursor, label, "nonce");
+        final byte[] assetId = readFixed(body, cursor, 32, label + ".sora_asset_id");
+        if (!containsNonZero(assetId)) {
+          throw new IllegalArgumentException(label + ".sora_asset_id must be non-zero");
+        }
+        readU8At(body, cursor.offset, label + ".decimals");
+        cursor.offset += 1;
+        final byte[] name = readFixed(body, cursor, 32, label + ".name");
+        if (!fixedAsciiFieldIsNonEmpty(name)) {
+          throw new IllegalArgumentException(label + ".name must be non-empty");
+        }
+        final byte[] symbol = readFixed(body, cursor, 32, label + ".symbol");
+        if (!fixedAsciiFieldIsNonEmpty(symbol)) {
+          throw new IllegalArgumentException(label + ".symbol must be non-empty");
+        }
+        requireExactPayloadEnd(cursor.offset, body, label);
+        return sccpPayloadSummary(
+            "TokenAdd",
+            SolanaSccpProver.DOMAIN_SORA,
+            targetDomain,
+            SCCP_MSG_PREFIX_TOKEN_ADD_V1,
+            body,
+            payloadBytes);
+      }
+      case 4:
+      case 5: {
+        final int targetDomain = readDomainAndAdvance(body, cursor, label, "target_domain");
+        readU64AndAdvance(body, cursor, label, "nonce");
+        final byte[] assetId = readFixed(body, cursor, 32, label + ".sora_asset_id");
+        if (!containsNonZero(assetId)) {
+          throw new IllegalArgumentException(label + ".sora_asset_id must be non-zero");
+        }
+        requireExactPayloadEnd(cursor.offset, body, label);
+        final String kind = discriminant == 4 ? "TokenPause" : "TokenResume";
+        final String prefix =
+            discriminant == 4 ? SCCP_MSG_PREFIX_TOKEN_PAUSE_V1 : SCCP_MSG_PREFIX_TOKEN_RESUME_V1;
+        return sccpPayloadSummary(
+            kind,
+            SolanaSccpProver.DOMAIN_SORA,
+            targetDomain,
+            prefix,
+            body,
+            payloadBytes);
+      }
+      default:
+        throw new IllegalArgumentException(label + " contains unsupported SCCP payload kind");
+    }
+  }
+
+  private static SccpPayloadSummary sccpPayloadSummary(
+      final String kind,
+      final int sourceDomain,
+      final int targetDomain,
+      final String messagePrefix,
+      final byte[] body,
+      final byte[] payloadBytes) {
+    return new SccpPayloadSummary(
+        kind,
+        sourceDomain,
+        targetDomain,
+        "0x" + hexLower(prefixedKeccakBytes(messagePrefix, body)),
+        "0x" + hexLower(prefixedHashBytes(SCCP_PAYLOAD_HASH_PREFIX_V1, payloadBytes)));
+  }
+
+  private static int readDomainAndAdvance(
+      final byte[] body, final Cursor cursor, final String label, final String field) {
+    final int domain = readU32LeAt(body, cursor.offset, label + "." + field);
+    cursor.offset += 4;
+    requireSupportedSccpBundleDomain(domain, label + "." + field);
+    return domain;
+  }
+
+  private static BigInteger readU64AndAdvance(
+      final byte[] body, final Cursor cursor, final String label, final String field) {
+    final BigInteger value = readU64LeAt(body, cursor.offset, label + "." + field);
+    cursor.offset += 8;
+    return value;
+  }
+
+  private static int readCodecAndAdvance(
+      final byte[] body, final Cursor cursor, final String label, final String field) {
+    final int codec = normalizeSccpCodecId(readU8At(body, cursor.offset, label + "." + field),
+        label + "." + field);
+    cursor.offset += 1;
+    return codec;
+  }
+
+  private static byte[] readCodecValueAndAdvance(
+      final byte[] body,
+      final Cursor cursor,
+      final String label,
+      final int codec,
+      final String field) {
+    final ReadVec value = readCanonicalSccpVec(body, cursor.offset, label + "." + field);
+    cursor.offset = value.nextOffset;
+    validateCanonicalSccpCodecBytes(codec, value.bytes, label + "." + field);
+    return value.bytes;
+  }
+
+  private static SccpCommitmentSummary decodeCanonicalSccpBundleCommitmentSummary(
+      final byte[] commitmentBytes, final String label) {
+    if (commitmentBytes.length != 70) {
+      throw new IllegalArgumentException(label + ".commitment must be 70 bytes");
+    }
+    final int version = readU8At(commitmentBytes, 0, label + ".commitment.version");
+    if (version != 1) {
+      throw new IllegalArgumentException(label + ".commitment.version must be 1");
+    }
+    return new SccpCommitmentSummary(
+        readU8At(commitmentBytes, 1, label + ".commitment.kind"),
+        readU32LeAt(commitmentBytes, 2, label + ".commitment.target_domain"),
+        "0x" + hexLower(Arrays.copyOfRange(commitmentBytes, 6, 38)),
+        "0x" + hexLower(Arrays.copyOfRange(commitmentBytes, 38, 70)));
+  }
+
+  private static String merkleRootFromCanonicalCommitmentBytes(
+      final byte[] commitmentBytes, final byte[] merkleProofBytes, final String label) {
+    int offset = 0;
+    final int stepCount = readU32LeAt(merkleProofBytes, offset, label + ".steps");
+    offset += 4;
+    byte[] current = prefixedHashBytes(SCCP_HUB_LEAF_PREFIX_V1, commitmentBytes);
+    for (int index = 0; index < stepCount; index++) {
+      if (offset + 33 > merkleProofBytes.length) {
+        throw new IllegalArgumentException(label + ".steps[" + index + "] is too short");
+      }
+      final byte[] sibling = Arrays.copyOfRange(merkleProofBytes, offset, offset + 32);
+      offset += 32;
+      final int siblingIsLeft =
+          readU8At(merkleProofBytes, offset, label + ".steps[" + index + "].sibling_is_left");
+      offset += 1;
+      if (siblingIsLeft != 0 && siblingIsLeft != 1) {
+        throw new IllegalArgumentException(
+            label + ".steps[" + index + "].sibling_is_left must be 0 or 1");
+      }
+      current =
+          prefixedHashBytes(
+              SCCP_HUB_NODE_PREFIX_V1,
+              siblingIsLeft == 1 ? concatBytes(sibling, current) : concatBytes(current, sibling));
+    }
+    requireExactPayloadEnd(offset, merkleProofBytes, label);
+    return "0x" + hexLower(current);
+  }
+
+  private static byte[] canonicalSccpCommitmentBytes(
+      final String kind,
+      final int targetDomain,
+      final String messageId,
+      final String payloadHash) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(1);
+    out.write(sccpMessageKindCode(kind));
+    writeU32Le(out, targetDomain);
+    write(out, hex32Bytes(messageId, "commitment.messageId"));
+    write(out, hex32Bytes(payloadHash, "commitment.payloadHash"));
+    return out.toByteArray();
+  }
+
+  private static int sccpMessageKindCode(final String kind) {
+    if ("Burn".equals(kind)) {
+      return 0;
+    }
+    if ("TokenAdd".equals(kind)) {
+      return 1;
+    }
+    if ("TokenPause".equals(kind)) {
+      return 2;
+    }
+    if ("TokenResume".equals(kind)) {
+      return 3;
+    }
+    if ("AssetRegister".equals(kind)) {
+      return 4;
+    }
+    if ("RouteActivate".equals(kind)) {
+      return 5;
+    }
+    if ("Transfer".equals(kind)) {
+      return 6;
+    }
+    throw new IllegalArgumentException("SCCP message kind is unsupported");
+  }
+
+  private static void requireSupportedSccpBundleDomain(final int domain, final String label) {
+    if (domain != SolanaSccpProver.DOMAIN_SORA
+        && domain != SourceSccpProofs.DOMAIN_ETH
+        && domain != SourceSccpProofs.DOMAIN_BSC
+        && domain != SolanaSccpProver.DOMAIN_SOLANA
+        && domain != DOMAIN_TON
+        && domain != SourceSccpProofs.DOMAIN_TRON) {
+      throw new IllegalArgumentException(label + " must be a supported SCCP domain");
+    }
+  }
+
+  private static int normalizeSccpCodecId(final int value, final String label) {
+    if (value != CODEC_TEXT_UTF8
+        && value != CODEC_EVM_HEX
+        && value != CODEC_SOLANA_BASE58
+        && value != CODEC_TON_RAW
+        && value != CODEC_TRON_BASE58CHECK
+        && value != CODEC_SORA_ASSET_ID) {
+      throw new IllegalArgumentException(label + " codec is unsupported");
+    }
+    return value;
+  }
+
+  private static int sccpCounterpartyAccountCodec(final int domain) {
+    if (domain == SolanaSccpProver.DOMAIN_SORA) {
+      return CODEC_TEXT_UTF8;
+    }
+    if (domain == SourceSccpProofs.DOMAIN_ETH || domain == SourceSccpProofs.DOMAIN_BSC) {
+      return CODEC_EVM_HEX;
+    }
+    if (domain == SolanaSccpProver.DOMAIN_SOLANA) {
+      return CODEC_SOLANA_BASE58;
+    }
+    if (domain == DOMAIN_TON) {
+      return CODEC_TON_RAW;
+    }
+    if (domain == SourceSccpProofs.DOMAIN_TRON) {
+      return CODEC_TRON_BASE58CHECK;
+    }
+    throw new IllegalArgumentException("SCCP domain must be supported");
+  }
+
+  private static void validateCanonicalSccpCodecBytes(
+      final int codec, final byte[] raw, final String label) {
+    switch (codec) {
+      case CODEC_TEXT_UTF8:
+        if (decodeCanonicalUtf8Bytes(raw, label).isEmpty()) {
+          throw new IllegalArgumentException(label + " must not be empty");
+        }
+        return;
+      case CODEC_EVM_HEX:
+        validateCanonicalEvmHexAddress(decodeCanonicalUtf8Bytes(raw, label), label);
+        return;
+      case CODEC_SOLANA_BASE58:
+        decodeBase58Fixed(decodeCanonicalUtf8Bytes(raw, label), label, 32);
+        return;
+      case CODEC_TON_RAW:
+        normalizeTonRawAddress(decodeCanonicalUtf8Bytes(raw, label), label);
+        return;
+      case CODEC_TRON_BASE58CHECK:
+        SourceSccpProofs.tronBase58CheckPayload(decodeCanonicalUtf8Bytes(raw, label), label);
+        return;
+      case CODEC_SORA_ASSET_ID:
+        if (raw.length != 32) {
+          throw new IllegalArgumentException(label + " must be 32 bytes");
+        }
+        return;
+      default:
+        throw new IllegalArgumentException(label + " codec is unsupported");
+    }
+  }
+
+  private static String decodeCanonicalUtf8Bytes(final byte[] raw, final String label) {
+    final String text = new String(raw, java.nio.charset.StandardCharsets.UTF_8);
+    if (!Arrays.equals(text.getBytes(java.nio.charset.StandardCharsets.UTF_8), raw)) {
+      throw new IllegalArgumentException(label + " must be canonical UTF-8");
+    }
+    return text;
+  }
+
+  private static void validateCanonicalEvmHexAddress(final String text, final String label) {
+    if (text.length() != 42 || !text.startsWith("0x")) {
+      throw new IllegalArgumentException(label + " must be a 0x-prefixed 20-byte EVM address");
+    }
+    final String payload = text.substring(2);
+    for (int index = 0; index < payload.length(); index++) {
+      final char symbol = payload.charAt(index);
+      if (!((symbol >= '0' && symbol <= '9')
+          || (symbol >= 'a' && symbol <= 'f')
+          || (symbol >= 'A' && symbol <= 'F'))) {
+        throw new IllegalArgumentException(label + " must be a 0x-prefixed 20-byte EVM address");
+      }
+    }
+    final byte[] checksum =
+        keccak256(payload.toLowerCase(java.util.Locale.ROOT)
+            .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    for (int index = 0; index < payload.length(); index++) {
+      final char symbol = payload.charAt(index);
+      if (symbol >= '0' && symbol <= '9') {
+        continue;
+      }
+      final int checksumByte = checksum[index / 2] & 0xff;
+      final int checksumNibble = index % 2 == 0 ? checksumByte >>> 4 : checksumByte & 0x0f;
+      final boolean shouldBeUppercase = checksumNibble >= 8;
+      if (shouldBeUppercase && symbol != Character.toUpperCase(symbol)) {
+        throw new IllegalArgumentException(label + " must be a canonical EIP-55 EVM address");
+      }
+      if (!shouldBeUppercase && symbol != Character.toLowerCase(symbol)) {
+        throw new IllegalArgumentException(label + " must be a canonical EIP-55 EVM address");
+      }
+    }
+  }
+
+  private static ReadVec readCanonicalSccpVec(
+      final byte[] raw, final int offset, final String label) {
+    final int length = readU32LeAt(raw, offset, label + ".length");
+    final int start = offset + 4;
+    final long end = ((long) start) + ((long) length);
+    if (end > raw.length) {
+      throw new IllegalArgumentException(label + " is too short");
+    }
+    return new ReadVec(Arrays.copyOfRange(raw, start, (int) end), (int) end);
+  }
+
+  private static byte[] readFixed(
+      final byte[] raw, final Cursor cursor, final int length, final String label) {
+    final int end = cursor.offset + length;
+    if (end > raw.length) {
+      throw new IllegalArgumentException(label + " is too short");
+    }
+    final byte[] out = Arrays.copyOfRange(raw, cursor.offset, end);
+    cursor.offset = end;
+    return out;
+  }
+
+  private static int readU8At(final byte[] raw, final int offset, final String label) {
+    if (offset + 1 > raw.length) {
+      throw new IllegalArgumentException(label + " is too short");
+    }
+    return raw[offset] & 0xff;
+  }
+
+  private static int readU32LeAt(final byte[] raw, final int offset, final String label) {
+    if (offset + 4 > raw.length) {
+      throw new IllegalArgumentException(label + " is too short");
+    }
+    final long value =
+        ((long) raw[offset] & 0xffL)
+            | (((long) raw[offset + 1] & 0xffL) << 8)
+            | (((long) raw[offset + 2] & 0xffL) << 16)
+            | (((long) raw[offset + 3] & 0xffL) << 24);
+    if (value > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(label + " must fit platform size");
+    }
+    return (int) value;
+  }
+
+  private static BigInteger readU64LeAt(final byte[] raw, final int offset, final String label) {
+    if (offset + 8 > raw.length) {
+      throw new IllegalArgumentException(label + " is too short");
+    }
+    BigInteger value = BigInteger.ZERO;
+    for (int index = 7; index >= 0; index--) {
+      value = value.shiftLeft(8).or(BigInteger.valueOf(raw[offset + index] & 0xffL));
+    }
+    return value;
+  }
+
+  private static BigInteger readU128LeAt(final byte[] raw, final int offset, final String label) {
+    if (offset + 16 > raw.length) {
+      throw new IllegalArgumentException(label + " is too short");
+    }
+    BigInteger value = BigInteger.ZERO;
+    for (int index = 15; index >= 0; index--) {
+      value = value.shiftLeft(8).or(BigInteger.valueOf(raw[offset + index] & 0xffL));
+    }
+    return value;
+  }
+
+  private static void requireExactPayloadEnd(
+      final int offset, final byte[] raw, final String label) {
+    if (offset != raw.length) {
+      throw new IllegalArgumentException(label + " must not contain trailing bytes");
+    }
+  }
+
+  private static boolean fixedAsciiFieldIsNonEmpty(final byte[] raw) {
+    int limit = raw.length;
+    for (int index = 0; index < raw.length; index++) {
+      if (raw[index] == 0) {
+        limit = index;
+        break;
+      }
+    }
+    for (int index = 0; index < limit; index++) {
+      if (raw[index] != 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static byte[] decodeBase58Fixed(
+      final String value, final String field, final int byteLength) {
+    final byte[] raw = decodeBase58(value, field);
+    if (raw.length != byteLength) {
+      throw new IllegalArgumentException(field + " must decode to " + byteLength + " bytes");
+    }
+    return raw;
+  }
+
+  private static byte[] decodeBase58(final String value, final String field) {
+    final String text = Objects.requireNonNull(value, field);
+    if (!text.trim().equals(text) || text.isEmpty()) {
+      throw new IllegalArgumentException(field + " must be canonical base58");
+    }
+    BigInteger numeric = BigInteger.ZERO;
+    for (int index = 0; index < text.length(); index++) {
+      final int digit = BASE58_ALPHABET.indexOf(text.charAt(index));
+      if (digit < 0) {
+        throw new IllegalArgumentException(field + " must be canonical base58");
+      }
+      numeric = numeric.multiply(BigInteger.valueOf(58L)).add(BigInteger.valueOf(digit));
+    }
+    byte[] encoded = numeric.equals(BigInteger.ZERO) ? new byte[0] : numeric.toByteArray();
+    if (encoded.length > 0 && encoded[0] == 0) {
+      encoded = Arrays.copyOfRange(encoded, 1, encoded.length);
+    }
+    int leadingZeroes = 0;
+    while (leadingZeroes < text.length() && text.charAt(leadingZeroes) == '1') {
+      leadingZeroes++;
+    }
+    final byte[] decoded = new byte[leadingZeroes + encoded.length];
+    System.arraycopy(encoded, 0, decoded, leadingZeroes, encoded.length);
+    if (!encodeBase58(decoded).equals(text)) {
+      throw new IllegalArgumentException(field + " must be canonical base58");
+    }
+    return decoded;
+  }
+
+  private static String encodeBase58(final byte[] bytes) {
+    int leadingZeroes = 0;
+    while (leadingZeroes < bytes.length && bytes[leadingZeroes] == 0) {
+      leadingZeroes++;
+    }
+    BigInteger numeric = bytes.length == 0 ? BigInteger.ZERO : new BigInteger(1, bytes);
+    final StringBuilder reversed = new StringBuilder();
+    while (numeric.compareTo(BigInteger.ZERO) > 0) {
+      final BigInteger[] divRem = numeric.divideAndRemainder(BigInteger.valueOf(58L));
+      numeric = divRem[0];
+      reversed.append(BASE58_ALPHABET.charAt(divRem[1].intValue()));
+    }
+    for (int index = 0; index < leadingZeroes; index++) {
+      reversed.append('1');
+    }
+    return reversed.reverse().toString();
+  }
+
+  private static byte[] prefixedKeccakBytes(final String prefix, final byte[] payload) {
+    return keccak256(
+        concatBytes(prefix.getBytes(java.nio.charset.StandardCharsets.UTF_8), payload));
+  }
+
+  private static byte[] keccak256(final byte[] input) {
+    final KeccakDigest digest = new KeccakDigest(256);
+    digest.update(input, 0, input.length);
+    final byte[] out = new byte[32];
+    digest.doFinal(out, 0);
+    return out;
+  }
+
+  private static byte[] concatBytes(final byte[] left, final byte[] right) {
+    final byte[] out = new byte[left.length + right.length];
+    System.arraycopy(left, 0, out, 0, left.length);
+    System.arraycopy(right, 0, out, left.length, right.length);
+    return out;
   }
 
   private static void requireNonEmptyNonZeroBytes(final byte[] bytes, final String label) {
@@ -5587,6 +6234,76 @@ public final class TonSccpProver {
 
     private Cursor(final int offset) {
       this.offset = offset;
+    }
+  }
+
+  private static final class ReadVec {
+    private final byte[] bytes;
+    private final int nextOffset;
+
+    private ReadVec(final byte[] bytes, final int nextOffset) {
+      this.bytes = bytes;
+      this.nextOffset = nextOffset;
+    }
+  }
+
+  private static final class SccpPayloadSummary {
+    private final String kind;
+    private final int sourceDomain;
+    private final int targetDomain;
+    private final String messageId;
+    private final String payloadHash;
+
+    private SccpPayloadSummary(
+        final String kind,
+        final int sourceDomain,
+        final int targetDomain,
+        final String messageId,
+        final String payloadHash) {
+      this.kind = kind;
+      this.sourceDomain = sourceDomain;
+      this.targetDomain = targetDomain;
+      this.messageId = messageId;
+      this.payloadHash = payloadHash;
+    }
+  }
+
+  private static final class SccpCommitmentSummary {
+    private final int kindCode;
+    private final int targetDomain;
+    private final String messageId;
+    private final String payloadHash;
+
+    private SccpCommitmentSummary(
+        final int kindCode,
+        final int targetDomain,
+        final String messageId,
+        final String payloadHash) {
+      this.kindCode = kindCode;
+      this.targetDomain = targetDomain;
+      this.messageId = messageId;
+      this.payloadHash = payloadHash;
+    }
+  }
+
+  private static final class SccpBundleSummary {
+    private final int sourceDomain;
+    private final int targetDomain;
+    private final String messageId;
+    private final String payloadHash;
+    private final String commitmentRoot;
+
+    private SccpBundleSummary(
+        final int sourceDomain,
+        final int targetDomain,
+        final String messageId,
+        final String payloadHash,
+        final String commitmentRoot) {
+      this.sourceDomain = sourceDomain;
+      this.targetDomain = targetDomain;
+      this.messageId = messageId;
+      this.payloadHash = payloadHash;
+      this.commitmentRoot = commitmentRoot;
     }
   }
 

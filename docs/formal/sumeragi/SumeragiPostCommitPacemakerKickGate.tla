@@ -290,7 +290,40 @@ TriggerReturnAndTimeAreConsistent ==
 SuppressionDoesNotCaptureTime ==
   returned_false => ~timestamp_captured
 
+PostCommitPacemakerKickAdmissionExact ==
+  /\ CasePartitionExact
+  /\ TriggerMatchesSpec
+  /\ ReturnMatchesSpec
+  /\ NoQueueNeverTriggers
+  /\ TriggerRequiresQueuedWork
+
+PostCommitPacemakerKickPacingExact ==
+  /\ QueuedHealthyAlwaysTriggers
+  /\ PacingOnlyBackpressureStillTriggers
+
+PostCommitPacemakerKickHardStopExact ==
+  /\ HardBackpressureSuppressesKickstart
+  /\ TriggerRejectsHardBackpressure
+
+PostCommitPacemakerKickCallbackExact ==
+  CallbackResultDoesNotControlReturn
+
+PostCommitPacemakerKickTimestampExact ==
+  /\ TimestampMatchesSpec
+  /\ TriggerReturnAndTimeAreConsistent
+  /\ SuppressionDoesNotCaptureTime
+
+PostCommitPacemakerKickExactness ==
+  /\ PostCommitPacemakerKickAdmissionExact
+  /\ PostCommitPacemakerKickPacingExact
+  /\ PostCommitPacemakerKickHardStopExact
+  /\ PostCommitPacemakerKickCallbackExact
+  /\ PostCommitPacemakerKickTimestampExact
+
 Safety ==
+  PostCommitPacemakerKickExactness
+
+SafetyBreakdown ==
   /\ CasePartitionExact
   /\ TriggerMatchesSpec
   /\ TimestampMatchesSpec

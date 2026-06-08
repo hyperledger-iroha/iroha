@@ -101,6 +101,52 @@ Cases == {
   MarkValidation
 }
 
+CommitStageMarkerCases == {
+  ResetFromQc,
+  LocalFromAwaiting,
+  LocalFromLocal,
+  LocalFromQc,
+  QcFromAwaiting,
+  QcFromLocal,
+  QcSameEpoch,
+  QcNewEpoch
+}
+
+QuorumRescheduleCooldownCases == {
+  RescheduleNoLast,
+  RescheduleBeforeBackoff,
+  RescheduleAtBackoff,
+  RescheduleFutureLast,
+  RescheduleZeroBackoff
+}
+
+VoteBackedRescheduleCases == {
+  VoteNoLastStale,
+  VoteNoLastFresh,
+  VoteHigherStale,
+  VoteEqualStale,
+  VoteHigherFresh,
+  VoteZeroBackoffHigher
+}
+
+RescheduleMarkerCases == {MarkQuorum, MarkVoteBacked}
+
+PrecommitRebroadcastCases == {
+  PrecommitNoLast,
+  PrecommitBeforeCooldown,
+  PrecommitAtCooldown,
+  PrecommitZeroCooldown,
+  MarkPrecommit
+}
+
+ValidationRedriveCases == {
+  ValidationNoLast,
+  ValidationBeforeCooldown,
+  ValidationAtCooldown,
+  ValidationZeroCooldown,
+  MarkValidation
+}
+
 StageAwaiting == 1
 StageLocal == 2
 StageQc == 3
@@ -312,9 +358,40 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
-  \A c \in Cases:
+PendingBlockCommitStageMarkerExact ==
+  \A c \in CommitStageMarkerCases:
     ImplementationActions(c) = SpecActions(c)
+
+PendingBlockQuorumRescheduleCooldownExact ==
+  \A c \in QuorumRescheduleCooldownCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PendingBlockVoteBackedRescheduleExact ==
+  \A c \in VoteBackedRescheduleCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PendingBlockRescheduleMarkerExact ==
+  \A c \in RescheduleMarkerCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PendingBlockPrecommitRebroadcastExact ==
+  \A c \in PrecommitRebroadcastCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PendingBlockValidationRedriveExact ==
+  \A c \in ValidationRedriveCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PendingBlockMarkerCooldownExactness ==
+  /\ PendingBlockCommitStageMarkerExact
+  /\ PendingBlockQuorumRescheduleCooldownExact
+  /\ PendingBlockVoteBackedRescheduleExact
+  /\ PendingBlockRescheduleMarkerExact
+  /\ PendingBlockPrecommitRebroadcastExact
+  /\ PendingBlockValidationRedriveExact
+
+NoBugInvariant ==
+  PendingBlockMarkerCooldownExactness
 
 SafetyFast == NoBugInvariant
 

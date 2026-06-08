@@ -507,19 +507,34 @@ RoundPhaseAnchors ==
   /\ SpecRoundPhase("phase_wait_commit_qc_local") = "WaitCommitQc"
   /\ SpecRoundPhase("phase_wait_commit_qc_observed") = "WaitCommitQc"
 
-SafetyFast ==
+RoundViewActiveHeightExact ==
   /\ ActiveRoundHeightMatchesSpec
-  /\ NewViewTargetMatchesSpec
-  /\ BumpViewMatchesSpec
-  /\ RoundPhaseMatchesSpec
   /\ ActiveRoundHeightBounds
+  /\ ActiveRoundHeightAnchors
+
+RoundViewTargetExact ==
+  /\ NewViewTargetMatchesSpec
   /\ NewViewTargetBounds
+  /\ NewViewTargetAnchors
+
+RoundViewBumpExact ==
+  /\ BumpViewMatchesSpec
   /\ BumpViewResetsRoundAndPacemaker
   /\ BumpRetainedWindowMatchesSpec
-  /\ ActiveRoundHeightAnchors
-  /\ NewViewTargetAnchors
   /\ BumpViewAnchors
+
+RoundViewPhaseExact ==
+  /\ RoundPhaseMatchesSpec
   /\ RoundPhaseAnchors
+
+RoundViewHelpersExactness ==
+  /\ RoundViewActiveHeightExact
+  /\ RoundViewTargetExact
+  /\ RoundViewBumpExact
+  /\ RoundViewPhaseExact
+
+SafetyFast ==
+  RoundViewHelpersExactness
 
 BugActiveNoneReturnsState ==
   ActualActiveRoundHeight("active_none_mid") =

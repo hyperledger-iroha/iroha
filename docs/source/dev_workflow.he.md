@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   ייצור `serde`/`serde_json` פגיעות ביחס ל-`AGENTS_BASE_REF`. סט
   `SERDE_GUARD_ALLOW=1` רק עבור ניסויי CI לאחר הגשת תוכנית הגירה.
 - `make guards` אוכפת את מדיניות הסדרת Norito: היא מכחישה חדשות
-  שימוש ב-`serde`/`serde_json`, עוזרי AoS אד-הוק ותלות ב-SCALE בחוץ
+  שימוש ב-`serde`/`serde_json`, עוזרי AoS אד-הוק ותלות ב-retired codec בחוץ
   ספסלי Norito (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **מדיניות ממשק המשתמש של Proc-macro:** כל ארגז proc-macro חייב לשלוח `trybuild`
   רתמה (`tests/ui.rs` עם גלובס עובר/נכשל) מאחורי ה-`trybuild-tests`
   תכונה. הנח דוגמאות של נתיב שמח תחת `tests/ui/pass`, מקרי דחייה תחת

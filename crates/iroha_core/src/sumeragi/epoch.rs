@@ -1146,6 +1146,128 @@ mod tests {
     }
 
     #[test]
+    fn vrf_epoch_window_formal_gate_parameter_position_and_epoch_edges() {
+        let chain = ChainId::from("iroha:test:epoch_window_formal_edges");
+        let mut em = EpochManager::new_from_chain(&chain);
+
+        em.set_params(0, 7, 9);
+        assert_eq!(em.epoch_length_blocks(), 1);
+        assert_eq!(em.commit_window_end(), 1);
+        assert_eq!(em.reveal_window_end(), 1);
+        assert_eq!(em.position_in_epoch(0), None);
+        assert_eq!(em.epoch_for_height(0), 0);
+        assert!(!em.is_commit_window_position(0));
+        assert!(!em.is_reveal_window_position(0));
+        assert_eq!(em.position_in_epoch(1), Some(1));
+        assert_eq!(em.epoch_for_height(1), 0);
+        assert!(em.is_commit_window_position(1));
+        assert!(!em.is_reveal_window_position(1));
+
+        em.set_params(4, 10, 99);
+        assert_eq!(em.epoch_length_blocks(), 4);
+        assert_eq!(em.commit_window_end(), 4);
+        assert_eq!(em.reveal_window_end(), 4);
+        assert_eq!(em.position_in_epoch(1), Some(1));
+        assert_eq!(em.position_in_epoch(4), Some(4));
+        assert_eq!(em.position_in_epoch(5), Some(1));
+        assert_eq!(em.position_in_epoch(8), Some(4));
+        assert_eq!(em.position_in_epoch(9), Some(1));
+        assert_eq!(em.epoch_for_height(1), 0);
+        assert_eq!(em.epoch_for_height(4), 0);
+        assert_eq!(em.epoch_for_height(5), 1);
+        assert_eq!(em.epoch_for_height(8), 1);
+        assert_eq!(em.epoch_for_height(9), 2);
+        assert!(em.is_commit_window_position(4));
+        assert!(!em.is_commit_window_position(5));
+        assert!(!em.is_reveal_window_position(4));
+    }
+
+    #[test]
+    fn vrf_epoch_window_formal_gate_commit_reveal_boundaries() {
+        let chain = ChainId::from("iroha:test:epoch_window_formal_boundaries");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(8, 2, 5);
+        em.set_validator_roster_indices(0..4);
+
+        assert!(em.is_commit_window_position(1));
+        assert!(em.is_commit_window_position(2));
+        assert!(!em.is_commit_window_position(3));
+        assert!(!em.is_reveal_window_position(2));
+        assert!(em.is_reveal_window_position(3));
+        assert!(em.is_reveal_window_position(5));
+        assert!(!em.is_reveal_window_position(6));
+
+        let reveal = [0x61; 32];
+        assert_eq!(
+            em.try_note_commit_at_height(
+                0,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal),
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::RejectedOutOfWindow
+        );
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal),
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_commit_at_height(
+                3,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for([0x62; 32]),
+                    signer: 1,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::RejectedOutOfWindow
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                2,
+                VrfReveal {
+                    epoch: 0,
+                    reveal,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::RejectedOutOfWindow
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                5,
+                VrfReveal {
+                    epoch: 0,
+                    reveal,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+
+        em.set_params(8, 5, 3);
+        assert!(em.is_commit_window_position(5));
+        assert!(!em.is_reveal_window_position(3));
+        assert!(!em.is_reveal_window_position(4));
+        assert!(!em.is_reveal_window_position(5));
+        assert!(!em.is_reveal_window_position(6));
+    }
+
+    #[test]
     fn set_epoch_seed_overrides_initial_seed() {
         let chain = ChainId::from("iroha:test:epoch_seed_override");
         let mut em = EpochManager::new_from_chain(&chain);
@@ -1521,6 +1643,454 @@ mod tests {
     }
 
     #[test]
+    fn vrf_epoch_restore_formal_gate_unfinalized_params_roster_and_reports() {
+        let chain = ChainId::from("iroha:test:epoch_restore_formal_unfinalized");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(1, 1, 1);
+        em.set_validator_roster_indices(0..2);
+        em.on_block_commit(1);
+        assert!(em.take_last_epoch_snapshot().is_some());
+        assert!(em.take_last_penalties_detailed().is_some());
+
+        let zero_length_record = VrfEpochRecord {
+            epoch: 5,
+            seed: [0xA1; 32],
+            epoch_length: 0,
+            commit_deadline_offset: 7,
+            reveal_deadline_offset: 9,
+            roster_len: 0,
+            finalized: false,
+            updated_at_height: 41,
+            participants: vec![
+                VrfParticipantRecord {
+                    signer: 1,
+                    commitment: Some([0xB1; 32]),
+                    reveal: Some([0xC1; 32]),
+                    last_updated_height: 39,
+                },
+                VrfParticipantRecord {
+                    signer: 2,
+                    commitment: Some([0xB2; 32]),
+                    reveal: None,
+                    last_updated_height: 40,
+                },
+            ],
+            late_reveals: vec![VrfLateRevealRecord {
+                signer: 3,
+                reveal: [0xD3; 32],
+                noted_at_height: 42,
+            }],
+            committed_no_reveal: vec![2],
+            no_participation: vec![0],
+            penalties_applied: true,
+            penalties_applied_at_height: Some(43),
+            validator_election: None,
+        };
+        em.restore_from_record(&zero_length_record);
+
+        assert_eq!(em.epoch(), 5);
+        assert_eq!(em.seed(), [0xA1; 32]);
+        assert_eq!(em.epoch_length_blocks(), 1);
+        assert_eq!(em.commit_window_end(), 1);
+        assert_eq!(em.reveal_window_end(), 1);
+        assert_eq!(em.test_current_roster_len(), None);
+        assert!(em.take_last_epoch_snapshot().is_none());
+        assert!(em.take_last_penalties().is_none());
+        assert!(em.take_last_penalties_detailed().is_none());
+
+        let snapshot = em.snapshot_current_epoch(11, 44);
+        assert_eq!(snapshot.epoch, 5);
+        assert_eq!(snapshot.seed, [0xA1; 32]);
+        assert_eq!(snapshot.commits, vec![(1, [0xB1; 32]), (2, [0xB2; 32])]);
+        assert_eq!(snapshot.reveals, vec![(1, [0xC1; 32])]);
+        assert_eq!(snapshot.late_reveals, vec![(3, [0xD3; 32], 42)]);
+        assert_eq!(snapshot.roster_len, 11);
+        assert!(snapshot.committed_no_reveal.is_empty());
+        assert!(snapshot.no_participation.is_empty());
+
+        let clamped_record = VrfEpochRecord {
+            epoch: 6,
+            seed: [0xA2; 32],
+            epoch_length: 4,
+            commit_deadline_offset: 9,
+            reveal_deadline_offset: 12,
+            roster_len: 3,
+            finalized: false,
+            updated_at_height: 45,
+            participants: Vec::new(),
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+        em.restore_from_record(&clamped_record);
+
+        assert_eq!(em.epoch(), 6);
+        assert_eq!(em.epoch_length_blocks(), 4);
+        assert_eq!(em.commit_window_end(), 4);
+        assert_eq!(em.reveal_window_end(), 4);
+        assert_eq!(em.test_current_roster_len(), Some(3));
+        assert_eq!(
+            em.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 6,
+                    commitment: [0xE2; 32],
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 6,
+                    commitment: [0xE3; 32],
+                    signer: 3,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::RejectedUnknownSigner
+        );
+    }
+
+    #[test]
+    fn vrf_epoch_restore_formal_gate_finalized_advance_saturates_and_clears() {
+        let chain = ChainId::from("iroha:test:epoch_restore_formal_finalized");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(1, 1, 1);
+        em.set_validator_roster_indices(0..2);
+        em.on_block_commit(1);
+        assert!(em.take_last_epoch_snapshot().is_some());
+        assert!(em.take_last_penalties().is_some());
+
+        let record_seed = [0x21; 32];
+        let reveal_low = [0x31; 32];
+        let reveal_high = [0x32; 32];
+        let finalized_record = VrfEpochRecord {
+            epoch: 9,
+            seed: record_seed,
+            epoch_length: 8,
+            commit_deadline_offset: 2,
+            reveal_deadline_offset: 5,
+            roster_len: 4,
+            finalized: true,
+            updated_at_height: 72,
+            participants: vec![
+                VrfParticipantRecord {
+                    signer: 2,
+                    commitment: Some(commitment_for(reveal_high)),
+                    reveal: Some(reveal_high),
+                    last_updated_height: 70,
+                },
+                VrfParticipantRecord {
+                    signer: 0,
+                    commitment: Some(commitment_for(reveal_low)),
+                    reveal: Some(reveal_low),
+                    last_updated_height: 69,
+                },
+                VrfParticipantRecord {
+                    signer: 1,
+                    commitment: Some([0x41; 32]),
+                    reveal: None,
+                    last_updated_height: 68,
+                },
+            ],
+            late_reveals: vec![VrfLateRevealRecord {
+                signer: 3,
+                reveal: [0x33; 32],
+                noted_at_height: 73,
+            }],
+            committed_no_reveal: vec![1],
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+        let mut expected = EpochManager::new_from_chain(&chain);
+        expected.set_epoch_seed(record_seed);
+        expected.reveals.insert(0, reveal_low);
+        expected.reveals.insert(2, reveal_high);
+        let expected_seed = expected.current_entropy();
+
+        em.restore_from_record(&finalized_record);
+
+        assert_eq!(em.epoch(), 10);
+        assert_eq!(em.seed(), expected_seed);
+        assert_eq!(em.epoch_length_blocks(), 8);
+        assert_eq!(em.commit_window_end(), 2);
+        assert_eq!(em.reveal_window_end(), 5);
+        assert_eq!(em.test_current_roster_len(), None);
+        let current = em.snapshot_current_epoch(4, 74);
+        assert!(current.commits.is_empty());
+        assert!(current.reveals.is_empty());
+        assert!(current.late_reveals.is_empty());
+        assert!(em.take_last_epoch_snapshot().is_none());
+        assert!(em.take_last_penalties().is_none());
+        assert!(em.take_last_penalties_detailed().is_none());
+
+        let saturated_record = VrfEpochRecord {
+            epoch: u64::MAX,
+            seed: [0x51; 32],
+            epoch_length: 2,
+            commit_deadline_offset: 1,
+            reveal_deadline_offset: 2,
+            roster_len: 2,
+            finalized: true,
+            updated_at_height: u64::MAX,
+            participants: vec![VrfParticipantRecord {
+                signer: 0,
+                commitment: Some(commitment_for([0x61; 32])),
+                reveal: Some([0x61; 32]),
+                last_updated_height: u64::MAX,
+            }],
+            late_reveals: Vec::new(),
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        };
+        em.restore_from_record(&saturated_record);
+
+        assert_eq!(em.epoch(), u64::MAX);
+        assert_eq!(em.test_current_roster_len(), None);
+        let saturated = em.snapshot_current_epoch(2, u64::MAX);
+        assert!(saturated.commits.is_empty());
+        assert!(saturated.reveals.is_empty());
+        assert!(saturated.late_reveals.is_empty());
+    }
+
+    #[test]
+    fn vrf_epoch_restore_formal_gate_snapshot_and_merge_matrix() {
+        let chain = ChainId::from("iroha:test:epoch_restore_formal_merge");
+        let mut wrong_epoch = EpochManager::new_from_chain(&chain);
+        wrong_epoch.set_params(10, 3, 6);
+        wrong_epoch.set_epoch_seed([0x70; 32]);
+        wrong_epoch.set_validator_roster_indices([0, 1, 1, 2]);
+        let wrong_epoch_reveal = [0x71; 32];
+        assert_eq!(
+            wrong_epoch.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(wrong_epoch_reveal),
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            wrong_epoch.try_note_reveal_at_height(
+                4,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: wrong_epoch_reveal,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        let before_wrong_epoch = wrong_epoch.snapshot_current_epoch(99, 12);
+        assert_eq!(before_wrong_epoch.roster_len, 3);
+        assert!(before_wrong_epoch.committed_no_reveal.is_empty());
+        assert!(before_wrong_epoch.no_participation.is_empty());
+        wrong_epoch.merge_record_observations(&VrfEpochRecord {
+            epoch: 1,
+            seed: [0xFF; 32],
+            epoch_length: 1,
+            commit_deadline_offset: 1,
+            reveal_deadline_offset: 1,
+            roster_len: 99,
+            finalized: false,
+            updated_at_height: 13,
+            participants: vec![VrfParticipantRecord {
+                signer: 2,
+                commitment: Some([0x72; 32]),
+                reveal: Some([0x73; 32]),
+                last_updated_height: 13,
+            }],
+            late_reveals: vec![VrfLateRevealRecord {
+                signer: 2,
+                reveal: [0x74; 32],
+                noted_at_height: 14,
+            }],
+            committed_no_reveal: Vec::new(),
+            no_participation: Vec::new(),
+            penalties_applied: false,
+            penalties_applied_at_height: None,
+            validator_election: None,
+        });
+        assert_eq!(
+            wrong_epoch.snapshot_current_epoch(99, 12).commits,
+            before_wrong_epoch.commits
+        );
+        assert_eq!(
+            wrong_epoch.snapshot_current_epoch(99, 12).reveals,
+            before_wrong_epoch.reveals
+        );
+        assert!(
+            wrong_epoch
+                .snapshot_current_epoch(99, 12)
+                .late_reveals
+                .is_empty()
+        );
+        assert_eq!(wrong_epoch.epoch(), 0);
+        assert_eq!(wrong_epoch.seed(), [0x70; 32]);
+        assert_eq!(wrong_epoch.epoch_length_blocks(), 10);
+        assert_eq!(wrong_epoch.commit_window_end(), 3);
+        assert_eq!(wrong_epoch.reveal_window_end(), 6);
+        assert_eq!(wrong_epoch.test_current_roster_len(), Some(3));
+
+        let mut merge = EpochManager::new_from_chain(&chain);
+        merge.set_params(4, 1, 2);
+        merge.set_validator_roster_indices(0..2);
+        merge.on_block_commit(4);
+        merge.set_params(10, 3, 6);
+        merge.set_validator_roster_indices([0, 1, 2, 3]);
+        let report_epoch = 0;
+        let current_epoch = merge.epoch();
+        let seed_before_merge = merge.seed();
+
+        let existing_reveal = [0x81; 32];
+        let existing_late_reveal = [0x82; 32];
+        assert_eq!(
+            merge.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: current_epoch,
+                    commitment: commitment_for(existing_reveal),
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            merge.try_note_reveal_at_height(
+                4,
+                VrfReveal {
+                    epoch: current_epoch,
+                    reveal: existing_reveal,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            merge.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: current_epoch,
+                    commitment: commitment_for(existing_late_reveal),
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            merge.try_note_reveal_at_height(
+                7,
+                VrfReveal {
+                    epoch: current_epoch,
+                    reveal: existing_late_reveal,
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::AcceptedLate
+        );
+
+        let new_reveal = [0x83; 32];
+        let new_late_reveal = [0x84; 32];
+        merge.merge_record_observations(&VrfEpochRecord {
+            epoch: current_epoch,
+            seed: [0x99; 32],
+            epoch_length: 99,
+            commit_deadline_offset: 88,
+            reveal_deadline_offset: 77,
+            roster_len: 99,
+            finalized: false,
+            updated_at_height: 15,
+            participants: vec![
+                VrfParticipantRecord {
+                    signer: 0,
+                    commitment: Some([0x85; 32]),
+                    reveal: Some([0x86; 32]),
+                    last_updated_height: 15,
+                },
+                VrfParticipantRecord {
+                    signer: 1,
+                    commitment: Some(commitment_for(new_reveal)),
+                    reveal: Some(new_reveal),
+                    last_updated_height: 15,
+                },
+            ],
+            late_reveals: vec![
+                VrfLateRevealRecord {
+                    signer: 2,
+                    reveal: [0x87; 32],
+                    noted_at_height: 16,
+                },
+                VrfLateRevealRecord {
+                    signer: 3,
+                    reveal: new_late_reveal,
+                    noted_at_height: 17,
+                },
+            ],
+            committed_no_reveal: vec![9],
+            no_participation: vec![8],
+            penalties_applied: true,
+            penalties_applied_at_height: Some(18),
+            validator_election: None,
+        });
+
+        assert_eq!(merge.epoch(), current_epoch);
+        assert_eq!(merge.seed(), seed_before_merge);
+        assert_eq!(merge.epoch_length_blocks(), 10);
+        assert_eq!(merge.commit_window_end(), 3);
+        assert_eq!(merge.reveal_window_end(), 6);
+        assert_eq!(merge.test_current_roster_len(), Some(4));
+        assert_eq!(
+            merge
+                .take_last_penalties_detailed()
+                .expect("merge must preserve transient reports"),
+            (report_epoch, Vec::new(), vec![0, 1], 2)
+        );
+
+        let merged = merge.snapshot_current_epoch(99, 18);
+        assert_eq!(merged.roster_len, 4);
+        assert_eq!(merged.updated_at_height, 18);
+        assert_eq!(
+            merged.commits,
+            vec![
+                (0, commitment_for(existing_reveal)),
+                (1, commitment_for(new_reveal)),
+                (2, commitment_for(existing_late_reveal)),
+            ]
+        );
+        assert_eq!(merged.reveals, vec![(0, existing_reveal), (1, new_reveal)]);
+        assert_eq!(
+            merged.late_reveals,
+            vec![(2, existing_late_reveal, 7), (3, new_late_reveal, 17)]
+        );
+        assert!(merged.committed_no_reveal.is_empty());
+        assert!(merged.no_participation.is_empty());
+
+        let hint_only = EpochManager::new_from_chain(&chain).snapshot_current_epoch(7, 19);
+        assert_eq!(hint_only.roster_len, 7);
+        assert_eq!(hint_only.updated_at_height, 19);
+    }
+
+    #[test]
     fn penalties_use_validator_roster_snapshot() {
         let chain = ChainId::from("iroha:test:epoch4");
         let mut em = EpochManager::new_from_chain(&chain);
@@ -1728,5 +2298,351 @@ mod tests {
         assert!(committed_no_reveal.is_empty());
         assert!(no_participation.is_empty());
         assert_eq!(roster_len, 0);
+    }
+
+    #[test]
+    fn vrf_epoch_boundary_formal_gate_boundary_snapshot_penalties_and_takes() {
+        let chain = ChainId::from("iroha:test:epoch_boundary_formal");
+        let mut em = EpochManager::new_from_chain(&chain);
+        em.set_params(6, 2, 4);
+        em.set_validator_roster_indices([0, 1, 1, 2, 3]);
+        assert_eq!(
+            em.test_current_roster_len(),
+            Some(4),
+            "roster indices should be canonicalized and deduplicated"
+        );
+
+        em.on_block_commit(0);
+        assert_eq!(em.epoch(), 0);
+        assert!(em.take_last_epoch_snapshot().is_none());
+        assert!(em.take_last_penalties().is_none());
+        assert!(em.take_last_penalties_detailed().is_none());
+
+        em.on_block_commit(5);
+        assert_eq!(em.epoch(), 0);
+        assert!(em.take_last_epoch_snapshot().is_none());
+
+        let regular_reveal = [0x81; 32];
+        let late_reveal = [0x82; 32];
+        let seed_before_boundary = em.seed();
+        assert_eq!(
+            em.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(regular_reveal),
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                3,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: regular_reveal,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: [0x83; 32],
+                    signer: 1,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_commit_at_height(
+                2,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(late_reveal),
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            em.try_note_reveal_at_height(
+                5,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: late_reveal,
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::AcceptedLate
+        );
+
+        let expected_next_seed = em.current_entropy();
+        em.on_block_commit(6);
+
+        let snapshot = em
+            .take_last_epoch_snapshot()
+            .expect("boundary should produce a finalized epoch snapshot");
+        assert_eq!(snapshot.epoch, 0);
+        assert_eq!(snapshot.seed, seed_before_boundary);
+        assert_eq!(snapshot.updated_at_height, 6);
+        assert_eq!(
+            snapshot.commits,
+            vec![
+                (0, commitment_for(regular_reveal)),
+                (1, [0x83; 32]),
+                (2, commitment_for(late_reveal)),
+            ]
+        );
+        assert_eq!(snapshot.reveals, vec![(0, regular_reveal)]);
+        assert_eq!(snapshot.late_reveals, vec![(2, late_reveal, 5)]);
+        assert_eq!(snapshot.committed_no_reveal, vec![1]);
+        assert_eq!(snapshot.no_participation, vec![3]);
+        assert_eq!(snapshot.roster_len, 4);
+        assert!(em.take_last_epoch_snapshot().is_none());
+
+        let detailed = em
+            .take_last_penalties_detailed()
+            .expect("boundary should produce detailed penalties");
+        assert_eq!(detailed, (0, vec![1], vec![3], 4));
+        assert!(em.take_last_penalties_detailed().is_none());
+        assert_eq!(
+            em.take_last_penalties()
+                .expect("boundary should produce legacy penalties"),
+            (0, vec![1])
+        );
+        assert!(em.take_last_penalties().is_none());
+
+        assert_eq!(em.epoch(), 1);
+        assert_eq!(em.seed(), expected_next_seed);
+        assert_eq!(em.test_current_roster_len(), None);
+        let current = em.snapshot_current_epoch(4, 6);
+        assert!(current.commits.is_empty());
+        assert!(current.reveals.is_empty());
+        assert!(current.late_reveals.is_empty());
+
+        let mut fallback = EpochManager::new_from_chain(&chain);
+        fallback.set_params(4, 1, 2);
+        assert_eq!(
+            fallback.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: [0x84; 32],
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        fallback.on_block_commit(4);
+        assert_eq!(
+            fallback
+                .take_last_penalties_detailed()
+                .expect("fallback roster penalties should be recorded"),
+            (0, vec![2], vec![0, 1], 3),
+            "without a roster snapshot, observed signer max defines a contiguous fallback roster"
+        );
+
+        let mut empty = EpochManager::new_from_chain(&chain);
+        empty.set_params(4, 1, 2);
+        empty.on_block_commit(4);
+        assert_eq!(
+            empty
+                .take_last_penalties_detailed()
+                .expect("empty epoch should still report an empty roster"),
+            (0, Vec::new(), Vec::new(), 0)
+        );
+    }
+
+    #[test]
+    fn vrf_epoch_boundary_formal_gate_entropy_reset_next_epoch_and_saturation() {
+        let chain = ChainId::from("iroha:test:epoch_boundary_formal_entropy");
+        let mut ordered = EpochManager::new_from_chain(&chain);
+        ordered.set_params(8, 2, 5);
+        let empty_entropy = ordered.current_entropy();
+        assert_ne!(
+            empty_entropy,
+            ordered.seed(),
+            "empty entropy still domain-hashes the previous seed"
+        );
+
+        let reveal_low = [0x91; 32];
+        let reveal_high = [0x92; 32];
+        assert_eq!(
+            ordered.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal_high),
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            ordered.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal_low),
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            ordered.try_note_reveal_at_height(
+                3,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: reveal_high,
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            ordered.try_note_reveal_at_height(
+                3,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: reveal_low,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+
+        let mut reverse = EpochManager::new_from_chain(&chain);
+        reverse.set_params(8, 2, 5);
+        assert_eq!(
+            reverse.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal_low),
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            reverse.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(reveal_high),
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            reverse.try_note_reveal_at_height(
+                3,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: reveal_low,
+                    signer: 0,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            reverse.try_note_reveal_at_height(
+                3,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: reveal_high,
+                    signer: 2,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            ordered.current_entropy(),
+            reverse.current_entropy(),
+            "entropy must be signer-ordered, not caller-order dependent"
+        );
+
+        let late_reveal = [0x93; 32];
+        let entropy_before_late = ordered.current_entropy();
+        assert_eq!(
+            ordered.try_note_commit_at_height(
+                1,
+                VrfCommit {
+                    epoch: 0,
+                    commitment: commitment_for(late_reveal),
+                    signer: 1,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::Accepted
+        );
+        assert_eq!(
+            ordered.try_note_reveal_at_height(
+                6,
+                VrfReveal {
+                    epoch: 0,
+                    reveal: late_reveal,
+                    signer: 1,
+                    bls_sig: Vec::new(),
+                },
+            ),
+            VrfNoteResult::AcceptedLate
+        );
+        assert_eq!(
+            ordered.current_entropy(),
+            entropy_before_late,
+            "late reveals must not affect next seed entropy"
+        );
+
+        let expected_next_seed = ordered.current_entropy();
+        ordered.set_validator_roster_indices(0..3);
+        ordered.next_epoch();
+        assert_eq!(ordered.epoch(), 1);
+        assert_eq!(ordered.seed(), expected_next_seed);
+        assert_eq!(ordered.test_current_roster_len(), None);
+        let after_next = ordered.snapshot_current_epoch(3, 8);
+        assert!(after_next.commits.is_empty());
+        assert!(after_next.reveals.is_empty());
+        assert!(after_next.late_reveals.is_empty());
+
+        let reset_seed = [0x94; 32];
+        reverse.on_block_commit(8);
+        assert!(reverse.take_last_epoch_snapshot().is_some());
+        assert!(reverse.take_last_penalties_detailed().is_some());
+        reverse.reset_epoch_state(7, reset_seed);
+        assert_eq!(reverse.epoch(), 7);
+        assert_eq!(reverse.seed(), reset_seed);
+        assert!(reverse.take_last_epoch_snapshot().is_none());
+        assert!(reverse.take_last_penalties().is_none());
+        assert!(reverse.take_last_penalties_detailed().is_none());
+        assert_eq!(reverse.test_current_roster_len(), None);
+
+        let mut saturated = EpochManager::new_from_chain(&chain);
+        saturated.set_params(1, 1, 1);
+        saturated.set_epoch(u64::MAX);
+        saturated.on_block_commit(1);
+        assert_eq!(saturated.epoch(), u64::MAX);
+        assert!(saturated.snapshot_current_epoch(0, 1).commits.is_empty());
     }
 }

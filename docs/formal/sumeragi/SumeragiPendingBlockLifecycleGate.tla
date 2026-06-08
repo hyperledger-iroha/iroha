@@ -246,9 +246,38 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
-  \A c \in Cases:
+PendingBlockConstructorExact ==
+  ImplementationActions(NewDefaults) = SpecActions(NewDefaults)
+
+PendingBlockSameSubjectReplacementExact ==
+  \A c \in ReplaceSameCases:
     ImplementationActions(c) = SpecActions(c)
+
+PendingBlockDifferentSubjectReplacementExact ==
+  \A c \in ReplaceDifferentCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PendingBlockReviveExact ==
+  \A c \in ReviveCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PendingBlockRetireAbortExact ==
+  /\ ImplementationActions(Retire) = SpecActions(Retire)
+  /\ ImplementationActions(Abort) = SpecActions(Abort)
+
+PendingBlockRetiredPayloadRefreshExact ==
+  ImplementationActions(RefreshRetired) = SpecActions(RefreshRetired)
+
+PendingBlockLifecycleExactness ==
+  /\ PendingBlockConstructorExact
+  /\ PendingBlockSameSubjectReplacementExact
+  /\ PendingBlockDifferentSubjectReplacementExact
+  /\ PendingBlockReviveExact
+  /\ PendingBlockRetireAbortExact
+  /\ PendingBlockRetiredPayloadRefreshExact
+
+NoBugInvariant ==
+  PendingBlockLifecycleExactness
 
 SafetyFast == NoBugInvariant
 

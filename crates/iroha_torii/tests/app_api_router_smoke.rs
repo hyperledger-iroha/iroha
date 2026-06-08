@@ -324,6 +324,17 @@ async fn app_api_router_smoke() {
         app.clone(),
         Request::builder()
             .uri(Uri::from_static(
+                "/v1/contracts/rollups/uranai/markets/history?market_id=not-a-real-market",
+            ))
+            .body(axum::body::Body::empty())
+            .unwrap(),
+    )
+    .await;
+
+    assert_route_is_not_auth_denied(
+        app.clone(),
+        Request::builder()
+            .uri(Uri::from_static(
                 "/v1/contracts/rollups/trader/activity?authority=not-a-real-authority",
             ))
             .body(axum::body::Body::empty())

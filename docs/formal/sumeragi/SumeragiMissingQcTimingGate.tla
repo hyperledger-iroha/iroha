@@ -455,21 +455,36 @@ SaturatingMulAnchors ==
   /\ SpecMul("mul_exact_cap") = MaxMillis
   /\ SpecMul("mul_overflow") = MaxMillis
 
-SafetyFast ==
+MissingQcIdleTimingExact ==
   /\ IdleRoundMatchesSpec
   /\ IdleViewMatchesSpec
-  /\ StreakMatchesSpec
-  /\ ForcedProposalMatchesSpec
-  /\ DeferRotationMatchesSpec
-  /\ HardCapMatchesSpec
-  /\ SaturatingMulMatchesSpec
   /\ IdleRoundAnchors
   /\ IdleViewAnchors
+
+MissingQcStreakForcedExact ==
+  /\ StreakMatchesSpec
+  /\ ForcedProposalMatchesSpec
   /\ StreakAnchors
   /\ ForcedProposalAnchors
+
+MissingQcRotationExact ==
+  /\ DeferRotationMatchesSpec
+  /\ HardCapMatchesSpec
   /\ DeferRotationAnchors
   /\ HardCapAnchors
+
+MissingQcArithmeticExact ==
+  /\ SaturatingMulMatchesSpec
   /\ SaturatingMulAnchors
+
+MissingQcTimingExactness ==
+  /\ MissingQcIdleTimingExact
+  /\ MissingQcStreakForcedExact
+  /\ MissingQcRotationExact
+  /\ MissingQcArithmeticExact
+
+SafetyFast ==
+  MissingQcTimingExactness
 
 BugIdleRoundNonemptyTimesOut ==
   ActualIdleRound("idle_nonempty_after_timeout") =

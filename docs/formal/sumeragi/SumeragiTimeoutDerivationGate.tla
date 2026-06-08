@@ -596,33 +596,54 @@ StaleGateAnchors ==
   /\ SpecPrevote("prevote_none_after") = FALSE
   /\ SpecPrevote("prevote_prepare_zero_timeout") = FALSE
 
-SafetyFast ==
+TimeoutControlCooldownExact ==
   /\ ControlCooldownMatchesSpec
   /\ AliasCooldownMatchesSpec
+  /\ ControlCooldownBounds
+  /\ ControlCooldownAnchors
+
+TimeoutPayloadCooldownExact ==
   /\ PayloadCooldownMatchesSpec
   /\ TargetedCooldownMatchesSpec
+  /\ PayloadCooldownUsesControlMultiplier
+  /\ TargetedCooldownHasFloor
+  /\ PayloadCooldownAnchors
+
+TimeoutBackoffExact ==
   /\ BackoffMatchesSpec
+  /\ BackoffBounds
+  /\ BackoffAnchors
+
+TimeoutCommitPacemakerExact ==
   /\ CommitTimeoutMatchesSpec
   /\ PacemakerMatchesSpec
+  /\ CommitTimeoutHasFloor
+  /\ CommitTimeoutAnchors
+  /\ PacemakerAnchors
+
+TimeoutAvailabilityExact ==
   /\ AvailabilityTimeoutMatchesSpec
+  /\ AvailabilityAnchors
+
+TimeoutStaleGateExact ==
   /\ AvailabilityGateMatchesSpec
   /\ MissingQuorumMatchesSpec
   /\ PrevoteQuorumMatchesSpec
-  /\ ControlCooldownBounds
-  /\ PayloadCooldownUsesControlMultiplier
-  /\ TargetedCooldownHasFloor
-  /\ BackoffBounds
-  /\ CommitTimeoutHasFloor
   /\ AvailabilityGateRequiresPositiveTimeout
   /\ MissingQuorumRequiresPositiveTimeoutAndMissingQuorum
   /\ PrevoteRequiresPreparePhaseAndPositiveTimeout
-  /\ ControlCooldownAnchors
-  /\ PayloadCooldownAnchors
-  /\ BackoffAnchors
-  /\ CommitTimeoutAnchors
-  /\ PacemakerAnchors
-  /\ AvailabilityAnchors
   /\ StaleGateAnchors
+
+TimeoutDerivationExactness ==
+  /\ TimeoutControlCooldownExact
+  /\ TimeoutPayloadCooldownExact
+  /\ TimeoutBackoffExact
+  /\ TimeoutCommitPacemakerExact
+  /\ TimeoutAvailabilityExact
+  /\ TimeoutStaleGateExact
+
+SafetyFast ==
+  TimeoutDerivationExactness
 
 BugControlZeroReturnsZero ==
   ActualControl("control_zero") = SpecControl("control_zero")

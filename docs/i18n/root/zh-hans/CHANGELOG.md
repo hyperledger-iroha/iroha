@@ -19,11 +19,11 @@ translator: machine-google-reviewed
 
 ## [未发布]
 
-- 放下 SCALE 垫片； `norito::codec` 现在通过本机 Norito 序列化来实现。
-- 将跨 crate 的 `parity_scale_codec` 用法替换为 `norito::codec`。
+- 放下 retired codec 垫片； `norito::codec` 现在通过本机 Norito 序列化来实现。
+- 将跨 crate 的 `retired_codec` 用法替换为 `norito::codec`。
 - 开始将工具迁移到本机 Norito 序列化。
-- 从工作区中删除剩余的 `parity-scale-codec` 依赖项，以支持本机 Norito 序列化。
-- 用本机 Norito 实现替换残留的 SCALE 特征派生，并重命名版本化编解码器模块。
+- 从工作区中删除剩余的 `retired codec` 依赖项，以支持本机 Norito 序列化。
+- 用本机 Norito 实现替换残留的 retired codec 特征派生，并重命名版本化编解码器模块。
 - 使用功能门控宏将 `iroha_config_base_derive` 和 `iroha_futures_derive` 合并为 `iroha_derive`。
 - *(multisig)* 使用稳定的错误代码/原因拒绝来自多重签名机构的直接签名，跨嵌套中继器强制执行多重签名 TTL 上限，并在提交之前在 CLI 中显示 TTL 上限（SDK 奇偶校验待定）。
 - 将 FFI 程序宏移至 `iroha_ffi` 并删除 `iroha_ffi_derive` 箱。
@@ -247,7 +247,7 @@ translator: machine-google-reviewed
 - 将 TransactionValue 重命名为 CommiedTransaction (#4610)
 - 通过 ID 验证个人帐户 (#4411)
 - 对私钥使用多重哈希格式 (#4541)
- - 将 `parity_scale_decoder` 重命名为 `norito_cli`
+ - 将 `legacy_codec_decoder` 重命名为 `norito_cli`
 - 将区块发送到 Set B 验证器
 - 使 `Role` 透明 (#4886)
 - 从标头导出块哈希 (#4890)
@@ -1171,7 +1171,7 @@ translator: machine-google-reviewed
 - hyperledger#2309：在 CI 中重新启用文档测试。
 - hyperledger#2165 删除 codecov 安装。
 - 移动到新容器以防止与当前用户发生冲突。
- - hyperledger#2158 升级 `parity_scale_codec` 和其他依赖项。 （Norito 编解码器）
+ - hyperledger#2158 升级 `retired_codec` 和其他依赖项。 （Norito 编解码器）
 - 修复构建。
 - hyperledger#2461 改进 iroha2 CI。
 - 更新 `syn`。

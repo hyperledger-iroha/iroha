@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   `serde`/`serde_json` өнімі `AGENTS_BASE_REF` қатысты. Орнату
   `SERDE_GUARD_ALLOW=1` тек тасымалдау жоспарын тапсырғаннан кейін CI эксперименттері үшін.
 - `make guards` Norito сериялау саясатын жүзеге асырады: ол жаңадан бас тартады
-  `serde`/`serde_json` пайдалану, арнайы AoS көмекшілері және сырттағы SCALE тәуелділіктері
+  `serde`/`serde_json` пайдалану, арнайы AoS көмекшілері және сырттағы retired codec тәуелділіктері
   Norito орындықтар (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **Proc-macro UI саясаты:** әрбір proc-makro жәшігі `trybuild` жіберуі керек
   `trybuild-tests` артындағы жіп (`tests/ui.rs` өту/сәтсіз глобустары бар)
   ерекшелігі. Бақытты жол үлгілерін `tests/ui/pass` астына, бас тарту жағдайларын астына қойыңыз

@@ -845,30 +845,48 @@ WrapperSlotLifecycleAnchors ==
   /\ RemoveSlotAfterRetire \in SpecActions(ApplyCommitRetireRemovesSlot)
   /\ StoreSlotAfterEvent \in SpecActions(ApplyCommitBelowRetainsSlot)
 
-Safety ==
-  /\ SlotTrackerStepMatchesSpec
+FrontierSlotConstructorExact ==
   /\ ConstructorMatchesSpec
+  /\ ConstructorAnchors
+
+FrontierSlotEvidenceExact ==
   /\ BlockCreatedMatchesSpec
   /\ BodyAvailableMatchesSpec
   /\ VoteAndCommitQcMatchesSpec
+  /\ PeerEvidenceAnchors
+  /\ BlockCreatedAnchors
+  /\ BodyEvidenceAnchors
+  /\ VoteAndCommitQcAnchors
+
+FrontierSlotRepairTimeoutExact ==
   /\ AuthoritativeAndFetchMatchesSpec
   /\ QuorumTimeoutMatchesSpec
   /\ LagViewCommitMatchesSpec
+  /\ AuthoritativeAndFetchAnchors
+  /\ QuorumTimeoutAnchors
+  /\ LagViewCommitAnchors
+
+FrontierSlotCrossInvariantExact ==
   /\ UrgentFetchRequiresBodyFetch
   /\ ViewChangeClearsRebroadcastGuard
   /\ CommitPipelineRequiresBodyAvailable
   /\ RetiredSlotsAreFinalized
   /\ EveryStepKeepsNestedStateConsistent
+
+FrontierSlotWrapperExact ==
   /\ WrapperMatchesSpec
-  /\ PeerEvidenceAnchors
-  /\ ConstructorAnchors
-  /\ BlockCreatedAnchors
-  /\ BodyEvidenceAnchors
-  /\ VoteAndCommitQcAnchors
-  /\ AuthoritativeAndFetchAnchors
-  /\ QuorumTimeoutAnchors
-  /\ LagViewCommitAnchors
   /\ WrapperSlotLifecycleAnchors
+
+FrontierSlotTrackerExactness ==
+  /\ SlotTrackerStepMatchesSpec
+  /\ FrontierSlotConstructorExact
+  /\ FrontierSlotEvidenceExact
+  /\ FrontierSlotRepairTimeoutExact
+  /\ FrontierSlotCrossInvariantExact
+  /\ FrontierSlotWrapperExact
+
+Safety ==
+  FrontierSlotTrackerExactness
 
 =============================================================================
 ====

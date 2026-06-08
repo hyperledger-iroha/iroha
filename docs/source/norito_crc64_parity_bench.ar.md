@@ -80,7 +80,7 @@ What to expect:
 
 ## 4) End‑to‑End Encode/Decode Benches
 
-The `crates/norito/benches/codec.rs` benchmark compares Norito vs SCALE and bincode for encode and decode. It also includes compressed variants.
+The `crates/norito/benches/codec.rs` benchmark covers Norito encode/decode paths and compressed variants.
 
 Recommended invocation:
 
@@ -97,7 +97,7 @@ RUSTFLAGS='-C target-feature=+neon,+aes' cargo bench -p norito -- benches::bench
 ```
 
 Interpreting results:
-- Norito includes a header, schema hash, and CRC64; SCALE and bincode do not. Expect Norito to be competitive for larger payloads and slightly slower/smaller for very small ones.
+- Norito includes a header, schema hash, and CRC64. Expect headered Norito payloads to carry a small fixed overhead on tiny values while preserving deterministic layout and stronger integrity metadata.
 - Compression benches (zstd) measure end‑to‑end time including compression; pick levels based on throughput needs (Norito default uses a “fast” level).
 
 ## 5) Troubleshooting & Tips

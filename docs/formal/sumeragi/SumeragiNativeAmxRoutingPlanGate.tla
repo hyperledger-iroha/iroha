@@ -358,19 +358,99 @@ RoutingResolutionFailsClosed ==
   /\ CanonicalLowestLane \in tried =>
        ImplementationCanonicalLowestLane(CanonicalLowestLane)
 
-Safety ==
+RoutingAdmissionCases == {
+  SingleTarget,
+  OneParticipantNoCoordinator,
+  MultiParticipantNative,
+  UniversalCoordinatorNative,
+  UnknownParticipantLaneRejected
+}
+
+RoutingParticipantCanonicalCases == {
+  UnorderedInputCanonical,
+  DuplicateInputDedup,
+  SameDataspaceDifferentLaneKept,
+  CanonicalLowestLane
+}
+
+RoutingRoleProjectionCases == {
+  CoordinatorRoleForced,
+  ParticipantRolesForced,
+  NativeLegsCoordinatorFirst,
+  SingleLegsOneCoordinator
+}
+
+RoutingDigestCases == {
+  SingleDigestDomain,
+  NativeDigestDomain,
+  DigestBindsCoordinator,
+  DigestBindsParticipants,
+  DigestIgnoresInputOrder
+}
+
+RoutingExecutionContextCases == {
+  ContextCoordinatorRoute,
+  ContextPlanDigest,
+  ContextPlanLegs,
+  RejectWrongCoordinatorContext,
+  RejectWrongDigestContext,
+  RejectWrongLegsContext
+}
+
+RoutingReceiptCases == {
+  NativeRequiresReceipt,
+  SingleRejectsReceipt
+}
+
+NativeAmxRoutingPlanGroupedCases ==
+  RoutingAdmissionCases \cup
+  RoutingParticipantCanonicalCases \cup
+  RoutingRoleProjectionCases \cup
+  RoutingDigestCases \cup
+  RoutingExecutionContextCases \cup
+  RoutingReceiptCases
+
+NativeAmxRoutingPlanCaseGroupsComplete ==
+  NativeAmxRoutingPlanGroupedCases = Candidates
+
+NativeAmxRoutingAdmissionExact ==
   /\ AdmissionMatchesSpec
   /\ PlanKindMatchesSpec
   /\ SingleTargetsStaySingle
   /\ NativeTargetsStayNative
   /\ UniversalCoordinatorRoutePreserved
+
+NativeAmxRoutingParticipantCanonicalExact ==
   /\ ParticipantsAreCanonical
+
+NativeAmxRoutingRoleProjectionExact ==
   /\ RolesAreForced
   /\ LegProjectionMatchesPlan
+
+NativeAmxRoutingDigestExact ==
   /\ DigestMatchesPlan
+
+NativeAmxRoutingExecutionContextExact ==
   /\ ExecutionContextProjectionMatchesPlan
   /\ BlockRecheckRejectsMutatedContext
+
+NativeAmxRoutingReceiptExact ==
   /\ ReceiptPresenceMatchesPlanKind
+
+NativeAmxRoutingResolutionExact ==
   /\ RoutingResolutionFailsClosed
+
+NativeAmxRoutingPlanExactness ==
+  /\ NativeAmxRoutingPlanCaseGroupsComplete
+  /\ NativeAmxRoutingAdmissionExact
+  /\ NativeAmxRoutingParticipantCanonicalExact
+  /\ NativeAmxRoutingRoleProjectionExact
+  /\ NativeAmxRoutingDigestExact
+  /\ NativeAmxRoutingExecutionContextExact
+  /\ NativeAmxRoutingReceiptExact
+  /\ NativeAmxRoutingResolutionExact
+
+Safety ==
+  NativeAmxRoutingPlanExactness
 
 ====

@@ -225,20 +225,32 @@ RawInputIsolationAnchors ==
   /\ ~SpecNearRbcRaw("unresolved_rbc_only")
   /\ SpecNearRbcRaw("near_rbc_raw")
 
-SafetyFast ==
+IdleBacklogRawSignalExact ==
   /\ NearQueueRawMatchesSpec
   /\ NearRbcRawMatchesSpec
+  /\ RawInputIsolationAnchors
+
+IdleBacklogDerivedSignalExact ==
   /\ ConsensusBacklogMatchesSpec
   /\ RbcBacklogMatchesSpec
   /\ NearQueueBacklogMatchesSpec
   /\ NearRbcBacklogMatchesSpec
+  /\ ResidualBacklogAnchors
+
+IdleBacklogGateExact ==
   /\ MethodGateMatchesSpec
   /\ ActorGateMatchesSpec
   /\ MethodActorGateAgreement
   /\ BenignBacklogGateAnchors
   /\ ClosingBacklogGateAnchors
-  /\ ResidualBacklogAnchors
-  /\ RawInputIsolationAnchors
+
+IdleBacklogSignalsExactness ==
+  /\ IdleBacklogRawSignalExact
+  /\ IdleBacklogDerivedSignalExact
+  /\ IdleBacklogGateExact
+
+SafetyFast ==
+  IdleBacklogSignalsExactness
 
 BugDropResidualConsensus ==
   ActualConsensusQueueBacklog("residual_only") = SpecConsensusQueueBacklog("residual_only")

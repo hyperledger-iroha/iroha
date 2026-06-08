@@ -27,7 +27,7 @@ Legitimacy and “main crate” assessment (spotlight):
 - PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — legit reference crates.
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — canonical modern Rust TLS stack.
 - Noise: `snow` — canonical implementation.
-- Serialization: `parity-scale-codec` is canonical for SCALE. Serde has been removed from production dependencies across the workspace; Norito derives/writers cover every runtime path. Any residual Serde references live in historical documentation, guardrail scripts, or test-only allowlists.
+- Serialization: Norito is the canonical workspace codec. Serde has been removed from production dependencies across the workspace; Norito derives/writers cover every runtime path. Any residual Serde references live in historical documentation, guardrail scripts, or test-only allowlists.
 - FFI/libs: `libsodium-sys-stable`, `openssl` — legitimate; prefer Rustls over OpenSSL in production paths (current code already does).
 
 Recommendations:

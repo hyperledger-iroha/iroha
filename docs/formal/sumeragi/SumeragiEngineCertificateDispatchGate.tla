@@ -142,6 +142,41 @@ NewViewSameOrPast(candidate) ==
 NewViewFuture(candidate) ==
   candidate = "new_view_future_view"
 
+AcceptedDispatchCases == {
+  "current_prepare",
+  "current_commit",
+  "new_view_lower_view",
+  "new_view_same_view",
+  "new_view_future_view"
+}
+
+RejectedDispatchCases == {
+  "stale_prepare",
+  "stale_commit",
+  "committed_prepare",
+  "committed_commit",
+  "committed_new_view",
+  "wrong_height_prepare",
+  "wrong_height_commit",
+  "wrong_height_new_view",
+  "wrong_epoch_prepare",
+  "wrong_epoch_commit",
+  "wrong_epoch_new_view",
+  "wrong_validator_set_prepare",
+  "wrong_validator_set_commit",
+  "wrong_validator_set_new_view",
+  "wrong_quorum_prepare",
+  "wrong_quorum_commit",
+  "wrong_quorum_new_view"
+}
+
+CertificateDispatchGroupedCases ==
+  AcceptedDispatchCases \cup RejectedDispatchCases
+
+CertificateDispatchCaseGroupsPartition ==
+  /\ CertificateDispatchGroupedCases = Cases
+  /\ AcceptedDispatchCases \intersect RejectedDispatchCases = {}
+
 SpecHandler(candidate) ==
   IF \/ CommittedHeight(candidate)
      \/ WrongHeight(candidate)
@@ -273,16 +308,26 @@ NoCrossPhaseDispatch ==
     ImplementationHandler(candidate) # "none" =>
       ImplementationHandler(candidate) = PhaseHandler(candidate)
 
-Safety ==
-  /\ DispatchMatchesSpec
+AcceptedDispatchExact ==
   /\ CurrentPrepareDispatchesPrepare
   /\ CurrentCommitDispatchesCommit
   /\ NewViewsDispatchToNewViewHandler
+
+RejectedDispatchExact ==
   /\ WrongContextNeverDispatches
   /\ WrongQuorumNeverDispatches
   /\ CommittedHeightsNeverDispatch
   /\ StalePrepareCommitNeverDispatches
+
+CertificateDispatchExactness ==
+  /\ CertificateDispatchCaseGroupsPartition
+  /\ DispatchMatchesSpec
+  /\ AcceptedDispatchExact
+  /\ RejectedDispatchExact
   /\ NoCrossPhaseDispatch
+
+Safety ==
+  CertificateDispatchExactness
 
 =============================================================================
 ====

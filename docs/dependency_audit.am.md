@@ -39,7 +39,7 @@ translator: machine-google-reviewed
 - PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` - ሕጋዊ የማጣቀሻ ሳጥኖች.
 - TLS: `rustls`, `tokio-rustls`, I18NI0000034X - ቀኖናዊ ዘመናዊ የዝገት TLS ቁልል.
 - ጫጫታ: `snow` - ቀኖናዊ ትግበራ.
-- ተከታታይነት፡ I18NI0000036X ለ SCALE ቀኖናዊ ነው። ሰርዴ በስራ ቦታው ላይ ከምርት ጥገኛ ተወግዷል; Norito እያንዳንዱን የሩጫ መንገድ ይሸፍናል/ጸሐፊዎች። ማንኛውም ቀሪ የሰርዴ ማጣቀሻዎች በታሪካዊ ሰነዶች፣ በጠባቂ ስክሪፕቶች ወይም በሙከራ-ብቻ የፈቃድ ዝርዝሮች ይኖራሉ።
+- ተከታታይነት፡ I18NI0000036X ለ retired codec ቀኖናዊ ነው። ሰርዴ በስራ ቦታው ላይ ከምርት ጥገኛ ተወግዷል; Norito እያንዳንዱን የሩጫ መንገድ ይሸፍናል/ጸሐፊዎች። ማንኛውም ቀሪ የሰርዴ ማጣቀሻዎች በታሪካዊ ሰነዶች፣ በጠባቂ ስክሪፕቶች ወይም በሙከራ-ብቻ የፈቃድ ዝርዝሮች ይኖራሉ።
 - FFI/libs: `libsodium-sys-stable`, `openssl` - ህጋዊ; በምርት ዱካዎች ውስጥ ከOpenSSL ይልቅ Rustlsን ይመርጣሉ (የአሁኑ ኮድ ቀድሞውኑ ይሠራል)።
 
 ምክሮች፡-

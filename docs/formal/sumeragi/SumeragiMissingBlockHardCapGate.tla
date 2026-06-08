@@ -244,10 +244,46 @@ RangePullProgressDoesNotRotate ==
     /\ ImplementationProgressed(RangePullBeforeHardCapNoViewChange)
     /\ ~ImplementationTriggers(RangePullBeforeHardCapNoViewChange)
 
+HardCapSideEffectCases == {
+  AlreadyTriggeredSealsBudget, TriggerRecordsBudget, TriggerLatchesRequest,
+  TriggerUsesMissingPayloadCause, SuppressedDoesNotLatch
+}
+
+HardCapNoActionableCases == {
+  NoActionableClearsRecovery, NoActionableNoProgress
+}
+
+HardCapRangePullCases == {
+  RangePullBeforeHardCapNoViewChange
+}
+
+MissingBlockHardCapGroupedCases ==
+  DecisionCandidates \cup HardCapSideEffectCases \cup
+  HardCapNoActionableCases \cup HardCapRangePullCases
+
+MissingBlockHardCapCaseGroupsComplete ==
+  MissingBlockHardCapGroupedCases = Candidates
+
+MissingBlockHardCapDecisionExact ==
+  HardCapDecisionMatchesSpec
+
+MissingBlockHardCapSideEffectsExact ==
+  DuplicateAndTriggerSideEffects
+
+MissingBlockHardCapNoActionableExact ==
+  NoActionableCleanupIsTerminal
+
+MissingBlockHardCapRangePullExact ==
+  RangePullProgressDoesNotRotate
+
+MissingBlockHardCapExactness ==
+  /\ MissingBlockHardCapCaseGroupsComplete
+  /\ MissingBlockHardCapDecisionExact
+  /\ MissingBlockHardCapSideEffectsExact
+  /\ MissingBlockHardCapNoActionableExact
+  /\ MissingBlockHardCapRangePullExact
+
 Safety ==
-  /\ HardCapDecisionMatchesSpec
-  /\ DuplicateAndTriggerSideEffects
-  /\ NoActionableCleanupIsTerminal
-  /\ RangePullProgressDoesNotRotate
+  MissingBlockHardCapExactness
 
 ====

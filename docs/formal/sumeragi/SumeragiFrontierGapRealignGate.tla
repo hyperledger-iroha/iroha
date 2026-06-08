@@ -295,8 +295,89 @@ TypeInvariant ==
   /\ tried \subseteq Candidates
   /\ \A candidate \in tried: ImplementationActions(candidate) \subseteq Actions
 
-Safety ==
+FrontierGapAdmissionCases == {
+  NoFutureEvidenceNoRequest, FutureEvidenceAtFrontierNoRequest,
+  FutureEvidenceBeyondMissingPayloadRequests, LocalTipPayloadSuppresses,
+  ExactBodyOwnerSuppressesGenericPull, ExactBodyLagExpiredRetriesExactRepair,
+  DeepCatchupBypassesExactOwnerSuppress
+}
+
+FrontierGapAnchorCases == {
+  CanonicalReanchorUsesPrevLatestAnchor, NonCanonicalUsesLatestLatestAnchor,
+  MissingAnchorSuppresses
+}
+
+FrontierGapTargetCases == {
+  VoteRosterTargetsPreferred, CommitTopologyFallbackTargets,
+  TrustedPeersFallbackTargets, LocalPeerRemovedFromTargets, TargetsSortedDeduped,
+  EmptyTargetsSuppress
+}
+
+FrontierGapSendAccountingCases == {
+  PerPeerCooldownSkipsDuplicate, SentZeroSuppress,
+  SuccessfulPullRecordsPermits, SuccessfulPullMarksCanonicalWindow
+}
+
+FrontierGapWindowCases == {
+  AlreadyEmittedWindowSuppresses, CanonicalStrideSuppressesNonAligned,
+  CanonicalStrideAlignedEmits, EveryThirdWindowAllPeers,
+  OtherWindowTwoPeerCohort, RecoveryFsmSuppressesWindow,
+  MissingQcStallMarksWindow
+}
+
+FrontierGapRecoveryMetadataCases == {
+  HighPriorityForCanonicalNextHeight, LockLagFarFutureExtendsCooldown,
+  RangePullMetricIncrement, CanonicalWindowRecordsDependencyWatermark
+}
+
+FrontierGapGroupedCases ==
+  FrontierGapAdmissionCases \cup FrontierGapAnchorCases \cup
+  FrontierGapTargetCases \cup FrontierGapSendAccountingCases \cup
+  FrontierGapWindowCases \cup FrontierGapRecoveryMetadataCases
+
+FrontierGapCaseGroupsComplete ==
+  FrontierGapGroupedCases = Candidates
+
+FrontierGapAdmissionExact ==
   \A candidate \in tried:
-    ImplementationActions(candidate) = SpecActions(candidate)
+    candidate \in FrontierGapAdmissionCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+FrontierGapAnchorExact ==
+  \A candidate \in tried:
+    candidate \in FrontierGapAnchorCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+FrontierGapTargetExact ==
+  \A candidate \in tried:
+    candidate \in FrontierGapTargetCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+FrontierGapSendAccountingExact ==
+  \A candidate \in tried:
+    candidate \in FrontierGapSendAccountingCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+FrontierGapWindowExact ==
+  \A candidate \in tried:
+    candidate \in FrontierGapWindowCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+FrontierGapRecoveryMetadataExact ==
+  \A candidate \in tried:
+    candidate \in FrontierGapRecoveryMetadataCases =>
+      ImplementationActions(candidate) = SpecActions(candidate)
+
+FrontierGapRealignExactness ==
+  /\ FrontierGapCaseGroupsComplete
+  /\ FrontierGapAdmissionExact
+  /\ FrontierGapAnchorExact
+  /\ FrontierGapTargetExact
+  /\ FrontierGapSendAccountingExact
+  /\ FrontierGapWindowExact
+  /\ FrontierGapRecoveryMetadataExact
+
+Safety ==
+  FrontierGapRealignExactness
 
 ====

@@ -183,15 +183,15 @@ pub(crate) mod test_time {
         time::Duration,
     };
 
-    static SCALE: AtomicU64 = AtomicU64::new(1);
+    static TEST_TIME_SCALE: AtomicU64 = AtomicU64::new(1);
 
     /// Set a time scale factor for tests (>=1). When >1, timeouts are divided by this scale.
     pub fn set_time_scale(scale: u64) {
-        SCALE.store(scale.max(1), Ordering::Relaxed);
+        TEST_TIME_SCALE.store(scale.max(1), Ordering::Relaxed);
     }
 
     pub fn scale(d: Duration) -> Duration {
-        let s = SCALE.load(Ordering::Relaxed);
+        let s = TEST_TIME_SCALE.load(Ordering::Relaxed);
         if s > 1 { d / s } else { d }
     }
 }
@@ -3085,12 +3085,52 @@ fn vnext_validation_reject_reason_label(reason_label: &str) -> &'static str {
     }
 }
 
-fn proposer_index_from_block(block: &SignedBlock) -> u32 {
-    block
-        .signatures()
-        .next()
-        .and_then(|sig| u32::try_from(sig.index()).ok())
+fn proposer_index_from_signature_index(index: Option<u64>) -> u32 {
+    index
+        .and_then(|index| u32::try_from(index).ok())
         .unwrap_or(0)
+}
+
+fn proposer_index_from_block(block: &SignedBlock) -> u32 {
+    proposer_index_from_signature_index(block.signatures().next().map(BlockSignature::index))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InvalidProposalEvidenceProjection {
+    kind: crate::sumeragi::consensus::EvidenceKind,
+    proposal: crate::sumeragi::consensus::Proposal,
+    reason: String,
+    proposer: u32,
+    view: u64,
+    epoch: u64,
+    payload_hash: Hash,
+    qc_subject: HashOf<BlockHeader>,
+    qc_height: u64,
+    parent: HashOf<BlockHeader>,
+    height: u64,
+}
+
+fn invalid_proposal_evidence_projection(
+    evidence: &crate::sumeragi::consensus::Evidence,
+) -> Option<InvalidProposalEvidenceProjection> {
+    let crate::sumeragi::consensus::EvidencePayload::InvalidProposal { proposal, reason } =
+        &evidence.payload
+    else {
+        return None;
+    };
+    Some(InvalidProposalEvidenceProjection {
+        kind: evidence.kind,
+        proposal: *proposal,
+        reason: reason.clone(),
+        proposer: proposal.header.proposer,
+        view: proposal.header.view,
+        epoch: proposal.header.epoch,
+        payload_hash: proposal.payload_hash,
+        qc_subject: proposal.header.highest_qc.subject_block_hash,
+        qc_height: proposal.header.highest_qc.height,
+        parent: proposal.header.parent_hash,
+        height: proposal.header.height,
+    })
 }
 
 fn build_invalid_proposal_evidence(
@@ -3103,7 +3143,30 @@ fn build_invalid_proposal_evidence(
     let proposer = proposer_index_from_block(block);
     let view = block.header().view_change_index();
     let proposal = Actor::build_consensus_proposal(block, payload_hash, qc, proposer, view, epoch);
-    invalid_proposal_evidence(proposal, reason)
+    #[cfg(debug_assertions)]
+    let expected_reason = reason.clone();
+    let evidence = invalid_proposal_evidence(proposal, reason);
+    #[cfg(debug_assertions)]
+    {
+        let projection = invalid_proposal_evidence_projection(&evidence)
+            .expect("invalid proposal evidence must contain proposal payload");
+        debug_assert_eq!(
+            projection.kind,
+            crate::sumeragi::consensus::EvidenceKind::InvalidProposal
+        );
+        debug_assert_eq!(projection.proposal, proposal);
+        debug_assert_eq!(projection.reason, expected_reason);
+        debug_assert_eq!(projection.proposer, proposer);
+        debug_assert_eq!(projection.view, view);
+        debug_assert_eq!(projection.epoch, epoch);
+        debug_assert_eq!(projection.payload_hash, payload_hash);
+        debug_assert_eq!(projection.qc_subject, qc.subject_block_hash);
+        debug_assert_eq!(projection.qc_height, qc.height);
+        debug_assert_eq!(projection.parent, qc.subject_block_hash);
+        debug_assert_eq!(projection.height, block.header().height().get());
+        debug_assert!(projection.qc_height < projection.height);
+    }
+    evidence
 }
 
 #[cfg(test)]
@@ -11660,6 +11723,18 @@ enum BackgroundRequestLogKind {
     BroadcastControlFlow,
     PostNativeAmx,
     BroadcastNativeAmx,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackgroundScheduleAction {
+    Inline,
+    Fallback,
+    Queue,
+}
+
+enum BackgroundFallbackNetworkDispatch {
+    Post(iroha_p2p::Post<NetworkMessage>),
+    Broadcast(iroha_p2p::Broadcast<NetworkMessage>),
 }
 
 #[derive(Debug, Clone)]
@@ -24090,29 +24165,8 @@ impl Actor {
         true
     }
 
-    fn schedule_background(&mut self, request: BackgroundRequest) {
-        let request = match request {
-            BackgroundRequest::Post { peer, mut msg } => {
-                if !self.prepare_background_block_message(&mut msg) {
-                    return;
-                }
-                BackgroundRequest::Post { peer, msg }
-            }
-            BackgroundRequest::Broadcast { mut msg } => {
-                if !self.prepare_background_block_message(&mut msg) {
-                    return;
-                }
-                BackgroundRequest::Broadcast { msg }
-            }
-            other => other,
-        };
-        #[cfg(test)]
-        self.record_background_request(&request);
-        if self.config.debug.disable_background_worker {
-            self.dispatch_background_inline(request);
-            return;
-        }
-        let bypass_queue = match &request {
+    fn background_request_bypasses_queue(request: &BackgroundRequest) -> bool {
+        match request {
             BackgroundRequest::Post { msg, .. } => matches!(
                 msg.as_ref(),
                 BlockMessage::Proposal(_)
@@ -24143,10 +24197,57 @@ impl Actor {
                     | BlockMessage::RbcDeliver(_)
             ),
             _ => false,
+        }
+    }
+
+    fn background_schedule_action(
+        disable_background_worker: bool,
+        via_queue: bool,
+        request: &BackgroundRequest,
+    ) -> BackgroundScheduleAction {
+        if disable_background_worker {
+            BackgroundScheduleAction::Inline
+        } else if via_queue {
+            BackgroundScheduleAction::Queue
+        } else if Self::background_request_bypasses_queue(request) {
+            BackgroundScheduleAction::Fallback
+        } else {
+            BackgroundScheduleAction::Queue
+        }
+    }
+
+    fn schedule_background(&mut self, request: BackgroundRequest) {
+        let request = match request {
+            BackgroundRequest::Post { peer, mut msg } => {
+                if !self.prepare_background_block_message(&mut msg) {
+                    return;
+                }
+                BackgroundRequest::Post { peer, msg }
+            }
+            BackgroundRequest::Broadcast { mut msg } => {
+                if !self.prepare_background_block_message(&mut msg) {
+                    return;
+                }
+                BackgroundRequest::Broadcast { msg }
+            }
+            other => other,
         };
-        if bypass_queue {
-            self.dispatch_background_fallback(request);
-            return;
+        #[cfg(test)]
+        self.record_background_request(&request);
+        match Self::background_schedule_action(
+            self.config.debug.disable_background_worker,
+            false,
+            &request,
+        ) {
+            BackgroundScheduleAction::Inline => {
+                self.dispatch_background_inline(request);
+                return;
+            }
+            BackgroundScheduleAction::Fallback => {
+                self.dispatch_background_fallback(request);
+                return;
+            }
+            BackgroundScheduleAction::Queue => {}
         }
         let dispatched = {
             #[cfg(feature = "telemetry")]
@@ -24185,9 +24286,20 @@ impl Actor {
         };
         #[cfg(test)]
         self.record_background_request(&request);
-        if self.config.debug.disable_background_worker {
-            self.dispatch_background_inline(request);
-            return;
+        match Self::background_schedule_action(
+            self.config.debug.disable_background_worker,
+            true,
+            &request,
+        ) {
+            BackgroundScheduleAction::Inline => {
+                self.dispatch_background_inline(request);
+                return;
+            }
+            BackgroundScheduleAction::Fallback => {
+                self.dispatch_background_fallback(request);
+                return;
+            }
+            BackgroundScheduleAction::Queue => {}
         }
         let dispatched = {
             #[cfg(feature = "telemetry")]
@@ -24304,47 +24416,58 @@ impl Actor {
     }
 
     fn dispatch_background_fallback(&mut self, request: BackgroundRequest) {
+        match Self::background_fallback_network_dispatch(request) {
+            BackgroundFallbackNetworkDispatch::Post(post) => self.network.post(post),
+            BackgroundFallbackNetworkDispatch::Broadcast(broadcast) => {
+                self.network.broadcast(broadcast);
+            }
+        }
+    }
+
+    fn background_fallback_network_dispatch(
+        request: BackgroundRequest,
+    ) -> BackgroundFallbackNetworkDispatch {
         match request {
             BackgroundRequest::Post { peer, msg } => {
                 let priority = msg.as_ref().priority();
-                self.network.post(iroha_p2p::Post {
+                BackgroundFallbackNetworkDispatch::Post(iroha_p2p::Post {
                     data: NetworkMessage::SumeragiBlock(Box::new(msg)),
                     peer_id: peer,
                     priority,
-                });
+                })
             }
             BackgroundRequest::PostControlFlow { peer, frame } => {
-                self.network.post(iroha_p2p::Post {
+                BackgroundFallbackNetworkDispatch::Post(iroha_p2p::Post {
                     data: NetworkMessage::SumeragiControlFlow(Box::new(frame)),
                     peer_id: peer,
                     priority: iroha_p2p::Priority::High,
-                });
+                })
             }
             BackgroundRequest::Broadcast { msg } => {
                 let priority = msg.as_ref().priority();
-                self.network.broadcast(iroha_p2p::Broadcast {
+                BackgroundFallbackNetworkDispatch::Broadcast(iroha_p2p::Broadcast {
                     data: NetworkMessage::SumeragiBlock(Box::new(msg)),
                     priority,
-                });
+                })
             }
             BackgroundRequest::BroadcastControlFlow { frame } => {
-                self.network.broadcast(iroha_p2p::Broadcast {
+                BackgroundFallbackNetworkDispatch::Broadcast(iroha_p2p::Broadcast {
                     data: NetworkMessage::SumeragiControlFlow(Box::new(frame)),
                     priority: iroha_p2p::Priority::High,
-                });
+                })
             }
             BackgroundRequest::PostNativeAmx { peer, message } => {
-                self.network.post(iroha_p2p::Post {
+                BackgroundFallbackNetworkDispatch::Post(iroha_p2p::Post {
                     data: NetworkMessage::NativeAmx(Box::new(message)),
                     peer_id: peer,
                     priority: iroha_p2p::Priority::High,
-                });
+                })
             }
             BackgroundRequest::BroadcastNativeAmx { message } => {
-                self.network.broadcast(iroha_p2p::Broadcast {
+                BackgroundFallbackNetworkDispatch::Broadcast(iroha_p2p::Broadcast {
                     data: NetworkMessage::NativeAmx(Box::new(message)),
                     priority: iroha_p2p::Priority::High,
-                });
+                })
             }
         }
     }
@@ -24706,48 +24829,50 @@ impl Actor {
         let committed_qc = self.latest_committed_qc();
         let base_height =
             active_round_height(self.highest_qc, committed_qc, self.last_committed_height);
-        if height_window != 0 && height > base_height.saturating_add(height_window) {
-            debug!(
-                height,
-                view,
-                base_height,
-                height_window,
-                kind,
-                "dropping consensus message beyond future height window"
-            );
-            return true;
-        }
-        if view_window == 0 {
-            return false;
-        }
-        if height != base_height {
-            return false;
-        }
-        let Some(base_view) = self.phase_tracker.current_view(height) else {
-            return false;
-        };
-        if matches!(kind, "NewViewVote" | "NewViewCert") {
-            // Allow view-change signals to flow so lagging peers can catch up.
-            return false;
-        }
-        if let Some(view_age) = self.phase_tracker.view_age(height, Instant::now()) {
-            if view_age >= self.commit_quorum_timeout() {
-                return false;
+        let base_view = (view_window != 0 && height == base_height)
+            .then(|| self.phase_tracker.current_view(height))
+            .flatten();
+        let view_age_expired = (view_window != 0 && height == base_height)
+            && self
+                .phase_tracker
+                .view_age(height, Instant::now())
+                .is_some_and(|view_age| view_age >= self.commit_quorum_timeout());
+        match future_consensus_message_drop_decision(
+            height,
+            view,
+            kind,
+            base_height,
+            base_view,
+            height_window,
+            view_window,
+            view_age_expired,
+        ) {
+            FutureConsensusMessageDropDecision::Allow => false,
+            FutureConsensusMessageDropDecision::HeightWindow => {
+                debug!(
+                    height,
+                    view,
+                    base_height,
+                    height_window,
+                    kind,
+                    "dropping consensus message beyond future height window"
+                );
+                true
+            }
+            FutureConsensusMessageDropDecision::ViewWindow => {
+                let base_view = base_view.unwrap_or_default();
+                debug!(
+                    height,
+                    view,
+                    base_height,
+                    base_view,
+                    view_window,
+                    kind,
+                    "dropping consensus message beyond future view window"
+                );
+                true
             }
         }
-        if view > base_view.saturating_add(view_window) {
-            debug!(
-                height,
-                view,
-                base_height,
-                base_view,
-                view_window,
-                kind,
-                "dropping consensus message beyond future view window"
-            );
-            return true;
-        }
-        false
     }
 
     fn stale_view(&self, height: u64, view: u64) -> Option<u64> {
@@ -40985,6 +41110,45 @@ pub(crate) fn commit_quorum_timeout_from_durations(
     base.max(Duration::from_millis(1))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FutureConsensusMessageDropDecision {
+    Allow,
+    HeightWindow,
+    ViewWindow,
+}
+
+fn future_consensus_message_drop_decision(
+    height: u64,
+    view: u64,
+    kind: &'static str,
+    base_height: u64,
+    base_view: Option<u64>,
+    height_window: u64,
+    view_window: u64,
+    view_age_expired: bool,
+) -> FutureConsensusMessageDropDecision {
+    if height_window == 0 && view_window == 0 {
+        return FutureConsensusMessageDropDecision::Allow;
+    }
+    if height_window != 0 && height > base_height.saturating_add(height_window) {
+        return FutureConsensusMessageDropDecision::HeightWindow;
+    }
+    if view_window == 0 || height != base_height {
+        return FutureConsensusMessageDropDecision::Allow;
+    }
+    let Some(base_view) = base_view else {
+        return FutureConsensusMessageDropDecision::Allow;
+    };
+    if matches!(kind, "NewViewVote" | "NewViewCert") || view_age_expired {
+        return FutureConsensusMessageDropDecision::Allow;
+    }
+    if view > base_view.saturating_add(view_window) {
+        FutureConsensusMessageDropDecision::ViewWindow
+    } else {
+        FutureConsensusMessageDropDecision::Allow
+    }
+}
+
 fn active_round_height(
     highest_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
     committed_qc: Option<crate::sumeragi::consensus::QcHeaderRef>,
@@ -41855,11 +42019,482 @@ mod block_sync_warning_throttle_tests {
             None
         );
     }
+
+    #[test]
+    fn block_sync_warning_throttle_formal_gate_matrix() {
+        fn hash(byte: u8) -> HashOf<BlockHeader> {
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]))
+        }
+
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(50);
+        let burst_window = Duration::from_millis(200);
+        let burst_cap = 2;
+        let base_hash = hash(11);
+        let base_key = (
+            BlockSyncWarningKind::MissingCommitRoleQuorum,
+            base_hash,
+            42,
+            7,
+        );
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                Some(0)
+            );
+            assert!(throttle.entries.contains_key(&base_key));
+            assert_eq!(throttle.burst_window_start, Some(now));
+            assert_eq!(throttle.burst_emitted, 1);
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                Some(0)
+            );
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now + Duration::from_millis(10),
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                None
+            );
+            let (last_emit, suppressed) = throttle
+                .entries
+                .get(&base_key)
+                .copied()
+                .expect("base warning entry should remain present");
+            assert_eq!(last_emit, now);
+            assert_eq!(suppressed, 1);
+            assert_eq!(throttle.burst_emitted, 1);
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                Some(0)
+            );
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now + Duration::from_millis(10),
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                None
+            );
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now + cooldown,
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                Some(1)
+            );
+            assert_eq!(
+                throttle
+                    .entries
+                    .get(&base_key)
+                    .map(|(_, suppressed)| *suppressed),
+                Some(0)
+            );
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                Some(0)
+            );
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now + Duration::from_millis(10),
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                None
+            );
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now + Duration::from_millis(20),
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                None
+            );
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now + cooldown,
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                Some(2)
+            );
+        }
+
+        for (kind, block_hash, height, view) in [
+            (BlockSyncWarningKind::LockedQcConflict, base_hash, 42, 7),
+            (
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                hash(12),
+                42,
+                7,
+            ),
+            (
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                base_hash,
+                43,
+                7,
+            ),
+            (
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                base_hash,
+                42,
+                8,
+            ),
+        ] {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                    burst_window,
+                    0,
+                ),
+                Some(0)
+            );
+            assert_eq!(
+                throttle.allow(
+                    kind,
+                    block_hash,
+                    height,
+                    view,
+                    now + Duration::from_millis(10),
+                    cooldown,
+                    burst_window,
+                    0,
+                ),
+                Some(0),
+                "distinct throttle key should not collide"
+            );
+            assert_eq!(throttle.entries.len(), 2);
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            throttle.burst_window_start = Some(now);
+            throttle.burst_emitted = burst_cap;
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now + Duration::from_millis(10),
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                None
+            );
+            assert!(!throttle.entries.contains_key(&base_key));
+            assert_eq!(throttle.burst_emitted, burst_cap);
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            throttle.entries.insert(base_key, (now, 3));
+            throttle.burst_window_start = Some(now);
+            throttle.burst_emitted = burst_cap;
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now + cooldown,
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                None
+            );
+            assert_eq!(throttle.entries.get(&base_key), Some(&(now + cooldown, 0)));
+            assert_eq!(throttle.burst_emitted, burst_cap);
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            throttle.burst_window_start = Some(now);
+            throttle.burst_emitted = burst_cap;
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now + Duration::from_millis(10),
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                None
+            );
+            assert_eq!(throttle.burst_window_start, Some(now));
+            assert_eq!(throttle.burst_emitted, burst_cap);
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            throttle.burst_window_start = Some(now);
+            throttle.burst_emitted = burst_cap;
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now + burst_window,
+                    cooldown,
+                    burst_window,
+                    burst_cap,
+                ),
+                Some(0)
+            );
+            assert_eq!(throttle.burst_window_start, Some(now + burst_window));
+            assert_eq!(throttle.burst_emitted, 1);
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                    burst_window,
+                    0,
+                ),
+                Some(0)
+            );
+            assert_eq!(throttle.burst_emitted, 0);
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    Duration::ZERO,
+                    burst_window,
+                    burst_cap,
+                ),
+                Some(0)
+            );
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    Duration::ZERO,
+                    burst_window,
+                    burst_cap,
+                ),
+                Some(0)
+            );
+            assert_eq!(throttle.entries.get(&base_key), Some(&(now, 0)));
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            let old_key = (
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                base_hash,
+                41,
+                7,
+            );
+            let expiry = cooldown.saturating_mul(8);
+            throttle.entries.insert(
+                old_key,
+                (now.checked_sub(expiry).expect("test instant underflow"), 0),
+            );
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    hash(13),
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                    burst_window,
+                    0,
+                ),
+                Some(0)
+            );
+            assert!(throttle.entries.contains_key(&old_key));
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            let old_key = (
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                base_hash,
+                41,
+                7,
+            );
+            let expiry = cooldown.saturating_mul(8) + Duration::from_millis(1);
+            throttle.entries.insert(
+                old_key,
+                (now.checked_sub(expiry).expect("test instant underflow"), 0),
+            );
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    hash(14),
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                    burst_window,
+                    0,
+                ),
+                Some(0)
+            );
+            assert!(!throttle.entries.contains_key(&old_key));
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            let old_key = (
+                BlockSyncWarningKind::MissingCommitRoleQuorum,
+                base_hash,
+                41,
+                7,
+            );
+            throttle.entries.insert(
+                old_key,
+                (
+                    now.checked_sub(Duration::from_secs(1))
+                        .expect("test instant underflow"),
+                    0,
+                ),
+            );
+            assert_eq!(
+                throttle.allow(
+                    BlockSyncWarningKind::MissingCommitRoleQuorum,
+                    hash(15),
+                    42,
+                    7,
+                    now,
+                    Duration::ZERO,
+                    burst_window,
+                    0,
+                ),
+                Some(0)
+            );
+            assert!(throttle.entries.contains_key(&old_key));
+        }
+
+        {
+            let mut throttle = BlockSyncWarningThrottle::default();
+            throttle.entries.insert(base_key, (now, 1));
+            throttle.burst_window_start = Some(now);
+            throttle.burst_emitted = 1;
+            throttle.clear();
+            assert!(throttle.entries.is_empty());
+            assert_eq!(throttle.burst_window_start, None);
+            assert_eq!(throttle.burst_emitted, 0);
+        }
+    }
 }
 
 #[cfg(test)]
 mod qc_insufficient_warning_throttle_tests {
     use super::{QcInsufficientKind, QcInsufficientWarningThrottle};
+    use crate::sumeragi::consensus::Phase;
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::block::BlockHeader;
     use std::time::{Duration, Instant};
@@ -41954,6 +42589,355 @@ mod qc_insufficient_warning_throttle_tests {
             ),
             Some(0)
         );
+    }
+
+    #[test]
+    fn qc_insufficient_warning_throttle_formal_gate_matrix() {
+        fn hash(byte: u8) -> HashOf<BlockHeader> {
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]))
+        }
+
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(50);
+        let base_hash = hash(31);
+        let base_key = (
+            QcInsufficientKind::PermissionedVotes,
+            Phase::Commit,
+            base_hash,
+            42,
+            7,
+        );
+
+        {
+            let mut throttle = QcInsufficientWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                ),
+                Some(0)
+            );
+            assert_eq!(throttle.entries.get(&base_key), Some(&(now, 0)));
+        }
+
+        {
+            let mut throttle = QcInsufficientWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                ),
+                Some(0)
+            );
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now + Duration::from_millis(10),
+                    cooldown,
+                ),
+                None
+            );
+            assert_eq!(throttle.entries.get(&base_key), Some(&(now, 1)));
+        }
+
+        {
+            let mut throttle = QcInsufficientWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                ),
+                Some(0)
+            );
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now + Duration::from_millis(10),
+                    cooldown,
+                ),
+                None
+            );
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now + cooldown,
+                    cooldown,
+                ),
+                Some(1)
+            );
+            assert_eq!(throttle.entries.get(&base_key), Some(&(now + cooldown, 0)));
+        }
+
+        {
+            let mut throttle = QcInsufficientWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                ),
+                Some(0)
+            );
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now + Duration::from_millis(10),
+                    cooldown,
+                ),
+                None
+            );
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now + Duration::from_millis(20),
+                    cooldown,
+                ),
+                None
+            );
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now + cooldown,
+                    cooldown,
+                ),
+                Some(2)
+            );
+        }
+
+        for (kind, phase, block_hash, height, view) in [
+            (
+                QcInsufficientKind::NposStake,
+                Phase::Commit,
+                base_hash,
+                42,
+                7,
+            ),
+            (
+                QcInsufficientKind::PermissionedVotes,
+                Phase::Prepare,
+                base_hash,
+                42,
+                7,
+            ),
+            (
+                QcInsufficientKind::PermissionedVotes,
+                Phase::Commit,
+                hash(32),
+                42,
+                7,
+            ),
+            (
+                QcInsufficientKind::PermissionedVotes,
+                Phase::Commit,
+                base_hash,
+                43,
+                7,
+            ),
+            (
+                QcInsufficientKind::PermissionedVotes,
+                Phase::Commit,
+                base_hash,
+                42,
+                8,
+            ),
+        ] {
+            let mut throttle = QcInsufficientWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                ),
+                Some(0)
+            );
+            assert_eq!(
+                throttle.allow(
+                    kind,
+                    phase,
+                    block_hash,
+                    height,
+                    view,
+                    now + Duration::from_millis(10),
+                    cooldown,
+                ),
+                Some(0),
+                "distinct QC-insufficient warning key should not collide"
+            );
+            assert_eq!(throttle.entries.len(), 2);
+        }
+
+        {
+            let mut throttle = QcInsufficientWarningThrottle::default();
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    Duration::ZERO,
+                ),
+                Some(0)
+            );
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    base_hash,
+                    42,
+                    7,
+                    now,
+                    Duration::ZERO,
+                ),
+                Some(0)
+            );
+            assert_eq!(throttle.entries.get(&base_key), Some(&(now, 0)));
+        }
+
+        {
+            let mut throttle = QcInsufficientWarningThrottle::default();
+            let old_key = (
+                QcInsufficientKind::PermissionedVotes,
+                Phase::Commit,
+                base_hash,
+                41,
+                7,
+            );
+            let expiry = cooldown.saturating_mul(8);
+            throttle.entries.insert(
+                old_key,
+                (now.checked_sub(expiry).expect("test instant underflow"), 0),
+            );
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    hash(33),
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                ),
+                Some(0)
+            );
+            assert!(throttle.entries.contains_key(&old_key));
+        }
+
+        {
+            let mut throttle = QcInsufficientWarningThrottle::default();
+            let old_key = (
+                QcInsufficientKind::PermissionedVotes,
+                Phase::Commit,
+                base_hash,
+                41,
+                7,
+            );
+            let expiry = cooldown.saturating_mul(8) + Duration::from_millis(1);
+            throttle.entries.insert(
+                old_key,
+                (now.checked_sub(expiry).expect("test instant underflow"), 0),
+            );
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    hash(34),
+                    42,
+                    7,
+                    now,
+                    cooldown,
+                ),
+                Some(0)
+            );
+            assert!(!throttle.entries.contains_key(&old_key));
+        }
+
+        {
+            let mut throttle = QcInsufficientWarningThrottle::default();
+            let old_key = (
+                QcInsufficientKind::PermissionedVotes,
+                Phase::Commit,
+                base_hash,
+                41,
+                7,
+            );
+            throttle.entries.insert(
+                old_key,
+                (
+                    now.checked_sub(Duration::from_secs(1))
+                        .expect("test instant underflow"),
+                    0,
+                ),
+            );
+            assert_eq!(
+                throttle.allow(
+                    QcInsufficientKind::PermissionedVotes,
+                    Phase::Commit,
+                    hash(35),
+                    42,
+                    7,
+                    now,
+                    Duration::ZERO,
+                ),
+                Some(0)
+            );
+            assert!(throttle.entries.contains_key(&old_key));
+        }
+
+        {
+            let mut throttle = QcInsufficientWarningThrottle::default();
+            throttle.entries.insert(base_key, (now, 1));
+            throttle.clear();
+            assert!(throttle.entries.is_empty());
+        }
     }
 }
 

@@ -75,7 +75,7 @@ RUSTFLAGS='-C target-feature=+neon,+aes' \
 
 ## 4) エンドツーエンドのエンコード／デコードベンチ
 
-`crates/norito/benches/codec.rs` は Norito と SCALE/bincode のエンコード／デコード性能を比較し、圧縮（zstd）も含む。
+`crates/norito/benches/codec.rs` は Norito のエンコード／デコード経路と圧縮（zstd）バリアントをカバーする。
 
 推奨実行:
 

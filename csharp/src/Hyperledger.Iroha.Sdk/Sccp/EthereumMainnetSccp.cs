@@ -97,6 +97,41 @@ public static class EthereumMainnetSccp
             throw new ArgumentException($"{name} must be a relative POSIX path.", name);
         }
 
+        if (value.Contains(":", StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"{name} must not contain URI schemes or drive prefixes.",
+                name);
+        }
+
+        var normalizedValue = value.ToLowerInvariant();
+        static string ForbiddenPathMarker(params string[] parts) => string.Concat(parts);
+        var forbiddenPathMarkers = new[]
+        {
+            ForbiddenPathMarker("web", "assem", "bly"),
+            ForbiddenPathMarker("wa", "sm"),
+            ForbiddenPathMarker("sn", "ark", "js"),
+            ForbiddenPathMarker("remote", "pro", "ver"),
+            ForbiddenPathMarker("remote", "-", "pro", "ver"),
+            ForbiddenPathMarker("remote", "_", "pro", "ver"),
+            ForbiddenPathMarker("remote", " ", "pro", "ver"),
+            ForbiddenPathMarker("pro", "ver", "-", "url"),
+            ForbiddenPathMarker("pro", "ver", "_", "url"),
+            ForbiddenPathMarker("pro", "ver", "end", "point"),
+            ForbiddenPathMarker("pro", "ver", "-", "end", "point"),
+            ForbiddenPathMarker("pro", "ver", "_", "end", "point"),
+            ForbiddenPathMarker("pro", "ver", " ", "end", "point"),
+        };
+        foreach (var marker in forbiddenPathMarkers)
+        {
+            if (normalizedValue.Contains(marker, StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    $"{name} path contains forbidden prover dependency marker: {marker}.",
+                    name);
+            }
+        }
+
         var segments = value.Split('/');
         if (segments.Length == 0 || segments.Any(segment => segment.Length == 0 || segment == "." || segment == ".."))
         {

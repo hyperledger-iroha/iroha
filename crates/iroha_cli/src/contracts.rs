@@ -29,7 +29,6 @@ use iroha_core::{
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use ivm::{PointerType, host::IVMHost, kotodama::compiler::CompilerOptions};
 use reqwest::StatusCode;
-use serde::Deserialize;
 
 use crate::{Run, RunContext, TransactionWaitArgs, wait_for_transaction_status};
 
@@ -346,94 +345,69 @@ impl Run for ManifestCommand {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct ContractAppManifest {
     bundle_name: String,
-    #[serde(default)]
     default_dataspace: Option<String>,
     contracts: Vec<ContractAppManifestContract>,
-    #[serde(default)]
     init: Vec<ContractAppManifestInitCall>,
-    #[serde(default)]
     assertions: Vec<ContractAppManifestAssertion>,
-    #[serde(default)]
     profiles: BTreeMap<String, ContractDevManifestProfile>,
-    #[serde(default)]
     tests: Vec<ContractDevManifestTest>,
-    #[serde(default)]
     smoke: Vec<ContractDevManifestSmoke>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct ContractAppManifestContract {
     name: String,
     alias: String,
-    #[serde(default)]
     source: Option<PathBuf>,
-    #[serde(default)]
     artifact: Option<PathBuf>,
-    #[serde(default)]
     depends_on: Vec<String>,
-    #[serde(default)]
     lease_expiry_ms: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct ContractAppManifestInitCall {
     id: String,
     contract: String,
-    #[serde(default)]
     entrypoint: Option<String>,
-    #[serde(default)]
     payload: Option<toml::Value>,
     gas_limit: u64,
-    #[serde(default)]
     gas_asset_id: Option<String>,
-    #[serde(default)]
     fee_sponsor: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct ContractAppManifestAssertion {
     id: String,
     contract: String,
-    #[serde(default)]
     entrypoint: Option<String>,
-    #[serde(default)]
     payload: Option<toml::Value>,
     gas_limit: u64,
-    #[serde(default)]
     expected_result: Option<toml::Value>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Default)]
 struct ContractDevManifestProfile {
-    #[serde(default)]
     client_config: Option<PathBuf>,
-    #[serde(default)]
     default_gas_limit: Option<u64>,
-    #[serde(default)]
     fee_asset_id: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Default)]
 struct ContractDevManifestTest {
     path: PathBuf,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Default)]
 struct ContractDevManifestSmoke {
     id: String,
     contract: String,
-    #[serde(default)]
     mode: Option<String>,
-    #[serde(default)]
     entrypoint: Option<String>,
-    #[serde(default)]
     payload: Option<toml::Value>,
-    #[serde(default)]
     expected_result: Option<toml::Value>,
-    #[serde(default)]
     gas_limit: Option<u64>,
 }
 
@@ -548,6 +522,230 @@ fn toml_to_json_value(value: toml::Value) -> Result<norito::json::Value> {
     }
 }
 
+fn toml_required_string(table: &toml::Table, key: &str, context: &str) -> Result<String> {
+    match table.get(key).and_then(toml::Value::as_str) {
+        Some(value) => Ok(value.to_owned()),
+        None => Err(eyre!("`{context}.{key}` must be a string")),
+    }
+}
+
+fn toml_optional_string(table: &toml::Table, key: &str, context: &str) -> Result<Option<String>> {
+    match table.get(key) {
+        Some(value) => value
+            .as_str()
+            .map(|value| Some(value.to_owned()))
+            .ok_or_else(|| eyre!("`{context}.{key}` must be a string")),
+        None => Ok(None),
+    }
+}
+
+fn toml_optional_path(table: &toml::Table, key: &str, context: &str) -> Result<Option<PathBuf>> {
+    Ok(toml_optional_string(table, key, context)?.map(PathBuf::from))
+}
+
+fn toml_required_u64(table: &toml::Table, key: &str, context: &str) -> Result<u64> {
+    let value = table
+        .get(key)
+        .and_then(toml::Value::as_integer)
+        .ok_or_else(|| eyre!("`{context}.{key}` must be a non-negative integer"))?;
+    u64::try_from(value).map_err(|_| eyre!("`{context}.{key}` must be a non-negative integer"))
+}
+
+fn toml_optional_u64(table: &toml::Table, key: &str, context: &str) -> Result<Option<u64>> {
+    match table.get(key) {
+        Some(_) => toml_required_u64(table, key, context).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn toml_optional_string_array(
+    table: &toml::Table,
+    key: &str,
+    context: &str,
+) -> Result<Vec<String>> {
+    let Some(value) = table.get(key) else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| eyre!("`{context}.{key}` must be an array of strings"))?;
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| eyre!("`{context}.{key}[{index}]` must be a string"))
+        })
+        .collect()
+}
+
+fn toml_table_array<'a>(
+    table: &'a toml::Table,
+    key: &str,
+    context: &str,
+) -> Result<Vec<&'a toml::Table>> {
+    let Some(value) = table.get(key) else {
+        return Ok(Vec::new());
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| eyre!("`{context}.{key}` must be an array of tables"))?;
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            value
+                .as_table()
+                .ok_or_else(|| eyre!("`{context}.{key}[{index}]` must be a table"))
+        })
+        .collect()
+}
+
+fn parse_contract_manifest_contract(
+    table: &toml::Table,
+    index: usize,
+) -> Result<ContractAppManifestContract> {
+    let context = format!("contracts[{index}]");
+    Ok(ContractAppManifestContract {
+        name: toml_required_string(table, "name", &context)?,
+        alias: toml_required_string(table, "alias", &context)?,
+        source: toml_optional_path(table, "source", &context)?,
+        artifact: toml_optional_path(table, "artifact", &context)?,
+        depends_on: toml_optional_string_array(table, "depends_on", &context)?,
+        lease_expiry_ms: toml_optional_u64(table, "lease_expiry_ms", &context)?,
+    })
+}
+
+fn parse_contract_manifest_init_call(
+    table: &toml::Table,
+    index: usize,
+) -> Result<ContractAppManifestInitCall> {
+    let context = format!("init[{index}]");
+    Ok(ContractAppManifestInitCall {
+        id: toml_required_string(table, "id", &context)?,
+        contract: toml_required_string(table, "contract", &context)?,
+        entrypoint: toml_optional_string(table, "entrypoint", &context)?,
+        payload: table.get("payload").cloned(),
+        gas_limit: toml_required_u64(table, "gas_limit", &context)?,
+        gas_asset_id: toml_optional_string(table, "gas_asset_id", &context)?,
+        fee_sponsor: toml_optional_string(table, "fee_sponsor", &context)?,
+    })
+}
+
+fn parse_contract_manifest_assertion(
+    table: &toml::Table,
+    index: usize,
+) -> Result<ContractAppManifestAssertion> {
+    let context = format!("assertions[{index}]");
+    Ok(ContractAppManifestAssertion {
+        id: toml_required_string(table, "id", &context)?,
+        contract: toml_required_string(table, "contract", &context)?,
+        entrypoint: toml_optional_string(table, "entrypoint", &context)?,
+        payload: table.get("payload").cloned(),
+        gas_limit: toml_required_u64(table, "gas_limit", &context)?,
+        expected_result: table.get("expected_result").cloned(),
+    })
+}
+
+fn parse_contract_manifest_profile(
+    table: &toml::Table,
+    name: &str,
+) -> Result<ContractDevManifestProfile> {
+    let context = format!("profiles.{name}");
+    Ok(ContractDevManifestProfile {
+        client_config: toml_optional_path(table, "client_config", &context)?,
+        default_gas_limit: toml_optional_u64(table, "default_gas_limit", &context)?,
+        fee_asset_id: toml_optional_string(table, "fee_asset_id", &context)?,
+    })
+}
+
+fn parse_contract_manifest_test(
+    table: &toml::Table,
+    index: usize,
+) -> Result<ContractDevManifestTest> {
+    let context = format!("tests[{index}]");
+    Ok(ContractDevManifestTest {
+        path: PathBuf::from(toml_required_string(table, "path", &context)?),
+    })
+}
+
+fn parse_contract_manifest_smoke(
+    table: &toml::Table,
+    index: usize,
+) -> Result<ContractDevManifestSmoke> {
+    let context = format!("smoke[{index}]");
+    Ok(ContractDevManifestSmoke {
+        id: toml_required_string(table, "id", &context)?,
+        contract: toml_required_string(table, "contract", &context)?,
+        mode: toml_optional_string(table, "mode", &context)?,
+        entrypoint: toml_optional_string(table, "entrypoint", &context)?,
+        payload: table.get("payload").cloned(),
+        expected_result: table.get("expected_result").cloned(),
+        gas_limit: toml_optional_u64(table, "gas_limit", &context)?,
+    })
+}
+
+fn parse_contract_app_manifest(value: toml::Value) -> Result<ContractAppManifest> {
+    let table = value
+        .as_table()
+        .ok_or_else(|| eyre!("contract app manifest root must be a TOML table"))?;
+    let contracts = toml_table_array(table, "contracts", "manifest")?
+        .into_iter()
+        .enumerate()
+        .map(|(index, table)| parse_contract_manifest_contract(table, index))
+        .collect::<Result<Vec<_>>>()?;
+    if contracts.is_empty() {
+        return Err(eyre!("`manifest.contracts` must contain at least one table"));
+    }
+    let init = toml_table_array(table, "init", "manifest")?
+        .into_iter()
+        .enumerate()
+        .map(|(index, table)| parse_contract_manifest_init_call(table, index))
+        .collect::<Result<Vec<_>>>()?;
+    let assertions = toml_table_array(table, "assertions", "manifest")?
+        .into_iter()
+        .enumerate()
+        .map(|(index, table)| parse_contract_manifest_assertion(table, index))
+        .collect::<Result<Vec<_>>>()?;
+    let profiles = match table.get("profiles") {
+        Some(value) => value
+            .as_table()
+            .ok_or_else(|| eyre!("`manifest.profiles` must be a table"))?
+            .iter()
+            .map(|(name, value)| {
+                let profile = value
+                    .as_table()
+                    .ok_or_else(|| eyre!("`profiles.{name}` must be a table"))?;
+                Ok((name.clone(), parse_contract_manifest_profile(profile, name)?))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?,
+        None => BTreeMap::new(),
+    };
+    let tests = toml_table_array(table, "tests", "manifest")?
+        .into_iter()
+        .enumerate()
+        .map(|(index, table)| parse_contract_manifest_test(table, index))
+        .collect::<Result<Vec<_>>>()?;
+    let smoke = toml_table_array(table, "smoke", "manifest")?
+        .into_iter()
+        .enumerate()
+        .map(|(index, table)| parse_contract_manifest_smoke(table, index))
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(ContractAppManifest {
+        bundle_name: toml_required_string(table, "bundle_name", "manifest")?,
+        default_dataspace: toml_optional_string(table, "default_dataspace", "manifest")?,
+        contracts,
+        init,
+        assertions,
+        profiles,
+        tests,
+        smoke,
+    })
+}
+
 fn compile_or_load_contract_code(
     manifest_path: &Path,
     contract: &ContractAppManifestContract,
@@ -598,7 +796,10 @@ fn compile_or_load_contract_code(
 fn load_contract_app_manifest(path: &Path) -> Result<ContractAppManifest> {
     let body = fs::read_to_string(path)
         .wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
-    toml::from_str(&body).wrap_err_with(|| format!("failed to parse `{}`", path.display()))
+    let value = toml::from_str::<toml::Value>(&body)
+        .wrap_err_with(|| format!("failed to parse `{}`", path.display()))?;
+    parse_contract_app_manifest(value)
+        .wrap_err_with(|| format!("failed to decode `{}`", path.display()))
 }
 
 fn build_contract_app_bundle(manifest_path: &Path) -> Result<norito::json::Value> {

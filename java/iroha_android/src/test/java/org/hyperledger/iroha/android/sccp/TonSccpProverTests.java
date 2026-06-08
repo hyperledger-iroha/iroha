@@ -1,10 +1,14 @@
 package org.hyperledger.iroha.android.sccp;
 
+import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import org.bouncycastle.crypto.digests.KeccakDigest;
+import org.hyperledger.iroha.android.crypto.Blake2b;
 
 public final class TonSccpProverTests {
   private TonSccpProverTests() {}
@@ -26,6 +30,7 @@ public final class TonSccpProverTests {
     proverResolvesWitnessProviderBeforeBuildingRequest();
     proofRequestBindsRelayContextAndDeployment();
     proofRequestHashMatchesCrossSdkVector();
+    proofRequestRejectsNoncanonicalOrMismatchedBundleBytes();
     System.out.println("[IrohaAndroid] TON SCCP prover tests passed.");
   }
 
@@ -216,7 +221,8 @@ public final class TonSccpProverTests {
         : "TON submission envelope getter must return defensive copies";
 
     final byte[] proofBytes = {1, 2};
-    final byte[] bundleBytes = {3, 4};
+    final byte[] bundleBytes = sampleTonBundleBytes();
+    final byte[] expectedBundleBytes = Arrays.copyOf(bundleBytes, bundleBytes.length);
     final byte[] metadataBytes = {5, 6};
     final TonSccpProver.ProofResult copiedResult =
         sampleMessageProofResult(
@@ -231,7 +237,7 @@ public final class TonSccpProverTests {
     copiedInput.metadataBytes()[0] = 9;
     assert Arrays.equals(new byte[] {1, 2}, copiedInput.proofBytes())
         : "TON message-body proof bytes must be defensive copies";
-    assert Arrays.equals(new byte[] {3, 4}, copiedInput.bundleBytes())
+    assert Arrays.equals(expectedBundleBytes, copiedInput.bundleBytes())
         : "TON message-body bundle bytes must be defensive copies";
     assert Arrays.equals(new byte[] {5, 6}, copiedInput.metadataBytes())
         : "TON message-body metadata bytes must be defensive copies";
@@ -264,7 +270,7 @@ public final class TonSccpProverTests {
 
     boolean zeroProofThrew = false;
     try {
-      TonSccpProver.buildSubmission(sampleMessageBodyInput(new byte[] {0, 0}, new byte[] {5, 6, 7}));
+      TonSccpProver.buildSubmission(sampleMessageBodyInput(new byte[] {0, 0}, sampleTonBundleBytes()));
     } catch (final IllegalArgumentException ex) {
       zeroProofThrew = ex.getMessage().contains("all zero");
     }
@@ -275,7 +281,7 @@ public final class TonSccpProverTests {
     boolean oversizedTonMessageThrew = false;
     try {
       TonSccpProver.buildSubmission(
-          sampleMessageBodyInput(oversizedTonMessageProof, new byte[] {5, 6, 7}));
+          sampleMessageBodyInput(oversizedTonMessageProof, sampleTonBundleBytes()));
     } catch (final IllegalArgumentException ex) {
       oversizedTonMessageThrew = ex.getMessage().contains("TON BOC contains too many cells");
     }
@@ -287,7 +293,7 @@ public final class TonSccpProverTests {
           sampleMessageBodyInput(
               samplePublicInputs(),
               new byte[] {1, 2, 3, 4},
-              new byte[] {5, 6, 7},
+              sampleTonBundleBytes(),
               repeat("00", 32),
               repeat("56", 32)));
     } catch (final IllegalArgumentException ex) {
@@ -301,7 +307,7 @@ public final class TonSccpProverTests {
           sampleMessageBodyInput(
               samplePublicInputs(),
               new byte[] {1, 2, 3, 4},
-              new byte[] {5, 6, 7},
+              sampleTonBundleBytes(),
               repeat("bb", 32),
               repeat("00", 32)));
     } catch (final IllegalArgumentException ex) {
@@ -324,7 +330,7 @@ public final class TonSccpProverTests {
                   "19",
                   repeat("aa", 32)),
               new byte[] {1, 2, 3, 4},
-              new byte[] {5, 6, 7},
+              sampleTonBundleBytes(),
               repeat("bb", 32),
               repeat("56", 32)));
     } catch (final IllegalArgumentException ex) {
@@ -2710,12 +2716,12 @@ public final class TonSccpProverTests {
 
     final TonSccpProver.MessageBodyInput submissionInput =
         new TonSccpProver.MessageBodyInput(
-            result, new byte[] {5, 6, 7}, new byte[] {8, 9}, "7");
+            result, sampleTonBundleBytes(), new byte[] {8, 9}, "7");
     assert result.publicInputs().equals(submissionInput.publicInputs())
         : "proof-result submission input must carry public inputs";
     assert Arrays.equals(result.proofBytes(), submissionInput.proofBytes())
         : "proof-result submission input must carry proof bytes";
-    assert Arrays.equals(new byte[] {5, 6, 7}, result.bundleBytes())
+    assert Arrays.equals(sampleTonBundleBytes(), result.bundleBytes())
         : "proof result must carry request bundle bytes";
     assert Arrays.equals(new byte[] {9, 10}, result.sourceProofBytes())
         : "proof result must carry request source proof bytes";
@@ -2734,14 +2740,14 @@ public final class TonSccpProverTests {
     final TonSccpProver.Submission omittedSourceSubmission =
         TonSccpProver.buildSubmission(
             new TonSccpProver.MessageBodyInput(
-                omittedSourceProofResult, new byte[] {5, 6, 7}));
+                omittedSourceProofResult, sampleTonBundleBytes()));
     assert Arrays.equals(new byte[0], omittedSourceProofResult.sourceProofBytes())
         : "TON submit-ready proof results may omit source proof bytes";
     assert omittedSourceSubmission.messageBodyBoc().length > 0
         : "TON omitted-source submission must emit a BOC body";
     boolean mismatchedBundleThrew = false;
     try {
-      new TonSccpProver.MessageBodyInput(result, new byte[] {5, 6, 8});
+      new TonSccpProver.MessageBodyInput(result, sampleTonBundleBytes(new byte[] {0x71, 0x73}));
     } catch (final IllegalArgumentException ex) {
       mismatchedBundleThrew = ex.getMessage().contains("proofResult.bundleBytes");
     }
@@ -2751,8 +2757,8 @@ public final class TonSccpProverTests {
     boolean tamperedResultBundleThrew = false;
     try {
       new TonSccpProver.MessageBodyInput(
-          tonProofResultWithBundleBytes(result, new byte[] {5, 6, 8}),
-          new byte[] {5, 6, 8});
+          tonProofResultWithBundleBytes(result, sampleTonBundleBytes(new byte[] {0x71, 0x73})),
+          sampleTonBundleBytes(new byte[] {0x71, 0x73}));
     } catch (final IllegalArgumentException ex) {
       tamperedResultBundleThrew = ex.getMessage().contains("requestHash");
     }
@@ -2762,7 +2768,7 @@ public final class TonSccpProverTests {
     boolean mismatchedProofBase64Threw = false;
     try {
       new TonSccpProver.MessageBodyInput(
-          tonProofResultWithProofBase64(result, "AAAA"), new byte[] {5, 6, 7});
+          tonProofResultWithProofBase64(result, "AAAA"), sampleTonBundleBytes());
     } catch (final IllegalArgumentException ex) {
       mismatchedProofBase64Threw = ex.getMessage().contains("proofBase64");
     }
@@ -2773,7 +2779,7 @@ public final class TonSccpProverTests {
     try {
       new TonSccpProver.MessageBodyInput(
           tonProofResultWithEnvelopeHash(result, SolanaSccpProver.ZERO_HASH_V1),
-          new byte[] {5, 6, 7});
+          sampleTonBundleBytes());
     } catch (final IllegalArgumentException ex) {
       missingEnvelopeThrew = ex.getMessage().contains("proofResult.envelopeHash");
     }
@@ -2784,7 +2790,7 @@ public final class TonSccpProverTests {
     try {
       new TonSccpProver.MessageBodyInput(
           tonProofResultWithEnvelopeHash(result, "0x" + repeat("aa", 32)),
-          new byte[] {5, 6, 7});
+          sampleTonBundleBytes());
     } catch (final IllegalArgumentException ex) {
       tamperedEnvelopeThrew = ex.getMessage().contains("wrapped proof bytes");
     }
@@ -2800,7 +2806,7 @@ public final class TonSccpProverTests {
                   result.proofContext().version(),
                   "0x" + repeat("99", 32),
                   result.proofContext().destinationBindingHash())),
-          new byte[] {5, 6, 7});
+          sampleTonBundleBytes());
     } catch (final IllegalArgumentException ex) {
       mismatchedProofContextThrew = ex.getMessage().contains("proofContext");
     }
@@ -2811,7 +2817,7 @@ public final class TonSccpProverTests {
     try {
       new TonSccpProver.MessageBodyInput(
           tonProofResultWithSourceStateVerifierHash(result, SolanaSccpProver.ZERO_HASH_V1),
-          new byte[] {5, 6, 7});
+          sampleTonBundleBytes());
     } catch (final IllegalArgumentException ex) {
       wrongSourceStateVerifierThrew = ex.getMessage().contains("sourceStateVerifierHash");
     }
@@ -2829,7 +2835,7 @@ public final class TonSccpProverTests {
                   TonSccpProver.DOMAIN_TON,
                   result.sourceAdapterDeploymentBinding().sourceAdapterDeploymentHash(),
                   result.sourceAdapterDeploymentBinding().sourceAdapterDeploymentReceiptHash())),
-          new byte[] {5, 6, 7});
+          sampleTonBundleBytes());
     } catch (final IllegalArgumentException ex) {
       wrongResultDeploymentBindingThrew = ex.getMessage().contains("targetDomain");
     }
@@ -2881,7 +2887,8 @@ public final class TonSccpProverTests {
 
   private static void proverResolvesWitnessProviderBeforeBuildingRequest() {
     final boolean[] resolved = new boolean[] {false};
-    final byte[] bundleBytes = new byte[] {5, 6, 7};
+    final byte[] bundleBytes = sampleTonBundleBytes();
+    final byte[] expectedBundleBytes = Arrays.copyOf(bundleBytes, bundleBytes.length);
     final TonSccpProver.ProofRequestInput userInput =
         new TonSccpProver.ProofRequestInput(
             samplePublicInputs(),
@@ -2906,7 +2913,7 @@ public final class TonSccpProverTests {
               resolved[0] = true;
               return new TonSccpProver.ProofRequestInput(
                   input.publicInputs(),
-                  input.bundleBytes(),
+                  sampleTonBundleBytes(),
                   new byte[] {9, 10},
                   input.statementHash(),
                   input.destinationBindingHash(),
@@ -2928,9 +2935,9 @@ public final class TonSccpProverTests {
 
     assert Arrays.equals(new byte[] {9, 10}, result.sourceProofBytes())
         : "wrapped result must preserve provider-resolved source proof bytes";
-    assert Arrays.equals(new byte[] {5, 6, 7}, userInput.bundleBytes())
+    assert Arrays.equals(expectedBundleBytes, userInput.bundleBytes())
         : "UI-owned TON bundle bytes must not be mutated by witness provider";
-    assert Arrays.equals(new byte[] {5, 6, 7}, bundleBytes)
+    assert Arrays.equals(expectedBundleBytes, bundleBytes)
         : "UI-owned TON bundle array must not be mutated by witness provider";
   }
 
@@ -3007,6 +3014,27 @@ public final class TonSccpProverTests {
         result.publicInputs(),
         bundleBytes,
         result.sourceProofBytes(),
+        result.proofContext(),
+        result.statementHash(),
+        result.destinationBindingHash(),
+        result.sourceStateVerifierId(),
+        result.sourceStateVerifierHash(),
+        result.sourceAdapterDeploymentBindingHash(),
+        result.sourceAdapterDeploymentBinding(),
+        result.requestHash(),
+        result.envelopeHash());
+  }
+
+  private static TonSccpProver.ProofResult tonProofResultWithSourceProofBytes(
+      final TonSccpProver.ProofResult result, final byte[] sourceProofBytes) {
+    return new TonSccpProver.ProofResult(
+        result.version(),
+        result.backend(),
+        result.proofBytes(),
+        result.proofBase64(),
+        result.publicInputs(),
+        result.bundleBytes(),
+        sourceProofBytes,
         result.proofContext(),
         result.statementHash(),
         result.destinationBindingHash(),
@@ -3142,7 +3170,7 @@ public final class TonSccpProverTests {
         TonSccpProver.buildProofRequest(
             new TonSccpProver.ProofRequestInput(
                 samplePublicInputs(),
-                new byte[] {5, 6, 7},
+                sampleTonBundleBytes(),
                 repeat("56", 32),
                 repeat("78", 32),
                 TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
@@ -3154,7 +3182,7 @@ public final class TonSccpProverTests {
     try {
       new TonSccpProver.ProofRequestInput(
           samplePublicInputs(),
-          new byte[] {5, 6, 7},
+          sampleTonBundleBytes(),
           repeat("56", 32),
           repeat("78", 32),
           TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
@@ -3183,8 +3211,8 @@ public final class TonSccpProverTests {
         TonSccpProver.buildProofRequest(
             new TonSccpProver.ProofRequestInput(
                 samplePublicInputs(),
-                new byte[] {5, 6, 7},
-                new byte[] {9, 10},
+                sampleTonBundleBytes(new byte[] {0x71}),
+                new byte[] {0x72, 0x73},
                 repeat("56", 32),
                 repeat("78", 32),
                 TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
@@ -3197,8 +3225,8 @@ public final class TonSccpProverTests {
         TonSccpProver.buildProofRequest(
             new TonSccpProver.ProofRequestInput(
                 samplePublicInputs(),
-                new byte[] {5, 6, 7, 9},
-                new byte[] {10},
+                sampleTonBundleBytes(new byte[] {0x71, 0x72}),
+                new byte[] {0x73},
                 repeat("56", 32),
                 repeat("78", 32),
                 TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
@@ -3246,7 +3274,7 @@ public final class TonSccpProverTests {
                   repeat("12", 32),
                   "19",
                   repeat("aa", 32)),
-              new byte[] {5, 6, 7},
+              sampleTonBundleBytes(),
               new byte[0],
               repeat("56", 32),
               repeat("78", 32),
@@ -3266,7 +3294,7 @@ public final class TonSccpProverTests {
       TonSccpProver.buildProofRequest(
           new TonSccpProver.ProofRequestInput(
               samplePublicInputs(),
-              new byte[] {5, 6, 7},
+              sampleTonBundleBytes(),
               new byte[0],
               repeat("56", 32) + "\n",
               repeat("78", 32),
@@ -3286,7 +3314,7 @@ public final class TonSccpProverTests {
       TonSccpProver.buildProofRequest(
           new TonSccpProver.ProofRequestInput(
               samplePublicInputs(),
-              new byte[] {5, 6, 7},
+              sampleTonBundleBytes(),
               new byte[0],
               repeat("00", 32),
               repeat("78", 32),
@@ -3306,7 +3334,7 @@ public final class TonSccpProverTests {
       TonSccpProver.buildProofRequest(
           new TonSccpProver.ProofRequestInput(
               samplePublicInputs(),
-              new byte[] {5, 6, 7},
+              sampleTonBundleBytes(),
               new byte[0],
               repeat("56", 32),
               repeat("00", 32),
@@ -3335,12 +3363,14 @@ public final class TonSccpProverTests {
       TonSccpProver.buildProofRequest(
           new TonSccpProver.ProofRequestInput(
               new TonSccpProver.PublicInputsInput(
-                  repeat("dd", 32),
-                  repeat("ee", 32),
-                  repeat("12", 32),
+                  samplePublicInputs().version(),
+                  samplePublicInputs().messageId(),
+                  samplePublicInputs().payloadHash(),
+                  samplePublicInputs().targetDomain(),
+                  samplePublicInputs().commitmentRoot(),
                   "019",
-                  repeat("aa", 32)),
-              new byte[] {5, 6, 7},
+                  samplePublicInputs().finalityBlockHash()),
+              sampleTonBundleBytes(),
               new byte[0],
               repeat("56", 32),
               repeat("78", 32),
@@ -3456,7 +3486,7 @@ public final class TonSccpProverTests {
       TonSccpProver.buildProofRequest(
           new TonSccpProver.ProofRequestInput(
               samplePublicInputs(),
-              new byte[] {5, 6, 7},
+              sampleTonBundleBytes(),
               new byte[] {0, 0},
               repeat("56", 32),
               repeat("78", 32),
@@ -3479,7 +3509,7 @@ public final class TonSccpProverTests {
       TonSccpProver.buildProofRequest(
           new TonSccpProver.ProofRequestInput(
               samplePublicInputs(),
-              new byte[] {5, 6, 7},
+              sampleTonBundleBytes(),
               oversizedSourceProof,
               repeat("56", 32),
               repeat("78", 32),
@@ -3520,7 +3550,7 @@ public final class TonSccpProverTests {
                   repeat("12", 32),
                   "19",
                   repeat("aa", 32)),
-              new byte[] {5, 6, 7},
+              sampleTonBundleBytes(),
               new byte[0],
               repeat("56", 32),
               repeat("78", 32),
@@ -3549,19 +3579,150 @@ public final class TonSccpProverTests {
     assert threw : "TON proof requests must reject non-contract backends";
   }
 
+  private static void proofRequestRejectsNoncanonicalOrMismatchedBundleBytes() {
+    boolean threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(samplePublicInputs(), new byte[] {5, 6, 7}, new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.version must be 1");
+    }
+    assert threw : "TON proof requests must reject placeholder bundle bytes";
+
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              samplePublicInputs(), sampleTonBundleFixture(BigInteger.valueOf(43L)).bundleBytes, new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes must match publicInputs");
+    }
+    assert threw : "TON proof requests must reject bundle/public-input drift";
+
+    final byte[] bundle = sampleTonBundleBytes();
+    final TestBundleRanges ranges = splitTestSccpMessageProofBundleBytes(bundle);
+    final byte[] tamperedCommitment = Arrays.copyOf(ranges.commitment.bytes, ranges.commitment.bytes.length);
+    tamperedCommitment[6] = (byte) (tamperedCommitment[6] ^ 0x01);
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              samplePublicInputs(),
+              replaceTestSccpMessageProofBundleVec(bundle, ranges.commitment, tamperedCommitment),
+              new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.commitment must match payload");
+    }
+    assert threw : "TON proof requests must reject commitment/payload drift";
+
+    final byte[] tamperedRoot = Arrays.copyOf(bundle, bundle.length);
+    tamperedRoot[1] = (byte) (tamperedRoot[1] ^ 0x01);
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(samplePublicInputs(), tamperedRoot, new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.commitment_root must match merkle proof");
+    }
+    assert threw : "TON proof requests must reject tampered Merkle roots";
+
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              samplePublicInputs(),
+              replaceTestSccpMessageProofBundleVec(
+                  bundle, ranges.payload, concatTestBytes(ranges.payload.bytes, new byte[] {0x00})),
+              new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.payload must not contain trailing bytes");
+    }
+    assert threw : "TON proof requests must reject payload trailing bytes";
+
+    final byte[] unsupportedPayload = Arrays.copyOf(ranges.payload.bytes, ranges.payload.bytes.length);
+    unsupportedPayload[0] = 0x7f;
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              samplePublicInputs(),
+              replaceTestSccpMessageProofBundleVec(bundle, ranges.payload, unsupportedPayload),
+              new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("unsupported SCCP payload kind");
+    }
+    assert threw : "TON proof requests must reject unsupported SCCP payload kinds";
+
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              samplePublicInputs(),
+              replaceTestSccpMessageProofBundleVec(
+                  bundle, ranges.merkleProof, concatTestBytes(ranges.merkleProof.bytes, new byte[] {0x00})),
+              new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("bundleBytes.merkle_proof must not contain trailing bytes");
+    }
+    assert threw : "TON proof requests must reject Merkle proof trailing bytes";
+
+    final SampleTonBundleFixture oneStep =
+        sampleTonBundleFixture(
+            Collections.singletonList(new TestMerkleStep(repeatedByte((byte) 0xab, 32), 1)));
+    final TestBundleRanges oneStepRanges = splitTestSccpMessageProofBundleBytes(oneStep.bundleBytes);
+    final byte[] badDirection =
+        Arrays.copyOf(oneStepRanges.merkleProof.bytes, oneStepRanges.merkleProof.bytes.length);
+    badDirection[4 + 32] = 2;
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(
+              oneStep.publicInputs,
+              replaceTestSccpMessageProofBundleVec(oneStep.bundleBytes, oneStepRanges.merkleProof, badDirection),
+              new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sibling_is_left must be 0 or 1");
+    }
+    assert threw : "TON proof requests must reject invalid Merkle sibling directions";
+
+    final SampleTonBundleFixture nonSoraFixture =
+        sampleTonBundleFixture(
+            SourceSccpProofs.DOMAIN_ETH,
+            TonSccpProver.CODEC_EVM_HEX,
+            "0x52908400098527886E0F7030069857D2E4169EE7");
+    threw = false;
+    try {
+      TonSccpProver.buildProofRequest(
+          proofRequestInputWithBundle(nonSoraFixture.publicInputs, nonSoraFixture.bundleBytes, new byte[0]));
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes required for non-SORA source bundle");
+    }
+    assert threw : "TON proof requests must require source proof bytes for non-SORA bundles";
+
+    final TonSccpProver.ProofRequest nonSoraRequest =
+        TonSccpProver.buildProofRequest(
+            proofRequestInputWithBundle(
+                nonSoraFixture.publicInputs, nonSoraFixture.bundleBytes, new byte[] {0x51, 0x52}));
+    final TonSccpProver.ProofResult nonSoraResult =
+        TonSccpProver.wrapProofResult(new byte[] {1, 2, 3, 4}, nonSoraRequest);
+    threw = false;
+    try {
+      new TonSccpProver.MessageBodyInput(
+          tonProofResultWithSourceProofBytes(nonSoraResult, new byte[0]), nonSoraFixture.bundleBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sourceProofBytes required for non-SORA source bundle");
+    }
+    assert threw : "TON proof-result submissions must reject stripped non-SORA source proofs";
+  }
+
   private static void proofRequestHashMatchesCrossSdkVector() {
-    final TonSccpProver.PublicInputsInput publicInputs =
-        new TonSccpProver.PublicInputsInput(
-            repeat("11", 32),
-            repeat("22", 32),
-            repeat("33", 32),
-            "123456789",
-            repeat("44", 32));
+    final SampleTonBundleFixture fixture = sampleTonBundleFixture();
+    final TonSccpProver.PublicInputsInput publicInputs = fixture.publicInputs;
     final TonSccpProver.ProofRequest request =
         TonSccpProver.buildProofRequest(
             new TonSccpProver.ProofRequestInput(
                 publicInputs,
-                new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9},
+                fixture.bundleBytes,
                 new byte[] {0x51, 0x52, 0x53},
                 repeat("55", 32),
                 repeat("66", 32),
@@ -3578,12 +3739,12 @@ public final class TonSccpProverTests {
     final byte[] expectedPublicInputsBytes =
         hexBytes(
             "01"
-                + repeat("11", 32)
-                + repeat("22", 32)
+                + "806384e356636c10ee3bbbb90674a80410a86be034616abb811586b21ac81fc4367a4f"
+                + "9061f46a282eeeda95bc68c727888bde665bd89d0ebbc6dae266e3a264"
                 + "04000000"
-                + repeat("33", 32)
-                + "15cd5b0700000000"
-                + repeat("44", 32));
+                + "377eb92928595d90759d66529f96acf34afd4ef64cd2327ab6f65876fb3cf93e"
+                + "1300000000000000"
+                + repeat("aa", 32));
 
     assert Arrays.equals(
             expectedPublicInputsBytes, TonSccpProver.canonicalPublicInputsBytes(publicInputs))
@@ -3591,7 +3752,7 @@ public final class TonSccpProverTests {
     assert "0x7d35b186e3d49aed31693e33d33355fa8fa9032160c929f2c7fe260094f6ccdf"
         .equals(request.sourceAdapterDeploymentBindingHash())
         : "TON deployment binding hash must match other SDKs";
-    assert "0xb3a61f09923efd639a0263de6b45eec6ddd5de679bfaab1b6ec1c591fd1b1d1b"
+    assert "0x2a292741b8e8d8454699eda954592904e8260e6b8a41cc840f5d9c48732c3bbe"
         .equals(request.requestHash())
         : "TON proof request hash must match other SDKs";
     final TonSccpProver.ProofResult proofResult =
@@ -3600,13 +3761,13 @@ public final class TonSccpProverTests {
               (byte) 0x91, (byte) 0x92, (byte) 0x93, (byte) 0x94, (byte) 0x95
             },
             request);
-    assert "0xa2bc6697b237fd4b2dd3f60f187a184793104a99372dcdf60c7ec585ef32f5ab"
+    assert "0x9ed8e54d81c13a61939dedffb36c487f33d32a128ba95a0d29b33c5d25be6489"
         .equals(proofResult.envelopeHash())
         : "TON proof envelope hash must match other SDKs";
   }
 
   private static TonSccpProver.MessageBodyInput sampleMessageBodyInput() {
-    return sampleMessageBodyInput(new byte[] {5, 6, 7});
+    return sampleMessageBodyInput(sampleTonBundleBytes());
   }
 
   private static TonSccpProver.MessageBodyInput sampleMessageBodyInput(final byte[] bundleBytes) {
@@ -3763,7 +3924,7 @@ public final class TonSccpProverTests {
       final int sourceDomain) {
     return new TonSccpProver.ProofRequestInput(
         samplePublicInputs(),
-        new byte[] {5, 6, 7},
+        sampleTonBundleBytes(),
         sourceProofBytes,
         repeat("56", 32),
         repeat("78", 32),
@@ -3776,12 +3937,260 @@ public final class TonSccpProverTests {
   }
 
   private static TonSccpProver.PublicInputsInput samplePublicInputs() {
-    return new TonSccpProver.PublicInputsInput(
-        repeat("dd", 32),
-        repeat("ee", 32),
-        repeat("12", 32),
-        "19",
-        repeat("aa", 32));
+    return sampleTonBundleFixture().publicInputs;
+  }
+
+  private static byte[] sampleTonBundleBytes() {
+    return sampleTonBundleFixture().bundleBytes;
+  }
+
+  private static byte[] sampleTonBundleBytes(final byte[] finalityProof) {
+    return sampleTonBundleFixture(
+            SolanaSccpProver.DOMAIN_SORA,
+            TonSccpProver.CODEC_TEXT_UTF8,
+            "alice@sora",
+            327L,
+            BigInteger.valueOf(42L),
+            "sccp-ton-proof-request",
+            Collections.emptyList(),
+            finalityProof)
+        .bundleBytes;
+  }
+
+  private static SampleTonBundleFixture sampleTonBundleFixture() {
+    return sampleTonBundleFixture(
+        SolanaSccpProver.DOMAIN_SORA,
+        TonSccpProver.CODEC_TEXT_UTF8,
+        "alice@sora",
+        327L,
+        BigInteger.valueOf(42L),
+        "sccp-ton-proof-request",
+        Collections.emptyList(),
+        new byte[] {0x71, 0x72});
+  }
+
+  private static SampleTonBundleFixture sampleTonBundleFixture(final BigInteger amount) {
+    return sampleTonBundleFixture(
+        SolanaSccpProver.DOMAIN_SORA,
+        TonSccpProver.CODEC_TEXT_UTF8,
+        "alice@sora",
+        327L,
+        amount,
+        "sccp-ton-proof-request",
+        Collections.emptyList(),
+        new byte[] {0x71, 0x72});
+  }
+
+  private static SampleTonBundleFixture sampleTonBundleFixture(
+      final int sourceDomain, final int senderCodec, final String sender) {
+    return sampleTonBundleFixture(
+        sourceDomain,
+        senderCodec,
+        sender,
+        327L,
+        BigInteger.valueOf(42L),
+        "sccp-ton-proof-request",
+        Collections.emptyList(),
+        new byte[] {0x71, 0x72});
+  }
+
+  private static SampleTonBundleFixture sampleTonBundleFixture(
+      final List<TestMerkleStep> merkleProofSteps) {
+    return sampleTonBundleFixture(
+        SolanaSccpProver.DOMAIN_SORA,
+        TonSccpProver.CODEC_TEXT_UTF8,
+        "alice@sora",
+        327L,
+        BigInteger.valueOf(42L),
+        "sccp-ton-proof-request",
+        merkleProofSteps,
+        new byte[] {0x71, 0x72});
+  }
+
+  private static SampleTonBundleFixture sampleTonBundleFixture(
+      final int sourceDomain,
+      final int senderCodec,
+      final String sender,
+      final long nonce,
+      final BigInteger amount,
+      final String routeId,
+      final List<TestMerkleStep> merkleProofSteps,
+      final byte[] finalityProof) {
+    final ByteArrayOutputStream payloadBody = new ByteArrayOutputStream();
+    payloadBody.write(1);
+    writeTestU32Le(payloadBody, sourceDomain);
+    writeTestU32Le(payloadBody, TonSccpProver.DOMAIN_TON);
+    writeTestU64Le(payloadBody, BigInteger.valueOf(nonce));
+    writeTestU32Le(payloadBody, SolanaSccpProver.DOMAIN_SORA);
+    payloadBody.write(TonSccpProver.CODEC_TEXT_UTF8);
+    writeTestBytes(payloadBody, "xor#ton".getBytes(StandardCharsets.UTF_8));
+    writeTestU128Le(payloadBody, amount);
+    payloadBody.write(senderCodec);
+    writeTestBytes(payloadBody, sender.getBytes(StandardCharsets.UTF_8));
+    payloadBody.write(TonSccpProver.CODEC_TON_RAW);
+    writeTestBytes(payloadBody, ("0:" + repeat("12", 32)).getBytes(StandardCharsets.UTF_8));
+    payloadBody.write(TonSccpProver.CODEC_TEXT_UTF8);
+    writeTestBytes(payloadBody, routeId.getBytes(StandardCharsets.UTF_8));
+
+    final byte[] payloadBodyBytes = payloadBody.toByteArray();
+    final byte[] payloadBytes = concatTestBytes(new byte[] {0x02}, payloadBodyBytes);
+    final String messageId =
+        "0x" + hexLower(prefixedKeccakBytes("sccp:transfer:v1", payloadBodyBytes));
+    final String payloadHash =
+        "0x"
+            + hexLower(
+                Blake2b.digest256(
+                    concatTestBytes(
+                        "sccp:payload:v1".getBytes(StandardCharsets.UTF_8), payloadBytes)));
+
+    final ByteArrayOutputStream commitment = new ByteArrayOutputStream();
+    commitment.write(1);
+    commitment.write(6);
+    writeTestU32Le(commitment, TonSccpProver.DOMAIN_TON);
+    writeTestRawBytes(commitment, hexBytes(messageId.substring(2)));
+    writeTestRawBytes(commitment, hexBytes(payloadHash.substring(2)));
+    final byte[] commitmentBytes = commitment.toByteArray();
+
+    byte[] currentRoot =
+        Blake2b.digest256(
+            concatTestBytes("sccp:hub:leaf:v1".getBytes(StandardCharsets.UTF_8), commitmentBytes));
+    final ByteArrayOutputStream merkleProof = new ByteArrayOutputStream();
+    writeTestU32Le(merkleProof, merkleProofSteps.size());
+    for (final TestMerkleStep step : merkleProofSteps) {
+      if (step.sibling.length != 32) {
+        throw new IllegalArgumentException("test Merkle sibling must be 32 bytes");
+      }
+      writeTestRawBytes(merkleProof, step.sibling);
+      merkleProof.write(step.siblingIsLeft);
+      currentRoot =
+          Blake2b.digest256(
+              concatTestBytes(
+                  "sccp:hub:node:v1".getBytes(StandardCharsets.UTF_8),
+                  step.siblingIsLeft == 1
+                      ? concatTestBytes(step.sibling, currentRoot)
+                      : concatTestBytes(currentRoot, step.sibling)));
+    }
+    final String commitmentRoot = "0x" + hexLower(currentRoot);
+
+    final ByteArrayOutputStream bundle = new ByteArrayOutputStream();
+    bundle.write(1);
+    writeTestRawBytes(bundle, currentRoot);
+    writeTestBytes(bundle, commitmentBytes);
+    writeTestBytes(bundle, merkleProof.toByteArray());
+    writeTestBytes(bundle, payloadBytes);
+    writeTestBytes(bundle, finalityProof);
+
+    return new SampleTonBundleFixture(
+        new TonSccpProver.PublicInputsInput(
+            1,
+            messageId,
+            payloadHash,
+            TonSccpProver.DOMAIN_TON,
+            commitmentRoot,
+            "19",
+            repeat("aa", 32)),
+        bundle.toByteArray());
+  }
+
+  private static TonSccpProver.ProofRequestInput proofRequestInputWithBundle(
+      final TonSccpProver.PublicInputsInput publicInputs,
+      final byte[] bundleBytes,
+      final byte[] sourceProofBytes) {
+    return new TonSccpProver.ProofRequestInput(
+        publicInputs,
+        bundleBytes,
+        sourceProofBytes,
+        repeat("56", 32),
+        repeat("78", 32),
+        TonSccpProver.MAINNET_SHARD_STATE_VERIFIER_ID_V1,
+        repeat("cc", 32),
+        repeat("aa", 32),
+        repeat("bb", 32),
+        TonSccpProver.CONTRACT_PROOF_BACKEND_V1,
+        TonSccpProver.DOMAIN_TON);
+  }
+
+  private static TestBundleRanges splitTestSccpMessageProofBundleBytes(final byte[] bundleBytes) {
+    int offset = 33;
+    final TestBundleVecRange commitment = readTestCanonicalVecRange(bundleBytes, offset);
+    offset = commitment.nextOffset;
+    final TestBundleVecRange merkleProof = readTestCanonicalVecRange(bundleBytes, offset);
+    offset = merkleProof.nextOffset;
+    final TestBundleVecRange payload = readTestCanonicalVecRange(bundleBytes, offset);
+    offset = payload.nextOffset;
+    final TestBundleVecRange finalityProof = readTestCanonicalVecRange(bundleBytes, offset);
+    return new TestBundleRanges(commitment, merkleProof, payload, finalityProof);
+  }
+
+  private static TestBundleVecRange readTestCanonicalVecRange(
+      final byte[] bundleBytes, final int offset) {
+    final int length = readTestU32Le(bundleBytes, offset);
+    final int start = offset + 4;
+    final int end = start + length;
+    if (end > bundleBytes.length) {
+      throw new IllegalArgumentException("test vector exceeds bundle length");
+    }
+    return new TestBundleVecRange(
+        offset,
+        start,
+        end,
+        Arrays.copyOfRange(bundleBytes, start, end),
+        end);
+  }
+
+  private static byte[] replaceTestSccpMessageProofBundleVec(
+      final byte[] bundleBytes, final TestBundleVecRange vecRange, final byte[] replacement) {
+    final ByteArrayOutputStream out = new ByteArrayOutputStream();
+    out.write(bundleBytes, 0, vecRange.lengthOffset);
+    writeTestU32Le(out, replacement.length);
+    writeTestRawBytes(out, replacement);
+    out.write(bundleBytes, vecRange.bytesEnd, bundleBytes.length - vecRange.bytesEnd);
+    return out.toByteArray();
+  }
+
+  private static void writeTestBytes(final ByteArrayOutputStream out, final byte[] value) {
+    writeTestU32Le(out, value.length);
+    writeTestRawBytes(out, value);
+  }
+
+  private static void writeTestRawBytes(final ByteArrayOutputStream out, final byte[] value) {
+    out.write(value, 0, value.length);
+  }
+
+  private static void writeTestU32Le(final ByteArrayOutputStream out, final int value) {
+    if (value < 0) {
+      throw new IllegalArgumentException("u32 test value must be non-negative");
+    }
+    out.write(value & 0xff);
+    out.write((value >>> 8) & 0xff);
+    out.write((value >>> 16) & 0xff);
+    out.write((value >>> 24) & 0xff);
+  }
+
+  private static void writeTestU64Le(final ByteArrayOutputStream out, final BigInteger value) {
+    BigInteger working = value;
+    for (int index = 0; index < 8; index++) {
+      out.write(working.and(BigInteger.valueOf(0xffL)).intValue());
+      working = working.shiftRight(8);
+    }
+  }
+
+  private static void writeTestU128Le(final ByteArrayOutputStream out, final BigInteger value) {
+    BigInteger working = value;
+    for (int index = 0; index < 16; index++) {
+      out.write(working.and(BigInteger.valueOf(0xffL)).intValue());
+      working = working.shiftRight(8);
+    }
+  }
+
+  private static int readTestU32Le(final byte[] raw, final int offset) {
+    if (offset + 4 > raw.length) {
+      throw new IllegalArgumentException("test u32 is too short");
+    }
+    return (raw[offset] & 0xff)
+        | ((raw[offset + 1] & 0xff) << 8)
+        | ((raw[offset + 2] & 0xff) << 16)
+        | ((raw[offset + 3] & 0xff) << 24);
   }
 
   private static TonSccpProver.ShardStateProofRequestInput sampleShardStateProofRequestInput() {
@@ -4105,6 +4514,33 @@ public final class TonSccpProverTests {
         verifierCodeBocRootHash);
   }
 
+  private static byte[] concatTestBytes(final byte[] left, final byte[] right) {
+    final byte[] out = new byte[left.length + right.length];
+    System.arraycopy(left, 0, out, 0, left.length);
+    System.arraycopy(right, 0, out, left.length, right.length);
+    return out;
+  }
+
+  private static byte[] prefixedKeccakBytes(final String prefix, final byte[] payload) {
+    return keccak256(concatTestBytes(prefix.getBytes(StandardCharsets.UTF_8), payload));
+  }
+
+  private static byte[] keccak256(final byte[] input) {
+    final KeccakDigest digest = new KeccakDigest(256);
+    digest.update(input, 0, input.length);
+    final byte[] out = new byte[32];
+    digest.doFinal(out, 0);
+    return out;
+  }
+
+  private static String hexLower(final byte[] bytes) {
+    final StringBuilder builder = new StringBuilder(bytes.length * 2);
+    for (final byte b : bytes) {
+      builder.append(String.format("%02x", b & 0xff));
+    }
+    return builder.toString();
+  }
+
   private static String repeat(final String value, final int count) {
     final StringBuilder out = new StringBuilder(value.length() * count);
     for (int i = 0; i < count; i++) {
@@ -4146,5 +4582,65 @@ public final class TonSccpProverTests {
       }
     }
     return -1;
+  }
+
+  private static final class SampleTonBundleFixture {
+    private final TonSccpProver.PublicInputsInput publicInputs;
+    private final byte[] bundleBytes;
+
+    private SampleTonBundleFixture(
+        final TonSccpProver.PublicInputsInput publicInputs, final byte[] bundleBytes) {
+      this.publicInputs = publicInputs;
+      this.bundleBytes = bundleBytes;
+    }
+  }
+
+  private static final class TestMerkleStep {
+    private final byte[] sibling;
+    private final int siblingIsLeft;
+
+    private TestMerkleStep(final byte[] sibling, final int siblingIsLeft) {
+      this.sibling = sibling;
+      this.siblingIsLeft = siblingIsLeft;
+    }
+  }
+
+  private static final class TestBundleRanges {
+    private final TestBundleVecRange commitment;
+    private final TestBundleVecRange merkleProof;
+    private final TestBundleVecRange payload;
+    private final TestBundleVecRange finalityProof;
+
+    private TestBundleRanges(
+        final TestBundleVecRange commitment,
+        final TestBundleVecRange merkleProof,
+        final TestBundleVecRange payload,
+        final TestBundleVecRange finalityProof) {
+      this.commitment = commitment;
+      this.merkleProof = merkleProof;
+      this.payload = payload;
+      this.finalityProof = finalityProof;
+    }
+  }
+
+  private static final class TestBundleVecRange {
+    private final int lengthOffset;
+    private final int bytesStart;
+    private final int bytesEnd;
+    private final byte[] bytes;
+    private final int nextOffset;
+
+    private TestBundleVecRange(
+        final int lengthOffset,
+        final int bytesStart,
+        final int bytesEnd,
+        final byte[] bytes,
+        final int nextOffset) {
+      this.lengthOffset = lengthOffset;
+      this.bytesStart = bytesStart;
+      this.bytesEnd = bytesEnd;
+      this.bytes = bytes;
+      this.nextOffset = nextOffset;
+    }
   }
 }

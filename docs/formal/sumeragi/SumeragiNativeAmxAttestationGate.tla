@@ -344,4 +344,65 @@ ParticipantLegsRemainSeparate ==
     /\ ImplementationReceipt("differentParticipantSameSigner")
     /\ ImplementationParticipantLegsSeparate("differentParticipantSameSigner")
 
+NativeAmxAdmissionCases == {
+  "nonNativePlan", "emptyRoster"
+}
+
+NativeAmxRequestCases == {
+  "noPrepareVotes", "prepareBelowQuorum", "prepareQuorumNoCommitVotes",
+  "prepareQuorumCommitBelowQuorum", "commitWithoutPrepare"
+}
+
+NativeAmxReceiptCases == {
+  "fullQuorumSingleLeg", "fullQuorumMultiLeg", "oneLegPendingMultiLeg"
+}
+
+NativeAmxInvalidVoteCases == {
+  "duplicatePrepareSigner", "duplicateCommitSigner", "wrongPrepareBody",
+  "wrongCommitBody", "outsiderPrepareSigner", "outsiderCommitSigner"
+}
+
+NativeAmxDeterminismCacheCases == {
+  "unsortedQuorumVotes", "retriedHeightSameSigner",
+  "differentParticipantSameSigner"
+}
+
+NativeAmxAttestationGroupedCases ==
+  NativeAmxAdmissionCases \cup NativeAmxRequestCases \cup
+  NativeAmxReceiptCases \cup NativeAmxInvalidVoteCases \cup
+  NativeAmxDeterminismCacheCases
+
+NativeAmxAttestationCaseGroupsComplete ==
+  NativeAmxAttestationGroupedCases = Candidates
+
+NativeAmxRequestExact ==
+  /\ PrepareRequestsMatchSpec
+  /\ CommitRequestsMatchSpec
+  /\ NoCommitRequestBeforePrepareQuorum
+  /\ NoPrepareRetryAfterPrepareQuorum
+  /\ PrepareRequestBeforePrepareQuorum
+  /\ CommitRequestAfterPrepareBeforeCommit
+
+NativeAmxReceiptExact ==
+  /\ ReceiptsMatchSpec
+  /\ ReceiptRequiresBothQcs
+  /\ NoPartialMultiLegReceipt
+
+NativeAmxFailClosedExact ==
+  /\ InvalidVoteSetsFailClosed
+  /\ NonNativePlanDoesNotEmitReceiptOrRequests
+  /\ EmptyRosterFailsClosed
+
+NativeAmxDeterministicCacheExact ==
+  /\ UnsortedVotesUseValidatorOrder
+  /\ RetriedBodiesRemainSeparate
+  /\ ParticipantLegsRemainSeparate
+
+NativeAmxAttestationExactness ==
+  /\ NativeAmxAttestationCaseGroupsComplete
+  /\ NativeAmxRequestExact
+  /\ NativeAmxReceiptExact
+  /\ NativeAmxFailClosedExact
+  /\ NativeAmxDeterministicCacheExact
+
 ====

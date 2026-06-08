@@ -1119,6 +1119,17 @@ test("BSC route-config requires SDK-valid native prover bundles for production r
       ),
     /nativeEvmProverBundle.*BSC SDK validation.*proofArtifact/u,
   );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyRouteManifest({
+          bundleOverrides: {
+            proving_key: "artifacts/bsc-testnet/proof-artifact.bin",
+          },
+        }),
+      ),
+    /nativeEvmProverBundle.*BSC SDK validation.*artifact paths must be role-separated/u,
+  );
 
   const aliasBase = productionReadyRouteManifest();
   const aliasDriftBundle = nativeProverBundleForRollout(
@@ -1248,6 +1259,48 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
   await assert.rejects(
     () => buildBscNativeEvmProverBundleFromArtifacts(tinyProof.options),
     /proofArtifactBytes must be at least 65536 bytes/u,
+  );
+
+  const repeatedProof = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      proofArtifact: Buffer.alloc(96 * 1024, 0xa7),
+    },
+  });
+  await assert.rejects(
+    () => buildBscNativeEvmProverBundleFromArtifacts(repeatedProof.options),
+    /proof artifact looks like placeholder proof material: repeated 1-byte pattern/u,
+  );
+
+  const repeatedPattern = Buffer.alloc(96 * 1024);
+  for (let index = 0; index < repeatedPattern.length; index += 1) {
+    repeatedPattern[index] = index % 32;
+  }
+  const repeatedProvingKey = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      provingKey: repeatedPattern,
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(repeatedProvingKey.options),
+    /proving key looks like placeholder proof material: repeated 32-byte pattern/u,
+  );
+
+  const arithmeticProof = Buffer.alloc(96 * 1024);
+  for (let index = 0; index < arithmeticProof.length; index += 1) {
+    arithmeticProof[index] = (index * 17 + 23) & 0xff;
+  }
+  const arithmeticProofFixture = await writeNativeProverFixtureFiles({
+    artifactByteOverrides: {
+      proofArtifact: arithmeticProof,
+    },
+  });
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts(
+        arithmeticProofFixture.options,
+      ),
+    /proof artifact looks like placeholder proof material: arithmetic byte sequence with step 17/u,
   );
 
   const tinyImplementation = await writeNativeProverFixtureFiles({

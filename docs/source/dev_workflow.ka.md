@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   წარმოება `serde`/`serde_json` ხვდება `AGENTS_BASE_REF`-თან შედარებით. კომპლექტი
   `SERDE_GUARD_ALLOW=1` მხოლოდ CI ექსპერიმენტებისთვის მიგრაციის გეგმის წარდგენის შემდეგ.
 - `make guards` ახორციელებს Norito სერიიზაციის პოლიტიკას: ის უარყოფს ახალს
-  `serde`/`serde_json` გამოყენება, ad-hoc AoS დამხმარეები და SCALE დამოკიდებულებები გარეთ
+  `serde`/`serde_json` გამოყენება, ad-hoc AoS დამხმარეები და retired codec დამოკიდებულებები გარეთ
   Norito სკამები (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **Proc-macro UI პოლიტიკა:** ყველა proc-macro crate უნდა გამოგზავნოთ `trybuild`
   აღკაზმულობა (`tests/ui.rs` უღელტეხილით/ჩავარდნის გლობუსებით) `trybuild-tests`-ის უკან
   თვისება. მოათავსეთ ბედნიერი ბილიკის ნიმუშები `tests/ui/pass`-ში, უარყოფის შემთხვევები ქვემოთ

@@ -39,7 +39,7 @@ Qonuniylik va "asosiy sandiq" baholash (diqqat markazida):
 - PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` - qonuniy mos yozuvlar qutilari.
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — kanonik zamonaviy Rust TLS to'plami.
 - Shovqin: `snow` - kanonik amalga oshirish.
-- Seriyalashtirish: `parity-scale-codec` SCALE uchun kanonik hisoblanadi. Serde ish maydoni bo'ylab ishlab chiqarishga bog'liqlikdan olib tashlandi; Norito hosil qiladi/yozuvchilar har bir ish vaqti yo'lini qamrab oladi. Har qanday qoldiq Serde havolalari tarixiy hujjatlarda, himoya skriptlarida yoki faqat sinov uchun ruxsat etilgan ro'yxatlarda mavjud.
+- Seriyalashtirish: `retired codec` retired codec uchun kanonik hisoblanadi. Serde ish maydoni bo'ylab ishlab chiqarishga bog'liqlikdan olib tashlandi; Norito hosil qiladi/yozuvchilar har bir ish vaqti yo'lini qamrab oladi. Har qanday qoldiq Serde havolalari tarixiy hujjatlarda, himoya skriptlarida yoki faqat sinov uchun ruxsat etilgan ro'yxatlarda mavjud.
 - FFI/libs: `libsodium-sys-stable`, `openssl` — qonuniy; ishlab chiqarish yo'llarida OpenSSL orqali Rustls ni afzal ko'ring (joriy kod allaqachon mavjud).
 
 Tavsiyalar:

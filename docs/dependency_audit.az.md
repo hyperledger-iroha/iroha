@@ -39,7 +39,7 @@ Qanunilik və "əsas qutu" qiymətləndirməsi (diqqət mərkəzində):
 - PQ: `pqcrypto-mldsa`, `pqcrypto-mlkem`, `pqcrypto-traits` — qanuni istinad qutuları.
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — kanonik müasir Rust TLS yığını.
 - Səs-küy: `snow` - kanonik tətbiq.
-- Serializasiya: `parity-scale-codec` SCALE üçün kanonikdir. Serde iş sahəsində istehsal asılılıqlarından silindi; Norito hər bir iş vaxtı yolunu əhatə edir/yazarlar. İstənilən qalıq Serde istinadları tarixi sənədlərdə, qoruyucu skriptlərdə və ya yalnız sınaq icazəli siyahılarda yaşayır.
+- Serializasiya: `retired codec` retired codec üçün kanonikdir. Serde iş sahəsində istehsal asılılıqlarından silindi; Norito hər bir iş vaxtı yolunu əhatə edir/yazarlar. İstənilən qalıq Serde istinadları tarixi sənədlərdə, qoruyucu skriptlərdə və ya yalnız sınaq icazəli siyahılarda yaşayır.
 - FFI/libs: `libsodium-sys-stable`, `openssl` — qanuni; istehsal yollarında OpenSSL üzərində Rustls üstünlük verir (cari kod artıq edir).
 
 Tövsiyələr:

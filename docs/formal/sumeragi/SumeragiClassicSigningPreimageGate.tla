@@ -276,7 +276,7 @@ VrfRevealBindsBody ==
 PreimagesExcludeMutableSignatures ==
   candidate \in Cases => fields \cap SignatureFields = {}
 
-Safety ==
+ClassicPreimageLiveStateExactness ==
   /\ FieldsMatchSpec
   /\ PreimagesBindDomain
   /\ VoteUsesVoteTypeOnly
@@ -341,5 +341,53 @@ ClassicPreimageSafetyAnchors ==
   /\ VoteWithHighestConcreteAnchors
   /\ VrfConcreteBodyAnchors
   /\ AllConcretePreimagesExcludeMutableSignatures
+
+ClassicPreimageSpecProjectionExactness ==
+  /\ FieldsMatchSpec
+  /\ AllConcretePreimagesMatchSpec
+
+ClassicPreimageDomainExactness ==
+  /\ PreimagesBindDomain
+  /\ AllConcretePreimagesBindDomain
+
+ClassicPreimageTypeExactness ==
+  /\ VoteUsesVoteTypeOnly
+  /\ VrfCommitUsesCommitTypeOnly
+  /\ VrfRevealUsesRevealTypeOnly
+  /\ ConcreteVoteTypeAnchors
+  /\ ConcreteVrfCommitTypeAnchors
+  /\ ConcreteVrfRevealTypeAnchors
+
+ClassicPreimageVoteSubjectExactness ==
+  /\ VoteBindsSubject
+  /\ AllConcreteVotesBindSubject
+
+ClassicPreimageHighestQcExactness ==
+  /\ VoteWithoutHighestBindsAbsenceOnly
+  /\ VoteWithHighestBindsReference
+  /\ VoteWithoutHighestConcreteAnchors
+  /\ VoteWithHighestConcreteAnchors
+
+ClassicPreimageVrfBodyExactness ==
+  /\ VrfCommitBindsBody
+  /\ VrfRevealBindsBody
+  /\ VrfConcreteBodyAnchors
+
+ClassicPreimageMutableMaterialExactness ==
+  /\ PreimagesExcludeMutableSignatures
+  /\ AllConcretePreimagesExcludeMutableSignatures
+
+ClassicSigningPreimageExactness ==
+  /\ ClassicPreimageLiveStateExactness
+  /\ ClassicPreimageSpecProjectionExactness
+  /\ ClassicPreimageDomainExactness
+  /\ ClassicPreimageTypeExactness
+  /\ ClassicPreimageVoteSubjectExactness
+  /\ ClassicPreimageHighestQcExactness
+  /\ ClassicPreimageVrfBodyExactness
+  /\ ClassicPreimageMutableMaterialExactness
+  /\ ClassicPreimageSafetyAnchors
+
+Safety == ClassicSigningPreimageExactness
 
 ====

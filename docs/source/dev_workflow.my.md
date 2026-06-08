@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   ထုတ်လုပ်မှု `serde`/`serde_json` သည် `AGENTS_BASE_REF` နှင့် ဆက်စပ်မှုရှိသည်။ သတ်မှတ်
   `SERDE_GUARD_ALLOW=1` သည် ရွှေ့ပြောင်းခြင်းအစီအစဉ်ကို တင်ပြပြီးနောက် CI စမ်းသပ်မှုများအတွက်သာ။
 - `make guards` သည် Norito အမှတ်စဉ်မူဝါဒကို ကျင့်သုံးသည်- အသစ်ကို ငြင်းပယ်သည်
-  `serde`/`serde_json` အသုံးပြုမှု၊ ad-hoc AoS ကူညီပေးသူများ၊ နှင့် အပြင်ဘက် SCALE မှီခိုမှုများ
+  `serde`/`serde_json` အသုံးပြုမှု၊ ad-hoc AoS ကူညီပေးသူများ၊ နှင့် အပြင်ဘက် retired codec မှီခိုမှုများ
   Norito ထိုင်ခုံများ (`scripts/deny_serde_json.sh`၊
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`၊
-  `scripts/check_no_scale.sh`)။
+  `scripts/check_no_legacy_codec.sh`)။
 - **Proc-macro UI မူဝါဒ-** proc-macro သေတ္တာတိုင်းသည် `trybuild` ကို ပေးပို့ရမည်
   `trybuild-tests` နောက်ကွယ်ရှိ ကြိုး (`tests/ui.rs`)
   ထူးခြားချက်။ ပျော်ရွှင်သောလမ်းကြောင်းနမူနာများကို `tests/ui/pass` အောက်တွင်၊ ငြင်းပယ်ခြင်းဆိုင်ရာကိစ္စရပ်များကို အောက်၌ထားပါ။

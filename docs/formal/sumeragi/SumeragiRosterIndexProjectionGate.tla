@@ -58,6 +58,33 @@ Cases == {
   MissingThenManager
 }
 
+ProjectionEmptyCases == {
+  ProjectionEmptyTopology
+}
+
+ProjectionFallbackCases == {
+  ProjectionNoProviderLen3,
+  ProjectionProviderMissingFallback,
+  ProjectionProviderEmptyFallback
+}
+
+ProjectionProviderCases == {
+  ProjectionCompleteProviderSparse,
+  ProjectionProviderOverflowEmpty
+}
+
+ManagerApplyCases == {
+  ApplyNonemptyNormalizes,
+  ApplyEmptyUsesRosterLen,
+  ApplyEmptyZeroLen,
+  ApplyOverflowLeavesPrevious
+}
+
+ProjectionManagerCases == {
+  ProjectionThenManager,
+  MissingThenManager
+}
+
 ProjEmpty == 1
 ProjLocal01 == 2
 ProjLocal012 == 3
@@ -187,6 +214,33 @@ TypeInvariant ==
 NoBugInvariant ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
+
+RosterIndexProjectionEmptyExact ==
+  \A c \in ProjectionEmptyCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterIndexProjectionFallbackExact ==
+  \A c \in ProjectionFallbackCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterIndexProjectionProviderExact ==
+  \A c \in ProjectionProviderCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterIndexManagerApplyExact ==
+  \A c \in ManagerApplyCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterIndexProjectionManagerExact ==
+  \A c \in ProjectionManagerCases:
+    ImplementationActions(c) = SpecActions(c)
+
+RosterIndexProjectionExactness ==
+  /\ RosterIndexProjectionEmptyExact
+  /\ RosterIndexProjectionFallbackExact
+  /\ RosterIndexProjectionProviderExact
+  /\ RosterIndexManagerApplyExact
+  /\ RosterIndexProjectionManagerExact
 
 SafetyFast == NoBugInvariant
 

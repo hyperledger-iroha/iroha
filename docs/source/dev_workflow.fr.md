@@ -88,10 +88,10 @@ les nouveaux correctifs suivent les mêmes portes par défaut.
   la production `serde`/`serde_json` arrive par rapport à `AGENTS_BASE_REF`. Ensemble
   `SERDE_GUARD_ALLOW=1` uniquement pour les expériences CI après dépôt d'un plan de migration.
 - `make guards` applique la politique de sérialisation Norito : il refuse les nouveaux
-  Utilisation de `serde`/`serde_json`, assistants AoS ad hoc et dépendances SCALE en dehors
+  Utilisation de `serde`/`serde_json`, assistants AoS ad hoc et dépendances retired codec en dehors
   les bancs Norito (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **Politique de l'interface utilisateur Proc-macro :** chaque caisse proc-macro doit expédier un `trybuild`
   faisceau (`tests/ui.rs` avec globes réussite/échec) derrière le `trybuild-tests`
   fonctionnalité. Placez les échantillons du chemin heureux sous `tests/ui/pass`, les cas de rejet sous

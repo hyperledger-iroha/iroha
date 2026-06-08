@@ -1,6 +1,6 @@
 # Engineering Backlog (Detailed Open Work)
 
-Last updated: 2026-06-07
+Last updated: 2026-06-08
 
 The public roadmap lives in [`../../roadmap.md`](../../roadmap.md). Completed
 history lives in [`../../status.md`](../../status.md). This file should only
@@ -10,8 +10,9 @@ track detailed unfinished engineering work.
 
 The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
 runtime-network families outside that launch scope are not supported for now.
-Retired runtime-network families are explicitly outside SCCP launch support for now.
-Substrate/Polkadot-style networks are explicitly outside SCCP launch support for now.
+Retired platform-family lanes are explicitly outside SCCP launch support for
+now.
+Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
@@ -246,7 +247,10 @@ redistributable schemas, and official trust/revocation bundles.
   STARK/`OpenVerifyEnvelope` circuit id, public-input schema, byte bounds,
   verifier-key commitment, statement public input, and envelope-hash checks, so
   governed material proofs no longer reuse the zero-refresh bootstrap proof
-  envelope. `RunSoracloudFheJob` and Torii signed FHE job requests now carry
+  envelope. Core now decodes material proofs through that material-specific
+  attachment context, and all Soracloud FHE STARK wrappers reject non-empty
+  all-zero native envelope bytes before backend verifier dispatch.
+  `RunSoracloudFheJob` and Torii signed FHE job requests now carry
   an optional distinct full-bootstrap material proof attachment, provenance
   signs it, and Core requires it for policy-bound full-bootstrap jobs before
   dispatching through the active Soracloud verifier record or preverified-proof
@@ -262,11 +266,12 @@ redistributable schemas, and official trust/revocation bundles.
   Kotlin/JVM, and Java Android shared Soracloud BFV operation-fixture validators
   now pin the full-bootstrap material/profile digest, verifier-key commitment,
   and statement vector so SDK/release validation can reject fixture drift before
-  the executable evaluator lands. Full-mode exact
+  artifact-aware execution or proof verification. Full-mode exact
   and bounded runtime bootstrap paths now use dedicated crypto preflight
   helpers that validate governed material commitments, registered profile
-  digests, ciphertext shape, and exact/bounded metadata before returning the
-  current unavailable-evaluator error. Crypto now also exposes a typed
+  digests, ciphertext shape, and exact/bounded metadata before direct
+  no-artifact entry points return the governed-artifact requirement. Crypto now
+  also exposes a typed
   full-bootstrap artifact bundle validator/digest and artifact-aware execution
   preflight that bind concrete evaluator/proof-profile bytes to those governed
   commitments. Each artifact byte field is now a Norito role/profile envelope
@@ -295,17 +300,20 @@ redistributable schemas, and official trust/revocation bundles.
   exact and bounded raw-sample switch-key material, secret-consistency checks,
   switch execution, public bound propagation, governed artifact carriage, and
   artifact-aware full-bootstrap output/bound helpers that run through
-  slot-to-coefficient. Direct no-artifact registered entrypoints now validate
-  preflight, then fail with an explicit governed-artifact requirement; the real
-  proof verifier/prover backend remains unfinished. The
+  slot-to-coefficient. Full-bootstrap artifact-bundle validation now requires
+  executable sample-extraction switch-key material rather than accepting
+  metadata-only sample-extraction payloads in the governed bundle. Direct
+  no-artifact registered entrypoints now validate preflight, then fail with an
+  explicit governed-artifact requirement; the real proof verifier/prover
+  backend remains unfinished. The
   accumulator artifact now
   carries typed packed-slot test-vector material and rejects opaque,
   wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
   public-input schema and prover/verifier key artifacts now also carry typed
   proof-profile payloads that bind the canonical backend, key format, circuit
   id, statement-hash layout, and governed schema digest while rejecting opaque
-  schema/key bytes, empty key material, and duplicate prover/verifier key
-  material. Crypto now also
+  schema/key bytes, empty or all-zero key material, and duplicate
+  prover/verifier key material. Crypto now also
   exposes a domain-separated full-bootstrap execution proof statement digest
   that validates and binds the public key, governed bootstrap key/material,
   concrete artifact bundle, input/output ciphertexts, exact or bounded proof
@@ -315,18 +323,60 @@ redistributable schemas, and official trust/revocation bundles.
   exact/bounded full-mode jobs through artifact-aware full-bootstrap execution
   and bound propagation through sample-switch and slot-to-coefficient output
   before requiring one governed execution proof per output slot.
+  Torii signed job-run requests now validate those verifier-backed proof
+  attachments locally before instruction construction, so malformed signed
+  wrappers fail as bad requests before reaching Core. Torii signed job-run
+  preflight now resolves every signed parameter-set descriptor against the
+  registered BFV profile and runs the shared policy/job admission validators
+  plus BFV evaluation-key and refresh-transcript digest checks before
+  proof/artifact validation, recomputes policy proof-statement digests from
+  the signed key/transcript material, requires policy-bound bootstrap-key and
+  full-bootstrap material proofs to be present with matching statement hashes,
+  validates supplied full-bootstrap artifact bundles against the governed
+  request material before instruction construction, requires full-bootstrap
+  execution requests to carry signed circuit artifacts and a non-empty
+  execution-proof vector,
+  rejects full-bootstrap material/execution proof attachments outside
+  full-bootstrap job/key context, and rejects execution proofs that omit signed
+  artifact bundle bytes. Parameter, policy, job, key, transcript, digest, or
+  descriptor drift now fails locally before proof or artifact decoding. Core governed
+  full-bootstrap execution verifier-key derivation now validates the complete
+  artifact bundle before decoding verifier-key material, so drifted
+  non-verifier artifacts fail at the helper boundary. Data-model and Core
+  `OpenVerifyEnvelope` admission now also reject all-zero native STARK
+  envelope bytes for Soracloud FHE input, bootstrap-key, full-bootstrap
+  material, and full-bootstrap execution proofs.
   A `zk-stark` positive fixture now installs the governed artifact-backed
   STARK verifier key, generates backend-verified `OpenVerifyEnvelope` proofs
   over each full-bootstrap execution statement, and proves the active-verifier
   gate accepts them when STARK verification is enabled at runtime.
+  Matching `zk-stark` positive fixtures cover the bootstrap-key and
+  full-bootstrap material proof gates with active verifier records and
+  backend-verified `OpenVerifyEnvelope` proofs.
   A `zk-preverify` positive fixture now proves the active-verifier gate accepts
   a preverified proof batch for every production identifier slot.
+  The confidential verifier-call defaults now admit one such Soracloud
+  full-bootstrap execution batch without an operator override.
+  Core regressions now also prove that correctly shaped full-bootstrap
+  execution proof attachments fail closed before backend verification when the
+  governed verifier record is missing or withdrawn.
+  The Core proof helper now also reruns local job-shape validation and requires
+  input-bound metadata to match the input envelope count before deriving proof
+  statements, so stale bound sidecars and multi-input bootstrap drift cannot
+  reach proof verification.
+  It also rejects full-bootstrap execution circuit artifacts outside
+  full-bootstrap proof context even when no execution-proof attachments are
+  supplied, so artifact-only bypass attempts fail at the proof boundary.
+  Core regressions also pin full-bootstrap execution verifier-record metadata
+  drift across namespace, backend, curve, public-input schema, circuit/version,
+  gas schedule, active circuit mapping, proof byte caps, key presence/length,
+  commitment, and governed verifier-key byte binding.
   The legacy no-artifact Core execution helpers are test-only, so production
   full-mode jobs must pass through the governed artifact-aware path.
   Refresh-only proof and execution paths still reject `FullBootstrapV1`.
   Remaining production work is the audited full-bootstrap arithmetic
   proof-producing backend plus release-grade prover/verifier artifacts, not the
-  Core verifier gate.
+  Core verifier gate or statement-recomputation policy path.
   Direct crypto
   refresh-transcript validation/digesting and Soracloud transcript digesting
   now also preflight the advertised BFV public-key shape
@@ -708,10 +758,9 @@ redistributable schemas, and official trust/revocation bundles.
   output persistence now share checked binding state-total projection, so
   inconsistent existing-item accounting and `u64` total overflows fail closed
   before max-total admission checks.
-  The production
-  bounded-noise admission circuit/prover
-  rollout, broader target-limb BFV-RNS evaluator hardening, and executable
-  full-bootstrap evaluator plus verifier/prover implementation remain pending.
+  The production bounded-noise admission circuit/prover rollout, broader
+  target-limb BFV-RNS evaluator hardening, and audited full-bootstrap
+  proof-producing/verifier artifacts remain pending.
   Registered RNS chain selection now also preflights exact-addition and exact
   negacyclic-product coverage before exposing the chain or its production digest. Public RNS
   exact evaluator entry points now also preflight their required chain coverage
@@ -930,7 +979,7 @@ redistributable schemas, and official trust/revocation bundles.
   canonical evaluation-key bundle digest from the shared operation fixture, and
   `RunSoracloudFheJob` rejects structurally valid but ungoverned key material
   before output state is emitted. Shared release vectors still need to cover
-  the full BFV-RNS evaluator and executable full-bootstrap evaluator/proof
+  the broader BFV-RNS evaluator corridor and audited full-bootstrap proof
   material beyond the current encrypted-zero round-refresh bundles and
   data-model full-bootstrap material proof envelope.
 - Broaden validation from the green focused crypto/data-model/core/Torii/daemon
@@ -1308,7 +1357,11 @@ redistributable schemas, and official trust/revocation bundles.
 				  source-proof witness bytes for non-SORA source bundles; SCCP
 				  Rust TON native-recursive proof requests now apply the same canonical
 				  bundle/public-input/source-proof gate before local proof generation
-				  and proof-result wrapping; SCCP
+				  and proof-result wrapping, and the JavaScript, Python, Swift,
+				  Kotlin/JVM, and Java Android SDK TON request builders now mirror that
+				  canonical bundle/public-input/source-proof preflight with negative
+				  tests for arbitrary bytes, swapped bundles, tampered commitments,
+				  and stripped non-SORA source proofs; SCCP
 				  source-verifier template hashes and source-chain proof envelope
 				  shapes now reject unmapped source domains instead of falling back
 				  to empty source-chain keys, while
@@ -3184,7 +3237,7 @@ redistributable schemas, and official trust/revocation bundles.
     targets, JavaScript/Kotlin/JVM/Java Android identifier BFV parity,
     JavaScript Connect Norito schema-hash parity, Android Norito schema-manifest
     verification, C# SDK tests on macOS with a temporary .NET 8 SDK, full Swift
-    package tests, full workspace all-target clippy, `scripts/check_no_scale.sh`,
+    package tests, full workspace all-target clippy, `scripts/check_no_legacy_codec.sh`,
     formatting, and diff whitespace checks are green as of 2026-05-02.
   - Remaining validation: run `cargo test --workspace` in an uncontended
     validation window.

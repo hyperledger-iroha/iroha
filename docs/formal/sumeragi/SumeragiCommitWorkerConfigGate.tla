@@ -114,12 +114,27 @@ QueueCapsPositive ==
     /\ output[1] >= 1
     /\ output[2] >= 1
 
-SafetyFast ==
+CommitWorkerConfigOutputExact ==
   ActualOutput = SpecOutput
+
+CommitWorkerConfigFloorExact ==
   /\ WorkCapFloorAnchors
   /\ ResultCapFloorAnchors
+
+CommitWorkerConfigExplicitExact ==
   /\ ExplicitCapPreservation
+
+CommitWorkerConfigPositiveExact ==
   /\ QueueCapsPositive
+
+CommitWorkerConfigExactness ==
+  /\ CommitWorkerConfigOutputExact
+  /\ CommitWorkerConfigFloorExact
+  /\ CommitWorkerConfigExplicitExact
+  /\ CommitWorkerConfigPositiveExact
+
+SafetyFast ==
+  CommitWorkerConfigExactness
 
 BugWorkZeroFloored ==
   ActualMixedWorkZero = SpecMixedWorkZero

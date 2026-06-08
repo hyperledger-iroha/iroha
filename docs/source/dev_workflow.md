@@ -79,10 +79,10 @@ new patches follow the same default gates.
   production `serde`/`serde_json` hits relative to `AGENTS_BASE_REF`. Set
   `SERDE_GUARD_ALLOW=1` only for CI experiments after filing a migration plan.
 - `make guards` enforces the Norito serialization policy: it denies new
-  `serde`/`serde_json` usage, ad-hoc AoS helpers, and SCALE dependencies outside
-  the Norito benches (`scripts/deny_serde_json.sh`,
+  `serde`/`serde_json` usage, ad-hoc AoS helpers, and retired non-Norito codec
+  dependencies in workspace manifests (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **Proc-macro UI policy:** every proc-macro crate must ship a `trybuild`
   harness (`tests/ui.rs` with pass/fail globs) behind the `trybuild-tests`
   feature. Place happy-path samples under `tests/ui/pass`, rejection cases under

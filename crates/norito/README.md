@@ -42,20 +42,9 @@ These attributes apply to both struct fields and enum variants.
 
 ## Benchmarks
 
-The `benches/` directory contains a Criterion-based comparison between
-Norito and `parity-scale-codec`. On a sample data structure the
-following results were observed:
+The `benches/` directory contains Criterion-based Norito serialization,
+compression, and columnar-layout micro-benchmarks.
 
-| Benchmark                | Time      |
-|--------------------------|-----------|
-| `norito_encode`          | 6.46 µs |
-| `norito_encode_compressed` | 31.18 µs |
-| `scale_encode`           | 28.66 ns |
-| `scale_encode_compressed` | 24.78 µs |
-
-Run `cargo bench -p norito` to reproduce these numbers.
-
-Additional micro-benchmarks:
 - `ncb_sink_vs_vec`: compares NCB encoders using a simple `Vec<u8>` growth pattern vs the internal `ByteSink` with aligned growth and coalesced writes.
   Run: `cargo bench -p norito --bench ncb_sink_vs_vec`.
 
@@ -230,10 +219,10 @@ RUSTFLAGS='-C target-feature=+neon,+aes' cargo bench -p norito -- benches::bench
 Benches produce an optional size/throughput summary when `NORITO_BENCH_SUMMARY=1` is set. For example:
 
 ```
-NORITO_BENCH_SUMMARY=1 cargo bench -p norito --bench parity_compare
+NORITO_BENCH_SUMMARY=1 cargo bench -p norito --features bench-internal --bench codec
 ```
 
-This writes a machine-readable summary to `crates/norito/benches/artifacts/size_summary.json` comparing SCALE vs Norito (bare/headered/zstd).
+This writes a machine-readable summary to `crates/norito/benches/artifacts/size_summary.json` for Norito headered and compressed payloads.
 
 ## JSON Helpers and Benchmarks
 

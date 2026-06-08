@@ -18,10 +18,10 @@ translator: machine-google-reviewed
 Todos los cambios notables en este proyecto se documentarán en este archivo.
 
 ## [Inédito]- Dejar caer la cuña ESCALA; `norito::codec` ahora se implementa con la serialización nativa Norito.
-- Reemplace los usos de `parity_scale_codec` con `norito::codec` en todas las cajas.
+- Reemplace los usos de `retired_codec` con `norito::codec` en todas las cajas.
 - Comenzar a migrar herramientas a la serialización nativa Norito.
-- Elimine la dependencia `parity-scale-codec` restante del espacio de trabajo a favor de la serialización nativa Norito.
-- Reemplace las derivaciones de rasgos SCALE residuales con implementaciones nativas Norito y cambie el nombre del módulo de códec versionado.
+- Elimine la dependencia `retired codec` restante del espacio de trabajo a favor de la serialización nativa Norito.
+- Reemplace las derivaciones de rasgos retired codec residuales con implementaciones nativas Norito y cambie el nombre del módulo de códec versionado.
 - Fusionar `iroha_config_base_derive` e `iroha_futures_derive` en `iroha_derive` con macros controladas por funciones.
 - *(multifirma)* Rechazar firmas directas de autoridades multifirma con un código/motivo de error estable, aplicar límites de TTL multifirma en retransmisores anidados y mostrar límites de TTL en la CLI antes del envío (paridad de SDK pendiente).
 - Mueva las macros de procedimiento de FFI a `iroha_ffi` y elimine la caja `iroha_ffi_derive`.
@@ -242,7 +242,7 @@ Todos los cambios notables en este proyecto se documentarán en este archivo.
 - cambiar el nombre de TransactionValue a CommittedTransaction (#4610)
 - autenticar cuentas personales por ID (#4411)
 - utilizar formato multihash para claves privadas (#4541)
- - cambiar el nombre de `parity_scale_decoder` a `norito_cli`
+ - cambiar el nombre de `legacy_codec_decoder` a `norito_cli`
 - enviar bloques a los validadores del Conjunto B
 - hacer `Role` transparente (#4886)
 - derivar hash de bloque del encabezado (#4890)
@@ -1153,7 +1153,7 @@ Todos los cambios notables en este proyecto se documentarán en este archivo.
 - hyperledger#2309: Vuelva a habilitar las pruebas de documentos en CI.
 - hyperledger#2165 Elimina la instalación de codecov.
 - Mover a un nuevo contenedor para evitar conflictos con los usuarios actuales.
- - Hyperledger#2158 Actualización `parity_scale_codec` y otras dependencias. (códec Norito)
+ - Hyperledger#2158 Actualización `retired_codec` y otras dependencias. (códec Norito)
 - Arreglar la construcción.
 - hyperledger#2461 Mejorar iroha2 CI.
 - Actualización `syn`.

@@ -189,6 +189,34 @@ Safety ==
   \A c \in Candidates:
     ImplAllowed(c) = SpecAllowed(c)
 
+StaleViewFetchIdentityExact ==
+  \A c \in {BlockHashMismatch, HeightMismatch, ViewMismatch}:
+    ImplAllowed(c) = SpecAllowed(c)
+
+StaleViewPendingStateGateExact ==
+  \A c \in {InvalidPending, ConsensusInactive, NoLocalCommitVote}:
+    ImplAllowed(c) = SpecAllowed(c)
+
+StaleViewTipExtensionExact ==
+  \A c \in {
+    TipHeightMismatch,
+    ParentHashMismatch,
+    TipHashMissingParentPresent,
+    ParentMissingTipPresent,
+    ValidAbsentTip
+  }:
+    ImplPendingExtendsTip(c) = SpecPendingExtendsTip(c)
+
+StaleViewPositiveAdmissionExact ==
+  /\ ImplAllowed(ValidExactTip) = SpecAllowed(ValidExactTip)
+  /\ ImplAllowed(ValidAbsentTip) = SpecAllowed(ValidAbsentTip)
+
+StaleViewCommitQcFetchExactness ==
+  /\ StaleViewFetchIdentityExact
+  /\ StaleViewPendingStateGateExact
+  /\ StaleViewTipExtensionExact
+  /\ StaleViewPositiveAdmissionExact
+
 BugSkipBlockHash ==
   ImplAllowed(BlockHashMismatch) = SpecAllowed(BlockHashMismatch)
 

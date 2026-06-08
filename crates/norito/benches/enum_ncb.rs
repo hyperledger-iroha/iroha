@@ -1,24 +1,15 @@
 //! Enum-heavy dataset benches: AoS vs Norito NCB enum layout, plus projections.
 
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
+#[cfg(feature = "bench-internal")]
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
+#[cfg(feature = "bench-internal")]
 use norito::codec::{Decode as _, Encode as _};
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
+#[cfg(feature = "bench-internal")]
 use norito::columnar as ncb;
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
-use parity_scale_codec as scale;
 
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
+#[cfg(feature = "bench-internal")]
 #[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    scale::Encode,
-    scale::Decode,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 enum BenchEnum {
@@ -26,16 +17,9 @@ enum BenchEnum {
     Code(u32),
 }
 
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
+#[cfg(feature = "bench-internal")]
 #[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    scale::Encode,
-    scale::Decode,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct BenchRow {
@@ -44,7 +28,7 @@ struct BenchRow {
     flag: bool,
 }
 
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
+#[cfg(feature = "bench-internal")]
 fn make_data(n: usize) -> Vec<BenchRow> {
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
@@ -69,7 +53,7 @@ fn make_data(n: usize) -> Vec<BenchRow> {
     out
 }
 
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
+#[cfg(feature = "bench-internal")]
 fn bench_enum_encode(c: &mut Criterion) {
     let mut group = c.benchmark_group("enum_encode");
     for &n in &[64usize, 512, 4096] {
@@ -85,9 +69,6 @@ fn bench_enum_encode(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("AoS_Norito", n), &n, |b, _| {
             b.iter(|| std::hint::black_box(aos.encode()))
-        });
-        group.bench_with_input(BenchmarkId::new("SCALE", n), &n, |b, _| {
-            b.iter(|| std::hint::black_box(scale::Encode::encode(&aos)))
         });
         group.bench_with_input(BenchmarkId::new("NCB_enum_offsets", n), &n, |b, _| {
             b.iter(|| {
@@ -126,7 +107,7 @@ fn bench_enum_encode(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
+#[cfg(feature = "bench-internal")]
 fn bench_enum_decode(c: &mut Criterion) {
     let mut group = c.benchmark_group("enum_decode");
     for &n in &[64usize, 512, 4096] {
@@ -139,7 +120,6 @@ fn bench_enum_decode(c: &mut Criterion) {
             })
             .collect();
         let aos_bytes = aos.encode();
-        let scale_bytes = scale::Encode::encode(&aos);
         let ncb_bytes = ncb::encode_ncb_u64_enum_bool(&borrowed, false, false, false);
         let ncb_delta_bytes = ncb::encode_ncb_u64_enum_bool(&borrowed, true, false, false);
         let ncb_code_delta_bytes = ncb::encode_ncb_u64_enum_bool(&borrowed, false, false, true);
@@ -153,18 +133,6 @@ fn bench_enum_decode(c: &mut Criterion) {
                 std::hint::black_box(decoded.len())
             })
         });
-
-        group.bench_with_input(
-            BenchmarkId::new("SCALE_decode_materialize", n),
-            &n,
-            |b, _| {
-                b.iter(|| {
-                    let decoded: Vec<BenchRow> =
-                        scale::Decode::decode(&mut &scale_bytes[..]).unwrap();
-                    std::hint::black_box(decoded.len())
-                })
-            },
-        );
 
         group.bench_with_input(BenchmarkId::new("NCB_enum_view_iter", n), &n, |b, _| {
             b.iter(|| {
@@ -419,13 +387,13 @@ fn bench_enum_decode(c: &mut Criterion) {
     group.finish();
 }
 
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
+#[cfg(feature = "bench-internal")]
 criterion_group!(benches, bench_enum_encode, bench_enum_decode);
 
-#[cfg(all(feature = "bench-internal", feature = "parity-scale"))]
+#[cfg(feature = "bench-internal")]
 criterion_main!(benches);
 
-#[cfg(not(all(feature = "bench-internal", feature = "parity-scale")))]
+#[cfg(not(feature = "bench-internal"))]
 fn main() {
-    eprintln!("Enable `bench-internal` and `parity-scale` features to run this benchmark.");
+    eprintln!("Enable the `bench-internal` feature to run this benchmark.");
 }

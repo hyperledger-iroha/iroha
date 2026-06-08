@@ -63,6 +63,60 @@ NoSourcesReturnsNone == 30
 
 Candidates == 1..30
 
+ModeTagCases == {
+  ModeTagPermissioned,
+  ModeTagNpos
+}
+
+CommitJournalSourceCases == {
+  CommitJournalFirst,
+  CommitJournalFailureFallsThrough
+}
+
+CommitJournalSelectionCases == {
+  CommitJournalSelectionView,
+  CommitJournalKeyView,
+  CommitJournalCacheHitReturns,
+  CommitJournalSource,
+  CommitJournalCacheInsertGuard,
+  CommitJournalRecordsArtifacts
+}
+
+SidecarGateCases == {
+  SidecarAllowGate,
+  SidecarHashGate,
+  SidecarFailureFallsThrough
+}
+
+SidecarSelectionCases == {
+  SidecarSelectionView,
+  SidecarKeyView,
+  SidecarCacheHitReturns,
+  SidecarSource,
+  SidecarCacheInsertGuard,
+  SidecarRecordsArtifacts
+}
+
+SuccessorPreviousGateCases == {
+  SuccessorHeightChecked,
+  SuccessorPrevHashGate,
+  PreviousEvidenceTargetGate,
+  PreviousEvidenceMismatchReturnsNone
+}
+
+PreviousEvidenceSelectionCases == {
+  PreviousEvidenceStakeSnapshotConverted,
+  PreviousEvidenceCheckpointOnly,
+  PreviousEvidenceCacheHitReturns,
+  PreviousEvidenceSource,
+  PreviousEvidenceCacheInsertGuard,
+  PreviousEvidenceRecordsCheckpointOnly
+}
+
+NoSourceCases == {
+  NoSourcesReturnsNone
+}
+
 ModeTagPermissionedAction == 1
 ModeTagNposAction == 2
 JournalLookup == 3
@@ -287,6 +341,48 @@ TypeInvariant ==
 Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+PersistedRosterModeTagExact ==
+  \A c \in ModeTagCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PersistedRosterCommitJournalSourceExact ==
+  \A c \in CommitJournalSourceCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PersistedRosterCommitJournalSelectionExact ==
+  \A c \in CommitJournalSelectionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PersistedRosterSidecarGateExact ==
+  \A c \in SidecarGateCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PersistedRosterSidecarSelectionExact ==
+  \A c \in SidecarSelectionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PersistedRosterSuccessorPreviousGateExact ==
+  \A c \in SuccessorPreviousGateCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PersistedRosterPreviousEvidenceSelectionExact ==
+  \A c \in PreviousEvidenceSelectionCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PersistedRosterNoSourceExact ==
+  \A c \in NoSourceCases:
+    ImplementationActions(c) = SpecActions(c)
+
+PersistedRosterSelectionExactness ==
+  /\ PersistedRosterModeTagExact
+  /\ PersistedRosterCommitJournalSourceExact
+  /\ PersistedRosterCommitJournalSelectionExact
+  /\ PersistedRosterSidecarGateExact
+  /\ PersistedRosterSidecarSelectionExact
+  /\ PersistedRosterSuccessorPreviousGateExact
+  /\ PersistedRosterPreviousEvidenceSelectionExact
+  /\ PersistedRosterNoSourceExact
 
 BugPermissionedUsesNposTag ==
   ImplementationActions(ModeTagPermissioned) = SpecActions(ModeTagPermissioned)
