@@ -18,9 +18,12 @@ does not fetch schemas over the network.
 
 `fixture_manifest.json` records how checked-in XML fixtures map to the checked-in
 XSD corpus, plus reviewed schema-pending exceptions and audited public
-candidate sources that are blocked by redistribution terms. All checked-in XSDs
-have standalone XML fixtures, so `--require-fixture-for-schema` is expected to
-pass. Verify the manifest offline with:
+candidate sources that are blocked by redistribution terms. The
+`blocked_schema_sources` key must be present even when the reviewed blocker list
+is intentionally empty, so absence cannot be interpreted as a clean production
+gap review. All checked-in XSDs have standalone XML fixtures, so
+`--require-fixture-for-schema` is expected to pass. Verify the manifest offline
+with:
 
 ```bash
 python3 scripts/iso_xsd_fixture_verify.py \
@@ -37,7 +40,12 @@ Standards Editor redistribution terms, so candidate public mirrors with
 embedded no-redistribution license text must not be imported as release
 fixtures. Each checked-in schema entry also carries offline source provenance:
 a canonical GitHub repository URL, lowercase commit, source path, SPDX license,
-and source SHA-256 that must match the checked-in XSD bytes. Blocked source
+and source SHA-256 that must match the checked-in XSD bytes. Source repository
+coordinates must not use placeholder owners or names such as `example`,
+`dummy`, `fake`, `sample`, or `template`, and source/schema/fixture paths must
+not carry identifier-style secret-looking material. Schema entries and blocked
+candidate entries must record `source` explicitly; omitted `source` and
+explicit `source: null` are rejected separately. Blocked source
 entries use the same canonical GitHub/path/SHA checks, record audited
 restriction markers without checking in the restricted XSD bytes, and, when a
 profile catalog is supplied, must correspond to a current missing
@@ -47,7 +55,9 @@ record which concrete advertised message versions are backed by checked-in XSD
 fixtures. Summaries bind the manifest SHA-256, each schema and fixture SHA-256,
 per-schema source provenance, audited blocked-source provenance, and, when a
 profile catalog is supplied, both the profile source-file SHA-256 and embedded
-catalog JSON SHA-256. Profile catalog
+catalog JSON SHA-256. The `profile_catalog` key is always recorded; it is
+`null` only when no profile catalog was checked, and readiness requires that
+explicit state plus the manifest path to remain present. Profile catalog
 checks fail closed on
 non-canonical profile ids, malformed message family ids, unsupported directions,
 empty message-profile/version lists, duplicate profile ids, duplicate

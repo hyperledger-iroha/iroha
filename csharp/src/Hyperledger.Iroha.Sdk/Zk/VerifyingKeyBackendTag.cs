@@ -150,6 +150,7 @@ public static class VerifyingKeyBackendTags
             "halo2/pasta/offline-note-recursive",
             "halo2/pasta/kagemusha-folded-v1",
             "halo2/pasta/kagemusha-recursive-aggregation-v1",
+            "halo2/pasta/kagemusha-recursive-compact-v1",
             "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
             "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
             "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
@@ -172,6 +173,8 @@ public static class VerifyingKeyBackendTags
             ["stark"] = VerifyingKeyBackendTag.Stark,
             ["starkfri"] = VerifyingKeyBackendTag.Stark,
             ["starkfrisha256goldilocks"] = VerifyingKeyBackendTag.Stark,
+            ["starkfriposeidon2goldilocks"] = VerifyingKeyBackendTag.Stark,
+            ["starkfrisha256goldilocksv1"] = VerifyingKeyBackendTag.Stark,
             ["halo2ipaorchard"] = VerifyingKeyBackendTag.Halo2IpaOrchard,
             ["orchard"] = VerifyingKeyBackendTag.Halo2IpaOrchard,
             ["zcashorchard"] = VerifyingKeyBackendTag.Halo2IpaOrchard,
@@ -290,14 +293,29 @@ public static class VerifyingKeyBackendTags
         "mainnetcomplete",
         "mainnetclaim",
         "claimedmainnet",
+        "mainnetcertified",
+        "mainnetapproved",
+        "mainnetrelease",
         "auditedproduction",
         "externallyaudited",
+        "thirdpartyaudited",
+        "boiaudited",
+        "auditedmainnet",
+        "externalaudit",
         "auditpassed",
         "auditapproved",
         "auditsignoff",
         "auditclaim",
         "claimedaudit",
         "securityreviewpassed",
+        "securityauditpassed",
+        "securityaudited",
+        "externalsecurityreview",
+        "certifiedproduction",
+        "certifiedmainnet",
+        "releaseready",
+        "releaseapproved",
+        "releasecertified",
     ];
 
     private static bool IsTrustedSetupBackendLabel(string raw)
@@ -433,11 +451,15 @@ public static class VerifyingKeyBackendTags
 
     private static bool IsPortableVerifierBackendLabel(string value)
     {
+        if (value.Length == 0
+            || !IsLowerAsciiAlphanumeric(value[0])
+            || !IsLowerAsciiAlphanumeric(value[^1]))
+        {
+            return false;
+        }
         foreach (var ch in value)
         {
-            var allowed = (ch >= '0' && ch <= '9')
-                || (ch >= 'A' && ch <= 'Z')
-                || (ch >= 'a' && ch <= 'z')
+            var allowed = IsLowerAsciiAlphanumeric(ch)
                 || ch == '/'
                 || ch == ':'
                 || ch == '.'
@@ -449,7 +471,19 @@ public static class VerifyingKeyBackendTags
             }
         }
 
+        foreach (var separator in new[] { "//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:" })
+        {
+            if (value.Contains(separator, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
         return true;
+    }
+
+    private static bool IsLowerAsciiAlphanumeric(char ch)
+    {
+        return (ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z');
     }
 
     private static IEnumerable<string> LowercaseAsciiSegments(string value)

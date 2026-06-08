@@ -988,6 +988,36 @@ function nativeProverBundleProductionProblems(record, label) {
   return uniqueNonEmpty(problems);
 }
 
+export function canonicalBscNativeEvmProverBundleHash(bundle) {
+  return bytesToHex(
+    sha256(
+      textEncoder.encode(
+        JSON.stringify({
+          schema: bundle.schema,
+          bundleId: bundle.bundleId,
+          domain: bundle.domain,
+          chain: bundle.chain,
+          proofBackend: bundle.proofBackend,
+          proofArtifact: bundle.proofArtifact,
+          proofArtifactHash: bundle.proofArtifactHash,
+          provingKey: bundle.provingKey,
+          provingKeyHash: bundle.provingKeyHash,
+          verifierKey: bundle.verifierKey,
+          verifierKeyHash: bundle.verifierKeyHash,
+          destinationBindingHash: bundle.destinationBindingHash,
+          noWasm: bundle.noWasm,
+          remoteProverRequired: bundle.remoteProverRequired,
+          browserImplementation: bundle.browserImplementation,
+          nativeSdkArtifacts: bundle.nativeSdkArtifacts,
+          crossSdkFixtureParityArtifact: bundle.crossSdkFixtureParityArtifact,
+          nativeProverSelfTestArtifact: bundle.nativeProverSelfTestArtifact,
+          auditHashes: bundle.auditHashes,
+        }),
+      ),
+    ),
+  );
+}
+
 function bscDiagnosticProductionMaterialReasons(record, label) {
   if (!isRecord(record)) {
     return [];
@@ -1377,6 +1407,72 @@ async function readArtifactUnderRoot(root, value, label) {
   };
 }
 
+const PRODUCTION_PROOF_MATERIAL_SHAPE_MIN_BYTES = 4096;
+const PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES = 16;
+const PRODUCTION_PROOF_MATERIAL_MAX_REPEATED_PATTERN_BYTES = 64;
+
+function repeatedPrefixPatternLength(
+  bytes,
+  maxPatternLength = PRODUCTION_PROOF_MATERIAL_MAX_REPEATED_PATTERN_BYTES,
+) {
+  const maxLength = Math.min(maxPatternLength, Math.floor(bytes.length / 2));
+  for (let length = 1; length <= maxLength; length += 1) {
+    let repeated = true;
+    for (let index = length; index < bytes.length; index += 1) {
+      if (bytes[index] !== bytes[index % length]) {
+        repeated = false;
+        break;
+      }
+    }
+    if (repeated) {
+      return length;
+    }
+  }
+  return 0;
+}
+
+function constantByteDelta(bytes) {
+  if (bytes.length < 16) {
+    return null;
+  }
+  const delta = (bytes[1] - bytes[0] + 256) & 0xff;
+  for (let index = 2; index < bytes.length; index += 1) {
+    if (((bytes[index] - bytes[index - 1] + 256) & 0xff) !== delta) {
+      return null;
+    }
+  }
+  return delta;
+}
+
+function assertProductionProofMaterialShape(artifact, label) {
+  const bytes = artifact.bytes;
+  if (bytes.length < PRODUCTION_PROOF_MATERIAL_SHAPE_MIN_BYTES) {
+    return;
+  }
+  const repeatedPatternLength = repeatedPrefixPatternLength(bytes);
+  if (repeatedPatternLength > 0) {
+    throw new Error(
+      `${label} looks like placeholder proof material: repeated ${repeatedPatternLength}-byte pattern.`,
+    );
+  }
+  const arithmeticDelta = constantByteDelta(bytes);
+  if (arithmeticDelta !== null) {
+    throw new Error(
+      `${label} looks like placeholder proof material: arithmetic byte sequence with step ${arithmeticDelta}.`,
+    );
+  }
+  const uniqueBytes = new Set();
+  for (const byte of bytes) {
+    uniqueBytes.add(byte);
+    if (uniqueBytes.size >= PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES) {
+      return;
+    }
+  }
+  throw new Error(
+    `${label} looks like placeholder proof material: only ${uniqueBytes.size} unique byte values across ${bytes.length} bytes.`,
+  );
+}
+
 async function normalizeAuditHashOrFile(root, value, label) {
   const text = normalizeNonEmptyText(value, label);
   if (/^(?:0x)?[0-9a-f]{64}$/iu.test(text)) {
@@ -1618,18 +1714,31 @@ function buildNativeEvmProverBundleObject({
 }
 
 function attachNativeProverBundleToManifest(manifest, bundle) {
+  const profile =
+    bundle.bundle_id === SCCP_BSC_MAINNET_NATIVE_EVM_PROVER_BUNDLE_ID_V1 ||
+    bundle.chain === BSC_NETWORK_PROFILES.mainnet.chain
+      ? BSC_NETWORK_PROFILES.mainnet
+      : BSC_NETWORK_PROFILES.testnet;
+  const normalizedBundle = validateBscNativeEvmProverBundleForProfile(
+    bundle,
+    profile,
+  );
+  const nativeEvmProverBundleHash =
+    canonicalBscNativeEvmProverBundleHash(normalizedBundle);
   const destinationRollout = {
     ...(isRecord(manifest.destinationRollout)
       ? manifest.destinationRollout
       : {}),
     proofArtifactHash: bundle.proof_artifact_hash,
     provingKeyHash: bundle.proving_key_hash,
+    nativeEvmProverBundleHash,
     nativeEvmProverBundle: bundle,
   };
   return {
     ...manifest,
     proofArtifactHash: bundle.proof_artifact_hash,
     provingKeyHash: bundle.proving_key_hash,
+    nativeEvmProverBundleHash,
     nativeEvmProverBundle: bundle,
     destinationRollout,
   };
@@ -1685,6 +1794,8 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
     );
     sdkArtifacts.push({ ...artifact, sdk, implementation });
   }
+  assertProductionProofMaterialShape(proofArtifact, "proof artifact");
+  assertProductionProofMaterialShape(provingKey, "proving key");
   const auditHashes = await readNativeProverAuditHashes(root, options, {
     parityFixture,
     selfTestFixture,
@@ -2595,6 +2706,17 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest provingKeyHash",
     ["provingKeyHash", "proving_key_hash"],
   );
+  const declaredNativeEvmProverBundleHash = optionalRouteHash(
+    "route manifest nativeEvmProverBundleHash",
+    [
+      "nativeEvmProverBundleHash",
+      "native_evm_prover_bundle_hash",
+      "nativeProverBundleHash",
+      "native_prover_bundle_hash",
+      "bscNativeEvmProverBundleHash",
+      "bsc_native_evm_prover_bundle_hash",
+    ],
+  );
   if (Boolean(proofArtifactHash) !== Boolean(provingKeyHash)) {
     throw new Error(
       "route manifest proofArtifactHash and provingKeyHash must be supplied together.",
@@ -2708,6 +2830,23 @@ function normalizeRouteManifestForConfig(manifest) {
     destinationBindingHash,
     bscProfile,
   });
+  const nativeEvmProverBundleHash = nativeEvmProverBundle
+    ? canonicalBscNativeEvmProverBundleHash(nativeEvmProverBundle)
+    : null;
+  if (
+    declaredNativeEvmProverBundleHash &&
+    declaredNativeEvmProverBundleHash !== nativeEvmProverBundleHash
+  ) {
+    throw new Error(
+      "route manifest nativeEvmProverBundleHash does not match nativeEvmProverBundle.",
+    );
+  }
+  if (nativeEvmProverBundleHash) {
+    roleSeparatedHashes.push([
+      "nativeEvmProverBundleHash",
+      nativeEvmProverBundleHash,
+    ]);
+  }
   const seenRouteHashes = new Map();
   for (const [label, value] of roleSeparatedHashes.filter(([, value]) =>
     Boolean(value),
@@ -2953,6 +3092,7 @@ function normalizeRouteManifestForConfig(manifest) {
     verifierKeyHash,
     proofArtifactHash,
     provingKeyHash,
+    nativeEvmProverBundleHash,
     nativeEvmProverBundle,
     destinationBindingKey,
     destinationBindingHash,
@@ -3072,6 +3212,11 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
       "proving_key_hash",
       route.provingKeyHash,
       "proving_key_hash",
+    ),
+    ...tomlOptionalStringLine(
+      "native_evm_prover_bundle_hash",
+      route.nativeEvmProverBundleHash,
+      "native_evm_prover_bundle_hash",
     ),
     `destination_binding_key = ${tomlString(route.destinationBindingKey, "destination_binding_key")}`,
     `destination_binding_hash = ${tomlString(route.destinationBindingHash, "destination_binding_hash")}`,

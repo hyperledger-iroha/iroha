@@ -46,6 +46,16 @@ MAX_BEARER_TOKEN_BYTES = 8192
 MAX_HTTP_URL_CHARS = 2048
 MAX_SIDECAR_JSON_BYTES = 16 * 1024
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
+RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
+    "example",
+    "example.com",
+    "example.invalid",
+    "example.net",
+    "example.org",
+}
+TEMPLATE_CANARY_ENDPOINT_HOSTS = {
+    "operator-canary.bank",
+}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 RECEIPT_DIGEST_FIELD = "receipt_sha256"
@@ -1069,6 +1079,36 @@ def _host_uses_rebinding_suffix(hostname: str) -> bool:
     )
 
 
+def _host_uses_reserved_placeholder_suffix(hostname: str) -> bool:
+    return hostname in RESERVED_PLACEHOLDER_HOST_SUFFIXES or any(
+        hostname.endswith("." + suffix) for suffix in RESERVED_PLACEHOLDER_HOST_SUFFIXES
+    )
+
+
+def _host_uses_template_canary_suffix(hostname: str) -> bool:
+    return hostname in TEMPLATE_CANARY_ENDPOINT_HOSTS or any(
+        hostname.endswith("." + suffix) for suffix in TEMPLATE_CANARY_ENDPOINT_HOSTS
+    )
+
+
+def _reject_reserved_placeholder_url_host(
+    parsed: urllib.parse.ParseResult,
+    label: str,
+) -> None:
+    hostname = (parsed.hostname or "").strip().lower()
+    if _host_uses_reserved_placeholder_suffix(hostname):
+        raise AdapterError(f"{label} must not use reserved placeholder hostnames")
+
+
+def _reject_template_canary_url_host(
+    parsed: urllib.parse.ParseResult,
+    label: str,
+) -> None:
+    hostname = (parsed.hostname or "").strip().lower()
+    if _host_uses_template_canary_suffix(hostname):
+        raise AdapterError(f"{label} must not use template canary hostnames")
+
+
 def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     embedded: ipaddress.IPv4Address | None = None
     if isinstance(address, ipaddress.IPv6Address):
@@ -1145,6 +1185,8 @@ def _validate_base_url(base_url: str, allow_insecure_http: bool) -> str:
     if parsed.params or parsed.query or parsed.fragment:
         raise AdapterError(f"{label} must not contain params, query, or fragment")
     _validate_url_path(parsed, label)
+    _reject_reserved_placeholder_url_host(parsed, label)
+    _reject_template_canary_url_host(parsed, label)
     return base_url.rstrip("/")
 
 

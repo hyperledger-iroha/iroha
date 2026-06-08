@@ -1,11 +1,10 @@
-"""Build Reserved-lineage production proof evidence JSON for Kagemusha."""
+"""Build ABI-7 recursive compact key-artifact release evidence JSON."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
-import math
 from pathlib import Path
 import stat
 import sys
@@ -20,11 +19,14 @@ import check_android_device_lab_slot as device_lab  # noqa: E402
 import kagemusha_production_readiness as readiness  # noqa: E402
 
 
-DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND = (
-    readiness.expected_lineage_proof_command(
-        readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
-    )
-)
+DEFAULT_COMPACT_KEY_COMMAND = readiness.expected_compact_key_command()
+PLACEHOLDER_ARTIFACT_MESSAGE_FRAGMENT = "not a placeholder fixture"
+
+
+def _secret_path_error(path: str | None, label: str) -> str | None:
+    if path is not None and device_lab.SECRET_RE.search(path):
+        return f"{label} must not contain secret-looking material"
+    return None
 
 
 def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:
@@ -41,167 +43,10 @@ def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:
     return digest.hexdigest(), []
 
 
-def _secret_path_error(path: str | None, label: str) -> str | None:
-    if path is not None and device_lab.SECRET_RE.search(path):
-        return f"{label} must not contain secret-looking material"
-    return None
-
-
-def _validate_command(command: str) -> list[str]:
-    return readiness.validate_lineage_proof_command(
-        command, readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
-    )
-
-
-def _validate_elapsed_seconds(value: float) -> list[str]:
-    if not math.isfinite(value) or value <= 0:
-        return ["--elapsed-seconds must be a positive finite number"]
-    return []
-
-
 def _validate_generated_at_utc(value: str) -> list[str]:
     if device_lab.SIGNED_AT_UTC_RE.fullmatch(value) is None:
         return ["--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ"]
     return []
-
-
-def _validate_proof_log(path: Path) -> tuple[str | None, list[str]]:
-    return readiness.validate_lineage_proof_log(
-        path, readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"]
-    )
-
-
-def build_evidence(
-    *,
-    artifact_dir: Path,
-    proof_log: Path,
-    command: str,
-    elapsed_seconds: float,
-    generated_at_utc: str,
-) -> tuple[dict[str, Any] | None, list[str]]:
-    """Build a Reserved-lineage proof evidence document from local artifacts."""
-
-    errors = validate_lineage_input_paths(artifact_dir, proof_log)
-    if errors:
-        return None, errors
-
-    errors.extend(_validate_generated_at_utc(generated_at_utc))
-    generated_at, timestamp_error = readiness.parse_utc_timestamp(
-        generated_at_utc,
-        "--generated-at-utc",
-    )
-    if timestamp_error is not None:
-        errors.append(timestamp_error["message"])
-    errors.extend(_validate_command(command))
-    errors.extend(_validate_elapsed_seconds(elapsed_seconds))
-
-    artifact_digests: dict[str, str] = {}
-    artifact_sizes: dict[str, int] = {}
-    for artifact in readiness.LINEAGE_PROOF_REQUIRED_ARTIFACTS:
-        path = artifact_dir / artifact
-        digest, file_errors = _sha256_file(
-            path,
-            f"lineage artifact {artifact}",
-        )
-        if file_errors:
-            if file_errors == [f"lineage artifact {artifact} is missing"]:
-                errors.append(f"missing lineage artifact {artifact}")
-            else:
-                errors.extend(file_errors)
-            continue
-        assert digest is not None
-        try:
-            artifact_size = path.stat().st_size
-        except OSError:
-            errors.append(f"lineage artifact {artifact} size could not be read")
-            continue
-        if artifact_size <= 0:
-            errors.append(f"lineage artifact {artifact} must be non-empty")
-            continue
-        artifact_digests[artifact] = digest
-        artifact_sizes[artifact] = artifact_size
-
-    proof_log_digest, proof_log_errors = _validate_proof_log(proof_log)
-    errors.extend(proof_log_errors)
-
-    if errors:
-        return None, errors
-
-    assert generated_at is not None
-    assert proof_log_digest is not None
-    return (
-        {
-            "schema": readiness.LINEAGE_PROOF_EVIDENCE_SCHEMA,
-            "generated_at_utc": generated_at.isoformat().replace("+00:00", "Z"),
-            "opening_len": readiness.EXPECTED_LINEAGE_PROOF_OPENING_LEN,
-            "ipa_k": readiness.EXPECTED_LINEAGE_PROOF_IPA_K,
-            "verifier_backend": readiness.EXPECTED_LINEAGE_PROOF_BACKEND,
-            "verifier_witness_profile": readiness.EXPECTED_LINEAGE_VERIFIER_WITNESS_PROFILE,
-            "record_archive_proof_runtime_keygen_env": "unset",
-            "circuit_ids": dict(readiness.EXPECTED_LINEAGE_CIRCUIT_IDS),
-            "artifacts": artifact_digests,
-            "artifact_size_bytes": artifact_sizes,
-            "tests": {
-                "record_archive_proof": {
-                    "name": readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"],
-                    "status": "passed",
-                    "ignored": True,
-                    "command": command,
-                    "elapsed_seconds": elapsed_seconds,
-                    "log_path": readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
-                        "record_archive_proof"
-                    ],
-                    "log_sha256": proof_log_digest,
-                }
-            }
-        },
-        [],
-    )
-
-
-def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> list[str]:
-    """Return readiness-validator blocker messages for a generated evidence document."""
-
-    secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
-    if secret_error is not None:
-        return [secret_error]
-    pre_create_dir_errors = validate_artifact_dir_path(artifact_dir)
-    if pre_create_dir_errors:
-        return pre_create_dir_errors
-    try:
-        artifact_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return ["--artifact-dir could not be created for evidence validation"]
-    post_create_dir_errors = validate_artifact_dir_path(artifact_dir)
-    if post_create_dir_errors:
-        return post_create_dir_errors
-    path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=artifact_dir,
-            prefix=".lineage-proof-evidence-",
-            suffix=".json",
-            delete=False,
-        ) as handle:
-            path = Path(handle.name)
-            handle.write(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
-    except OSError:
-        if path is not None:
-            try:
-                path.unlink(missing_ok=True)
-            except OSError:
-                pass
-        return ["lineage proof evidence validation file could not be written"]
-    result = readiness.check_lineage_proof_evidence(
-        path, require_canonical_filename=False
-    )
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        return ["lineage proof evidence validation file could not be removed"]
-    return [item["message"] for item in result["blockers"]]
 
 
 def validate_artifact_dir_path(artifact_dir: Path) -> list[str]:
@@ -231,23 +76,180 @@ def validate_artifact_dir_path(artifact_dir: Path) -> list[str]:
     return []
 
 
+def build_evidence(
+    *,
+    artifact_dir: Path,
+    command: str,
+    generated_at_utc: str,
+    generator_log_path: Path | None = None,
+) -> tuple[dict[str, Any] | None, list[str]]:
+    """Build an ABI-7 recursive compact key evidence document from local artifacts."""
+
+    errors = validate_artifact_dir_path(artifact_dir)
+    errors.extend(_validate_generated_at_utc(generated_at_utc))
+    generated_at, timestamp_error = readiness.parse_utc_timestamp(
+        generated_at_utc,
+        "--generated-at-utc",
+    )
+    if timestamp_error is not None:
+        errors.append(timestamp_error["message"])
+    errors.extend(readiness.validate_compact_key_command(command))
+    if generator_log_path is None:
+        generator_log_path = artifact_dir / readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME
+    if generator_log_path.name != readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:
+        errors.append(
+            f"--generator-log must be named {readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME}"
+        )
+    try:
+        generator_log_parent = generator_log_path.resolve().parent
+        artifact_dir_resolved = artifact_dir.resolve()
+    except OSError:
+        errors.append("--generator-log parent could not be resolved")
+    else:
+        if generator_log_parent != artifact_dir_resolved:
+            errors.append("--generator-log must live directly under --artifact-dir")
+
+    artifact_digests: dict[str, str] = {}
+    artifact_sizes: dict[str, int] = {}
+    for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS:
+        path = artifact_dir / artifact
+        digest, file_errors = _sha256_file(
+            path,
+            f"recursive compact key artifact {artifact}",
+        )
+        if file_errors:
+            if file_errors == [f"recursive compact key artifact {artifact} is missing"]:
+                errors.append(f"missing recursive compact key artifact {artifact}")
+            else:
+                errors.extend(file_errors)
+            continue
+        assert digest is not None
+        try:
+            artifact_size = path.stat().st_size
+        except OSError:
+            errors.append(f"recursive compact key artifact {artifact} size could not be read")
+            continue
+        if artifact_size <= 0:
+            errors.append(f"recursive compact key artifact {artifact} must be non-empty")
+            continue
+        errors.extend(readiness.validate_compact_key_artifact_content(path, artifact))
+        artifact_digests[artifact] = digest
+        artifact_sizes[artifact] = artifact_size
+
+    generator_log_digest: str | None = None
+    if generator_log_path.name == readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:
+        generator_log_digest, generator_log_errors = _sha256_file(
+            generator_log_path,
+            "recursive compact key generator log",
+        )
+        if generator_log_errors:
+            if generator_log_errors == ["recursive compact key generator log is missing"]:
+                errors.append("missing recursive compact key generator log")
+            else:
+                errors.extend(generator_log_errors)
+        else:
+            try:
+                if (
+                    generator_log_path.stat().st_size
+                    > readiness.MAX_COMPACT_KEY_GENERATOR_LOG_BYTES
+                ):
+                    errors.append(
+                        "recursive compact key generator log exceeds maximum size"
+                    )
+            except OSError:
+                errors.append("recursive compact key generator log metadata could not be read")
+            try:
+                generator_log_text = generator_log_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                errors.append("recursive compact key generator log could not be read")
+            else:
+                generator_sizes, generator_parse_errors = (
+                    readiness.parse_compact_key_generator_log(generator_log_text)
+                )
+                errors.extend(generator_parse_errors)
+                for artifact, local_size in artifact_sizes.items():
+                    logged_size = generator_sizes.get(artifact)
+                    if logged_size is not None and logged_size != local_size:
+                        errors.append(
+                            f"recursive compact key generator log size does not match local artifact {artifact}"
+                        )
+
+    if errors:
+        return None, errors
+
+    assert generated_at is not None
+    assert generator_log_digest is not None
+    return (
+        {
+            "schema": readiness.COMPACT_KEY_EVIDENCE_SCHEMA,
+            "generated_at_utc": generated_at.isoformat().replace("+00:00", "Z"),
+            "opening_len": readiness.EXPECTED_COMPACT_KEY_OPENING_LEN,
+            "ipa_k": readiness.EXPECTED_COMPACT_KEY_IPA_K,
+            "verifier_backend": readiness.EXPECTED_COMPACT_KEY_BACKEND,
+            "circuit_id": readiness.EXPECTED_COMPACT_KEY_CIRCUIT_ID,
+            "record_namespace": readiness.EXPECTED_COMPACT_KEY_RECORD_NAMESPACE,
+            "record_version": readiness.EXPECTED_COMPACT_KEY_RECORD_VERSION,
+            "command": command,
+            "generator_log_path": readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME,
+            "generator_log_sha256": generator_log_digest,
+            "artifacts": artifact_digests,
+            "artifact_size_bytes": artifact_sizes,
+        },
+        [],
+    )
+
+
+def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> list[str]:
+    """Return readiness-validator blocker messages for a generated evidence document."""
+
+    secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")
+    if secret_error is not None:
+        return [secret_error]
+    pre_create_dir_errors = validate_artifact_dir_path(artifact_dir)
+    if pre_create_dir_errors:
+        return pre_create_dir_errors
+    try:
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return ["--artifact-dir could not be created for evidence validation"]
+    post_create_dir_errors = validate_artifact_dir_path(artifact_dir)
+    if post_create_dir_errors:
+        return post_create_dir_errors
+    path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=artifact_dir,
+            prefix=".recursive-compact-key-evidence-",
+            suffix=".json",
+            delete=False,
+        ) as handle:
+            path = Path(handle.name)
+            handle.write(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return ["recursive compact key evidence validation file could not be written"]
+    result = readiness.check_compact_key_evidence(
+        path,
+        require_canonical_filename=False,
+    )
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        return ["recursive compact key evidence validation file could not be removed"]
+    return [item["message"] for item in result["blockers"]]
+
+
 def _resolve_corridor_path(path: Path, label: str) -> tuple[Path | None, list[str]]:
     try:
         return path.resolve(), []
     except OSError:
         return None, [f"{label} could not be resolved"]
-
-
-def _same_resolved_parent(child: Path, parent: Path) -> tuple[bool | None, list[str]]:
-    child_parent, child_errors = _resolve_corridor_path(child.parent, "--proof-log parent")
-    if child_errors:
-        return None, child_errors
-    parent_resolved, parent_errors = _resolve_corridor_path(parent, "--artifact-dir")
-    if parent_errors:
-        return None, parent_errors
-    assert child_parent is not None
-    assert parent_resolved is not None
-    return child_parent == parent_resolved, []
 
 
 def validate_output_corridor(out_path: Path, artifact_dir: Path) -> list[str]:
@@ -272,33 +274,28 @@ def validate_output_corridor(out_path: Path, artifact_dir: Path) -> list[str]:
     return []
 
 
-def validate_lineage_input_paths(artifact_dir: Path, proof_log: Path) -> list[str]:
-    """Reject detached or aliased lineage proof inputs before reading bytes."""
+def _validate_output_parent(
+    path: Path,
+    label: str,
+    *,
+    missing_error: str | None = None,
+) -> tuple[bool, list[str]]:
+    """Classify an output parent without following symlink aliases."""
 
-    errors = validate_artifact_dir_path(artifact_dir)
-    proof_log_secret_error = _secret_path_error(str(proof_log), "--proof-log")
-    if proof_log_secret_error is not None:
-        errors.append(proof_log_secret_error)
-    if errors:
-        return errors
-    proof_log_ancestor_errors = device_lab.validate_no_symlink_ancestors(
-        proof_log,
-        "--proof-log ancestor directory",
-    )
-    if proof_log_ancestor_errors:
-        return proof_log_ancestor_errors
-    expected_proof_log_name = readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
-        "record_archive_proof"
-    ]
-    same_parent, corridor_errors = _same_resolved_parent(proof_log, artifact_dir)
-    if corridor_errors:
-        return corridor_errors
-    if proof_log.name != expected_proof_log_name or not same_parent:
-        return [
-            "--proof-log must be written directly under --artifact-dir as "
-            f"{expected_proof_log_name}"
-        ]
-    return []
+    parent = path.parent
+    try:
+        parent_mode = parent.lstat().st_mode
+    except FileNotFoundError:
+        if missing_error is None:
+            return False, []
+        return False, [missing_error]
+    except OSError:
+        return False, [f"{label} parent directory metadata could not be read"]
+    if stat.S_ISLNK(parent_mode):
+        return True, [f"{label} parent directory must not be a symlink"]
+    if not stat.S_ISDIR(parent_mode):
+        return True, [f"{label} parent must be a directory"]
+    return True, []
 
 
 def preflight_output_path(path: Path, label: str) -> list[str]:
@@ -356,30 +353,6 @@ def preflight_output_path(path: Path, label: str) -> list[str]:
     return []
 
 
-def _validate_output_parent(
-    path: Path,
-    label: str,
-    *,
-    missing_error: str | None = None,
-) -> tuple[bool, list[str]]:
-    """Classify an output parent without following symlink aliases."""
-
-    parent = path.parent
-    try:
-        parent_mode = parent.lstat().st_mode
-    except FileNotFoundError:
-        if missing_error is None:
-            return False, []
-        return False, [missing_error]
-    except OSError:
-        return False, [f"{label} parent directory metadata could not be read"]
-    if stat.S_ISLNK(parent_mode):
-        return True, [f"{label} parent directory must not be a symlink"]
-    if not stat.S_ISDIR(parent_mode):
-        return True, [f"{label} parent must be a directory"]
-    return True, []
-
-
 def validate_output_path(path: Path, label: str) -> list[str]:
     """Reject output paths that could overwrite aliased local files."""
 
@@ -417,28 +390,25 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Build Kagemusha Reserved-lineage production proof evidence JSON."
+        description="Build ABI-7 recursive compact key-artifact evidence JSON."
     )
     parser.add_argument(
         "--artifact-dir",
         default="artifacts/kagemusha",
-        help="Directory containing lineage-init/lineage-append key packages and records.",
-    )
-    parser.add_argument(
-        "--proof-log",
-        required=True,
-        help="Captured stdout/stderr log from the production ignored record-archive proof run.",
+        help="Directory containing ABI-7 recursive compact key artifacts.",
     )
     parser.add_argument(
         "--command",
-        default=DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
-        help="Exact command used to run the production ignored record-archive proof test.",
+        default=DEFAULT_COMPACT_KEY_COMMAND,
+        help="Exact command used to generate ABI-7 recursive compact key artifacts.",
     )
     parser.add_argument(
-        "--elapsed-seconds",
-        required=True,
-        type=float,
-        help="Wall-clock seconds consumed by the production proof run.",
+        "--generator-log",
+        default=None,
+        help=(
+            "Path to the captured recursive-compact-key-artifacts stdout log. "
+            f"Defaults to {readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME} under --artifact-dir."
+        ),
     )
     parser.add_argument(
         "--generated-at-utc",
@@ -447,7 +417,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--out",
-        default=readiness.DEFAULT_LINEAGE_PROOF_EVIDENCE_PATH,
+        default=readiness.DEFAULT_COMPACT_KEY_EVIDENCE_PATH,
         help="Output evidence JSON path.",
     )
     args = parser.parse_args(argv)
@@ -456,57 +426,54 @@ def main(argv: list[str] | None = None) -> int:
         error
         for error in (
             _secret_path_error(args.artifact_dir, "--artifact-dir"),
-            _secret_path_error(args.proof_log, "--proof-log"),
+            _secret_path_error(args.generator_log, "--generator-log"),
             _secret_path_error(args.out, "--out"),
         )
         if error is not None
     ]
     if path_errors:
         for error in path_errors:
-            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+            print(f"[kagemusha-compact-key-evidence] error: {error}", file=sys.stderr)
         return 1
 
     artifact_dir = Path(args.artifact_dir)
-    proof_log = Path(args.proof_log)
     out_path = Path(args.out)
-    path_errors.extend(validate_lineage_input_paths(artifact_dir, proof_log))
+    path_errors.extend(validate_artifact_dir_path(artifact_dir))
     path_errors.extend(validate_output_corridor(out_path, artifact_dir))
-    if out_path.name != readiness.LINEAGE_PROOF_EVIDENCE_FILENAME:
+    if out_path.name != readiness.COMPACT_KEY_EVIDENCE_FILENAME:
         path_errors.append(
-            f"--out must be named {readiness.LINEAGE_PROOF_EVIDENCE_FILENAME}"
+            f"--out must be named {readiness.COMPACT_KEY_EVIDENCE_FILENAME}"
         )
-    early_output_errors = preflight_output_path(out_path, "--out")
-    path_errors.extend(early_output_errors)
+    path_errors.extend(preflight_output_path(out_path, "--out"))
     if path_errors:
         for error in path_errors:
-            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+            print(f"[kagemusha-compact-key-evidence] error: {error}", file=sys.stderr)
         return 1
 
     evidence, errors = build_evidence(
         artifact_dir=artifact_dir,
-        proof_log=proof_log,
         command=args.command,
-        elapsed_seconds=args.elapsed_seconds,
         generated_at_utc=args.generated_at_utc,
+        generator_log_path=Path(args.generator_log) if args.generator_log else None,
     )
     if errors:
         for error in errors:
-            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+            print(f"[kagemusha-compact-key-evidence] error: {error}", file=sys.stderr)
         return 1
 
     assert evidence is not None
     validation_errors = validate_evidence_document(evidence, artifact_dir)
     if validation_errors:
         for error in validation_errors:
-            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+            print(f"[kagemusha-compact-key-evidence] error: {error}", file=sys.stderr)
         return 1
 
     write_errors = write_evidence(out_path, evidence)
     if write_errors:
         for error in write_errors:
-            print(f"[kagemusha-lineage-proof-evidence] error: {error}", file=sys.stderr)
+            print(f"[kagemusha-compact-key-evidence] error: {error}", file=sys.stderr)
         return 1
-    print("[kagemusha-lineage-proof-evidence] wrote evidence")
+    print("[kagemusha-compact-key-evidence] wrote evidence")
     return 0
 
 

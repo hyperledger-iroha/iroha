@@ -48,6 +48,16 @@ CANARY_SUMMARY_VERSION = 1
 MAX_CONFIG_JSON_BYTES = 64 * 1024
 MAX_HTTP_URL_CHARS = 2048
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
+RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
+    "example",
+    "example.com",
+    "example.invalid",
+    "example.net",
+    "example.org",
+}
+TEMPLATE_CANARY_ENDPOINT_HOSTS = {
+    "operator-canary.bank",
+}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 SECRET_VALUE_PATTERNS = [
@@ -656,8 +666,21 @@ def _require_positive_finite_number(value: float, label: str) -> float:
     return parsed
 
 
-def _string_list(value: dict[str, Any], key: str, label: str) -> list[str]:
-    raw = value.get(key, [])
+def _string_list(
+    value: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    require_explicit_policy: bool = False,
+) -> list[str]:
+    if key not in value:
+        if require_explicit_policy:
+            raise CanaryError(
+                f"{label}.{key} must be explicitly recorded as an array "
+                "when --require-explicit-policy is used"
+            )
+        return []
+    raw = value[key]
     if not isinstance(raw, list):
         raise CanaryError(f"{label}.{key} must be an array of strings")
     result: list[str] = []
@@ -691,13 +714,22 @@ def _reject_duplicate_paths(paths: list[Path], label: str) -> None:
         seen[key] = offset
 
 
-def _validate_path_string(raw: str, label: str) -> None:
+def _validate_path_string(
+    raw: str,
+    label: str,
+    *,
+    allow_runtime_secret_path: bool = False,
+) -> None:
     if any(ch.isspace() for ch in raw):
         raise CanaryError(f"{label} must not contain whitespace")
     if "\\" in raw:
         raise CanaryError(f"{label} must use forward slashes")
     if ";" in raw:
         raise CanaryError(f"{label} must not contain semicolon path parameters")
+    if not allow_runtime_secret_path and (
+        _contains_secret_material(raw) or _contains_secret_identifier_material(raw)
+    ):
+        raise CanaryError(f"{label} must not contain secret-looking material")
     parts = raw.split("/")
     for offset, part in enumerate(parts):
         if part == "" and offset != 0:
@@ -708,8 +740,18 @@ def _validate_path_string(raw: str, label: str) -> None:
             raise CanaryError(f"{label} must not contain dot or parent segments")
 
 
-def _path_from_config(config_dir: Path, raw: str, label: str) -> Path:
-    _validate_path_string(raw, label)
+def _path_from_config(
+    config_dir: Path,
+    raw: str,
+    label: str,
+    *,
+    allow_runtime_secret_path: bool = False,
+) -> Path:
+    _validate_path_string(
+        raw,
+        label,
+        allow_runtime_secret_path=allow_runtime_secret_path,
+    )
     path = Path(raw).expanduser()
     if path.is_absolute():
         return path
@@ -726,6 +768,7 @@ def _validate_endpoint_url(
     label: str,
     *,
     allow_insecure_http: bool,
+    allow_template_canary: bool = False,
 ) -> None:
     if len(url) > MAX_HTTP_URL_CHARS:
         raise CanaryError(f"{label} must be no longer than {MAX_HTTP_URL_CHARS} characters")
@@ -774,6 +817,9 @@ def _validate_endpoint_url(
     if parsed.params or parsed.query or parsed.fragment:
         raise CanaryError(f"{label} must not contain params, query, or fragment")
     _validate_url_path(parsed, label)
+    _reject_reserved_placeholder_url_host(parsed, label)
+    if not allow_template_canary:
+        _reject_template_canary_url_host(parsed, label)
 
 
 def _raw_url_host(parsed: urllib.parse.ParseResult) -> str:
@@ -890,6 +936,36 @@ def _host_uses_rebinding_suffix(hostname: str) -> bool:
     )
 
 
+def _host_uses_reserved_placeholder_suffix(hostname: str) -> bool:
+    return hostname in RESERVED_PLACEHOLDER_HOST_SUFFIXES or any(
+        hostname.endswith("." + suffix) for suffix in RESERVED_PLACEHOLDER_HOST_SUFFIXES
+    )
+
+
+def _host_uses_template_canary_suffix(hostname: str) -> bool:
+    return hostname in TEMPLATE_CANARY_ENDPOINT_HOSTS or any(
+        hostname.endswith("." + suffix) for suffix in TEMPLATE_CANARY_ENDPOINT_HOSTS
+    )
+
+
+def _reject_reserved_placeholder_url_host(
+    parsed: urllib.parse.ParseResult,
+    label: str,
+) -> None:
+    hostname = (parsed.hostname or "").strip().lower()
+    if _host_uses_reserved_placeholder_suffix(hostname):
+        raise CanaryError(f"{label} must not use reserved placeholder hostnames")
+
+
+def _reject_template_canary_url_host(
+    parsed: urllib.parse.ParseResult,
+    label: str,
+) -> None:
+    hostname = (parsed.hostname or "").strip().lower()
+    if _host_uses_template_canary_suffix(hostname):
+        raise CanaryError(f"{label} must not use template canary hostnames")
+
+
 def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     embedded: ipaddress.IPv4Address | None = None
     if isinstance(address, ipaddress.IPv6Address):
@@ -953,6 +1029,7 @@ def _build_rail_stage(
     raw: Any,
     *,
     require_explicit_policy: bool,
+    allow_template_canary_endpoints: bool,
 ) -> StagePlan:
     rail = _require_object(raw, "rail")
     _reject_unknown_keys(rail, RAIL_KEYS, "rail")
@@ -979,6 +1056,7 @@ def _build_rail_stage(
         torii_base_url,
         "rail.torii_base_url",
         allow_insecure_http=allow_insecure_http,
+        allow_template_canary=allow_template_canary_endpoints,
     )
     receipt_dir_raw = _optional_string(rail, "receipt_dir", "rail")
     receipt_dir = (
@@ -988,7 +1066,12 @@ def _build_rail_stage(
     )
     bearer_raw = _optional_string(rail, "bearer_token_file", "rail")
     bearer_token_file = (
-        _path_from_config(config_dir, bearer_raw, "rail.bearer_token_file")
+        _path_from_config(
+            config_dir,
+            bearer_raw,
+            "rail.bearer_token_file",
+            allow_runtime_secret_path=True,
+        )
         if bearer_raw is not None
         else None
     )
@@ -1035,6 +1118,7 @@ def _build_notary_stage(
     raw: Any,
     *,
     require_explicit_policy: bool,
+    allow_template_canary_endpoints: bool,
 ) -> StagePlan:
     notary = _require_object(raw, "notary")
     _reject_unknown_keys(notary, NOTARY_KEYS, "notary")
@@ -1044,7 +1128,12 @@ def _build_notary_stage(
         _required_string(notary, "export_dir", "notary"),
         "notary.export_dir",
     )
-    endpoints = _string_list(notary, "endpoints", "notary")
+    endpoints = _string_list(
+        notary,
+        "endpoints",
+        "notary",
+        require_explicit_policy=require_explicit_policy,
+    )
     dry_run = _policy_bool(
         notary,
         "dry_run",
@@ -1064,6 +1153,7 @@ def _build_notary_stage(
             endpoint,
             f"notary.endpoints[{offset}]",
             allow_insecure_http=allow_insecure_http,
+            allow_template_canary=allow_template_canary_endpoints,
         )
     receipt_dir_raw = _optional_string(notary, "receipt_dir", "notary")
     receipt_dir = (
@@ -1073,7 +1163,12 @@ def _build_notary_stage(
     )
     bearer_raw = _optional_string(notary, "bearer_token_file", "notary")
     bearer_token_file = (
-        _path_from_config(config_dir, bearer_raw, "notary.bearer_token_file")
+        _path_from_config(
+            config_dir,
+            bearer_raw,
+            "notary.bearer_token_file",
+            allow_runtime_secret_path=True,
+        )
         if bearer_raw is not None
         else None
     )
@@ -1158,13 +1253,27 @@ def _build_verify_stage(
     )
     receipt_dirs = [
         _path_from_config(config_dir, item, f"verify.receipt_dirs[{offset}]")
-        for offset, item in enumerate(_string_list(verify, "receipt_dirs", "verify"))
+        for offset, item in enumerate(
+            _string_list(
+                verify,
+                "receipt_dirs",
+                "verify",
+                require_explicit_policy=require_explicit_policy,
+            )
+        )
     ]
     if include_stage_receipts:
         receipt_dirs.extend(stage_receipt_dirs)
     receipts = [
         _path_from_config(config_dir, item, f"verify.receipts[{offset}]")
-        for offset, item in enumerate(_string_list(verify, "receipts", "verify"))
+        for offset, item in enumerate(
+            _string_list(
+                verify,
+                "receipts",
+                "verify",
+                require_explicit_policy=require_explicit_policy,
+            )
+        )
     ]
     _reject_duplicate_paths(receipt_dirs, "verify.receipt_dirs")
     _reject_duplicate_paths(receipts, "verify.receipts")
@@ -1385,13 +1494,17 @@ def _contains_secret_identifier_material(value: str) -> bool:
     )
 
 
+def _contains_secret_output_material(value: str) -> bool:
+    return _contains_secret_material(value) or _contains_secret_identifier_material(value)
+
+
 def _reject_secret_stage_output(results: list[StageResult]) -> None:
     for result in results:
-        if _contains_secret_material(result.stdout_preview):
+        if _contains_secret_output_material(result.stdout_preview):
             raise CanaryError(
                 f"stage {result.name} stdout_preview contains secret-looking material"
             )
-        if _contains_secret_material(result.stderr_preview):
+        if _contains_secret_output_material(result.stderr_preview):
             raise CanaryError(
                 f"stage {result.name} stderr_preview contains secret-looking material"
             )
@@ -1448,6 +1561,7 @@ def build_stage_plans(
     config: dict[str, Any],
     *,
     require_explicit_policy: bool,
+    allow_template_canary_endpoints: bool,
 ) -> tuple[str, str, list[StagePlan], Any]:
     """Validate a runbook and return provider metadata plus non-verify stages."""
 
@@ -1465,6 +1579,7 @@ def build_stage_plans(
                 config_dir,
                 config["rail"],
                 require_explicit_policy=require_explicit_policy,
+                allow_template_canary_endpoints=allow_template_canary_endpoints,
             )
         )
     if "notary" in config:
@@ -1473,6 +1588,7 @@ def build_stage_plans(
                 config_dir,
                 config["notary"],
                 require_explicit_policy=require_explicit_policy,
+                allow_template_canary_endpoints=allow_template_canary_endpoints,
             )
         )
     if not stages:
@@ -1492,6 +1608,7 @@ def run(args: argparse.Namespace) -> int:
         resolved_config_path,
         config,
         require_explicit_policy=args.require_explicit_policy,
+        allow_template_canary_endpoints=args.plan_only,
     )
     if (
         isinstance(args.output_limit_bytes, bool)

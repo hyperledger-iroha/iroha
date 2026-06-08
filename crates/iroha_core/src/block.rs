@@ -94,7 +94,7 @@ use iroha_data_model::{
     },
     peer::PeerId,
     transaction::{
-        SignedTransaction, TransactionEntrypoint,
+        Executable, SignedTransaction, TransactionEntrypoint,
         error::{TransactionLimitError, TransactionRejectionReason},
         signed::TransactionResultInner,
     },
@@ -6286,6 +6286,45 @@ pub(crate) mod valid {
             }
         }
 
+        fn signed_transaction_requires_live_sequential_execution(tx: &SignedTransaction) -> bool {
+            matches!(
+                tx.instructions(),
+                Executable::ContractCall(_) | Executable::Ivm(_)
+            )
+        }
+
+        fn entrypoint_requires_live_sequential_execution(
+            entrypoint: &TransactionEntrypoint,
+        ) -> bool {
+            Self::signed_transaction_from_entrypoint(entrypoint)
+                .is_some_and(Self::signed_transaction_requires_live_sequential_execution)
+        }
+
+        pub(crate) fn sequential_entrypoints_for_live_execution(
+            block: &SignedBlock,
+        ) -> Option<Vec<TransactionEntrypoint>> {
+            if let Some(entrypoints) = block.external_entrypoints_slice() {
+                let needs_sequential = entrypoints.iter().any(|entrypoint| {
+                    !matches!(entrypoint, TransactionEntrypoint::External(_))
+                        || Self::entrypoint_requires_live_sequential_execution(entrypoint)
+                });
+                return needs_sequential.then(|| entrypoints.to_vec());
+            }
+
+            block
+                .transactions_vec()
+                .iter()
+                .any(|tx| Self::signed_transaction_requires_live_sequential_execution(tx))
+                .then(|| {
+                    block
+                        .transactions_vec()
+                        .iter()
+                        .cloned()
+                        .map(TransactionEntrypoint::External)
+                        .collect()
+                })
+        }
+
         fn prepare_external_transactions(block: &SignedBlock) -> Vec<PreparedBlockTransaction> {
             Self::collect_external_signed_transactions(block)
                 .into_iter()
@@ -7352,13 +7391,7 @@ pub(crate) mod valid {
                 crate::sumeragi::witness::start_block();
             }
 
-            let sequential_entrypoints =
-                block.external_entrypoints_slice().and_then(|entrypoints| {
-                    entrypoints
-                        .iter()
-                        .any(|entrypoint| !matches!(entrypoint, TransactionEntrypoint::External(_)))
-                        .then(|| entrypoints.to_vec())
-                });
+            let sequential_entrypoints = Self::sequential_entrypoints_for_live_execution(block);
             if let Some(entrypoints) = sequential_entrypoints {
                 Self::validate_and_record_entrypoints_sequential(
                     block,
@@ -19141,6 +19174,73 @@ mod tests {
             results[0].2.0.is_ok(),
             "external-only transaction must execute successfully: {:?}",
             results[0].2
+        );
+    }
+
+    #[test]
+    fn block_validation_external_vm_entrypoints_require_sequential_execution() {
+        let chain_id = ChainId::from("external-vm-sequential-routing");
+        let (authority, keypair) = gen_account_in("wonderland");
+        let make_block = |tx: SignedTransaction| {
+            BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(tx))])
+                .chain(0, None)
+                .sign(keypair.private_key())
+                .unpack(|_| {})
+                .into()
+        };
+
+        let instructions_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "plain".to_owned())])
+            .sign(keypair.private_key());
+        let instructions_block: SignedBlock = make_block(instructions_tx);
+        assert!(
+            ValidBlock::sequential_entrypoints_for_live_execution(&instructions_block).is_none(),
+            "plain instruction batches should remain eligible for overlay scheduling"
+        );
+
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let contract_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_executable(Executable::ContractCall(
+                iroha_data_model::transaction::executable::ContractInvocation {
+                    contract_address,
+                    entrypoint: "increment".to_owned(),
+                    payload: None,
+                },
+            ))
+            .sign(keypair.private_key());
+        let contract_block: SignedBlock = make_block(contract_tx);
+        assert!(
+            ValidBlock::sequential_entrypoints_for_live_execution(&contract_block).is_some(),
+            "contract calls must execute against live state instead of stale prebuilt overlays"
+        );
+
+        let ivm_tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0x01])))
+            .sign(keypair.private_key());
+        let ivm_block: SignedBlock = make_block(ivm_tx);
+        assert!(
+            ValidBlock::sequential_entrypoints_for_live_execution(&ivm_block).is_some(),
+            "raw IVM bytecode can produce durable-state overlays and must execute live"
+        );
+
+        let proved_tx = TransactionBuilder::new(chain_id, authority)
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: IvmBytecode::from_compiled(vec![0x01, 0x02, 0x03]),
+                overlay: Vec::<InstructionBox>::new().into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            }))
+            .sign(keypair.private_key());
+        let proved_block: SignedBlock = make_block(proved_tx);
+        assert!(
+            ValidBlock::sequential_entrypoints_for_live_execution(&proved_block).is_none(),
+            "proved overlays are transaction-supplied and should keep their existing path"
         );
     }
 

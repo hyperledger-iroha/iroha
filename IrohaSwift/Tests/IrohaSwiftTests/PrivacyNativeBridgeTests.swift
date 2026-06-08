@@ -736,6 +736,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             expectedSchemaByte: 0x50
         ) { freedPointer in
             XCTAssertEqual(freedPointer, Optional(pointer))
+            assertPrivacyNativePointerZeroed(freedPointer, count: bytes.count)
             freedPointer?.deinitialize(count: bytes.count)
             freedPointer?.deallocate()
             freed = true
@@ -763,6 +764,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             expectedSchemaByte: 0x50
         ) { freedPointer in
             XCTAssertEqual(freedPointer, Optional(pointer))
+            assertPrivacyNativePointerZeroed(freedPointer, count: bytes.count)
             freedPointer?.update(repeating: 0x7F, count: bytes.count)
             freedPointer?.deinitialize(count: bytes.count)
             freedPointer?.deallocate()
@@ -792,6 +794,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
                 expectedSchemaByte: 0x50
             ) { freedPointer in
                 XCTAssertEqual(freedPointer, Optional(pointer))
+                assertPrivacyNativePointerZeroed(freedPointer, count: bytes.count)
                 freedPointer?.deinitialize(count: bytes.count)
                 freedPointer?.deallocate()
                 freed = true
@@ -821,6 +824,7 @@ final class PrivacyNativeBridgeTests: XCTestCase {
                 expectedSchemaByte: 0x50
             ) { freedPointer in
                 XCTAssertEqual(freedPointer, Optional(pointer))
+                assertPrivacyNativePointerZeroed(freedPointer, count: bytes.count)
                 freedPointer?.deinitialize(count: bytes.count)
                 freedPointer?.deallocate()
                 freed = true
@@ -1112,5 +1116,17 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             pointer.deallocate()
         }
         body(pointer, CUnsignedLong(bytes.count))
+    }
+
+    private func assertPrivacyNativePointerZeroed(
+        _ pointer: UnsafeMutablePointer<UInt8>?,
+        count: Int
+    ) {
+        guard let pointer else {
+            XCTFail("expected privacy native output pointer")
+            return
+        }
+        let bytes = Array(UnsafeBufferPointer(start: pointer, count: count))
+        XCTAssertTrue(bytes.allSatisfy { $0 == 0 })
     }
 }

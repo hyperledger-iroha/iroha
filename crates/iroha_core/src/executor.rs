@@ -527,6 +527,14 @@ fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn should_charge_pipeline_gas_asset(
+    skip_nexus_fee: bool,
+    nexus_fees: &NexusFees,
+    gas_asset_opt: &Option<String>,
+) -> bool {
+    !skip_nexus_fee && gas_asset_opt.is_some() && nexus_fees.per_gas_unit_fee <= Numeric::zero()
+}
+
 fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
     let hex = value.strip_prefix("0x").unwrap_or(value);
     hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -1243,6 +1251,75 @@ impl ContractCallExecutionContext {
     }
 }
 
+fn resolve_public_contract_entrypoint(
+    bytecode: &[u8],
+    selector: &str,
+    interface_required_message: &'static str,
+) -> Result<(u64, Option<String>), ValidationFail> {
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+        ValidationFail::NotPermitted(format!(
+            "invalid contract artifact for contract call dispatch: {err}"
+        ))
+    })?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed
+        .contract_interface
+        .as_ref()
+        .ok_or_else(|| ValidationFail::NotPermitted(interface_required_message.to_owned()))?;
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+        })?;
+    if !matches!(descriptor.kind, EntryPointKind::Public) {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` is not public"
+        )));
+    }
+    Ok((
+        prefix_len + descriptor.entry_pc,
+        descriptor.permission.clone(),
+    ))
+}
+
+fn resolve_default_public_contract_entrypoint(
+    bytecode: &[u8],
+) -> Result<Option<(u64, Option<String>)>, ValidationFail> {
+    use iroha_data_model::smart_contract::manifest::EntryPointKind;
+
+    let parsed = match ivm::ProgramMetadata::parse(bytecode) {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(None),
+    };
+    let Some(contract_interface) = parsed.contract_interface.as_ref() else {
+        return Ok(None);
+    };
+    let selector = "main";
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(
+                "contract call without contract_entrypoint metadata requires a public `main` entrypoint"
+                    .to_owned(),
+            )
+        })?;
+    if !matches!(descriptor.kind, EntryPointKind::Public) {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint `main` is not public".to_owned(),
+        ));
+    }
+    Ok(Some((
+        parsed.prefix_len() as u64 + descriptor.entry_pc,
+        descriptor.permission.clone(),
+    )))
+}
+
 pub(crate) fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
@@ -1309,45 +1386,31 @@ pub(crate) fn parse_contract_call_execution_context(
     }
 
     let payload = metadata.get("contract_payload").cloned();
-    if entrypoint.is_none() && payload.is_none() {
-        return Ok(None);
-    }
-
-    let (entrypoint_pc, entrypoint_permission) = if let Some(selector) = entrypoint.as_deref() {
-        let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
-            ValidationFail::NotPermitted(format!(
-                "invalid contract artifact for contract call dispatch: {err}"
-            ))
-        })?;
-        let prefix_len = parsed.prefix_len() as u64;
-        let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
-            ValidationFail::NotPermitted(
-                "contract call entrypoint metadata requires a self-describing contract artifact"
-                    .to_owned(),
+    let (entrypoint, entrypoint_pc, entrypoint_permission) =
+        if let Some(selector) = entrypoint.as_deref() {
+            let (entrypoint_pc, entrypoint_permission) = resolve_public_contract_entrypoint(
+                bytecode,
+                selector,
+                "contract call entrypoint metadata requires a self-describing contract artifact",
+            )?;
+            (
+                Some(selector.to_owned()),
+                Some(entrypoint_pc),
+                entrypoint_permission,
             )
-        })?;
-        let descriptor = contract_interface
-            .entrypoints
-            .iter()
-            .find(|candidate| candidate.name == selector)
-            .ok_or_else(|| {
-                ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
-            })?;
-        if !matches!(
-            descriptor.kind,
-            iroha_data_model::smart_contract::manifest::EntryPointKind::Public
-        ) {
-            return Err(ValidationFail::NotPermitted(format!(
-                "contract entrypoint `{selector}` is not public"
-            )));
-        }
-        (
-            Some(prefix_len + descriptor.entry_pc),
-            descriptor.permission.clone(),
-        )
-    } else {
-        (None, None)
-    };
+        } else if let Some((entrypoint_pc, entrypoint_permission)) =
+            resolve_default_public_contract_entrypoint(bytecode)?
+        {
+            (
+                Some("main".to_owned()),
+                Some(entrypoint_pc),
+                entrypoint_permission,
+            )
+        } else if payload.is_none() {
+            return Ok(None);
+        } else {
+            (None, None, None)
+        };
 
     Ok(Some(ContractCallExecutionContext {
         contract_address,
@@ -1371,39 +1434,18 @@ pub(crate) fn parse_contract_invocation_execution_context(
         ));
     }
 
-    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
-        ValidationFail::NotPermitted(format!(
-            "invalid contract artifact for contract call dispatch: {err}"
-        ))
-    })?;
-    let prefix_len = parsed.prefix_len() as u64;
-    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
-        ValidationFail::NotPermitted(
-            "contract call requires a self-describing contract artifact".to_owned(),
-        )
-    })?;
-    let descriptor = contract_interface
-        .entrypoints
-        .iter()
-        .find(|candidate| candidate.name == selector)
-        .ok_or_else(|| {
-            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
-        })?;
-    if !matches!(
-        descriptor.kind,
-        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
-    ) {
-        return Err(ValidationFail::NotPermitted(format!(
-            "contract entrypoint `{selector}` is not public"
-        )));
-    }
+    let (entrypoint_pc, entrypoint_permission) = resolve_public_contract_entrypoint(
+        bytecode,
+        selector,
+        "contract call requires a self-describing contract artifact",
+    )?;
 
     Ok(ContractCallExecutionContext {
         contract_address: Some(invocation.contract_address.clone()),
         contract_alias,
         entrypoint: Some(selector.to_owned()),
-        entrypoint_pc: Some(prefix_len + descriptor.entry_pc),
-        entrypoint_permission: descriptor.permission.clone(),
+        entrypoint_pc: Some(entrypoint_pc),
+        entrypoint_permission,
         args: invocation.payload.clone().unwrap_or_default(),
     })
 }
@@ -1763,7 +1805,12 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         bytes
     };
 
-    if !skip_nexus_fee && let Some(gas_asset_id_str) = gas_asset_opt {
+    if should_charge_pipeline_gas_asset(
+        skip_nexus_fee,
+        &state_transaction.nexus.fees,
+        &gas_asset_opt,
+    ) && let Some(gas_asset_id_str) = gas_asset_opt
+    {
         let (units_per_gas, twap_local_per_xor, volatility_bucket, liquidity_profile) = {
             let gas_rate = state_transaction
                 .pipeline
@@ -2398,7 +2445,12 @@ impl Executor {
         state_transaction.last_tx_gas_used = used;
 
         // 5) Charge gas fees when configured and the transaction specified a gas asset.
-        if !skip_nexus_fee && let Some(gas_asset_id_str) = gas_asset_opt {
+        if should_charge_pipeline_gas_asset(
+            skip_nexus_fee,
+            &state_transaction.nexus.fees,
+            &gas_asset_opt,
+        ) && let Some(gas_asset_id_str) = gas_asset_opt
+        {
             // Determine rate; require explicit mapping for determinism
             let gas_rate = state_transaction
                 .pipeline
@@ -3100,7 +3152,12 @@ impl Executor {
                 let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 state_transaction.last_tx_gas_used = gas_used;
 
-                if let Some(gas_asset_id_str) = gas_asset_opt {
+                if should_charge_pipeline_gas_asset(
+                    skip_nexus_fee,
+                    &state_transaction.nexus.fees,
+                    &gas_asset_opt,
+                ) && let Some(gas_asset_id_str) = gas_asset_opt
+                {
                     let gas_rate = state_transaction
                         .pipeline
                         .gas
@@ -3344,7 +3401,12 @@ impl Executor {
                 state_transaction.last_tx_gas_used = gas_used;
 
                 // Charge gas fees: if a gas asset was provided and accepted by policy.
-                if let Some(gas_asset_id_str) = gas_asset_opt {
+                if should_charge_pipeline_gas_asset(
+                    skip_nexus_fee,
+                    &state_transaction.nexus.fees,
+                    &gas_asset_opt,
+                ) && let Some(gas_asset_id_str) = gas_asset_opt
+                {
                     // Determine rate; require explicit mapping for determinism
                     let gas_rate = state_transaction
                         .pipeline
@@ -6004,6 +6066,33 @@ mod tests {
 
     fn alice() -> AccountId {
         iroha_test_samples::ALICE_ID.clone()
+    }
+
+    #[test]
+    fn pipeline_gas_asset_charge_is_disabled_when_nexus_gas_fee_is_active() {
+        let mut nexus_fees = NexusFees::default();
+        let gas_asset = Some("xor#universal".to_owned());
+
+        nexus_fees.per_gas_unit_fee = Numeric::zero();
+        assert!(should_charge_pipeline_gas_asset(
+            false,
+            &nexus_fees,
+            &gas_asset
+        ));
+
+        nexus_fees.per_gas_unit_fee = Numeric::new(1, 3);
+        assert!(!should_charge_pipeline_gas_asset(
+            false,
+            &nexus_fees,
+            &gas_asset
+        ));
+
+        assert!(!should_charge_pipeline_gas_asset(
+            true,
+            &nexus_fees,
+            &gas_asset
+        ));
+        assert!(!should_charge_pipeline_gas_asset(false, &nexus_fees, &None));
     }
 
     fn seed_verified_nexus_fee_budget(
@@ -10158,6 +10247,84 @@ mod tests {
             invocation_context.entrypoint_permission(),
             Some("ContractAdmin")
         );
+    }
+
+    #[test]
+    fn contract_dispatch_context_defaults_to_main_permission_for_self_describing_artifact() {
+        let (program, expected_entrypoint_pc) =
+            contract_program_with_entrypoint("main", Some("ContractAdmin"));
+        let metadata = Metadata::default();
+
+        let context = parse_contract_call_execution_context(&metadata, &program)
+            .expect("parse default main dispatch")
+            .expect("default main context");
+
+        assert_eq!(context.entrypoint.as_deref(), Some("main"));
+        assert_eq!(context.entrypoint_pc(), Some(expected_entrypoint_pc));
+        assert_eq!(context.entrypoint_permission(), Some("ContractAdmin"));
+
+        let authority = ALICE_ID.clone();
+        let account = Account::new(authority.clone()).build(&authority);
+        let world = World::with([], [account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query_handle);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let err = enforce_contract_entrypoint_permission(&tx.world, &authority, &context)
+            .expect_err("missing default main permission should reject");
+        assert!(matches!(
+            err,
+            ValidationFail::NotPermitted(message)
+                if message.contains("contract entrypoint `main` requires permission `ContractAdmin`")
+        ));
+
+        Grant::account_permission(
+            Permission::new("ContractAdmin".to_owned(), Json::new(())),
+            authority.clone(),
+        )
+        .execute(&authority, &mut tx)
+        .expect("grant default main permission");
+        enforce_contract_entrypoint_permission(&tx.world, &authority, &context)
+            .expect("granted default main permission should allow dispatch");
+    }
+
+    #[test]
+    fn contract_dispatch_context_keeps_generic_raw_ivm_without_selector_unclassified() {
+        let metadata = Metadata::default();
+        let context = parse_contract_call_execution_context(&metadata, &generate_ok_program())
+            .expect("parse generic raw ivm context");
+
+        assert!(context.is_none());
+    }
+
+    #[test]
+    fn contract_dispatch_context_rejects_no_selector_self_describing_artifact_without_main() {
+        let (program, expected_entrypoint_pc) =
+            contract_program_with_entrypoint("run", Some("RunPermission"));
+        let metadata = Metadata::default();
+
+        let err = parse_contract_call_execution_context(&metadata, &program)
+            .expect_err("self-describing default dispatch without main should reject");
+        assert!(matches!(
+            err,
+            ValidationFail::NotPermitted(message)
+                if message.contains("requires a public `main` entrypoint")
+        ));
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static name"),
+            Json::new("run".to_owned()),
+        );
+        let context = parse_contract_call_execution_context(&metadata, &program)
+            .expect("explicit run dispatch parses")
+            .expect("explicit run context");
+        assert_eq!(context.entrypoint.as_deref(), Some("run"));
+        assert_eq!(context.entrypoint_pc(), Some(expected_entrypoint_pc));
+        assert_eq!(context.entrypoint_permission(), Some("RunPermission"));
     }
 
     #[test]

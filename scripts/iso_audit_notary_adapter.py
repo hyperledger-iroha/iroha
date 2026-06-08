@@ -49,7 +49,18 @@ RECORDS_DIR = "messages"
 MAX_BEARER_TOKEN_BYTES = 8192
 MAX_HTTP_URL_CHARS = 2048
 MAX_AUDIT_EXPORT_JSON_BYTES = 64 * 1024 * 1024
+MAX_PERSISTED_RECORD_JSON_BYTES = 1024 * 1024
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
+RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
+    "example",
+    "example.com",
+    "example.invalid",
+    "example.net",
+    "example.org",
+}
+TEMPLATE_CANARY_ENDPOINT_HOSTS = {
+    "operator-canary.bank",
+}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
 DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
@@ -66,6 +77,7 @@ AUDIT_INDEX_KEYS = {
     INDEX_DIGEST_FIELD,
 }
 PACS002_CODES = {"ACTC", "ACSP", "ACSC", "ACWC", "PDNG", "RJCT"}
+ISO_RECORD_STATES = {"Pending", "Accepted", "Rejected"}
 PERSISTED_RECORD_KEYS = {
     "version",
     "message_id",
@@ -662,8 +674,10 @@ def _absolute_path_without_resolving_leaf(path: Path) -> Path:
     return path if path.is_absolute() else Path.cwd() / path
 
 
-def _load_json(path: Path) -> Any:
-    raw = _read_regular_file(path, max_bytes=MAX_AUDIT_EXPORT_JSON_BYTES)
+def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
+    if max_bytes is None:
+        max_bytes = MAX_AUDIT_EXPORT_JSON_BYTES
+    raw = _read_regular_file(path, max_bytes=max_bytes, limit_label="JSON")
     try:
         value = json.loads(
             raw.decode("utf-8"),
@@ -712,6 +726,13 @@ def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -
         if any(_is_secret_looking_key(key) for key in unknown):
             raise AdapterError(f"{label} contains unknown keys")
         raise AdapterError(f"{label} contains unknown keys: {', '.join(unknown)}")
+
+
+def _require_exact_keys(value: dict[str, Any], required: set[str], label: str) -> None:
+    _reject_unknown_keys(value, required, label)
+    missing = sorted(required - set(value))
+    if missing:
+        raise AdapterError(f"{label} is missing required keys: {', '.join(missing)}")
 
 
 def _is_secret_looking_key(value: Any) -> bool:
@@ -873,10 +894,39 @@ def _require_pacs002_code(value: Any, label: str) -> str:
     return code
 
 
+def _require_record_state(value: Any, label: str) -> str:
+    state = _require_clean_string(value, label)
+    if state not in ISO_RECORD_STATES:
+        raise AdapterError(f"{label} must be Pending, Accepted, or Rejected")
+    return state
+
+
+def _require_status_code_consistency(
+    state: str,
+    code: str,
+    label: str,
+    *,
+    noun: str,
+) -> None:
+    allowed = {
+        "Pending": {"ACTC", "ACSP", "ACWC", "PDNG"},
+        "Accepted": {"ACSP", "ACSC"},
+        "Rejected": {"RJCT"},
+    }[state]
+    if code not in allowed:
+        raise AdapterError(
+            f"{label}.pacs002_code is not valid for {state} {noun}"
+        )
+
+
+def _require_audit_record_status_consistency(record: dict[str, Any], label: str) -> None:
+    state = _require_record_state(record.get("state"), f"{label}.state")
+    code = _require_pacs002_code(record.get("pacs002_code"), f"{label}.pacs002_code")
+    _require_status_code_consistency(state, code, label, noun="state")
+
+
 def _derived_pacs002_code(record: dict[str, Any], label: str) -> str:
-    state = _require_clean_string(record.get("state"), f"{label}.state")
-    if state not in {"Pending", "Accepted", "Rejected"}:
-        raise AdapterError(f"{label}.state must be Pending, Accepted, or Rejected")
+    state = _require_record_state(record.get("state"), f"{label}.state")
     if state == "Rejected":
         return "RJCT"
     if state == "Accepted":
@@ -901,7 +951,7 @@ def _verify_optional_clean_string_fields(
 def _verify_persisted_context(value: Any, label: str) -> None:
     if not isinstance(value, dict):
         raise AdapterError(f"{label} must be an object")
-    _reject_unknown_keys(value, PERSISTED_CONTEXT_KEYS, label)
+    _require_exact_keys(value, PERSISTED_CONTEXT_KEYS, label)
     _verify_optional_clean_string_fields(value, PERSISTED_CONTEXT_KEYS, label)
 
 
@@ -910,7 +960,7 @@ def _verify_persisted_metadata(
 ) -> None:
     if not isinstance(value, dict):
         raise AdapterError(f"{label} must be an object")
-    _reject_unknown_keys(value, PERSISTED_METADATA_KEYS, label)
+    _require_exact_keys(value, PERSISTED_METADATA_KEYS, label)
     _verify_optional_clean_string_fields(
         value,
         PERSISTED_METADATA_KEYS - {"embedded_signature_detected"},
@@ -938,11 +988,10 @@ def _verify_persisted_metadata(
 def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str, int]:
     if not isinstance(value, dict):
         raise AdapterError(f"{label} must be an object")
-    _reject_unknown_keys(value, PERSISTED_HISTORY_KEYS, label)
-    status = _require_clean_string(value.get("status"), f"{label}.status")
-    if status not in {"Pending", "Accepted", "Rejected"}:
-        raise AdapterError(f"{label}.status must be Pending, Accepted, or Rejected")
+    _require_exact_keys(value, PERSISTED_HISTORY_KEYS, label)
+    status = _require_record_state(value.get("status"), f"{label}.status")
     code = _require_pacs002_code(value.get("pacs002_code"), f"{label}.pacs002_code")
+    _require_status_code_consistency(status, code, label, noun="status")
     updated_at_ms = _require_nonnegative_int(
         value.get("updated_at_ms"),
         f"{label}.updated_at_ms",
@@ -957,10 +1006,10 @@ def _verify_persisted_record_source(
     path: Path,
     label: str,
 ) -> None:
-    value = _load_json(path)
+    value = _load_json(path, max_bytes=MAX_PERSISTED_RECORD_JSON_BYTES)
     if not isinstance(value, dict):
         raise AdapterError(f"{label} must contain a JSON object")
-    _reject_unknown_keys(value, PERSISTED_RECORD_KEYS, label)
+    _require_exact_keys(value, PERSISTED_RECORD_KEYS, label)
     version = value.get("version")
     if (
         isinstance(version, bool)
@@ -1048,7 +1097,9 @@ def _verify_persisted_record_sources(
     *,
     allow_missing_record_sources: bool,
 ) -> None:
-    records = audit_index.get("records", [])
+    records = audit_index.get("records")
+    if not isinstance(records, list):
+        raise AdapterError(f"{label}.records must be an array")
     if store_dir is None:
         if not allow_missing_record_sources and records:
             raise AdapterError(f"{label}.store_dir is required to verify audit records")
@@ -1082,7 +1133,7 @@ def _verify_persisted_record_sources(
 def _verify_audit_index_record(record: Any, label: str) -> None:
     if not isinstance(record, dict):
         raise AdapterError(f"{label} must be an object")
-    _reject_unknown_keys(record, AUDIT_INDEX_RECORD_KEYS, label)
+    _require_exact_keys(record, AUDIT_INDEX_RECORD_KEYS, label)
     message_id = _require_clean_string(record.get("message_id"), f"{label}.message_id")
     filename = _require_clean_string(record.get("filename"), f"{label}.filename")
     expected_filename = _expected_message_filename(message_id)
@@ -1092,8 +1143,7 @@ def _verify_audit_index_record(record: Any, label: str) -> None:
         )
     if not _is_lower_hex_sha256(record.get("record_sha256")):
         raise AdapterError(f"{label}.record_sha256 must be a canonical SHA-256")
-    _require_clean_string(record.get("state"), f"{label}.state")
-    _require_pacs002_code(record.get("pacs002_code"), f"{label}.pacs002_code")
+    _require_audit_record_status_consistency(record, label)
     _require_nonnegative_int(record.get("updated_at_ms"), f"{label}.updated_at_ms")
     _require_optional_nonnegative_int(record.get("settled_at_ms"), f"{label}.settled_at_ms")
     _require_optional_clean_string(record.get("transaction_hash"), f"{label}.transaction_hash")
@@ -1147,6 +1197,8 @@ def verify_audit_index(index: Any) -> dict[str, Any]:
     records = index.get("records")
     if isinstance(record_count, bool) or not isinstance(record_count, int) or record_count < 0:
         raise AdapterError("audit index record_count must be a non-negative integer")
+    if record_count == 0:
+        raise AdapterError("audit index record_count must be positive before notary publication")
     if not isinstance(records, list):
         raise AdapterError("audit index records must be an array")
     if len(records) != record_count:
@@ -1399,6 +1451,36 @@ def _host_uses_rebinding_suffix(hostname: str) -> bool:
     )
 
 
+def _host_uses_reserved_placeholder_suffix(hostname: str) -> bool:
+    return hostname in RESERVED_PLACEHOLDER_HOST_SUFFIXES or any(
+        hostname.endswith("." + suffix) for suffix in RESERVED_PLACEHOLDER_HOST_SUFFIXES
+    )
+
+
+def _host_uses_template_canary_suffix(hostname: str) -> bool:
+    return hostname in TEMPLATE_CANARY_ENDPOINT_HOSTS or any(
+        hostname.endswith("." + suffix) for suffix in TEMPLATE_CANARY_ENDPOINT_HOSTS
+    )
+
+
+def _reject_reserved_placeholder_url_host(
+    parsed: urllib.parse.ParseResult,
+    label: str,
+) -> None:
+    hostname = (parsed.hostname or "").strip().lower()
+    if _host_uses_reserved_placeholder_suffix(hostname):
+        raise AdapterError(f"{label} must not use reserved placeholder hostnames")
+
+
+def _reject_template_canary_url_host(
+    parsed: urllib.parse.ParseResult,
+    label: str,
+) -> None:
+    hostname = (parsed.hostname or "").strip().lower()
+    if _host_uses_template_canary_suffix(hostname):
+        raise AdapterError(f"{label} must not use template canary hostnames")
+
+
 def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     embedded: ipaddress.IPv4Address | None = None
     if isinstance(address, ipaddress.IPv6Address):
@@ -1475,6 +1557,8 @@ def _validate_endpoint(endpoint: str, allow_insecure_http: bool) -> None:
     if parsed.params or parsed.query or parsed.fragment:
         raise AdapterError(f"{label} must not contain params, query, or fragment")
     _validate_url_path(parsed, label)
+    _reject_reserved_placeholder_url_host(parsed, label)
+    _reject_template_canary_url_host(parsed, label)
 
 
 def _reject_duplicate_endpoints(endpoints: list[str]) -> None:

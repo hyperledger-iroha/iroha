@@ -182,39 +182,78 @@ fn requested_contract_entrypoint(metadata: &Metadata) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn resolve_public_contract_entrypoint(
+    bytecode: &[u8],
+    selector: &str,
+    interface_required_message: &'static str,
+) -> Result<u64, String> {
+    let parsed = ivm::ProgramMetadata::parse(bytecode)
+        .map_err(|err| format!("invalid contract artifact for contract call dispatch: {err}"))?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed
+        .contract_interface
+        .as_ref()
+        .ok_or_else(|| interface_required_message.to_owned())?;
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
+    if !matches!(
+        descriptor.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+    ) {
+        return Err(format!("contract entrypoint `{selector}` is not public"));
+    }
+    Ok(prefix_len + descriptor.entry_pc)
+}
+
+fn resolve_default_public_contract_entrypoint(bytecode: &[u8]) -> Result<Option<u64>, String> {
+    let parsed = match ivm::ProgramMetadata::parse(bytecode) {
+        Ok(parsed) => parsed,
+        Err(_) => return Ok(None),
+    };
+    let Some(contract_interface) = parsed.contract_interface.as_ref() else {
+        return Ok(None);
+    };
+    let selector = "main";
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| {
+            "contract call without contract_entrypoint metadata requires a public `main` entrypoint"
+                .to_owned()
+        })?;
+    if !matches!(
+        descriptor.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+    ) {
+        return Err("contract entrypoint `main` is not public".to_owned());
+    }
+    Ok(Some(parsed.prefix_len() as u64 + descriptor.entry_pc))
+}
+
 fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
 ) -> Result<Option<ContractCallExecutionContext>, String> {
     let entrypoint = requested_contract_entrypoint(metadata);
     let payload = metadata.get("contract_payload").cloned();
-    if entrypoint.is_none() && payload.is_none() {
-        return Ok(None);
-    }
 
-    let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
-        let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
-            format!("invalid contract artifact for contract call dispatch: {err}")
-        })?;
-        let prefix_len = parsed.prefix_len() as u64;
-        let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
-            "contract call entrypoint metadata requires a self-describing contract artifact"
-                .to_owned()
-        })?;
-        let descriptor = contract_interface
-            .entrypoints
-            .iter()
-            .find(|candidate| candidate.name == selector)
-            .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
-        if !matches!(
-            descriptor.kind,
-            iroha_data_model::smart_contract::manifest::EntryPointKind::Public
-        ) {
-            return Err(format!("contract entrypoint `{selector}` is not public"));
-        }
-        Some(prefix_len + descriptor.entry_pc)
+    let (entrypoint, entrypoint_pc) = if let Some(selector) = entrypoint.as_deref() {
+        let entrypoint_pc = resolve_public_contract_entrypoint(
+            bytecode,
+            selector,
+            "contract call entrypoint metadata requires a self-describing contract artifact",
+        )?;
+        (Some(selector.to_owned()), Some(entrypoint_pc))
+    } else if let Some(entrypoint_pc) = resolve_default_public_contract_entrypoint(bytecode)? {
+        (Some("main".to_owned()), Some(entrypoint_pc))
+    } else if payload.is_none() {
+        return Ok(None);
     } else {
-        None
+        (None, None)
     };
 
     Ok(Some(ContractCallExecutionContext {
@@ -233,28 +272,15 @@ fn parse_contract_invocation_execution_context(
         return Err("contract entrypoint must not be empty".to_owned());
     }
 
-    let parsed = ivm::ProgramMetadata::parse(bytecode)
-        .map_err(|err| format!("invalid contract artifact for contract call dispatch: {err}"))?;
-    let prefix_len = parsed.prefix_len() as u64;
-    let contract_interface = parsed
-        .contract_interface
-        .as_ref()
-        .ok_or_else(|| "contract call requires a self-describing contract artifact".to_owned())?;
-    let descriptor = contract_interface
-        .entrypoints
-        .iter()
-        .find(|candidate| candidate.name == selector)
-        .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
-    if !matches!(
-        descriptor.kind,
-        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
-    ) {
-        return Err(format!("contract entrypoint `{selector}` is not public"));
-    }
+    let entrypoint_pc = resolve_public_contract_entrypoint(
+        bytecode,
+        selector,
+        "contract call requires a self-describing contract artifact",
+    )?;
 
     Ok(ContractCallExecutionContext {
         entrypoint: Some(selector.to_owned()),
-        entrypoint_pc: Some(prefix_len + descriptor.entry_pc),
+        entrypoint_pc: Some(entrypoint_pc),
         args: invocation.payload.clone().unwrap_or_default(),
     })
 }
@@ -743,14 +769,14 @@ fn select_entrypoint<'a>(
     if let Some(requested) = requested_entrypoint {
         return entrypoints.iter().find(|entry| entry.name == requested);
     }
-    if let Some(entrypoint) = entrypoints.iter().find(|entry| entry.name == "main") {
+    if let Some(entrypoint) = entrypoints.iter().find(|entry| {
+        entry.name == "main"
+            && matches!(
+                entry.kind,
+                iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+            )
+    }) {
         return Some(entrypoint);
-    }
-    if let Some(entrypoint) = entrypoints.iter().find(|entry| entry.name == "hajimari") {
-        return Some(entrypoint);
-    }
-    if entrypoints.len() == 1 {
-        return entrypoints.first();
     }
     None
 }
@@ -2038,6 +2064,35 @@ mod tests {
             access_hints_skipped: Vec::new(),
             triggers: Vec::new(),
         }
+    }
+
+    #[test]
+    fn select_entrypoint_defaults_only_to_public_main() {
+        let mut main = default_test_entrypoint();
+        main.read_keys = vec!["state:main".to_owned()];
+        let mut run = default_test_entrypoint();
+        run.name = "run".to_owned();
+        run.read_keys = vec!["state:run".to_owned()];
+        let mut hajimari = default_test_entrypoint();
+        hajimari.name = "hajimari".to_owned();
+        hajimari.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari;
+        hajimari.read_keys = vec!["state:hajimari".to_owned()];
+        let mut view_main = default_test_entrypoint();
+        view_main.kind = iroha_data_model::smart_contract::manifest::EntryPointKind::View;
+
+        let entrypoints = vec![run.clone(), hajimari.clone(), main.clone()];
+        assert_eq!(
+            select_entrypoint(&entrypoints, None).map(|entrypoint| entrypoint.name.as_str()),
+            Some("main")
+        );
+        assert_eq!(
+            select_entrypoint(&entrypoints, Some("run")).map(|entrypoint| entrypoint.name.as_str()),
+            Some("run")
+        );
+
+        let non_main_entrypoints = vec![run, hajimari];
+        assert!(select_entrypoint(&non_main_entrypoints, None).is_none());
+        assert!(select_entrypoint(&[view_main], None).is_none());
     }
 
     fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {

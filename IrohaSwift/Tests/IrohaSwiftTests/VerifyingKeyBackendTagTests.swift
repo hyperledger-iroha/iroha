@@ -79,6 +79,7 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             ("halo2/ipa/penumbra", .groth16Bls12377),
             ("halo2/ipa/masp", .groth16Bls12377),
             ("monero-fcmp++", .fcmpPlusPlusCurveTree),
+            ("fcmp++", .fcmpPlusPlusCurveTree),
             ("fcmp-plus-plus-curve-tree", .fcmpPlusPlusCurveTree),
             ("halo2/ipa/monero", .fcmpPlusPlusCurveTree),
             ("halo2/ipa/curve-tree", .fcmpPlusPlusCurveTree),
@@ -108,7 +109,10 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             ("groth16", .groth16),
             ("groth16/bn254", .groth16),
             ("stark", .stark),
+            ("stark/fri", .stark),
             ("stark/fri/sha256-goldilocks", .stark),
+            ("stark/fri/poseidon2-goldilocks", .stark),
+            ("stark/fri/sha256_goldilocks.v1", .stark),
             ("unknown/privacy/backend", .unsupported)
         ]
 
@@ -141,7 +145,14 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "anonymous-pgc-k-out-of-n-v1-production",
             "sis-hints-anoncred-pq-v0-devfixture",
             "groth16/bls12-377/../../prod",
-            "post-quantum-masp/audit-claimed"
+            "post-quantum-masp/audit-claimed",
+            "halo2/ipa/orchard:kzg",
+            "orchard:universal-srs",
+            "penumbra-masp:kzg",
+            "jindo-lattice-pcs-zk:trusted-setup",
+            "miden-stark:ptau",
+            "sis-with-hints:groth16",
+            "pq-masp-stark-fri:kzg"
         ]
 
         for label in aliases {
@@ -159,9 +170,12 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kagemusha-folded-v1",
             "halo2/pasta/kaigi-roster-v1",
+            "halo2/pasta/kagemusha-recursive-compact-v1",
             "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
             "stark/fri",
-            "stark/fri/sha256-goldilocks"
+            "stark/fri/sha256-goldilocks",
+            "stark/fri/poseidon2-goldilocks",
+            "stark/fri/sha256_goldilocks.v1"
         ]
 
         for backend in supported {
@@ -193,6 +207,14 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "halo2\u{FF0F}ipa",
             "halo2/\u{200B}ipa",
             "h\u{0430}lo2/ipa",
+            "HALO2/IPA",
+            "stark/FRI",
+            "halo2/ipa::ivm-execution-v1",
+            "halo2//ipa",
+            "halo2/ipa:",
+            "halo2/ipa.",
+            "halo2/ipa/.ivm-execution-v1",
+            "halo2/ipa:ivm..execution-v1",
             " stark/fri/sha256-goldilocks",
             "stark/fri/sha256-goldilocks ",
             "halo2/ipa/orchard",
@@ -234,10 +256,29 @@ final class VerifyingKeyBackendTagTests: XCTestCase {
             "halo2/ipa:production-ready",
             "halo2/ipa:claimed-production",
             "halo2/ipa:mainnet-ready",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
+            "halo2/ipa/orchard:production-ready",
+            "orchard:mainnet-ready",
+            "penumbra-masp:external-security-review",
+            "jindo-lattice-pcs-zk:release-ready",
+            "miden-stark:dev-fixture",
+            "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+            "halo2/ipa/orchard:kzg",
+            "orchard:universal-srs",
+            "penumbra-masp:kzg",
+            "jindo-lattice-pcs-zk:trusted-setup",
+            "miden-stark:ptau",
+            "sis-with-hints:groth16",
+            "pq-masp-stark-fri:kzg",
             "stark/fri/audit-signoff",
             "stark/fri/externally-audited",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
             "stark/fri/security-review-passed",
             "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
             "stark/fri/a-u-d-i-t-c-l-a-i-m",
             "stark/fri/dev-fixture",
             "stark/fri/d-e-v-f-i-x-t-u-r-e",

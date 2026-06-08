@@ -1532,6 +1532,38 @@ test("registerVerifyingKey accepts legacy schema hash aliases but posts Torii DT
   assert.equal(captured.public_inputs_schema_hash_hex, undefined);
 });
 
+test("registerVerifyingKey accepts current production backend labels", async () => {
+  const captured = [];
+  const fetchImpl = async (_url, init) => {
+    captured.push(JSON.parse(init.body));
+    return createResponse({ status: 202 });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const backends = [
+    "halo2/ipa",
+    "halo2/ipa:ivm-execution-v1",
+    "halo2/pasta/ivm-execution-v1",
+    "halo2/pasta/kagemusha-folded-v1",
+    "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kagemusha-recursive-compact-v1",
+    "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
+    "stark/fri",
+    "stark/fri/sha256-goldilocks",
+    "stark/fri/poseidon2-goldilocks",
+    "stark/fri/sha256_goldilocks.v1",
+  ];
+  for (const [index, backend] of backends.entries()) {
+    await client.registerVerifyingKey({
+      ...sampleVerifyingKeyRegisterPayload(),
+      backend,
+      name: `vk_${index}`,
+      circuit_id: `production_circuit_${index}`,
+    });
+  }
+
+  assert.deepEqual(captured.map((body) => body.backend), backends);
+});
+
 test("registerVerifyingKey rejects mismatched vk_len", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -1640,6 +1672,14 @@ test("verifying key registration rejects unsupported production backends before 
     ["register fullwidth-slash backend", () => client.registerVerifyingKey({ ...base, backend: "halo2\uFF0Fipa" })],
     ["register zero-width backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/\u200Bipa" })],
     ["register Cyrillic-a backend", () => client.registerVerifyingKey({ ...base, backend: "h\u0430lo2/ipa" })],
+    ["register uppercase backend", () => client.registerVerifyingKey({ ...base, backend: "HALO2/IPA" })],
+    ["register uppercase STARK backend", () => client.registerVerifyingKey({ ...base, backend: "stark/FRI" })],
+    ["register double-colon native backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa::ivm-execution-v1" })],
+    ["register double-slash backend", () => client.registerVerifyingKey({ ...base, backend: "halo2//ipa" })],
+    ["register trailing-colon backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:" })],
+    ["register trailing-dot backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa." })],
+    ["register slash-dot backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/.ivm-execution-v1" })],
+    ["register dot-dot backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:ivm..execution-v1" })],
     ["register pending Orchard", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/orchard" })],
     ["register unstable STARK latest alias", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/latest" })],
     ["register unstable STARK attestation alias", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/attestation" })],
@@ -1649,8 +1689,14 @@ test("verifying key registration rejects unsupported production backends before 
     ["register claimed audited STARK profile", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/audit-proof-v1" })],
     ["register claimed production IPA", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:production-ready" })],
     ["register claimed mainnet IPA", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:mainnet-ready" })],
+    ["register claimed release IPA", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:release-ready" })],
+    ["register claimed certified mainnet IPA", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:certified-mainnet" })],
+    ["register claimed third-party audited IPA", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:third-party-audited" })],
     ["register claimed audit STARK", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/audit-signoff" })],
+    ["register claimed BOI audited STARK", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/boi-audited" })],
+    ["register claimed external security review STARK", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/external-security-review" })],
     ["register spliced security review STARK", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/S.e.c.u.r.i.t.yReviewPassed" })],
+    ["register spliced security audited STARK", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d" })],
     ["register pending Penumbra splice", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/penumbra" })],
     ["register pending MASP splice", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/masp" })],
     ["register toy native Halo2 profile", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/tiny-add" })],
@@ -1683,7 +1729,12 @@ test("verifying key registration rejects unsupported production backends before 
     ["update claimed audited STARK profile", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/audit-proof-v1" })],
     ["update claimed production IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:production-ready" })],
     ["update claimed mainnet IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:mainnet-ready" })],
+    ["update claimed release IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:release-ready" })],
+    ["update claimed certified mainnet IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:certified-mainnet" })],
+    ["update claimed third-party audited IPA", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa:third-party-audited" })],
     ["update claimed audit STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/audit-signoff" })],
+    ["update claimed BOI audited STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/boi-audited" })],
+    ["update claimed external security review STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/external-security-review" })],
     ["update spliced audit claim STARK", () => client.updateVerifyingKey({ ...base, backend: "stark/fri/a-u-d-i-t-c-l-a-i-m" })],
     ["update pending Monero splice", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa/monero" })],
     ["update pending curve-tree splice", () => client.updateVerifyingKey({ ...base, backend: "halo2/ipa/curve-tree" })],

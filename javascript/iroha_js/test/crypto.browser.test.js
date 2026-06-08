@@ -52,6 +52,57 @@ function browserNoritoFrameFromPayload(schemaByte, payload) {
   return frame;
 }
 
+const TEST_NORITO_COMPACT_LEN_FLAG = 0x02;
+const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
+  "119f4df38a98ef5848ad0aadb9715779",
+  "hex",
+);
+
+function browserNoritoFrameFromSchemaHash(schemaHash, payload, flags = 0) {
+  const payloadBuffer = Buffer.from(payload);
+  const frame = Buffer.alloc(40);
+  frame.write("NRT0", 0, "ascii");
+  Buffer.from(schemaHash).copy(frame, 6);
+  frame[39] = flags;
+  const archive = Buffer.concat([frame, payloadBuffer]);
+  archive.writeBigUInt64LE(BigInt(payloadBuffer.length), 23);
+  archive.writeBigUInt64LE(testCrc64(payloadBuffer), 31);
+  return archive;
+}
+
+function kagemushaNoritoLength(value, flags = 0) {
+  if ((flags & TEST_NORITO_COMPACT_LEN_FLAG) === 0) {
+    const length = Buffer.alloc(8);
+    length.writeBigUInt64LE(BigInt(value));
+    return length;
+  }
+  let remaining = BigInt(value);
+  const bytes = [];
+  while (remaining >= 0x80n) {
+    bytes.push(Number((remaining & 0x7fn) | 0x80n));
+    remaining >>= 7n;
+  }
+  bytes.push(Number(remaining));
+  return Buffer.from(bytes);
+}
+
+function kagemushaNoritoField(payload, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  const bytes = Buffer.from(payload);
+  return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
+}
+
+function kagemushaNoritoString(value, flags = TEST_NORITO_COMPACT_LEN_FLAG) {
+  const bytes = Buffer.from(value, "utf8");
+  return Buffer.concat([kagemushaNoritoLength(bytes.length, flags), bytes]);
+}
+
+function kagemushaNoritoByteVec(value) {
+  const bytes = Buffer.from(value);
+  const length = Buffer.alloc(8);
+  length.writeBigUInt64LE(BigInt(bytes.length));
+  return Buffer.concat([length, bytes]);
+}
+
 function browserNoritoFrame(schemaByte) {
   const frame = Buffer.alloc(40);
   frame.write("NRT0", 0, "ascii");
@@ -91,14 +142,19 @@ function kagemushaVerifierKeyCommitment(crypto, verifierKey) {
 }
 
 function kagemushaLineageProvingKeyArchive(crypto, circuitId, verifierKey, seed) {
-  return browserNoritoFrameFromPayload(
-    0x9a,
-    Buffer.concat([
-      Buffer.from([1, 0]),
-      Buffer.from(circuitId, "utf8"),
-      kagemushaVerifierKeyCommitment(crypto, verifierKey),
-      Buffer.alloc(64, seed),
-    ]),
+  const flags = TEST_NORITO_COMPACT_LEN_FLAG;
+  const version = Buffer.alloc(2);
+  version.writeUInt16LE(1);
+  const payload = Buffer.concat([
+    kagemushaNoritoField(version, flags),
+    kagemushaNoritoField(kagemushaNoritoString(circuitId, flags), flags),
+    kagemushaNoritoField(kagemushaVerifierKeyCommitment(crypto, verifierKey), flags),
+    kagemushaNoritoField(kagemushaNoritoByteVec(Buffer.alloc(64, seed)), flags),
+  ]);
+  return browserNoritoFrameFromSchemaHash(
+    KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH,
+    payload,
+    flags,
   );
 }
 
@@ -171,6 +227,29 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       `${label} exposes recursive compact spend mode`,
     );
     assert.equal(
+      crypto.isKagemushaRecursiveCompactUnavailable(
+        new Error(
+          crypto.KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT,
+        ),
+      ),
+      true,
+      `${label} classifies reserved compact payment-token unavailable errors`,
+    );
+    assert.equal(
+      crypto.isKagemushaRecursiveCompactUnavailable(
+        `bridge: ${crypto.KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT}`,
+      ),
+      true,
+      `${label} classifies reserved compact multi-hop unavailable errors`,
+    );
+    assert.equal(
+      crypto.isKagemushaRecursiveCompactUnavailable(
+        new Error("recursive compact proof composition unavailable"),
+      ),
+      false,
+      `${label} rejects vague recursive compact proof errors`,
+    );
+    assert.equal(
       crypto.preferredKagemushaOfflineSpendModeForCapabilities(true, true),
       crypto.KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1,
       `${label} capability helper should prefer recursive spend mode`,
@@ -190,6 +269,16 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
       false,
       `${label} browser build must not expose native recursive aggregation prover`,
     );
+    assert.equal(
+      crypto.isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(),
+      false,
+      `${label} browser build must not expose native recursive spend compact projection`,
+    );
+    assert.equal(
+      crypto.isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(),
+      false,
+      `${label} browser build must not expose native recursive spend compact projection verifier`,
+    );
     assert.throws(
       () => crypto.kagemushaProveVerifiedCompactPaymentTokenWithRecords(),
       /unavailable in browser-only crypto builds/,
@@ -206,6 +295,16 @@ test("browser crypto exposes native-only helpers as safe stubs", () => {
         crypto.kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(),
       /unavailable in browser-only crypto builds/,
       `${label} recursive compact prover must be native-only`,
+    );
+    assert.throws(
+      () => crypto.kagemushaRecursiveSpendCompactPaymentTokenFromBundle(),
+      /unavailable in browser-only crypto builds/,
+      `${label} recursive spend compact projection must be native-only`,
+    );
+    assert.throws(
+      () => crypto.kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(),
+      /unavailable in browser-only crypto builds/,
+      `${label} recursive spend compact projection verifier must be native-only`,
     );
     assert.equal(crypto.KAGEMUSHA_RECURSIVE_PREVIOUS_PROOF_OPEN_ENVELOPES_REQUIRED_COUNT_V1, 1);
     assert.equal(

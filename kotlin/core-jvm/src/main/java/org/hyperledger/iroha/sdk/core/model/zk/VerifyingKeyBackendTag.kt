@@ -118,6 +118,7 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             "halo2/pasta/offline-note-recursive",
             "halo2/pasta/kagemusha-folded-v1",
             "halo2/pasta/kagemusha-recursive-aggregation-v1",
+            "halo2/pasta/kagemusha-recursive-compact-v1",
             "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
             "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
             "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
@@ -138,6 +139,8 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             "stark" to STARK,
             "starkfri" to STARK,
             "starkfrisha256goldilocks" to STARK,
+            "starkfriposeidon2goldilocks" to STARK,
+            "starkfrisha256goldilocksv1" to STARK,
             "halo2ipaorchard" to HALO2_IPA_ORCHARD,
             "orchard" to HALO2_IPA_ORCHARD,
             "zcashorchard" to HALO2_IPA_ORCHARD,
@@ -243,14 +246,29 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
             "mainnetcomplete",
             "mainnetclaim",
             "claimedmainnet",
+            "mainnetcertified",
+            "mainnetapproved",
+            "mainnetrelease",
             "auditedproduction",
             "externallyaudited",
+            "thirdpartyaudited",
+            "boiaudited",
+            "auditedmainnet",
+            "externalaudit",
             "auditpassed",
             "auditapproved",
             "auditsignoff",
             "auditclaim",
             "claimedaudit",
             "securityreviewpassed",
+            "securityauditpassed",
+            "securityaudited",
+            "externalsecurityreview",
+            "certifiedproduction",
+            "certifiedmainnet",
+            "releaseready",
+            "releaseapproved",
+            "releasecertified",
         )
 
         private val starkFriProductionBackends = setOf(
@@ -327,17 +345,26 @@ enum class VerifyingKeyBackendTag(@JvmField val noritoValue: String) {
                 ?.let { productionNativeHalo2PastaBackends.contains(it) }
                 ?: false
 
-        private fun isPortableVerifierBackendLabel(value: String): Boolean =
-            value.all { ch ->
-                ch in '0'..'9' ||
-                    ch in 'A'..'Z' ||
-                    ch in 'a'..'z' ||
-                    ch == '/' ||
-                    ch == ':' ||
-                    ch == '.' ||
-                    ch == '_' ||
-                    ch == '-'
+        private fun isPortableVerifierBackendLabel(value: String): Boolean {
+            if (value.isEmpty()) {
+                return false
             }
+            fun isLowerAsciiAlphanumeric(ch: Char): Boolean = ch in '0'..'9' || ch in 'a'..'z'
+            if (!isLowerAsciiAlphanumeric(value.first()) || !isLowerAsciiAlphanumeric(value.last())) {
+                return false
+            }
+            if (!value.all { ch ->
+                    isLowerAsciiAlphanumeric(ch) ||
+                        ch == '/' ||
+                        ch == ':' ||
+                        ch == '.' ||
+                        ch == '_' ||
+                        ch == '-'
+                }) {
+                return false
+            }
+            return listOf("//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:").none { value.contains(it) }
+        }
 
         private fun normalizeNativeHalo2PastaBackendLabel(raw: String): String? {
             val backend = raw

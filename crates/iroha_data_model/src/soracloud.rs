@@ -11826,6 +11826,11 @@ impl SoraAppInfraAuditEventV1 {
                 field: "to_version",
             });
         }
+        validate_soracloud_digest_hash(
+            "sora app infra audit event",
+            "app_manifest_hash",
+            self.app_manifest_hash,
+        )?;
         if self.service_count == 0 {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora app infra audit event",
@@ -11952,6 +11957,16 @@ impl SoraServiceAuditEventV1 {
                 field: "to_version",
             });
         }
+        validate_soracloud_digest_hash(
+            "sora service audit event",
+            "service_manifest_hash",
+            self.service_manifest_hash,
+        )?;
+        validate_soracloud_digest_hash(
+            "sora service audit event",
+            "container_manifest_hash",
+            self.container_manifest_hash,
+        )?;
         Ok(())
     }
 
@@ -12006,6 +12021,27 @@ impl SoraServiceAuditEventV1 {
                 field: "jurisdiction_tag",
                 reason: "must not be empty when provided".to_string(),
             });
+        }
+        if let Some(governance_tx_hash) = self.governance_tx_hash {
+            validate_soracloud_digest_hash(
+                "sora service audit event",
+                "governance_tx_hash",
+                governance_tx_hash,
+            )?;
+        }
+        if let Some(policy_snapshot_hash) = self.policy_snapshot_hash {
+            validate_soracloud_digest_hash(
+                "sora service audit event",
+                "policy_snapshot_hash",
+                policy_snapshot_hash,
+            )?;
+        }
+        if let Some(consent_evidence_hash) = self.consent_evidence_hash {
+            validate_soracloud_digest_hash(
+                "sora service audit event",
+                "consent_evidence_hash",
+                consent_evidence_hash,
+            )?;
         }
         Ok(())
     }
@@ -12127,6 +12163,18 @@ impl SoraServiceRuntimeStateV1 {
                 reason: "must not be empty when provided".to_string(),
             });
         }
+        validate_soracloud_digest_hash(
+            "sora service runtime state",
+            "materialized_bundle_hash",
+            self.materialized_bundle_hash,
+        )?;
+        if let Some(last_receipt_id) = self.last_receipt_id {
+            validate_soracloud_digest_hash(
+                "sora service runtime state",
+                "last_receipt_id",
+                last_receipt_id,
+            )?;
+        }
 
         Ok(())
     }
@@ -12223,6 +12271,18 @@ impl SoraInrouReplicaRuntimeStateV1 {
                 reason: "must be greater than zero".to_string(),
             });
         }
+        validate_soracloud_digest_hash(
+            "sora inrou replica runtime state",
+            "materialized_bundle_hash",
+            self.materialized_bundle_hash,
+        )?;
+        if let Some(last_receipt_id) = self.last_receipt_id {
+            validate_soracloud_digest_hash(
+                "sora inrou replica runtime state",
+                "last_receipt_id",
+                last_receipt_id,
+            )?;
+        }
         Ok(())
     }
 }
@@ -12273,6 +12333,16 @@ impl SoraServiceMailboxMessageV1 {
                 found: self.schema_version,
             });
         }
+        validate_soracloud_digest_hash(
+            "sora service mailbox message",
+            "message_id",
+            self.message_id,
+        )?;
+        validate_soracloud_digest_hash(
+            "sora service mailbox message",
+            "payload_commitment",
+            self.payload_commitment,
+        )?;
 
         if self.available_after_sequence < self.enqueue_sequence {
             return Err(SoracloudManifestError::InvalidField {
@@ -12371,6 +12441,41 @@ impl SoraRuntimeReceiptV1 {
                 manifest: "sora runtime receipt",
                 field: "service_version",
             });
+        }
+        validate_soracloud_digest_hash("sora runtime receipt", "receipt_id", self.receipt_id)?;
+        validate_soracloud_digest_hash(
+            "sora runtime receipt",
+            "request_commitment",
+            self.request_commitment,
+        )?;
+        validate_soracloud_digest_hash(
+            "sora runtime receipt",
+            "result_commitment",
+            self.result_commitment,
+        )?;
+        if let Some(placement_id) = self.placement_id {
+            validate_soracloud_digest_hash("sora runtime receipt", "placement_id", placement_id)?;
+        }
+        if let Some(mailbox_message_id) = self.mailbox_message_id {
+            validate_soracloud_digest_hash(
+                "sora runtime receipt",
+                "mailbox_message_id",
+                mailbox_message_id,
+            )?;
+        }
+        if let Some(journal_artifact_hash) = self.journal_artifact_hash {
+            validate_soracloud_digest_hash(
+                "sora runtime receipt",
+                "journal_artifact_hash",
+                journal_artifact_hash,
+            )?;
+        }
+        if let Some(checkpoint_artifact_hash) = self.checkpoint_artifact_hash {
+            validate_soracloud_digest_hash(
+                "sora runtime receipt",
+                "checkpoint_artifact_hash",
+                checkpoint_artifact_hash,
+            )?;
         }
         if self
             .selected_peer_id
@@ -14031,6 +14136,45 @@ mod tests {
             encode_app_infra_provenance_payload(&manifest).expect("encode app infra provenance"),
             norito::to_bytes(&manifest).expect("encode canonical manifest")
         );
+    }
+
+    #[test]
+    fn app_infra_service_ref_validate_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut service = sample_app_infra_service("app_api");
+        service.service_manifest_hash = zero_digest;
+        let error = service
+            .validate()
+            .expect_err("service manifest placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "service_manifest_hash");
+
+        let mut service = sample_app_infra_service("app_api");
+        service.container_manifest_hash = zero_digest;
+        let error = service
+            .validate()
+            .expect_err("container manifest placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "container_manifest_hash");
+    }
+
+    #[test]
+    fn app_infra_audit_event_validate_rejects_zero_prehash_manifest_hash_sentinel() {
+        let event = SoraAppInfraAuditEventV1 {
+            schema_version: SORA_APP_INFRA_AUDIT_EVENT_VERSION_V1,
+            sequence: 1,
+            action: SoraAppInfraActionV1::Deploy,
+            app_name: sample_name("sample_app"),
+            from_version: None,
+            to_version: "1.0.0".to_string(),
+            app_manifest_hash: zero_prehash_statement_hash(),
+            service_count: 1,
+            signer: sample_signer(),
+        };
+
+        let error = event
+            .validate()
+            .expect_err("app manifest placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "app_manifest_hash");
     }
 
     fn sample_model_provenance_ref() -> SoraModelProvenanceRefV1 {
@@ -18520,6 +18664,104 @@ mod tests {
             request: sample_decryption_request(),
             sequence: 18,
             signer: KeyPair::random().public_key().clone(),
+        }
+    }
+
+    fn sample_service_deployment_state() -> SoraServiceDeploymentStateV1 {
+        SoraServiceDeploymentStateV1 {
+            schema_version: SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+            service_name: "portal".parse().expect("valid name"),
+            current_service_version: "1.1.0".to_string(),
+            current_service_manifest_hash: sample_hash(170),
+            current_container_manifest_hash: sample_hash(171),
+            revision_count: 2,
+            process_generation: 2,
+            process_started_sequence: 7,
+            active_rollout: None,
+            last_rollout: None,
+            config_generation: 0,
+            secret_generation: 0,
+            service_configs: BTreeMap::new(),
+            service_secrets: BTreeMap::new(),
+            service_lease: None,
+            lease_volume_states: Vec::new(),
+        }
+    }
+
+    fn sample_service_runtime_state() -> SoraServiceRuntimeStateV1 {
+        SoraServiceRuntimeStateV1 {
+            schema_version: SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
+            service_name: "portal".parse().expect("valid name"),
+            active_service_version: "2026.1".to_string(),
+            health_status: SoraServiceHealthStatusV1::Healthy,
+            load_factor_bps: 750,
+            materialized_bundle_hash: sample_hash(160),
+            rollout_handle: Some("rollout-1".to_string()),
+            pending_mailbox_message_count: 2,
+            last_receipt_id: Some(sample_hash(161)),
+        }
+    }
+
+    fn sample_service_audit_event() -> SoraServiceAuditEventV1 {
+        SoraServiceAuditEventV1 {
+            schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
+            sequence: 1,
+            action: SoraServiceLifecycleActionV1::DecryptionRequest,
+            service_name: "portal".parse().expect("valid name"),
+            from_version: None,
+            to_version: "1.0.0".to_string(),
+            service_manifest_hash: sample_hash(172),
+            container_manifest_hash: sample_hash(173),
+            governance_tx_hash: Some(sample_hash(176)),
+            binding_name: Some("private_state".parse().expect("valid name")),
+            state_key: Some("/state/private/patient-1".to_string()),
+            config_name: None,
+            secret_name: None,
+            rollout_handle: None,
+            policy_name: Some("phi_threshold_policy".parse().expect("valid name")),
+            policy_snapshot_hash: Some(sample_hash(177)),
+            jurisdiction_tag: Some("us_hipaa".to_string()),
+            consent_evidence_hash: Some(sample_hash(178)),
+            break_glass: Some(true),
+            break_glass_reason: Some("emergency review".to_string()),
+            signer: KeyPair::random().public_key().clone(),
+        }
+    }
+
+    fn sample_service_mailbox_message() -> SoraServiceMailboxMessageV1 {
+        SoraServiceMailboxMessageV1 {
+            schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+            message_id: sample_hash(162),
+            from_service: "portal".parse().expect("valid name"),
+            from_handler: "update".parse().expect("valid name"),
+            to_service: "audit".parse().expect("valid name"),
+            to_handler: "private_update".parse().expect("valid name"),
+            payload_bytes: b"ciphertext".to_vec(),
+            payload_commitment: Hash::new(b"ciphertext"),
+            enqueue_sequence: 10,
+            available_after_sequence: 10,
+            expires_at_sequence: Some(12),
+        }
+    }
+
+    fn sample_runtime_receipt() -> SoraRuntimeReceiptV1 {
+        SoraRuntimeReceiptV1 {
+            schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
+            receipt_id: sample_hash(164),
+            service_name: "portal".parse().expect("valid name"),
+            service_version: "2026.1".to_string(),
+            handler_name: "update".parse().expect("valid name"),
+            handler_class: SoraServiceHandlerClassV1::Update,
+            request_commitment: sample_hash(165),
+            result_commitment: sample_hash(166),
+            certified_by: SoraCertifiedResponsePolicyV1::None,
+            emitted_sequence: 44,
+            placement_id: Some(sample_hash(170)),
+            selected_validator_account_id: Some(sample_account_id(171)),
+            selected_peer_id: Some("12D3KooWRuntimePrimary".to_string()),
+            mailbox_message_id: Some(sample_hash(163)),
+            journal_artifact_hash: Some(sample_hash(168)),
+            checkpoint_artifact_hash: Some(sample_hash(169)),
         }
     }
 

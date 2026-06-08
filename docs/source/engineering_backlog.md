@@ -12,6 +12,7 @@ The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
 runtime-network families outside that launch scope are not supported for now.
 Retired platform-family lanes are explicitly outside SCCP launch support for
 now.
+Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
@@ -49,6 +50,16 @@ Local path, raw CLI, summary-path, artifact-path, and URL-path validators now
 also reject narrow identifier-style secret path material such as
 `token-*-secret` and strong key markers without treating ordinary token-file
 operator paths as secret-bearing by name alone.
+Canary runbook artifact paths now use the same narrow local-path scanner before
+plan-only output or child command construction, while bearer-token file paths
+remain runtime secret-file references and are redacted in planned commands.
+Canary child stdout/stderr previews now also reject identifier-style
+secret-looking material before summary emission.
+XSD `xmllint` failure diagnostics now redact identifier-style secret-looking
+validator output as well as key/value secret material before schema-validation
+errors are reported.
+Direct evidence receipt-verifier failure diagnostics now redact key/value and
+identifier-style secret-looking stderr before reporting child verifier failures.
 ISO URL port parser failures now report only label-level invalid-port
 diagnostics instead of including parser exception text that may contain the raw
 operator-provided port string.
@@ -2258,10 +2269,20 @@ redistributable schemas, and official trust/revocation bundles.
   trust-pin presence, booleans, supplementary-data caps, business-service
   dependencies, and amount minor-unit currency rows are shape-checked when
   present.
-  Candidate schema imports fail closed when source provenance is missing,
-  malformed, digest-drifted, or when an XSD contains known restricted Standards
-  Editor redistribution terms, preventing public mirrors with embedded
-  no-redistribution notices from being treated as production fixture evidence.
+	  Candidate schema imports fail closed when source provenance is missing,
+	  malformed, digest-drifted, still uses placeholder GitHub repository
+	  coordinates, carries identifier-style secret-looking path material, or when
+	  an XSD contains known restricted Standards Editor redistribution terms, and
+	  checked-in and blocked candidate schema entries reject omitted `source`
+	  separately from explicit null source objects in both direct preflight and
+	  archived readiness replay,
+	  the manifest must explicitly record `blocked_schema_sources` as an array even
+  when no reviewed restricted source candidates are present. The aggregate
+  readiness gate replays the same repository-coordinate checks and
+  rejects secret-looking repository coordinates before output for archived XSD
+  summaries, preventing public mirrors with embedded
+  no-redistribution notices or placeholder provenance from being treated as
+  production fixture evidence.
 - Broaden XMLDSig/XAdES fixture coverage beyond internal P-256 key and
   generated certificate-chain material, including complete canonical XML
   coverage for broader signed ISO envelopes, official
@@ -2523,7 +2544,8 @@ redistributable schemas, and official trust/revocation bundles.
   tests, rejects endpoint URLs with credentials, params, query strings,
 	  fragments, surrounding or embedded whitespace, or control characters, rejects
 	  empty, zero, leading-zero, malformed, out-of-range, or explicit-default ports, non-canonical hosts,
-	  invalid DNS labels, percent-escaped hosts, numeric-host/legacy-IPv4
+	  reserved placeholder hosts, checked-in template hosts under
+	  `operator-canary.bank`, invalid DNS labels, percent-escaped hosts, numeric-host/legacy-IPv4
 	  spoofing, and IPv6 transition addresses embedding non-global IPv4 addresses,
 	  rejects traversal, backslash, encoded-separator, encoded-semicolon,
 	  encoded URL delimiters, encoded-percent,
@@ -2536,8 +2558,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  whitespace, embedded whitespace, or control characters, and
 	  requires the export directory, `latest.notary.json`, the digest-addressed
 	  anchor peer, `messages.index.json`, and clean `store_dir/messages` record
-	  sources to be non-symlink regular directories/files, caps each audit export
-		  JSON input at 64 MiB, requires positive finite `--timeout-secs` and
+	  sources to be non-symlink regular directories/files, caps anchor/index
+		  JSON inputs at 64 MiB and persisted record-source JSON inputs at 1 MiB,
+		  requires positive finite `--timeout-secs` and
 		  positive integer `--response-limit-bytes`, and writes bounded
 		  per-endpoint receipts without persisting token material, redacting
 		  secret-looking remote response previews or transport errors before persistence. Receipt
@@ -2557,7 +2580,8 @@ redistributable schemas, and official trust/revocation bundles.
 	  strings, fragments, surrounding or embedded whitespace, or control
 	  characters, overlong URLs or DNS hosts, localhost/local-private IP
 	  literals, known local/private rebinding hostnames, or IPv6 transition
-	  addresses embedding non-global IPv4 addresses, rejects malformed, out-of-range,
+	  addresses embedding non-global IPv4 addresses, reserved placeholder hosts,
+	  checked-in template hosts under `operator-canary.bank`, rejects malformed, out-of-range,
 	  empty, zero, leading-zero, or explicit-default ports and non-canonical hosts, invalid DNS labels, percent-escaped hosts, and
 	  numeric-host/legacy-IPv4 spoofing, rejects traversal, backslash, encoded-separator,
 	  encoded-semicolon, encoded URL delimiters, encoded-percent, percent-encoded control/space bytes, malformed percent
@@ -2600,19 +2624,23 @@ redistributable schemas, and official trust/revocation bundles.
 	  whitespace, empty/zero/leading-zero/malformed/default ports, non-canonical hosts, or control
 	  characters, localhost/local-private IP literals, known local/private
 	  rebinding hostnames, IPv6 transition addresses embedding non-global IPv4
-	  addresses, invalid DNS labels, percent-escaped hosts, numeric-host
+	  addresses, reserved placeholder hosts such as `.example`, `example.com`,
+	  `example.net`, `example.org`, or `example.invalid`, checked-in template
+	  hosts under `operator-canary.bank`, invalid DNS labels, percent-escaped hosts, numeric-host
 	  or legacy-IPv4 spoofing, plus traversal, backslash, encoded-separator,
 	  encoded-semicolon, encoded URL delimiters, encoded-percent,
 	  percent-encoded control/space bytes, malformed percent escapes, or
 	  embedded/encoded-semicolon/encoded-delimiter/repeated-separator URL paths, can cross-check referenced XML or notary anchor
-	  source files, closes the raw receipt schemas per receipt kind plus notary
-	  anchor/audit-index source schemas, including duplicate-free nested audit records, binds
+		  source files, closes the raw receipt schemas per receipt kind plus notary
+		  anchor/audit-index source schemas, including an explicit `records[]`
+		  array and duplicate-free nested audit records, binds
   audit record filenames to `sha256(message_id).json`, binds each indexed
   `record_sha256` to the persisted `store_dir/messages` body when source files
 	  are required or locally available, rejects row/source metadata drift and
 	  persisted-state-derived `pacs002_code` or status-history timestamp drift,
 	  binds endpoint digests to recorded endpoint URLs, requires timezone-aware adapter timestamps that do not
   require trimming, enforces `ok`/`status_code` consistency,
+	  requires HTTP response body digests and failed-receipt error strings,
 	  validates bounded response metadata, requires rail `xml_path` values to
 	  point at `.xml` leaves, cross-checks rail sidecars against the
 	  adapter's `xml_path + .json` convention and receipt metadata, requires notary
@@ -2622,15 +2650,29 @@ redistributable schemas, and official trust/revocation bundles.
 	  receipt `message_type`, `xml_path`, and
 	  `sidecar_path` values that carry whitespace, control characters,
 		  leading dashes, leading-dash path segments, backslashes, semicolon path
-		  parameters, empty path segments, or dot/parent path segments, plus receipt and source-sidecar rail
+		  parameters, empty path segments, or dot/parent path segments, requires raw
+		  rail receipts and archived rail receipt summaries to record nullable
+		  `profile`/`rail_message_id` keys, plus receipt and source-sidecar rail
 		  `profile`/`rail_message_id` values when they carry surrounding whitespace or
-		  embedded whitespace or control characters, rejects non-canonical receipt or
+		  embedded whitespace or control characters, rejects source-sidecar explicit
+		  null optional metadata instead of treating it as omission, rejects non-canonical receipt or
 		  source-sidecar profile IDs, rejects overlong or non-canonical ASCII
-		  `rail_message_id` values, caps receipt JSON at 4 MiB, notary source
-		  JSON at 64 MiB, rail source XML at 4 MiB, and source-sidecar JSON at
-		  16 KiB before parsing or hashing, replays digest-addressed notary-anchor and
+		  `rail_message_id` values, caps receipt JSON at 4 MiB, notary anchor/index
+  JSON at 64 MiB, persisted notary record-source JSON at 1 MiB, rail source XML
+  at 4 MiB, and source-sidecar JSON at 16 KiB before parsing or hashing,
+  replays digest-addressed notary-anchor and
   `messages.index.json` checks while rejecting symlinked or non-regular notary
-  anchor/index peers and rail XML/sidecar files, rejects legacy `colr.007` rail
+  anchor/index peers and requiring complete audit-index record summary key sets,
+  canonical Torii lifecycle states, state-compatible pacs.002 summary codes,
+  including nullable Torii-emitted fields, plus complete persisted
+  record/context/metadata/history key sets and state-compatible status-history
+  pacs.002 codes before
+  source-file replay or Torii durable-store reload,
+  positive notary record counts before publication and during source-file or
+  production-evidence replay,
+  Torii reload clean-string enforcement, filename/message-id binding, symlink-free regular-file-only
+  record directory/loading, symlink-free durable-output directories, and a 1 MiB Torii
+  persisted-record persist/reload cap, rejects legacy `colr.007` rail
   source files unless `--allow-legacy-colr007` is set for local diagnostics,
   rejects symlinked receipt archive directories before discovery, rejects
   repeated receipt paths or copied receipts with duplicate `receipt_sha256` values, and
@@ -2644,14 +2686,21 @@ redistributable schemas, and official trust/revocation bundles.
 	  runbook strings, rejects present `null` optional path and numeric limit
 		  fields instead of silently applying defaults, rejects embedded whitespace,
 		  leading-dash path segments, backslashes, semicolon path parameters, empty
-		  path segments, and dot/parent segments in runbook paths before expansion, keeps relative paths inside
+		  path segments, dot/parent segments, and secret-looking key/value or
+		  identifier-style material in ordinary runbook artifact paths before expansion, keeps relative paths inside
 	  the runbook directory while preserving final path leaves for child script
-	  symlink/file-boundary checks, rejects
-	  endpoint URLs with credentials, params, query strings, fragments, embedded
-	  whitespace, malformed bracketed hosts, overlong URL strings, or DNS hosts
-	  longer than 253 characters, localhost/local-private IP literals, or known
-	  local/private rebinding hostnames, legacy IPv4 numeric notation, or IPv6
-	  transition addresses embedding non-global IPv4 addresses,
+	  symlink/file-boundary checks, keeps bearer-token file paths as redacted
+	  runtime secret-file references, rejects identifier-style secret-looking
+	  child stdout/stderr previews before summary emission, rejects
+		  endpoint URLs with credentials, params, query strings, fragments, embedded
+		  whitespace, malformed bracketed hosts, overlong URL strings, or DNS hosts
+		  longer than 253 characters, localhost/local-private IP literals, or known
+		  local/private rebinding hostnames, reserved placeholder hosts such as
+		  `.example`, `example.com`, `example.net`, `example.org`, or
+		  `example.invalid`, legacy IPv4 numeric notation, or IPv6 transition
+		  addresses embedding non-global IPv4 addresses,
+		  accepts checked-in `operator-canary.bank` template endpoints only for
+		  `--plan-only` validation and rejects them before non-plan child execution,
 	  rejects empty, zero, leading-zero, malformed, out-of-range, or explicit-default ports,
 	  rejects non-canonical hosts, invalid DNS labels, percent-escaped hosts,
 	  numeric-host spoofing, percent-escape smuggling, and smuggled URL paths
@@ -2664,8 +2713,9 @@ redistributable schemas, and official trust/revocation bundles.
   stdout/stderr through the configured preview cap instead of retaining
   unbounded output, supports
   `--require-explicit-policy` so production runbooks must spell out every
-  policy boolean and the summary records that proof, with regression coverage
-  over the rail, notary, and verifier policy-boolean surface, and writes a single
+  policy boolean plus list-valued notary/verify receipt selector fields and the
+  summary records that proof, with regression coverage over the rail, notary,
+  and verifier policy-boolean/list surface, and writes a single
   bounded JSON summary suitable for CI or operator evidence archives. Summary
 	  output paths are preflighted before subprocess stages, reject control
 	  characters, whitespace, leading-dash segments, backslashes, semicolon
@@ -2679,7 +2729,9 @@ redistributable schemas, and official trust/revocation bundles.
 - Completed 2026-06-04: added checked-in ISO operator canary runbook templates
   under `fixtures/iso20022/operator_canary/` for Swift CBPR+, Fedwire Funds,
   SEPA SCT Inst, and securities CSD profile families. The script tests validate
-  that each template plans successfully without network access.
+  that each template plans successfully without network access, while non-plan
+  canary execution and archived production evidence reject the
+  `operator-canary.bank` template endpoint suffix.
 - Completed 2026-06-04: added `scripts/iso_trust_bundle_verify.py` as an
   offline XMLDSig/XAdES trust-bundle preflight for operator rail PKI packages.
   It caps bundle JSON at 64 MiB before parsing, verifies canonical lowercase
@@ -2695,18 +2747,28 @@ redistributable schemas, and official trust/revocation bundles.
 		  percent-escaped hosts, numeric-host/legacy-IPv4 spoofing, IPv6
 		  transition embedded-IPv4 smuggling, percent-escape smuggling,
 		  smuggled URL paths including encoded semicolon parameters, encoded URL delimiters, and repeated separators, required provenance URL,
-		  required source authority/version values, and timezone-aware
+			  an explicitly recorded top-level `source` object,
+			  required source authority/version values, and timezone-aware
 	  non-future retrieval timestamp fields,
   repeated-path/copied-bundle/duplicate
   profile ID rejection, duplicate `bundle_sha256` rejection, unique DER labels
-  per material class, DER-object `sha256` values that fail when present as
-  `null` or another non-string value, omitted absent labels in trust summaries,
+  per material class, mandatory DER-object `sha256` values that must match
+  canonical decoded `der_base64` bytes, omitted absent labels in trust summaries,
   archived-summary `label: null` rejection in the evidence gate, and
 	  secret-looking fields before emitting Torii profile trust override JSON.
+	  Trust bundles must now carry an explicit `embedded_signature_policy`;
+	  omitted policy fields are rejected instead of defaulting to
+	  `require-verified` during preflight.
+	  Every list-typed trust-material field must also be recorded as an array,
+	  including explicit `[]` values for intentionally empty pin or DER
+	  collections, so profile override emission cannot infer absence as an empty
+	  production proof.
 	  Profile override emission now also rejects local-audit `--allow-record-only`
-	  or `--allow-insecure-source-url` modes and placeholder source provenance
-	  (`placeholder`, `replace-before-production`, or `example.invalid`), leaving
-	  those bundles summary-only until real rail source metadata is supplied.
+		  or `--allow-insecure-source-url` modes and placeholder source provenance
+		  (`dummy`, `fake`, `placeholder`, `replace-before-production`, `sample`,
+		  `template`, or reserved hosts such as `example.com`, `example.net`,
+		  `example.org`, `example.invalid`, and `operator-canary.bank`), leaving those bundles summary-only
+		  until real rail source metadata is supplied.
 		  It also requires an explicit `--max-source-age-days` freshness budget and
 		  leaves stale source packages summary-only instead of writing profile
 		  overrides. The digest-bound trust summary records that budget so evidence
@@ -2729,8 +2791,12 @@ redistributable schemas, and official trust/revocation bundles.
 	  kind-specific notary anchor/index/count or rail message/profile/payload
 	  metadata,
 		  complete child-process stdout/stderr previews for every executed canary
-		  stage, rejects timed-out stages,
-		  and timeout-bounded direct receipt archive verification covering canary
+			  stage, rejects timed-out stages, rejects forged canary summaries that
+			  carry both executed `stages` and plan-only `planned_stages` branches,
+			  and readiness replay keeps plan-only compact summaries blocker-producing
+			  only when they retain `stage_windows: []` and explicitly recorded
+			  `receipt_summary: null`,
+			  and timeout-bounded direct receipt archive verification covering canary
 		  receipt digests, receipt filenames, receipt kinds, successful status
 		  metadata, kind-specific compact receipt metadata, and explicit rejection
 		  of rail default-profile fallback unless the local override is recorded by
@@ -2782,6 +2848,8 @@ redistributable schemas, and official trust/revocation bundles.
 		  delivery, caps archived
   canary/trust and XSD/evidence summary JSON inputs at 4 MiB before parsing,
   caps direct receipt-verifier stdout/stderr at 4 MiB before JSON parsing,
+  redacts key/value and identifier-style secret-looking direct receipt-verifier
+  stderr before reporting failed child verifier diagnostics,
 	  rejects receipt,
 	  summary, and emitted profile-override output paths when they contain
 	  control characters, whitespace, leading-dash segments, backslashes,
@@ -2794,14 +2862,20 @@ redistributable schemas, and official trust/revocation bundles.
 		  empty-port, malformed-port, non-canonical-host, invalid-host-label, overlong-url,
 		  overlong-host, percent-escape,
 		  numeric-host/legacy-IPv4-spoofed, IPv6-transition embedded-IPv4,
-		  repeated-separator, or traversal-bearing trust-source URLs,
-		  placeholder trust-source authority/version metadata and `example.invalid`
-		  source provenance,
+			  repeated-separator, or traversal-bearing trust-source URLs,
+			  placeholder trust-source authority/version metadata including `dummy`,
+			  `fake`, `sample`, or `template`, and reserved source provenance hosts
+			  such as `.example`, `example.com`, `example.net`, `example.org`, or
+			  `example.invalid`, and `operator-canary.bank`,
   missing/malformed/future trust-source retrieval timestamps,
   missing/malformed/future or padded trust-summary `verified_at` timestamps, smuggled
-  child command endpoint URLs including localhost/local-private IP literals,
-  known local/private rebinding hostnames, legacy IPv4 numeric notation, or IPv6
-  transition addresses embedding non-global IPv4 addresses,
+  live adapter, canary runbook, child command, and direct receipt endpoint URLs
+  including localhost/local-private IP literals, known local/private rebinding
+  hostnames, reserved documentation hosts such as `.example`, `example.com`,
+  `example.net`, `example.org`, or `example.invalid`, template child-command
+  suffixes such as `operator-canary.bank` even under local insecure-HTTP replay,
+  direct receipt archive endpoints under the same checked-in template suffix,
+  legacy IPv4 numeric notation, or IPv6 transition addresses embedding non-global IPv4 addresses,
   local-only child command flags in either `--flag` or `--flag=value` form, including the notary adapter's
   `--allow-missing-record-sources` diagnostic override, unsupported child
   command flags outside the expected rail/notary/receipt-verifier CLI surfaces,
@@ -2837,10 +2911,14 @@ redistributable schemas, and official trust/revocation bundles.
   official-package gaps until the remaining securities/collateral/legacy-return
   XSDs are checked in. `--require-profile-schema-backed-versions` now uses
   the default `DEFAULT_PROFILES_JSON` catalog when no `--profile-catalog`
-  override is supplied, so the release gate fails directly on the current
-  profile-advertised schema gaps.
-  Optional manifest/profile fields are optional only when
-  omitted; present `null` reviewed reasons, trust/revocation material lists,
+	  override is supplied, so the release gate fails directly on the current
+	  profile-advertised schema gaps.
+  Blocked public XSD candidate evidence now must include at least one explicit
+  redistribution or public-distribution restriction marker; a copyright-only
+  marker list is rejected before manifest summary emission and again during
+  readiness replay.
+	  Optional manifest/profile fields are optional only when
+	  omitted; present `null` reviewed reasons, trust/revocation material lists,
   booleans, numeric caps, business-service arrays, or amount minor-unit arrays
   fail before a digest-bound XSD summary can be emitted. Required and optional
   manifest/profile-catalog strings now reject ASCII control characters before
@@ -2851,6 +2929,8 @@ redistributable schemas, and official trust/revocation bundles.
 		  provenance, manifest schema, fixture, fixture schema-reference, and
 		  archived profile-catalog paths reject embedded whitespace, leading-dash
 		  path segments, or semicolon path parameters before summary emission and during readiness rechecks.
+  Readiness also requires archived XSD summaries to retain the emitted manifest
+  path and explicit profile-catalog object/null state.
 - Completed 2026-06-04: added `scripts/iso_production_readiness.py` as the
   aggregate offline ISO release gate. It verifies digest-bound XSD fixture and
   operator evidence summaries, requires strict schema-backed/fixture-backed XSD

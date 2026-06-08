@@ -21,6 +21,7 @@ requires a new source-proof design, fresh fixtures, SDK/Torii surface review,
 and explicit governance approval rather than reviving diagnostic code paths.
 Retired platform-family lanes are explicitly outside SCCP launch support for
 now.
+Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 The active launch policy is Ethereum-mainnet lane readiness. The active Ethereum launch lane
 can open from complete mainnet source-proof, source-adapter deployment,
 destination rollout, and route-canary evidence without waiting for future

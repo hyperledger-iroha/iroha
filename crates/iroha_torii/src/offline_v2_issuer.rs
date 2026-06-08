@@ -1061,7 +1061,10 @@ fn build_key_certificate(
     let expires_at = now_ms.saturating_add(duration_ms(issuer.certificate_ttl));
     let usage_limit = assertion_usage_limit(request)?;
     Ok(json_object(vec![
-        ("version", number_value(2)),
+        (
+            "version",
+            number_value(u64::from(OFFLINE_NOTE_KEY_CERTIFICATE_VERSION)),
+        ),
         ("platform", string_value(&attestation.platform)),
         ("key_id", string_value(&attestation.key_id)),
         ("device_id", string_value(&request.device_id)),
@@ -2286,6 +2289,29 @@ mod tests {
     }
 
     #[test]
+    fn redeem_route_accepts_legacy_structured_certificate_json_version_two() {
+        let mut request = fixture_redeem_request();
+        let model = chain_admissible_fixture_redeem_model();
+        let mut redemption = redemption_json(&model);
+        let Value::Object(redemption_fields) = &mut redemption else {
+            panic!("expected redemption object");
+        };
+        let certificate = redemption_fields
+            .get_mut("sender_key_certificate")
+            .expect("sender key certificate");
+        insert_field(certificate, "version", number_value(2));
+        insert_field(&mut request.value, "redemption", redemption);
+
+        let parsed = parse_redemption(&request).expect("legacy structured redemption parses");
+
+        assert_eq!(parsed, model);
+        assert_eq!(
+            parsed.sender_key_certificate.version,
+            OFFLINE_NOTE_KEY_CERTIFICATE_VERSION
+        );
+    }
+
+    #[test]
     fn redeem_route_rejects_redemption_for_different_authenticated_account() {
         let mut request = fixture_redeem_request();
         request.account_id = AccountId::new(
@@ -2329,6 +2355,10 @@ mod tests {
 
         let certificate =
             build_key_certificate(&issuer, &request, &attestation, NOW_MS).expect("certificate");
+        assert_eq!(
+            certificate.get("version").and_then(Value::as_u64),
+            Some(u64::from(OFFLINE_NOTE_KEY_CERTIFICATE_VERSION))
+        );
         assert_eq!(
             optional_string(&certificate, "public_key"),
             Some(BASE64_STANDARD.encode(note_key).as_str())

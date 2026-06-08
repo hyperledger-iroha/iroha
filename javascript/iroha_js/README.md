@@ -32,10 +32,26 @@ that need to point at an alternate `native/` folder.
 ## Native Recursive Kagemusha Spend
 
 Native builds expose ABI-6 recursive Kagemusha spend helpers from the crypto
-surface. ABI 7 keeps the reserved `recursive_compact_v1` compact-token symbols
-source-stable, but public compact proving and receiver verification fail closed
-until that token proof composes the private-hop verifier-slice relation
-in-circuit. `preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v1`
+surface. ABI 7 exposes source-stable `recursive_compact_v1` compact-token
+symbols for `kagemusha-recursive-compact-v1` separately from ABI 6 recursive
+spend. Use
+`kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
+and `kagemushaVerifyRecursiveCompactPaymentToken`; gate them with
+`isKagemushaRecursiveCompactPaymentTokenNativeAvailable()` and
+`isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable()`. The
+recursive-spend compact projection verifier is exposed separately as
+`kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(...)`; gate it with
+`isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable()`.
+It accepts raw Norito compact-token and verifier-record archives, rejects empty,
+malformed, oversized, or negative-height inputs before native dispatch, and
+returns the native boolean receiver result. ABI 7 now
+carries the one-hop LEN=4 compact-token proof path when the native host includes
+the packaged compact one-hop proving-key archive and matching verifier-slice
+material. Production defaults still stay on ABI 6 Reserved-lineage recursive
+spend until that archive is shipped and signed for release. A missing packaged
+key, the generic compact-token reservation, and the multi-hop
+verifier-batch reservation still reach the proof-composition reservation and
+remain reserved ABI-7 state. `preferredKagemushaOfflineSpendMode()` selects `recursive_spend_v1`
 when the native host reports bridge ABI 6 or later and every required
 recursive-spend method rejects the malformed availability probe, and otherwise
 falls back to `checked_prefold_v1`: `kagemushaRecursiveSpendInit`,
@@ -64,6 +80,9 @@ material: JavaScript wallet code must pass it through Norito unchanged and must
 not construct, rewrite, or mutate it. The native NAPI host validates
 `vk_commitment`, `public_inputs_schema_hash`, and `domain_tag` against the exact
 previous bundle before proving or returning output bytes.
+Native append streams the previous recursive proof bytes into
+`recursive_proof_chain_digest`; SDK code must not derive or patch the
+accumulator state.
 Production init requests and Reserved-lineage append-output requests must also
 include packaged lineage key artifacts in the raw Norito request:
 `lineage_verifier_key` and `lineage_proving_key_archive`. Missing artifacts are
