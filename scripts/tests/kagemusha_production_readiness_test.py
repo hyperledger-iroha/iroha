@@ -203,33 +203,45 @@ def write_abi7_fail_closed_marker_files(repo: Path) -> None:
                 "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN",
                 "KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES",
                 "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope",
-                "duplicated multi-hop compact Pallas archive must reject before unavailable",
-                "height-aware duplicated multi-hop compact Pallas archive must reject before unavailable",
-                "forged multi-hop compact Pallas metadata must reject before unavailable",
-                "reordered multi-hop compact Pallas archive must reject before unavailable",
-                "height-aware reordered multi-hop compact Pallas archive must reject before unavailable",
-                "fn prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive(",
+                "height-aware detached compact Pallas archive must reject before proving",
+                "height-aware extra compact Pallas opening must reject before proving",
+                "height-aware missing compact Pallas opening must reject before proving",
+                "duplicated multi-hop compact Pallas archive must reject before proving",
+                "height-aware duplicated multi-hop compact Pallas archive must reject before proving",
+                "forged multi-hop compact Pallas metadata must reject before proving",
+                "height-aware forged multi-hop compact Pallas metadata must reject before proving",
+                "reordered multi-hop compact Pallas archive must reject before proving",
+                "height-aware reordered multi-hop compact Pallas archive must reject before proving",
+                "fn prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes(",
                 ") -> Result<(), String> {",
-                "    decode_kagemusha_recursive_compact_pallas_open_envelopes();",
                 "    kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs();",
                 "    validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding();",
-                "    if evidence.aggregation_statement.steps.len() != 1 {",
-                "        return Err(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE.to_owned());",
+                "    prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope_dispatch();",
+                "}",
+                "fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
+                ") -> Result<(), String> {",
+                "    prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes();",
+                "    for hop_index in 1..hop_count {",
+                "        prove_halo2_ipa_kagemusha_recursive_compact_payment_token_append_envelope_dispatch();",
                 "    }",
-                "    match preflight.opening_len {",
-                "        4 => prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope::<4>(),",
+                "}",
+                "fn prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope_dispatch(",
+                ") -> Result<(), String> {",
+                "    prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope::<$len>();",
+                "    match usize::try_from(preflight.opening_len) {",
+                "        4 => prove_len!(4),",
                 "        _ => Err(\"unsupported\".to_owned()),",
                 "    }",
                 "}",
                 "pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(",
                 ") -> Result<(), String> {",
-                "    prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive();",
+                "    prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes();",
                 "    proving_key_bytes;",
                 "    None",
                 "}",
                 "pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_at_height(",
                 ") -> Result<(), String> {",
-                "    prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive();",
+                "    prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes();",
                 "    proving_key_bytes;",
                 "    Some(block_height);",
                 "}",
@@ -278,7 +290,7 @@ def write_abi7_fail_closed_marker_files(repo: Path) -> None:
                 "ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE",
                 "pub unsafe extern \"C\" fn connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(",
                 ") -> c_int {",
-                "    prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive()",
+                "    prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts()",
                 "        .map_err(|err| {",
                 "            if is_kagemusha_recursive_compact_unavailable_error(&err) {",
                 "                BridgeError::KagemushaRecursiveCompactUnavailable",
@@ -290,11 +302,11 @@ def write_abi7_fail_closed_marker_files(repo: Path) -> None:
                 "}",
                 "pub unsafe extern \"C\" fn connect_norito_kagemusha_verify_recursive_compact_payment_token(",
                 ") -> c_int {",
-                "    match preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {",
+                "    match preverify_kagemusha_recursive_compact_payment_token(&token, vk_box) {",
                 "        Err(err) if is_kagemusha_recursive_compact_unavailable_error(&err) => {}",
                 "        _ => {}",
                 "    }",
-                "    verify_kagemusha_recursive_compact_payment_token(&token, &vk_box);",
+                "    verify_kagemusha_recursive_compact_payment_token(&token, vk_box);",
                 "    *out_valid = 0;",
                 "    0",
                 "}",
@@ -521,6 +533,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "artifact_sha256": metadata["signed_evidence_artifact_sha256"],
                     "signed_at_utc": evidence["signed_at_utc"],
                     "signer_public_key_sha256": evidence["signer_public_key_sha256"],
+                    "offline_wallet_apk_path": metadata["offline_wallet_apk_path"],
+                    "offline_wallet_apk_sha256": metadata["offline_wallet_apk_sha256"],
+                    "d2d_payment_transcript_path": metadata[
+                        "d2d_payment_transcript_path"
+                    ],
+                    "d2d_payment_transcript_sha256": metadata[
+                        "d2d_payment_transcript_sha256"
+                    ],
+                    "wallet_integrity_transcript_path": metadata[
+                        "wallet_integrity_transcript_path"
+                    ],
+                    "wallet_integrity_transcript_sha256": metadata[
+                        "wallet_integrity_transcript_sha256"
+                    ],
+                    "attestation_certificate_chain_path": metadata[
+                        "attestation_certificate_chain_path"
+                    ],
+                    "attestation_certificate_chain_sha256": metadata[
+                        "attestation_certificate_chain_sha256"
+                    ],
                 }
 
         self.assertEqual(status, 0)
@@ -530,7 +562,7 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertTrue(summary["abi6_reserved_lineage"]["ok"])
         self.assertEqual(
             summary["abi7_recursive_compact"]["state"],
-            "one_hop_wired_multi_hop_reserved",
+            "package_aware_multi_hop_composed",
         )
         self.assertEqual(
             summary["lineage_key_release_tooling"]["state"],
@@ -739,6 +771,193 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                     "artifact_sha256"
                 ],
             )
+        self.assertEqual(
+            set(manifest["evidence"]["android_slot_artifacts"]),
+            set(manifest["android_device_lab"]["signed_evidence"]),
+        )
+        for slot, artifacts in manifest["evidence"]["android_slot_artifacts"].items():
+            summary = manifest["android_device_lab"]["signed_evidence"][slot]
+            self.assertEqual(
+                set(artifacts),
+                {
+                    "offline_wallet_apk",
+                    "d2d_payment_transcript",
+                    "wallet_integrity_transcript",
+                    "attestation_certificate_chain",
+                },
+            )
+            self.assertEqual(
+                artifacts["offline_wallet_apk"]["path"],
+                f"artifacts/android/device_lab/{slot}/{summary['offline_wallet_apk_path']}",
+            )
+            self.assertEqual(
+                artifacts["offline_wallet_apk"]["sha256"],
+                summary["offline_wallet_apk_sha256"],
+            )
+            self.assertGreater(artifacts["offline_wallet_apk"]["size_bytes"], 0)
+            self.assertEqual(
+                artifacts["d2d_payment_transcript"]["path"],
+                (
+                    f"artifacts/android/device_lab/{slot}/"
+                    f"{summary['d2d_payment_transcript_path']}"
+                ),
+            )
+            self.assertEqual(
+                artifacts["d2d_payment_transcript"]["sha256"],
+                summary["d2d_payment_transcript_sha256"],
+            )
+            self.assertGreater(
+                artifacts["d2d_payment_transcript"]["size_bytes"],
+                0,
+            )
+            self.assertEqual(
+                artifacts["wallet_integrity_transcript"]["path"],
+                (
+                    f"artifacts/android/device_lab/{slot}/"
+                    f"{summary['wallet_integrity_transcript_path']}"
+                ),
+            )
+            self.assertEqual(
+                artifacts["wallet_integrity_transcript"]["sha256"],
+                summary["wallet_integrity_transcript_sha256"],
+            )
+            self.assertGreater(
+                artifacts["wallet_integrity_transcript"]["size_bytes"],
+                0,
+            )
+            self.assertEqual(
+                artifacts["attestation_certificate_chain"]["path"],
+                (
+                    f"artifacts/android/device_lab/{slot}/"
+                    f"{summary['attestation_certificate_chain_path']}"
+                ),
+            )
+            self.assertEqual(
+                artifacts["attestation_certificate_chain"]["sha256"],
+                summary["attestation_certificate_chain_sha256"],
+            )
+            self.assertGreater(
+                artifacts["attestation_certificate_chain"]["size_bytes"],
+                0,
+            )
+
+    def test_kagemusha_release_bundle_rejects_missing_android_slot_apk_after_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            device_lab_root = fixture["device_lab_root"]
+            assert isinstance(summary, dict)
+            assert isinstance(device_lab_root, Path)
+            android = json.loads(json.dumps(summary["android_device_lab"]))
+            slot = next(iter(android["signed_evidence"]))
+            apk_relative = android["signed_evidence"][slot]["offline_wallet_apk_path"]
+            (device_lab_root / slot / apk_relative).unlink()
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                release_bundle.readiness,
+                "check_android_device_lab",
+                return_value=android,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_android_slot_artifact_file_shape", rendered)
+        self.assertIn("kagemusha_release_android_slot_artifact_inventory", rendered)
+
+    def test_kagemusha_release_bundle_rejects_android_slot_attestation_digest_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            device_lab_root = fixture["device_lab_root"]
+            assert isinstance(summary, dict)
+            assert isinstance(device_lab_root, Path)
+            android = json.loads(json.dumps(summary["android_device_lab"]))
+            slot = next(iter(android["signed_evidence"]))
+            chain_relative = android["signed_evidence"][slot][
+                "attestation_certificate_chain_path"
+            ]
+            (device_lab_root / slot / chain_relative).write_bytes(
+                b"tampered attestation chain\n"
+            )
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                release_bundle.readiness,
+                "check_android_device_lab",
+                return_value=android,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_android_slot_artifact_digest_drift", rendered)
+        self.assertIn("kagemusha_release_android_slot_artifact_inventory", rendered)
+
+    def test_kagemusha_release_bundle_rejects_android_slot_d2d_transcript_digest_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            device_lab_root = fixture["device_lab_root"]
+            assert isinstance(summary, dict)
+            assert isinstance(device_lab_root, Path)
+            android = json.loads(json.dumps(summary["android_device_lab"]))
+            slot = next(iter(android["signed_evidence"]))
+            d2d_relative = android["signed_evidence"][slot][
+                "d2d_payment_transcript_path"
+            ]
+            (device_lab_root / slot / d2d_relative).write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                release_bundle.readiness,
+                "check_android_device_lab",
+                return_value=android,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_android_slot_artifact_digest_drift", rendered)
+        self.assertIn("kagemusha_release_android_slot_artifact_inventory", rendered)
+
+    def test_kagemusha_release_bundle_rejects_android_slot_wallet_transcript_digest_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary = fixture["summary"]
+            device_lab_root = fixture["device_lab_root"]
+            assert isinstance(summary, dict)
+            assert isinstance(device_lab_root, Path)
+            android = json.loads(json.dumps(summary["android_device_lab"]))
+            slot = next(iter(android["signed_evidence"]))
+            wallet_relative = android["signed_evidence"][slot][
+                "wallet_integrity_transcript_path"
+            ]
+            (device_lab_root / slot / wallet_relative).write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+
+            with mock.patch.object(
+                release_bundle.readiness,
+                "check_android_device_lab",
+                return_value=android,
+            ):
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    status = release_bundle.main(release_bundle_args(fixture))
+
+        rendered = stderr.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn("kagemusha_release_android_slot_artifact_digest_drift", rendered)
+        self.assertIn("kagemusha_release_android_slot_artifact_inventory", rendered)
 
     def test_kagemusha_release_bundle_rejects_placeholder_compact_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -840,6 +1059,38 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 status = release_bundle.main(release_bundle_args(fixture))
             manifest = json.loads(out.read_text(encoding="utf-8"))
             manifest["evidence"]["readiness_summary"]["sha256"] = "0" * 64
+            write_json(out, manifest)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                verify_status = release_bundle.main(
+                    [
+                        *release_bundle_args(fixture),
+                        "--verify-existing",
+                        "dist/kagemusha-production-release-bundle.json",
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        self.assertEqual(verify_status, 1)
+        self.assertIn(
+            "kagemusha_release_bundle_manifest_drift",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_verify_existing_rejects_missing_android_slot_artifacts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest = json.loads(out.read_text(encoding="utf-8"))
+            del manifest["evidence"]["android_slot_artifacts"]
             write_json(out, manifest)
             stderr = io.StringIO()
 
@@ -1374,6 +1625,179 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn(
             "kagemusha_release_summary_unexpected_section_field",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_unexpected_android_signed_evidence_summary_field(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
+            summary["android_device_lab"]["signed_evidence"][slot][
+                "production_ready_claim"
+            ] = "operator override"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_unexpected_field",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_missing_android_signed_evidence_summary_field(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
+            del summary["android_device_lab"]["signed_evidence"][slot][
+                "d2d_payment_transcript_sha256"
+            ]
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_missing_field",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_nonobject_android_signed_evidence_summary_entry(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
+            summary["android_device_lab"]["signed_evidence"][slot] = "ready"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_shape",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_unsafe_android_signed_evidence_summary_slot_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot, entry = next(
+                iter(summary["android_device_lab"]["signed_evidence"].items())
+            )
+            del summary["android_device_lab"]["signed_evidence"][slot]
+            summary["android_device_lab"]["signed_evidence"][
+                "token=supersecret"
+            ] = entry
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_slot",
+            rendered,
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_release_bundle_rejects_malformed_android_signed_evidence_summary_sha256(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
+            summary["android_device_lab"]["signed_evidence"][slot][
+                "wallet_integrity_transcript_sha256"
+            ] = "A" * 64
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_sha256",
+            stderr.getvalue(),
+        )
+
+    def test_kagemusha_release_bundle_rejects_unsafe_android_signed_evidence_summary_path_without_leak(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
+            summary["android_device_lab"]["signed_evidence"][slot][
+                "d2d_payment_transcript_path"
+            ] = "../token=supersecret.json"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+            rendered = stderr.getvalue()
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_path",
+            rendered,
+        )
+        self.assertNotIn("token=supersecret", rendered)
+
+    def test_kagemusha_release_bundle_rejects_noncanonical_android_signed_evidence_summary_timestamp(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            summary_path = fixture["summary_path"]
+            assert isinstance(summary_path, Path)
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            slot = next(iter(summary["android_device_lab"]["signed_evidence"]))
+            summary["android_device_lab"]["signed_evidence"][slot][
+                "signed_at_utc"
+            ] = "2026-06-06T00:00:00+00:00"
+            write_json(summary_path, summary)
+            stderr = io.StringIO()
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                status = release_bundle.main(release_bundle_args(fixture))
+
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "kagemusha_release_summary_android_signed_evidence_timestamp",
             stderr.getvalue(),
         )
 
@@ -2928,8 +3352,37 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             result = readiness.check_abi7_fail_closed(repo)
 
         self.assertTrue(result["ok"])
-        self.assertEqual("one_hop_wired_multi_hop_reserved", result["state"])
+        self.assertEqual("package_aware_multi_hop_composed", result["state"])
         self.assertEqual([], result["blockers"])
+
+    def test_abi7_fail_closed_rejects_dispatch_without_checked_opening_len_conversion(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp) / "repo"
+            write_abi7_fail_closed_marker_files(repo)
+            core_path = repo / "crates/iroha_core/src/zk.rs"
+            core_text = core_path.read_text(encoding="utf-8")
+            core_path.write_text(
+                core_text.replace(
+                    "match usize::try_from(preflight.opening_len)",
+                    "match preflight.opening_len",
+                ),
+                encoding="utf-8",
+            )
+
+            result = readiness.check_abi7_fail_closed(repo)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            {
+                "code": "abi7_fail_closed_contract_missing",
+                "function": "fn prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope_dispatch(",
+                "marker": "match usize::try_from(preflight.opening_len)",
+                "message": "ABI-7 recursive compact launch-boundary function contract is missing",
+            },
+            result["blockers"],
+        )
 
     def test_abi7_fail_closed_rejects_preverify_contract_without_unavailable_error(
         self,
@@ -3141,11 +3594,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
     def test_missing_compact_key_evidence_blocks_rollup_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            result = readiness.check_compact_key_evidence(
-                Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
-            )
+            missing_path = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            result = readiness.check_compact_key_evidence(missing_path)
 
         self.assertFalse(result["ok"])
+        self.assertEqual(
+            readiness.COMPACT_KEY_EVIDENCE_SUMMARY_LABEL,
+            result["path"],
+        )
+        self.assertNotIn(str(missing_path.parent), json.dumps(result))
         self.assertIn(
             "compact_key_evidence_missing",
             {item["code"] for item in result["blockers"]},
@@ -4151,11 +4608,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
 
     def test_missing_lineage_proof_evidence_blocks_rollup_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            result = readiness.check_lineage_proof_evidence(
-                Path(temp) / "missing-lineage-proof-evidence.json"
-            )
+            missing_path = Path(temp) / readiness.LINEAGE_PROOF_EVIDENCE_FILENAME
+            result = readiness.check_lineage_proof_evidence(missing_path)
 
         self.assertFalse(result["ok"])
+        self.assertEqual(
+            readiness.LINEAGE_PROOF_EVIDENCE_SUMMARY_LABEL,
+            result["path"],
+        )
+        self.assertNotIn(str(missing_path.parent), json.dumps(result))
         self.assertIn(
             "lineage_proof_evidence_missing",
             {item["code"] for item in result["blockers"]},

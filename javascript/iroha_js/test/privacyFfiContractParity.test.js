@@ -220,8 +220,12 @@ const EXPECTED_SDK_PRIVACY_PRODUCTION_GATE_MISSING_REASONS = Object.freeze([
   "chain admission path is not enabled",
   "cross-SDK parity is incomplete",
   "wallet/state support is incomplete",
+  "witness privacy checks are incomplete",
   "deterministic tests are incomplete",
+  "negative/adversarial tests are incomplete",
   "fuzzing gate is incomplete",
+  "parser fuzzing gate is incomplete",
+  "verifier fuzzing gate is incomplete",
   "performance gate is incomplete",
   "external audit signoff is missing",
   "implementation stage is not production-hardened",
@@ -352,8 +356,12 @@ const EXPECTED_JAVA_PRIVACY_CAPABILITY_FIELDS = Object.freeze([
   "chainAdmission",
   "sdkParity",
   "walletState",
+  "witnessPrivacyChecks",
   "deterministicTests",
+  "negativeAdversarialTests",
   "fuzzing",
+  "parserFuzzing",
+  "verifierFuzzing",
   "performanceGates",
   "externalAudit",
   "missingProductionGates",
@@ -624,7 +632,7 @@ function extractJsCatalogProductionGateMissingReasons(text, label) {
   const requirements = [...requirementsBlock.matchAll(/Object\.freeze\(\["[^"]+",\s*"([^"]+)"\]\)/gu)].map(
     (match) => match[1],
   );
-  assert.equal(requirements.length, 9, `${label} production gate requirement count drifted`);
+  assert.equal(requirements.length, 13, `${label} production gate requirement count drifted`);
   const supplemental = [
     "PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE",
     "PRODUCTION_GATE_MISSING_PLANNED_SDK",
@@ -649,7 +657,7 @@ function extractPythonCatalogProductionGateMissingReasons(text, label) {
   const requirements = [...requirementsBlock.matchAll(/\("[^"]+",\s*"([^"]+)"\)/gu)].map(
     (match) => match[1],
   );
-  assert.equal(requirements.length, 9, `${label} production gate requirement count drifted`);
+  assert.equal(requirements.length, 13, `${label} production gate requirement count drifted`);
   const supplemental = [
     "PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE",
     "PRODUCTION_GATE_MISSING_PLANNED_SDK",
@@ -1355,8 +1363,8 @@ test("privacy FFI public symbol names stay stable across native bindings", () =>
   );
   assert.match(
     connectBridge,
-    /fn\s+iroha_privacy_free_buffer\([^)]*\)\s*\{[\s\S]*?connect_norito_free\(ptr_\);[\s\S]*?\}/,
-    "privacy free-buffer symbol must delegate to the bridge allocator free path",
+    /fn\s+iroha_privacy_free_buffer\([^)]*\)\s*\{[\s\S]*?clear_privacy_allocated_buffer\(ptr_\)[\s\S]*?free\(base\s+as\s+\*mut\s+_\);[\s\S]*?\}/,
+    "privacy free-buffer symbol must zeroize and free the private privacy allocation base",
   );
 
   for (const symbol of EXPECTED_PRIVACY_C_FFI_SYMBOLS) {
@@ -1589,7 +1597,7 @@ test("native privacy FFI hosts remain Norito-only and JSON-free", () => {
         "unsafe fn read_privacy_request",
         "C bridge privacy output encoder",
       ),
-      /let\s+result\s*=[\s\S]*write_bytes\(out_ptr,\s*out_len,\s*&bytes\)[\s\S]*bytes\.fill\(0\)[\s\S]*result/,
+      /let\s+result\s*=[\s\S]*write_privacy_bytes\(out_ptr,\s*out_len,\s*&bytes\)[\s\S]*bytes\.fill\(0\)[\s\S]*result/,
     ],
     [
       "JS NAPI privacy FFI",
@@ -2306,7 +2314,7 @@ test("native privacy FFI production-disabled responses enumerate all gates", () 
   ]) {
     assert.match(
       text,
-      /const\s+PRIVACY_PRODUCTION_DISABLED_MESSAGE:\s*&str\s*=\s*"[^"]*exact protocol implementation[^"]*real proving[^"]*real verification[^"]*chain admission[^"]*cross-SDK parity[^"]*wallet\/state support[^"]*deterministic tests[^"]*fuzzing[^"]*performance gates[^"]*external audit[^"]*real protocol engine[^"]*Iroha production allowlist[^"]*"/,
+      /const\s+PRIVACY_PRODUCTION_DISABLED_MESSAGE:\s*&str\s*=\s*"[^"]*exact protocol implementation[^"]*real proving[^"]*real verification[^"]*chain admission[^"]*cross-SDK parity[^"]*wallet\/state support[^"]*witness privacy checks[^"]*deterministic tests[^"]*negative\/adversarial tests[^"]*fuzzing[^"]*parser fuzzing[^"]*verifier fuzzing[^"]*performance gates[^"]*external audit[^"]*real protocol engine[^"]*Iroha production allowlist[^"]*"/,
       `${label} must enumerate every production-disabled gate in the public result message`,
     );
     for (const snippet of [
@@ -2326,7 +2334,7 @@ test("native privacy FFI production-disabled responses enumerate all gates", () 
     );
     assert.match(
       text,
-      /privacy_build_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*(?:iroha_privacy_build_proof_v1|PrivacyProofOperationV1::Build)[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*for fragment in \[[\s\S]*"exact protocol implementation"[\s\S]*"real proving"[\s\S]*"real verification"[\s\S]*"chain admission"[\s\S]*"cross-SDK parity"[\s\S]*"wallet\/state support"[\s\S]*"deterministic tests"[\s\S]*"fuzzing"[\s\S]*"performance gates"[\s\S]*"external audit"[\s\S]*"real protocol engine"[\s\S]*"Iroha production allowlist"[\s\S]*result\.message\.contains\(fragment\)[\s\S]*!result\.message\.contains\("secret"\)/,
+      /privacy_build_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*(?:iroha_privacy_build_proof_v1|PrivacyProofOperationV1::Build)[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*for fragment in \[[\s\S]*"exact protocol implementation"[\s\S]*"real proving"[\s\S]*"real verification"[\s\S]*"chain admission"[\s\S]*"cross-SDK parity"[\s\S]*"wallet\/state support"[\s\S]*"witness privacy checks"[\s\S]*"deterministic tests"[\s\S]*"negative\/adversarial tests"[\s\S]*"fuzzing"[\s\S]*"parser fuzzing"[\s\S]*"verifier fuzzing"[\s\S]*"performance gates"[\s\S]*"external audit"[\s\S]*"real protocol engine"[\s\S]*"Iroha production allowlist"[\s\S]*result\.message\.contains\(fragment\)[\s\S]*!result\.message\.contains\("secret"\)/,
       `${label} must test that production-disabled build results name every gate without witness leakage`,
     );
     assert.match(
@@ -2336,7 +2344,7 @@ test("native privacy FFI production-disabled responses enumerate all gates", () 
     );
     assert.match(
       text,
-      /privacy_verify_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*(?:iroha_privacy_verify_proof_v1|PrivacyProofOperationV1::Verify)[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*for fragment in \[[\s\S]*"exact protocol implementation"[\s\S]*"real proving"[\s\S]*"real verification"[\s\S]*"chain admission"[\s\S]*"cross-SDK parity"[\s\S]*"wallet\/state support"[\s\S]*"deterministic tests"[\s\S]*"fuzzing"[\s\S]*"performance gates"[\s\S]*"external audit"[\s\S]*"real protocol engine"[\s\S]*"Iroha production allowlist"[\s\S]*result\.message\.contains\(fragment\)[\s\S]*!result\.message\.contains\("secret"\)/,
+      /privacy_verify_proof_rejects_supported_algorithm_until(?:_production)?_gate_passes[\s\S]*(?:iroha_privacy_verify_proof_v1|PrivacyProofOperationV1::Verify)[\s\S]*PRIVACY_FFI_ERROR_PRODUCTION_DISABLED[\s\S]*for fragment in \[[\s\S]*"exact protocol implementation"[\s\S]*"real proving"[\s\S]*"real verification"[\s\S]*"chain admission"[\s\S]*"cross-SDK parity"[\s\S]*"wallet\/state support"[\s\S]*"witness privacy checks"[\s\S]*"deterministic tests"[\s\S]*"negative\/adversarial tests"[\s\S]*"fuzzing"[\s\S]*"parser fuzzing"[\s\S]*"verifier fuzzing"[\s\S]*"performance gates"[\s\S]*"external audit"[\s\S]*"real protocol engine"[\s\S]*"Iroha production allowlist"[\s\S]*result\.message\.contains\(fragment\)[\s\S]*!result\.message\.contains\("secret"\)/,
       `${label} must test that production-disabled verify results name every gate without proof leakage`,
     );
     assert.match(
@@ -3527,9 +3535,9 @@ test("native chain proof admission uses explicit production verifier backend all
       `${label} must admit only explicit FCMP++ plus aliases before tag alias compaction`,
     );
     assert.ok(
-      text.includes("!/^[a-z0-9/_.:-]+$/u.test(backend)") &&
+      text.includes("!/^[A-Za-z0-9/_.:+-]+$/u.test(backend)") &&
         text.includes('["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]'),
-      `${label} must keep verifier backend labels lowercase, path-safe, and portable while admitting explicit FCMP++ aliases`,
+      `${label} must keep verifier backend labels ASCII, path-safe, and portable while admitting explicit FCMP++ aliases`,
     );
   }
   for (const [label, text] of [
@@ -3561,7 +3569,7 @@ test("native chain proof admission uses explicit production verifier backend all
       `${label} must reject unsupported updateVerifyingKey backends before fetch`,
     );
     assert.ok(
-      text.includes("!/^[a-z0-9/_.:-]+$/u.test(backend)") &&
+      text.includes("!/^[A-Za-z0-9/_.:+-]+$/u.test(backend)") &&
         text.includes('["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]'),
       `${label} must reject spaces and unsafe separators in verifier backend labels before request dispatch while preserving portable plus aliases`,
     );
@@ -4212,22 +4220,22 @@ test("SDK privacy native tests clear request copies after native failures", () =
   }
 });
 
-test("JS and Python privacy availability probes clear request copies after failures", () => {
+test("JS and Python privacy availability probes clear temporary copies after probe use", () => {
   const surfaces = [
     [
       "JS source privacy native tests",
       source("javascript/iroha_js/test/privacyNative.test.js"),
-      /availability probes clear request copies after native failures[\s\S]*probe failure after request copy[\s\S]*throwingProbe[\s\S]*badOutputProbe[\s\S]*Buffer\.alloc\(privacyNoritoFrame\(0x52\)\.length\)/,
+      /availability probes build and verify with Norito request archives[\s\S]*capabilitiesOutput[\s\S]*buildOutput[\s\S]*verifyOutput[\s\S]*every\(\(value\) => value === 0\)[\s\S]*availability probes clear request copies after native failures[\s\S]*badOutput[\s\S]*Buffer\.alloc\(1\)/,
     ],
     [
       "JS package dist privacy native tests",
       source("javascript/iroha_js/test/package_dist.test.js"),
-      /availability clears request copies after failures[\s\S]*probe failure after request copy[\s\S]*throwingProbe[\s\S]*badOutputProbe[\s\S]*Buffer\.alloc\(privacyNoritoFrame\(0x52\)\.length\)/,
+      /availability clears request copies after failures[\s\S]*probe failure after request copy[\s\S]*throwingProbe[\s\S]*badOutputProbe[\s\S]*Buffer\.alloc\(privacyNoritoFrame\(0x52\)\.length\)[\s\S]*badOutput[\s\S]*Buffer\.alloc\(1\)/,
     ],
     [
       "Python privacy native tests",
       source("python/iroha_python/tests/crypto_algorithms_test.py"),
-      /availability_probes_clear_request_copies_after_failures[\s\S]*probe failure after request copy[\s\S]*throwing_native\.build_request[\s\S]*all\(value == 0 for value in throwing_native\.build_request\)[\s\S]*bad_output_native\.verify_request[\s\S]*all\(value == 0 for value in bad_output_native\.verify_request\)/,
+      /availability_probes_use_norito_request_archives[\s\S]*capabilities_output[\s\S]*build_output[\s\S]*verify_output[\s\S]*all\(value == 0 for value in native\.capabilities_output\)[\s\S]*availability_probes_clear_request_copies_after_failures[\s\S]*bad_output_native\.verify_output[\s\S]*all\(value == 0 for value in bad_output_native\.verify_output\)/,
     ],
   ];
 
@@ -4235,7 +4243,7 @@ test("JS and Python privacy availability probes clear request copies after failu
     assert.match(
       text,
       pattern,
-      `${label} must prove availability probe requests are zeroed after failures`,
+      `${label} must prove availability probe requests and outputs are zeroed after use`,
     );
   }
 });
@@ -6114,8 +6122,8 @@ test("privacy native availability proof probes use shared Norito request archive
         "function hasPrivacyNative",
         `${label} privacy native probe`,
       ),
-      /privacyNativeOutputToBuffer\(result,\s*operation\)/,
-      `${label} privacy probes must route native output through the capped archive decoder`,
+      /privacyNativeOutputToBuffer\(result,\s*operation,\s*\{\s*clearSource:\s*true\s*\}\)/,
+      `${label} privacy probes must route native output through the capped archive decoder and clear probe output`,
     );
     assert.match(
       sliceBetween(
@@ -6192,8 +6200,8 @@ test("privacy native availability proof probes use shared Norito request archive
       "def _invoke_privacy_native",
       "Python privacy native probe",
     ),
-    /_privacy_output_archive\(operation,\s*result\)/,
-    "Python privacy probes must route native output through the capped archive decoder",
+    /_privacy_output_archive\(operation,\s*result\)[\s\S]*finally:[\s\S]*_clear_privacy_native_output\(result\)/,
+    "Python privacy probes must route native output through the capped archive decoder and clear probe output",
   );
   assert.match(
     sliceBetween(

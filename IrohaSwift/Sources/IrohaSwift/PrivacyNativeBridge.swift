@@ -30,8 +30,12 @@ public struct PrivacyProductionGate: Equatable, Sendable {
         "chain admission path is not enabled",
         "cross-SDK parity is incomplete",
         "wallet/state support is incomplete",
+        "witness privacy checks are incomplete",
         "deterministic tests are incomplete",
+        "negative/adversarial tests are incomplete",
         "fuzzing gate is incomplete",
+        "parser fuzzing gate is incomplete",
+        "verifier fuzzing gate is incomplete",
         "performance gate is incomplete",
         "external audit signoff is missing",
         "implementation stage is not production-hardened",
@@ -47,8 +51,12 @@ public struct PrivacyProductionGate: Equatable, Sendable {
     public let chainAdmission: Bool
     public let sdkParity: Bool
     public let walletState: Bool
+    public let witnessPrivacyChecks: Bool
     public let deterministicTests: Bool
+    public let negativeAdversarialTests: Bool
     public let fuzzing: Bool
+    public let parserFuzzing: Bool
+    public let verifierFuzzing: Bool
     public let performanceGates: Bool
     public let externalAudit: Bool
     public let missing: [String]
@@ -66,8 +74,12 @@ public struct PrivacyProductionGate: Equatable, Sendable {
         chainAdmission = false
         sdkParity = false
         walletState = false
+        witnessPrivacyChecks = false
         deterministicTests = false
+        negativeAdversarialTests = false
         fuzzing = false
+        parserFuzzing = false
+        verifierFuzzing = false
         performanceGates = false
         externalAudit = false
         missing = Self.missingReasons

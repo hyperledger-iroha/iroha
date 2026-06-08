@@ -27,11 +27,55 @@ DEFAULT_READINESS_SUMMARY_PATH = "dist/kagemusha-production-readiness.json"
 DEFAULT_RELEASE_BUNDLE_OUT = "dist/kagemusha-production-release-bundle.json"
 
 SUMMARY_REQUIRED_SECTION_STATES: dict[str, str] = {
-    "abi7_recursive_compact": "one_hop_wired_multi_hop_reserved",
+    "abi7_recursive_compact": "package_aware_multi_hop_composed",
     "lineage_key_release_tooling": "record_artifacts_wired",
     "lineage_proof_evidence": "production_width_proof_passed",
     "compact_key_evidence": "compact_key_artifacts_validated",
 }
+ANDROID_SLOT_RELEASE_ARTIFACTS: tuple[tuple[str, str, str], ...] = (
+    (
+        "offline_wallet_apk",
+        "offline_wallet_apk_path",
+        "offline_wallet_apk_sha256",
+    ),
+    (
+        "d2d_payment_transcript",
+        "d2d_payment_transcript_path",
+        "d2d_payment_transcript_sha256",
+    ),
+    (
+        "wallet_integrity_transcript",
+        "wallet_integrity_transcript_path",
+        "wallet_integrity_transcript_sha256",
+    ),
+    (
+        "attestation_certificate_chain",
+        "attestation_certificate_chain_path",
+        "attestation_certificate_chain_sha256",
+    ),
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS = frozenset(
+    (
+        "signed_at_utc",
+        "artifact_sha256",
+        "signer_public_key_sha256",
+        *(
+            field
+            for _, path_field, digest_field in ANDROID_SLOT_RELEASE_ARTIFACTS
+            for field in (path_field, digest_field)
+        ),
+    )
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS = frozenset(
+    path_field for _, path_field, _ in ANDROID_SLOT_RELEASE_ARTIFACTS
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS = frozenset(
+    (
+        "artifact_sha256",
+        "signer_public_key_sha256",
+        *(digest_field for _, _, digest_field in ANDROID_SLOT_RELEASE_ARTIFACTS),
+    )
+)
 SUMMARY_ALLOWED_TOP_LEVEL_KEYS = frozenset(
     (
         "schema",
@@ -425,6 +469,138 @@ def _contains_secret_string(value: Any) -> bool:
     return False
 
 
+def _check_android_signed_evidence_summary_shape(
+    android: dict[str, Any],
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    signed_evidence_summary = android.get("signed_evidence")
+    if not isinstance(signed_evidence_summary, dict):
+        return [
+            _blocker(
+                "kagemusha_release_summary_android_signed_evidence_shape",
+                "Android signed-evidence summary must be a JSON object",
+            )
+        ]
+    if not signed_evidence_summary:
+        return [
+            _blocker(
+                "kagemusha_release_summary_android_signed_evidence_shape",
+                "Android signed-evidence summary must not be empty",
+            )
+        ]
+
+    for raw_slot, entry in signed_evidence_summary.items():
+        slot, slot_blockers = _validate_android_manifest_slot(raw_slot)
+        for blocker in slot_blockers:
+            blockers.append(
+                {
+                    **blocker,
+                    "code": "kagemusha_release_summary_android_signed_evidence_slot",
+                }
+            )
+        display_slot = _display_summary_field(raw_slot)
+        if not isinstance(entry, dict):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_signed_evidence_shape",
+                    "Android signed-evidence summary slot entry must be a JSON object",
+                    slot=display_slot,
+                )
+            )
+            continue
+
+        unexpected_fields = sorted(
+            set(entry) - ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS
+        )
+        for field in unexpected_fields:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_signed_evidence_unexpected_field",
+                    "Android signed-evidence summary slot entry contains an unexpected field",
+                    slot=display_slot,
+                    field=_display_summary_field(field),
+                )
+            )
+        missing_fields = sorted(
+            ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS - set(entry)
+        )
+        for field in missing_fields:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_signed_evidence_missing_field",
+                    "Android signed-evidence summary slot entry is missing a required field",
+                    slot=display_slot,
+                    field=field,
+                )
+            )
+
+        for field in sorted(ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS & set(entry)):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_signed_evidence_value",
+                        "Android signed-evidence summary field must be a non-empty string",
+                        slot=display_slot,
+                        field=field,
+                    )
+                )
+                continue
+            if field == "signed_at_utc":
+                if not device_lab.SIGNED_AT_UTC_RE.fullmatch(value):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_timestamp",
+                            "Android signed-evidence summary timestamp must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+                            slot=display_slot,
+                        )
+                    )
+                    continue
+                _, timestamp_blocker = readiness.parse_utc_timestamp(
+                    value,
+                    "Android signed-evidence summary signed_at_utc",
+                )
+                if timestamp_blocker is not None:
+                    timestamp_blocker["code"] = (
+                        "kagemusha_release_summary_android_signed_evidence_timestamp"
+                    )
+                    timestamp_blocker["slot"] = display_slot
+                    blockers.append(timestamp_blocker)
+            elif field in ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS:
+                if (
+                    not device_lab.SHA256_HEX_RE.fullmatch(value)
+                    or value == "0" * 64
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_sha256",
+                            "Android signed-evidence summary field must be a non-zero lowercase sha256 hex digest",
+                            slot=display_slot,
+                            field=field,
+                        )
+                    )
+            elif field in ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS:
+                path_errors: list[str] = []
+                if (
+                    device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                        value,
+                        path_errors,
+                        f"Android signed-evidence summary {field}",
+                    )
+                    is None
+                ):
+                    blockers.extend(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_path",
+                            error,
+                            slot=display_slot,
+                            field=field,
+                        )
+                        for error in path_errors
+                    )
+    return blockers
+
+
 def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     if _contains_secret_string(summary):
@@ -509,6 +685,8 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 "Android device-lab summary must cover the full standard matrix",
             )
         )
+    else:
+        blockers.extend(_check_android_signed_evidence_summary_shape(android))
     for name, state in SUMMARY_REQUIRED_SECTION_STATES.items():
         section = _section(summary, name)
         if section is None or section.get("ok") is not True or section.get("state") != state:
@@ -870,6 +1048,123 @@ def _android_signed_evidence_entries(
     return entries, blockers
 
 
+def _android_slot_artifact_entries(
+    device_lab_root: Path,
+    bundle_root: Path,
+    android: dict[str, Any],
+) -> tuple[dict[str, dict[str, dict[str, Any]]], list[dict[str, Any]]]:
+    entries: dict[str, dict[str, dict[str, Any]]] = {}
+    blockers: list[dict[str, Any]] = []
+    signed_evidence_summary = android.get("signed_evidence", {})
+    if not isinstance(signed_evidence_summary, dict):
+        return entries, [
+            _blocker(
+                "kagemusha_release_android_slot_artifact_summary",
+                "Android signed-evidence summary must be a JSON object",
+            )
+        ]
+
+    for report in android.get("slots", []):
+        if not isinstance(report, dict) or report.get("status") != "ok":
+            continue
+        slot, slot_blockers = _validate_android_manifest_slot(report.get("slot"))
+        blockers.extend(slot_blockers)
+        if slot is None:
+            continue
+        kagemusha = report.get("kagemusha", {})
+        summary_entry = signed_evidence_summary.get(slot)
+        if not isinstance(kagemusha, dict) or not isinstance(summary_entry, dict):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_android_slot_artifact_summary",
+                    "validated Android slot artifacts are missing from the readiness summary",
+                    slot=slot,
+                )
+            )
+            continue
+
+        slot_entries: dict[str, dict[str, Any]] = {}
+        for artifact_kind, path_field, digest_field in ANDROID_SLOT_RELEASE_ARTIFACTS:
+            expected_path = summary_entry.get(path_field)
+            expected_digest = summary_entry.get(digest_field)
+            if (
+                not isinstance(expected_path, str)
+                or not expected_path
+                or not isinstance(expected_digest, str)
+                or not expected_digest
+                or kagemusha.get(path_field) != expected_path
+                or kagemusha.get(digest_field) != expected_digest
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_android_slot_artifact_summary_drift",
+                        "Android slot artifact summary no longer matches validated device-lab report",
+                        slot=slot,
+                        artifact=artifact_kind,
+                    )
+                )
+                continue
+
+            path_errors: list[str] = []
+            safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                expected_path,
+                path_errors,
+                f"Android slot artifact {artifact_kind}",
+            )
+            if safe_relative is None:
+                blockers.extend(
+                    _blocker(
+                        "kagemusha_release_android_slot_artifact_path",
+                        error,
+                        slot=slot,
+                        artifact=artifact_kind,
+                    )
+                    for error in path_errors
+                )
+                continue
+
+            entry, entry_blockers = _evidence_entry_with_size(
+                device_lab_root / slot / safe_relative,
+                bundle_root,
+                label=f"Android slot artifact {artifact_kind}",
+                code="kagemusha_release_android_slot_artifact_file_shape",
+            )
+            blockers.extend(entry_blockers)
+            if entry is None:
+                continue
+            if expected_digest != entry["sha256"]:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_android_slot_artifact_digest_drift",
+                        "Android slot artifact digest no longer matches validated readiness summary",
+                        slot=slot,
+                        artifact=artifact_kind,
+                    )
+                )
+                continue
+            slot_entries[artifact_kind] = entry
+
+        if set(slot_entries) != {item[0] for item in ANDROID_SLOT_RELEASE_ARTIFACTS}:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_android_slot_artifact_inventory",
+                    "Android slot artifact inventory must include every release-critical artifact",
+                    slot=slot,
+                )
+            )
+            continue
+        entries[slot] = slot_entries
+
+    if set(entries) != set(signed_evidence_summary):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_android_slot_artifact_inventory",
+                "Android slot artifact inventory must match validated readiness summary slots",
+            )
+        )
+    return entries, blockers
+
+
 def _bundle_evidence_paths(bundle: dict[str, Any]) -> set[str]:
     paths: set[str] = set()
 
@@ -1172,6 +1467,15 @@ def build_release_bundle(
         blockers.extend(android_entry_blockers)
         if android_signed_entries:
             evidence_entries["android_signed_evidence"] = android_signed_entries
+
+        android_slot_entries, android_slot_blockers = _android_slot_artifact_entries(
+            device_lab_root,
+            bundle_root,
+            android,
+        )
+        blockers.extend(android_slot_blockers)
+        if android_slot_entries:
+            evidence_entries["android_slot_artifacts"] = android_slot_entries
 
     manifest: dict[str, Any] = {
         "schema": RELEASE_BUNDLE_SCHEMA,

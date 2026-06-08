@@ -1,6 +1,11 @@
 import Foundation
 
 extension SwiftTransactionEncoder {
+    private static func encodeTransactionMetadataJSON(_ metadata: [String: ToriiJSONValue]) throws -> Data? {
+        guard !metadata.isEmpty else { return nil }
+        return try JSONEncoder().encode(metadata)
+    }
+
     static func encodeIssueOfflineNote(request: IssueOfflineNoteRequest,
                                          keypair: Keypair,
                                          creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
@@ -29,7 +34,8 @@ extension SwiftTransactionEncoder {
                 ttlMs: request.ttlMs,
                 nonce: request.nonce,
                 issueModel: issueModel,
-                privateKey: privateKey
+                privateKey: privateKey,
+                metadataJSON: try encodeTransactionMetadataJSON(request.metadata)
             )
         }
         return try wrap(native: native)
@@ -64,7 +70,8 @@ extension SwiftTransactionEncoder {
                 ttlMs: request.ttlMs,
                 nonce: request.nonce,
                 redemptionModel: redemptionModel,
-                privateKey: privateKey
+                privateKey: privateKey,
+                metadataJSON: try encodeTransactionMetadataJSON(request.metadata)
             )
         }
         return try wrap(native: native)
@@ -104,7 +111,8 @@ extension SwiftTransactionEncoder {
                 nonce: request.nonce,
                 bearerAuditTrail: bearerAuditTrail,
                 redemptionModel: redemptionModel,
-                privateKey: privateKey
+                privateKey: privateKey,
+                metadataJSON: try encodeTransactionMetadataJSON(request.metadata)
             )
         }
         return try wrap(native: native)
@@ -139,7 +147,8 @@ extension SwiftTransactionEncoder {
                 ttlMs: request.ttlMs,
                 nonce: request.nonce,
                 auditModel: auditModel,
-                privateKey: privateKey
+                privateKey: privateKey,
+                metadataJSON: try encodeTransactionMetadataJSON(request.metadata)
             )
         }
         return try wrap(native: native)

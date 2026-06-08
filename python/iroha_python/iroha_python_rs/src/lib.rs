@@ -4188,21 +4188,27 @@ fn kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pal
     py: Python<'_>,
     record_bundle_archive: &[u8],
     pallas_open_envelopes_archive: &[u8],
+    recursive_compact_key_artifacts_archive: &[u8],
 ) -> PyResult<Py<PyBytes>> {
     let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
         decode_kagemusha_recursive_archive(
             record_bundle_archive,
             "Kagemusha recursive compact record bundle",
         )?;
+    let key_artifacts: iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1 =
+        decode_kagemusha_recursive_archive(
+            recursive_compact_key_artifacts_archive,
+            "Kagemusha recursive compact key artifacts",
+        )?;
     ensure_kagemusha_recursive_archive_len(
         pallas_open_envelopes_archive.len(),
         "pallas_open_envelopes_archive",
     )?;
     let token =
-        iroha_core::zk::prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(
+        iroha_core::zk::prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
             &record_bundle,
             pallas_open_envelopes_archive,
-            None,
+            &key_artifacts,
         )
         .map_err(|err| {
             if err.starts_with(
@@ -4316,22 +4322,32 @@ fn kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height_p
 #[pyo3(name = "kagemusha_verify_recursive_compact_payment_token")]
 fn kagemusha_verify_recursive_compact_payment_token_py(
     compact_token_archive: &[u8],
+    recursive_compact_verifier_keys_archive: &[u8],
 ) -> PyResult<bool> {
     let token: iroha_data_model::offline::KagemushaCompactPaymentToken =
         decode_kagemusha_recursive_archive(
             compact_token_archive,
             "Kagemusha recursive compact payment token",
         )?;
-    let vk_box = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
+    let verifier_keys: iroha_data_model::offline::KagemushaRecursiveCompactVerifierKeysV1 =
+        decode_kagemusha_recursive_archive(
+            recursive_compact_verifier_keys_archive,
+            "Kagemusha recursive compact verifier keys",
+        )?;
+    let vk_box =
+        iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+            &token,
+            &verifier_keys,
+        )
         .map_err(PyRuntimeError::new_err)?;
-    match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
+    match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, vk_box) {
         Err(err) if is_kagemusha_recursive_compact_unavailable_error(&err) => {
             return Ok(false);
         }
         Err(err) => return Err(PyValueError::new_err(err)),
         Ok(()) => {}
     }
-    if iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
+    if iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, vk_box) {
         return Ok(true);
     }
     Ok(false)
@@ -7915,8 +7931,12 @@ mod tests {
             "chain admission",
             "cross-SDK parity",
             "wallet/state support",
+            "witness privacy checks",
             "deterministic tests",
+            "negative/adversarial tests",
             "fuzzing",
+            "parser fuzzing",
+            "verifier fuzzing",
             "performance gates",
             "external audit",
             "real protocol engine",
@@ -7979,8 +7999,12 @@ mod tests {
             "chain admission",
             "cross-SDK parity",
             "wallet/state support",
+            "witness privacy checks",
             "deterministic tests",
+            "negative/adversarial tests",
             "fuzzing",
+            "parser fuzzing",
+            "verifier fuzzing",
             "performance gates",
             "external audit",
             "real protocol engine",
@@ -9353,6 +9377,40 @@ mod tests {
         norito::to_bytes(&token).expect("encode Python multi-row recursive compact token")
     }
 
+    fn recursive_compact_key_artifacts_for_python()
+    -> &'static iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1 {
+        static KEY_ARTIFACTS: OnceLock<
+            iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1,
+        > = OnceLock::new();
+        KEY_ARTIFACTS.get_or_init(|| {
+            iroha_core::zk::kagemusha_recursive_compact_payment_token_key_artifacts()
+                .expect("Python recursive compact key artifacts")
+        })
+    }
+
+    fn recursive_compact_key_artifacts_archive_for_python() -> &'static [u8] {
+        static ARCHIVE: OnceLock<Vec<u8>> = OnceLock::new();
+        ARCHIVE
+            .get_or_init(|| {
+                norito::to_bytes(recursive_compact_key_artifacts_for_python())
+                    .expect("encode Python recursive compact key artifacts")
+            })
+            .as_slice()
+    }
+
+    fn recursive_compact_verifier_keys_archive_for_python() -> &'static [u8] {
+        static ARCHIVE: OnceLock<Vec<u8>> = OnceLock::new();
+        ARCHIVE
+            .get_or_init(|| {
+                let verifier_keys = recursive_compact_key_artifacts_for_python()
+                    .verifier_keys()
+                    .expect("Python recursive compact verifier keys");
+                norito::to_bytes(&verifier_keys)
+                    .expect("encode Python recursive compact verifier keys")
+            })
+            .as_slice()
+    }
+
     fn provider_metadata(provider_id: &str) -> PyProviderMetadata {
         PyProviderMetadata {
             provider_id: Some(provider_id.to_string()),
@@ -9988,11 +10046,14 @@ mod tests {
     fn kagemusha_recursive_compact_python_function_rejects_malformed_record_bundle() {
         ensure_python();
         Python::attach(|py| {
+            let key_artifacts_archive = recursive_compact_key_artifacts_archive_for_python();
+            let verifier_keys_archive = recursive_compact_verifier_keys_archive_for_python();
             let err =
             kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
                 py,
                 &[1],
                 &[2],
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject malformed record bundle")
             .to_string();
@@ -10007,6 +10068,7 @@ mod tests {
                 py,
                 &oversized_archive,
                 &[2],
+                key_artifacts_archive,
             )
             .expect_err("oversized recursive compact record bundle must reject before Norito decode")
             .to_string();
@@ -10021,6 +10083,7 @@ mod tests {
                 py,
                 &record_archive,
                 &[2],
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject malformed Pallas archive")
             .to_string();
@@ -10034,6 +10097,7 @@ mod tests {
                 py,
                 &record_archive,
                 &oversized_archive,
+                key_artifacts_archive,
             )
             .expect_err("oversized recursive compact Pallas archive must reject before core preflight")
             .to_string();
@@ -10060,6 +10124,7 @@ mod tests {
                 py,
                 &record_archive,
                 &detached_pallas_archive,
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject detached valid Pallas archive")
             .to_string();
@@ -10091,6 +10156,7 @@ mod tests {
                 py,
                 &one_hop_record_archive,
                 &extra_pallas_archive,
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject extra valid Pallas opening archive")
             .to_string();
@@ -10116,6 +10182,7 @@ mod tests {
                 py,
                 &multi_hop_record_archive,
                 &missing_pallas_archive,
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject missing valid Pallas opening archive")
             .to_string();
@@ -10138,6 +10205,7 @@ mod tests {
                 py,
                 &multi_hop_record_archive,
                 &duplicated_pallas_archive,
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject duplicated multi-hop valid Pallas opening archive")
             .to_string();
@@ -10163,6 +10231,7 @@ mod tests {
                     py,
                     &multi_hop_record_archive,
                     &forged_metadata_pallas_archive,
+                    key_artifacts_archive,
                 )
                 .expect_err("recursive compact prover must reject forged multi-hop Pallas metadata")
                 .to_string();
@@ -10181,6 +10250,7 @@ mod tests {
                 py,
                 &multi_hop_record_archive,
                 &reordered_pallas_archive,
+                key_artifacts_archive,
             )
             .expect_err("recursive compact prover must reject reordered valid Pallas opening archive")
             .to_string();
@@ -10191,41 +10261,46 @@ mod tests {
                     ),
                 "unexpected recursive compact reordered-Pallas error: {err}"
             );
-            let err =
+            let token_archive =
             kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes_py(
                 py,
                 &multi_hop_record_archive,
                 &multi_hop_pallas_archive,
+                key_artifacts_archive,
             )
-            .expect_err("valid multi-hop recursive compact archive must remain unavailable")
-            .to_string();
+            .expect("valid multi-hop recursive compact archive must produce a token");
             assert!(
-                err.contains(
-                    iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE
-                ),
-                "unexpected recursive compact multi-hop error: {err}"
+                !token_archive.bind(py).as_bytes().is_empty(),
+                "multi-hop recursive compact token archive must not be empty"
             );
 
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&[1])
-                .expect_err("recursive compact verifier must reject malformed payment token")
-                .to_string();
+            let err =
+                kagemusha_verify_recursive_compact_payment_token_py(&[1], verifier_keys_archive)
+                    .expect_err("recursive compact verifier must reject malformed payment token")
+                    .to_string();
             assert!(
                 err.contains("invalid Kagemusha recursive compact payment token archive"),
                 "unexpected recursive compact verifier malformed-input error: {err}"
             );
 
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&oversized_archive)
-                .expect_err("oversized recursive compact token must reject before Norito decode")
-                .to_string();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(
+                &oversized_archive,
+                verifier_keys_archive,
+            )
+            .expect_err("oversized recursive compact token must reject before Norito decode")
+            .to_string();
             assert!(
                 err.contains("Kagemusha recursive compact payment token archive must not exceed"),
                 "unexpected recursive compact verifier oversized-token error: {err}"
             );
 
             let malformed_token = malformed_recursive_compact_token_archive_for_python();
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&malformed_token)
-                .expect_err("recursive compact verifier must reject malformed token binding")
-                .to_string();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(
+                &malformed_token,
+                verifier_keys_archive,
+            )
+            .expect_err("recursive compact verifier must reject malformed token binding")
+            .to_string();
             assert!(
                 err.contains("public-input hash mismatch"),
                 "unexpected recursive compact malformed-binding error: {err}"
@@ -10234,9 +10309,12 @@ mod tests {
             let one_hop_record_bundle = sample_one_hop_recursive_compact_record_bundle_for_python();
             let forged_vk_hash_token =
                 recursive_compact_forged_vk_hash_token_archive_for_python(&one_hop_record_bundle);
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&forged_vk_hash_token)
-                .expect_err("recursive compact token with forged verifier-key hash must reject")
-                .to_string();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(
+                &forged_vk_hash_token,
+                verifier_keys_archive,
+            )
+            .expect_err("recursive compact token with forged verifier-key hash must reject")
+            .to_string();
             assert!(
                 err.contains("envelope verifier-key hash mismatch"),
                 "unexpected recursive compact forged verifier-key hash error: {err}"
@@ -10244,11 +10322,12 @@ mod tests {
 
             let multi_row_token =
                 recursive_compact_multi_row_token_archive_for_python(&one_hop_record_bundle);
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&multi_row_token)
-                .expect_err(
-                    "Python recursive compact verifier must reject multi-row public instances",
-                )
-                .to_string();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(
+                &multi_row_token,
+                verifier_keys_archive,
+            )
+            .expect_err("Python recursive compact verifier must reject multi-row public instances")
+            .to_string();
             assert!(
                 err.contains("exactly one row"),
                 "unexpected Python recursive compact multi-row error: {err}"
@@ -10256,9 +10335,12 @@ mod tests {
 
             let sentinel_spoofed_token =
                 sentinel_spoofed_recursive_compact_token_archive_for_python();
-            let err = kagemusha_verify_recursive_compact_payment_token_py(&sentinel_spoofed_token)
-                .expect_err("sentinel-spoofed recursive compact token must reject")
-                .to_string();
+            let err = kagemusha_verify_recursive_compact_payment_token_py(
+                &sentinel_spoofed_token,
+                verifier_keys_archive,
+            )
+            .expect_err("sentinel-spoofed recursive compact token must reject")
+            .to_string();
             assert!(
                 err.contains("circuit id `forged::"),
                 "unexpected recursive compact sentinel-spoofed error: {err}"
@@ -16826,7 +16908,7 @@ const PRIVACY_PRODUCTION_GATE_MISSING_ENGINE: &str =
     "real protocol engine is not production-enabled";
 const PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST: &str =
     "Iroha production allowlist is not enabled for this audited row";
-const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, deterministic tests, fuzzing, performance gates, external audit, real protocol engine enablement, and Iroha production allowlist evidence all pass";
+const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, witness privacy checks, deterministic tests, negative/adversarial tests, fuzzing, parser fuzzing, verifier fuzzing, performance gates, external audit, real protocol engine enablement, and Iroha production allowlist evidence all pass";
 #[cfg(test)]
 const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE: &[u8] =
     b"iroha-privacy-native-availability-probe-v1";
@@ -16870,8 +16952,18 @@ const PRIVACY_PRODUCTION_GATE_REQUIREMENTS: &[(&str, &str)] = &[
     ("chain_admission", "chain admission path is not enabled"),
     ("sdk_parity", "cross-SDK parity is incomplete"),
     ("wallet_state", "wallet/state support is incomplete"),
+    (
+        "witness_privacy_checks",
+        "witness privacy checks are incomplete",
+    ),
     ("deterministic_tests", "deterministic tests are incomplete"),
+    (
+        "negative_adversarial_tests",
+        "negative/adversarial tests are incomplete",
+    ),
     ("fuzzing", "fuzzing gate is incomplete"),
+    ("parser_fuzzing", "parser fuzzing gate is incomplete"),
+    ("verifier_fuzzing", "verifier fuzzing gate is incomplete"),
     ("performance_gates", "performance gate is incomplete"),
     ("external_audit", "external audit signoff is missing"),
 ];

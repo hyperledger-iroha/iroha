@@ -725,8 +725,12 @@ class PrivacyNativeBridgeTest {
         assertFalse(capabilities.productionGate.chainAdmission)
         assertFalse(capabilities.productionGate.sdkParity)
         assertFalse(capabilities.productionGate.walletState)
+        assertFalse(capabilities.productionGate.witnessPrivacyChecks)
         assertFalse(capabilities.productionGate.deterministicTests)
+        assertFalse(capabilities.productionGate.negativeAdversarialTests)
         assertFalse(capabilities.productionGate.fuzzing)
+        assertFalse(capabilities.productionGate.parserFuzzing)
+        assertFalse(capabilities.productionGate.verifierFuzzing)
         assertFalse(capabilities.productionGate.performanceGates)
         assertFalse(capabilities.productionGate.externalAudit)
         assertEquals(emptyList(), capabilities.productionGate.auditReferences)
@@ -742,6 +746,26 @@ class PrivacyNativeBridgeTest {
         assertTrue(
             capabilities.productionGate.missing.contains(
                 "chain admission path is not enabled",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "witness privacy checks are incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "negative/adversarial tests are incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "parser fuzzing gate is incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "verifier fuzzing gate is incomplete",
             ),
         )
         assertTrue(

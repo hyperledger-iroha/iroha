@@ -1545,7 +1545,11 @@ test("registerVerifyingKey accepts current production backend labels", async () 
     "halo2/pasta/ivm-execution-v1",
     "halo2/pasta/kagemusha-folded-v1",
     "halo2/pasta/kaigi-roster-v1",
+    "halo2/pasta/kagemusha-recursive-aggregation-v1",
     "halo2/pasta/kagemusha-recursive-compact-v1",
+    "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+    "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+    "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
     "halo2/pasta/anon-transfer-2x2-merkle16-poseidon-diversified",
     "stark/fri",
     "stark/fri/sha256-goldilocks",
@@ -1558,6 +1562,34 @@ test("registerVerifyingKey accepts current production backend labels", async () 
       backend,
       name: `vk_${index}`,
       circuit_id: `production_circuit_${index}`,
+    });
+  }
+
+  assert.deepEqual(captured.map((body) => body.backend), backends);
+});
+
+test("updateVerifyingKey accepts current production backend labels", async () => {
+  const captured = [];
+  const fetchImpl = async (_url, init) => {
+    captured.push(JSON.parse(init.body));
+    return createResponse({ status: 202 });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const backends = [
+    "halo2/pasta/kagemusha-recursive-aggregation-v1",
+    "halo2/pasta/kagemusha-recursive-compact-v1",
+    "halo2/pasta/kagemusha-recursive-spend-lineage-v1",
+    "halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1",
+    "halo2/pasta/kagemusha-recursive-spend-lineage-append-v1",
+    "stark/fri/sha256-goldilocks",
+  ];
+  for (const [index, backend] of backends.entries()) {
+    await client.updateVerifyingKey({
+      ...sampleVerifyingKeyRegisterPayload(),
+      backend,
+      name: `vk_update_${index}`,
+      version: 2,
+      circuit_id: `production_update_circuit_${index}`,
     });
   }
 

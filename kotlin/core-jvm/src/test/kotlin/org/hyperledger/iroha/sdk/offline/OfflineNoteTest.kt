@@ -26,12 +26,16 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.crypto.Signer
+import org.hyperledger.iroha.sdk.tx.SignedTransaction
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class OfflineNoteTest {
     @Test
@@ -2602,6 +2606,35 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun offlineNoteTransactionSubmitterIncludesFeeMetadata() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val payment = obj(fixture, "payment_token")
+        val codec = NoritoJavaCodecAdapter()
+        val client = CapturingIrohaClient()
+        val metadata = IrohaOfflineNoteTransactionSubmitter.feeMetadata(
+            gasAssetId = "xor#universal",
+            feeSponsor = string(payment, "recipient_account_id"),
+        )
+        val submitter = IrohaOfflineNoteTransactionSubmitter(
+            client = client,
+            signer = FakeSigner(),
+            chainId = string(derivation, "chain_id"),
+            authority = string(payment, "sender_account_id"),
+            codecAdapter = codec,
+            clock = LongSupplier { 1_736_000_000_000L },
+            transactionMetadata = metadata,
+        )
+
+        submitter.submitAudit(audit(fixture)).get(5, TimeUnit.SECONDS)
+
+        val signed = assertNotNull(client.submittedTransaction)
+        val payload = codec.decodeTransaction(signed.encodedPayload())
+        assertEquals(metadata, payload.metadata)
+    }
+
+    @Test
     fun walletRejectsExactAmountReceiveRequestReplayAfterRestart() {
         val fixture = loadFixture()
         val chain = obj(fixture, "chain_vectors")
@@ -4229,6 +4262,25 @@ class OfflineNoteTest {
             defunds.add(redemption to bearerAuditTrail)
             return CompletableFuture.completedFuture(ClientResponse(202, byteArrayOf(), "accepted"))
         }
+    }
+
+    private class CapturingIrohaClient : IrohaClient {
+        var submittedTransaction: SignedTransaction? = null
+
+        override fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse> {
+            submittedTransaction = transaction
+            return CompletableFuture.completedFuture(ClientResponse(202, byteArrayOf(), "accepted"))
+        }
+    }
+
+    private class FakeSigner : Signer {
+        override fun sign(message: ByteArray): ByteArray =
+            message + "-signature".toByteArray()
+
+        override fun publicKey(): ByteArray =
+            "fake-public-key".toByteArray()
+
+        override fun algorithm(): String = "Ed25519"
     }
 
     private class RejectingTransactionSubmitter : OfflineNoteTransactionSubmitter {

@@ -942,7 +942,7 @@ def test_privacy_catalog_loader_rejects_research_target_without_production_readi
                     securityNotes=[
                         "Orchard note semantics must remain domain-separated.",
                         "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-                        "Hardening gates require parser fuzzing, performance review, and external audit.",
+                        "Hardening gates require deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance review, and external audit.",
                     ],
                     recommendedFor=["shape research"],
                     chainRequirements=["Orchard note commitment tree"],
@@ -2500,7 +2500,7 @@ def test_privacy_catalog_production_gate_remains_fail_closed_for_catalog_claims(
                     securityNotes=[
                         "Review production proof constraints.",
                         "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-                        "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
                     ],
                     requiredState=[
                         "production verifier key registry",
@@ -2913,7 +2913,7 @@ def test_privacy_catalog_loader_rejects_stateful_ledger_mutation_without_restart
                     ],
                     securityNotes=[
                         "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-                        "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
                     ],
                     requiredState=[
                         "policy commitment registry",
@@ -3189,7 +3189,7 @@ def test_privacy_catalog_loader_rejects_source_referenced_verifier_without_negat
                     chainRequirements=["zkAt verifier key registry"],
                     securityNotes=[
                         "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.",
-                        "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
                     ],
                     requiredState=[
                         "policy commitment registry",
@@ -3270,8 +3270,10 @@ def test_privacy_catalog_loader_rejects_source_referenced_flow_without_hardening
     with pytest.raises(
         RuntimeError,
         match=(
-            "security_notes' must include audit/review, fuzzing, and "
-            "performance hardening gates for source-referenced entries"
+            "security_notes' must include deterministic vectors, "
+            "negative/adversarial cases, parser/verifier fuzzing, "
+            "performance, and audit/review hardening gates for "
+            "source-referenced entries"
         ),
     ):
         privacy_catalog._load_descriptors()
@@ -3298,7 +3300,7 @@ def test_privacy_catalog_loader_rejects_source_referenced_flow_without_witness_p
                     recommendedFor=["policy privacy"],
                     chainRequirements=["zkAt verifier key registry"],
                     securityNotes=[
-                        "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.",
+                        "Production hardening requires deterministic vectors, negative/adversarial test cases, parser/verifier fuzzing, performance gates, and external audit or verifier review.",
                     ],
                     requiredState=[
                         "policy commitment registry",

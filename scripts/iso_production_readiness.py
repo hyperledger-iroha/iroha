@@ -3483,12 +3483,17 @@ def _verify_archive_receipts(
     path: Path,
     args: argparse.Namespace,
     blockers: list[dict[str, Any]],
+    *,
+    policy_allows_canary_stage_receipts_only: bool,
 ) -> dict[str, Any] | None:
     if "receipt_verification" not in summary:
         raise ReadinessError(f"{path}.receipt_verification must be recorded")
     receipt_summary = summary["receipt_verification"]
     if receipt_summary is None:
-        if args.allow_canary_stage_receipts_only:
+        if (
+            args.allow_canary_stage_receipts_only
+            and policy_allows_canary_stage_receipts_only
+        ):
             return None
         _blocker(
             blockers,
@@ -4024,7 +4029,30 @@ def verify_evidence_summary(
         _blocker(blockers, "evidence.no_canary_summaries", "no canary summaries recorded", path)
     if not trust_summaries:
         _blocker(blockers, "evidence.no_trust_summaries", "no trust summaries recorded", path)
-    archive_receipts = _verify_archive_receipts(summary, path, args, blockers)
+    archive_receipts = _verify_archive_receipts(
+        summary,
+        path,
+        args,
+        blockers,
+        policy_allows_canary_stage_receipts_only=summary["policy"][
+            "allow_canary_stage_receipts_only"
+        ],
+    )
+    if (
+        summary["policy"]["allow_canary_stage_receipts_only"]
+        and args.allow_canary_stage_receipts_only
+        and archive_receipts is not None
+    ):
+        _blocker(
+            blockers,
+            "evidence.policy.allow_canary_stage_receipts_only",
+            (
+                "Evidence summary was produced with non-production policy "
+                "allow_canary_stage_receipts_only=true despite direct receipt "
+                "archive verification"
+            ),
+            path,
+        )
 
     canaries = [
         _verify_canary(

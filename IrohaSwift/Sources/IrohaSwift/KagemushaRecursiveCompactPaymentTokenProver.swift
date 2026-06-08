@@ -3,8 +3,12 @@ import Foundation
 public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, LocalizedError {
     case emptyRecordBundleArchive
     case emptyPallasOpenEnvelopesArchive
+    case emptyKeyArtifactsArchive
+    case emptyVerifierKeysArchive
     case oversizedRecordBundleArchive
     case oversizedPallasOpenEnvelopesArchive
+    case oversizedKeyArtifactsArchive
+    case oversizedVerifierKeysArchive
     case emptyBundleArchive
     case oversizedBundleArchive
     case invalidBundleArchive
@@ -13,6 +17,10 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
     case emptyRecordBundlePayload
     case invalidPallasOpenEnvelopesArchive
     case emptyPallasOpenEnvelopesPayload
+    case invalidKeyArtifactsArchive
+    case emptyKeyArtifactsPayload
+    case invalidVerifierKeysArchive
+    case emptyVerifierKeysPayload
     case emptyCompactTokenArchive
     case invalidCompactTokenArchive
     case emptyCompactTokenPayload
@@ -32,10 +40,18 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
             return "Kagemusha verified fold record bundle archive must not be empty."
         case .emptyPallasOpenEnvelopesArchive:
             return "Kagemusha Pallas open-envelope archive must not be empty."
+        case .emptyKeyArtifactsArchive:
+            return "Kagemusha recursive compact key-artifacts archive must not be empty."
+        case .emptyVerifierKeysArchive:
+            return "Kagemusha recursive compact verifier-keys archive must not be empty."
         case .oversizedRecordBundleArchive:
             return "Kagemusha verified fold record bundle archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
         case .oversizedPallasOpenEnvelopesArchive:
             return "Kagemusha Pallas open-envelope archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+        case .oversizedKeyArtifactsArchive:
+            return "Kagemusha recursive compact key-artifacts archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
+        case .oversizedVerifierKeysArchive:
+            return "Kagemusha recursive compact verifier-keys archive must not exceed \(KagemushaRecursiveSpendProver.nativeArchiveMaxBytes) bytes."
         case .emptyBundleArchive:
             return "Kagemusha recursive spend bundle archive must not be empty."
         case .oversizedBundleArchive:
@@ -52,6 +68,14 @@ public enum KagemushaRecursiveCompactPaymentTokenProverError: Error, Equatable, 
             return "Kagemusha Pallas open-envelope archive must be a valid Norito archive."
         case .emptyPallasOpenEnvelopesPayload:
             return "Kagemusha Pallas open-envelope archive must contain a non-empty Norito payload."
+        case .invalidKeyArtifactsArchive:
+            return "Kagemusha recursive compact key-artifacts archive must be a valid Norito archive."
+        case .emptyKeyArtifactsPayload:
+            return "Kagemusha recursive compact key-artifacts archive must contain a non-empty Norito payload."
+        case .invalidVerifierKeysArchive:
+            return "Kagemusha recursive compact verifier-keys archive must be a valid Norito archive."
+        case .emptyVerifierKeysPayload:
+            return "Kagemusha recursive compact verifier-keys archive must contain a non-empty Norito payload."
         case .emptyCompactTokenArchive:
             return "Kagemusha recursive compact-token archive must not be empty."
         case .invalidCompactTokenArchive:
@@ -105,30 +129,36 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
 
     public static func proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         recordBundleArchive: Data,
-        pallasOpenEnvelopesArchive: Data
+        pallasOpenEnvelopesArchive: Data,
+        recursiveCompactKeyArtifactsArchive: Data
     ) throws -> Data {
         try proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
             recordBundleArchive: recordBundleArchive,
             pallasOpenEnvelopesArchive: pallasOpenEnvelopesArchive,
+            recursiveCompactKeyArtifactsArchive: recursiveCompactKeyArtifactsArchive,
             bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenProverAvailable
         ) {
             try NoritoNativeBridge.shared
                 .proveKagemushaVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     recordBundleArchive: recordBundleArchive,
-                    pallasOpenEnvelopesArchive: pallasOpenEnvelopesArchive
+                    pallasOpenEnvelopesArchive: pallasOpenEnvelopesArchive,
+                    recursiveCompactKeyArtifactsArchive: recursiveCompactKeyArtifactsArchive
                 )
         }
     }
 
     public static func verifyRecursiveCompactPaymentToken(
-        compactTokenArchive: Data
+        compactTokenArchive: Data,
+        recursiveCompactVerifierKeysArchive: Data
     ) throws -> Bool {
         try verifyRecursiveCompactPaymentToken(
             compactTokenArchive: compactTokenArchive,
+            recursiveCompactVerifierKeysArchive: recursiveCompactVerifierKeysArchive,
             bridgeAvailable: NoritoNativeBridge.shared.isKagemushaRecursiveCompactPaymentTokenVerifierAvailable
         ) {
             try NoritoNativeBridge.shared.verifyKagemushaRecursiveCompactPaymentToken(
-                compactTokenArchive: compactTokenArchive
+                compactTokenArchive: compactTokenArchive,
+                recursiveCompactVerifierKeysArchive: recursiveCompactVerifierKeysArchive
             )
         }
     }
@@ -168,6 +198,7 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
     static func proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         recordBundleArchive: Data,
         pallasOpenEnvelopesArchive: Data,
+        recursiveCompactKeyArtifactsArchive: Data,
         bridgeAvailable: Bool,
         body: () throws -> Data?
     ) throws -> Data {
@@ -176,6 +207,9 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
         }
         guard !pallasOpenEnvelopesArchive.isEmpty else {
             throw KagemushaRecursiveCompactPaymentTokenProverError.emptyPallasOpenEnvelopesArchive
+        }
+        guard !recursiveCompactKeyArtifactsArchive.isEmpty else {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.emptyKeyArtifactsArchive
         }
         try requireValidInputArchive(
             recordBundleArchive,
@@ -188,6 +222,12 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
             oversizedError: .oversizedPallasOpenEnvelopesArchive,
             invalidError: .invalidPallasOpenEnvelopesArchive,
             emptyPayloadError: .emptyPallasOpenEnvelopesPayload
+        )
+        try requireValidInputArchive(
+            recursiveCompactKeyArtifactsArchive,
+            oversizedError: .oversizedKeyArtifactsArchive,
+            invalidError: .invalidKeyArtifactsArchive,
+            emptyPayloadError: .emptyKeyArtifactsPayload
         )
         guard bridgeAvailable else {
             throw KagemushaRecursiveCompactPaymentTokenProverError.bridgeUnavailable
@@ -214,13 +254,23 @@ public enum KagemushaRecursiveCompactPaymentTokenProver {
 
     static func verifyRecursiveCompactPaymentToken(
         compactTokenArchive: Data,
+        recursiveCompactVerifierKeysArchive: Data,
         bridgeAvailable: Bool,
         body: () throws -> Bool?
     ) throws -> Bool {
         guard !compactTokenArchive.isEmpty else {
             throw KagemushaRecursiveCompactPaymentTokenProverError.emptyCompactTokenArchive
         }
+        guard !recursiveCompactVerifierKeysArchive.isEmpty else {
+            throw KagemushaRecursiveCompactPaymentTokenProverError.emptyVerifierKeysArchive
+        }
         try requireValidRecursiveCompactTokenArchive(compactTokenArchive)
+        try requireValidInputArchive(
+            recursiveCompactVerifierKeysArchive,
+            oversizedError: .oversizedVerifierKeysArchive,
+            invalidError: .invalidVerifierKeysArchive,
+            emptyPayloadError: .emptyVerifierKeysPayload
+        )
         guard bridgeAvailable else {
             throw KagemushaRecursiveCompactPaymentTokenProverError.bridgeUnavailable
         }

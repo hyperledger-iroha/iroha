@@ -582,7 +582,9 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-summary-schema
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-artifact-inventory
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-artifact-inventory
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-compact-placeholder-inventory
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-compact-generator-log-inventory
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output

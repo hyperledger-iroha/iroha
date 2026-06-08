@@ -3204,6 +3204,44 @@ def _verify_direct_receipts_cover_canaries(
             )
 
 
+def _compact_receipt_summaries(
+    canaries: list[dict[str, Any]],
+    receipt_summary: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Return direct and canary receipt summaries already verified into compact form."""
+
+    summaries: list[dict[str, Any]] = []
+    if receipt_summary is not None:
+        summaries.append(receipt_summary)
+    for canary in canaries:
+        canary_receipt_summary = canary.get("receipt_summary")
+        if isinstance(canary_receipt_summary, dict):
+            summaries.append(canary_receipt_summary)
+    return summaries
+
+
+def _receipt_summaries_have_legacy_colr007(
+    receipt_summaries: list[dict[str, Any]],
+) -> bool:
+    return any(
+        receipt.get("receipt_kind") == "iso-rail-gateway"
+        and receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES
+        for summary in receipt_summaries
+        for receipt in summary["receipts"]
+    )
+
+
+def _receipt_summaries_have_default_profile(
+    receipt_summaries: list[dict[str, Any]],
+) -> bool:
+    return any(
+        receipt.get("receipt_kind") == "iso-rail-gateway"
+        and receipt.get("profile") is None
+        for summary in receipt_summaries
+        for receipt in summary["receipts"]
+    )
+
+
 def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
     """Reject receipt path or digest reuse across distinct canary summaries."""
 
@@ -3261,6 +3299,14 @@ def _reject_cross_trust_profile_reuse(trusts: list[dict[str, Any]]) -> None:
                     f"[{first_profile}].bundle_sha256"
                 )
             seen_bundle_digests[bundle_sha256] = (trust_offset, profile_offset)
+
+
+def _trusts_have_missing_source(trusts: list[dict[str, Any]]) -> bool:
+    return any(
+        profile.get("source") is None
+        for trust in trusts
+        for profile in trust["profiles"]
+    )
 
 
 def _reject_canary_rail_receipts_without_trust(
@@ -3346,6 +3392,24 @@ def run(args: argparse.Namespace) -> int:
 
     canaries = [verify_canary_summary(path, args) for path in canary_paths]
     trusts = [verify_trust_summary(path, args) for path in trust_paths]
+    if args.allow_plan_only and not any(canary["plan_only"] for canary in canaries):
+        raise EvidenceError(
+            "--allow-plan-only requires at least one canary summary with plan_only=true"
+        )
+    if args.allow_partial_canary and not any(
+        set(canary["stage_names"]) != REQUIRED_CANARY_STAGES for canary in canaries
+    ):
+        raise EvidenceError(
+            "--allow-partial-canary requires at least one canary summary "
+            "missing a rail or notary stage"
+        )
+    if args.allow_profile_json_not_emitted and not any(
+        not trust["profile_json_emitted"] for trust in trusts
+    ):
+        raise EvidenceError(
+            "--allow-profile-json-not-emitted requires at least one trust "
+            "summary with profile_json_emitted=false"
+        )
     _reject_duplicate_summary_digests(canaries, "canary_summaries")
     _reject_duplicate_summary_digests(trusts, "trust_summaries")
     _reject_cross_canary_receipt_reuse(canaries)
@@ -3356,7 +3420,42 @@ def run(args: argparse.Namespace) -> int:
             "provide --receipt or --receipt-dir for direct receipt archive verification"
         )
     if receipt_summary is not None:
+        if args.allow_canary_stage_receipts_only:
+            raise EvidenceError(
+                "--allow-canary-stage-receipts-only cannot be combined with "
+                "--receipt or --receipt-dir"
+            )
         _verify_direct_receipts_cover_canaries(canaries, receipt_summary)
+    receipt_summaries = _compact_receipt_summaries(canaries, receipt_summary)
+    if args.allow_legacy_colr007 and not _receipt_summaries_have_legacy_colr007(
+        receipt_summaries
+    ):
+        raise EvidenceError(
+            "--allow-legacy-colr007 requires at least one rail receipt with "
+            "legacy colr.007 message_type"
+        )
+    if args.allow_default_profile and not _receipt_summaries_have_default_profile(
+        receipt_summaries
+    ):
+        raise EvidenceError(
+            "--allow-default-profile requires at least one rail receipt without "
+            "an explicit profile"
+        )
+    if args.allow_record_only_trust and not any(trust["allow_record_only"] for trust in trusts):
+        raise EvidenceError(
+            "--allow-record-only-trust requires at least one trust summary "
+            "verified with allow_record_only=true"
+        )
+    if args.allow_synthetic_trust and not any(trust["allow_synthetic_der"] for trust in trusts):
+        raise EvidenceError(
+            "--allow-synthetic-trust requires at least one trust summary "
+            "verified with allow_synthetic_der=true"
+        )
+    if args.allow_missing_trust_source and not _trusts_have_missing_source(trusts):
+        raise EvidenceError(
+            "--allow-missing-trust-source requires at least one trust profile "
+            "with source=null"
+        )
     _reject_canary_rail_receipts_without_trust(canaries, trusts, args)
 
     output: dict[str, Any] = {

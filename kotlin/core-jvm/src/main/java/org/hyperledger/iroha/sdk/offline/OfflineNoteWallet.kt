@@ -1174,8 +1174,10 @@ class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(
     private val authority: String,
     private val codecAdapter: NoritoCodecAdapter = NoritoJavaCodecAdapter(),
     private val clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
+    transactionMetadata: Map<String, String> = emptyMap(),
 ) : OfflineNoteTransactionSubmitter {
     private val transactionBuilder = TransactionBuilder(codecAdapter)
+    private val transactionMetadata: Map<String, String> = transactionMetadata.toMap()
 
     override fun submitAudit(audit: OfflineNote.AuditBundle): CompletableFuture<ClientResponse> =
         submit(OfflineNote.auditInstruction(audit))
@@ -1198,8 +1200,34 @@ class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(
             authority = authority,
             creationTimeMs = clock.getAsLong(),
             executable = Executable.instructions(instructions),
+            metadata = transactionMetadata,
         )
         return client.submitTransaction(transactionBuilder.encodeAndSign(payload, signer))
+    }
+
+    companion object {
+        const val GAS_ASSET_ID_METADATA_KEY: String = "gas_asset_id"
+        const val FEE_SPONSOR_METADATA_KEY: String = "fee_sponsor"
+
+        @JvmStatic
+        fun gasAssetMetadata(gasAssetId: String): Map<String, String> =
+            feeMetadata(gasAssetId, null)
+
+        @JvmStatic
+        fun feeMetadata(gasAssetId: String, feeSponsor: String?): Map<String, String> {
+            val metadata = LinkedHashMap<String, String>()
+            metadata[GAS_ASSET_ID_METADATA_KEY] = normalizedMetadataValue(gasAssetId, "gasAssetId")
+            feeSponsor
+                ?.let { normalizedMetadataValue(it, "feeSponsor") }
+                ?.let { metadata[FEE_SPONSOR_METADATA_KEY] = it }
+            return metadata
+        }
+
+        private fun normalizedMetadataValue(value: String, field: String): String {
+            val trimmed = value.trim()
+            require(trimmed.isNotEmpty()) { "$field must not be blank" }
+            return trimmed
+        }
     }
 }
 

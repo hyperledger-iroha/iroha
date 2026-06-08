@@ -66,7 +66,9 @@ Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
 `recursive_compact_v1` compact-token surface and probes
 `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Use
 `proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
-and `verifyRecursiveCompactPaymentToken`; gate them with `isNativeAvailable()`
+with record-bundle, Pallas open-envelope, and recursive compact key-artifact
+archives, and `verifyRecursiveCompactPaymentToken` with compact-token and
+recursive compact verifier-key archives; gate them with `isNativeAvailable()`
 and `isVerifierNativeAvailable()`. The recursive-spend compact projection
 verifier is exposed separately as
 `verifyRecursiveSpendCompactPaymentTokenProjection(...)` and
@@ -74,18 +76,19 @@ verifier is exposed separately as
 `isProjectionVerifierNativeAvailable()`. It accepts raw Norito compact-token
 and verifier-record archives, rejects empty, malformed, oversized, or
 negative-height inputs before JNI dispatch, and returns the native boolean
-receiver result. ABI 7 now carries the one-hop LEN=4
-compact-token proof path when the native bundle includes the packaged compact
-one-hop proving-key archive and matching verifier-slice material. Production
+receiver result. ABI 7 now carries the one-hop LEN=4 and package-backed
+multi-hop compact-token proof paths when the native bundle includes packaged
+compact proving-key archives and matching verifier-slice material. Production
 defaults still stay on ABI 6 Reserved-lineage recursive spend until that
-archive is shipped and signed for release. When the native bridge reaches a
-proof-composition reservation for a missing packaged key, the generic
-compact-token reservation, or the multi-hop verifier-batch reservation,
-`proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
-throws `IllegalStateException`; `isRecursiveCompactUnavailable(error)` matches
-those reserved ABI-7 state errors. Empty or malformed local archives still fail
-as `IllegalArgumentException` before they can be confused with that reserved
-state.
+artifact set is shipped and signed for release. Empty, malformed, missing, or
+oversized local archives fail as `IllegalArgumentException`; the legacy
+`isRecursiveCompactUnavailable(error)` helper remains for older bridge
+diagnostics.
+The ABI-7 launch boundary remains explicit: the one-hop LEN=4 compact-token
+proof path uses a packaged compact one-hop proving-key, while release evidence
+continues to track the proof-composition reservation, generic compact-token
+reservation, multi-hop verifier-batch reservation, and reserved ABI-7 state.
+Missing native symbols still surface as `IllegalStateException`.
 `KagemushaRecursiveSpendProver` exposes the ABI 6 spend-again-offline cash
 surface. Preferred mode selection chooses `recursive_spend_v1` after the JNI
 bridge ABI-version probe succeeds and init, append, both transition-profile helpers,
@@ -174,8 +177,9 @@ Kotlin validates archive magic, length, CRC, the 64 MiB native size cap, and the
 operation-specific result schema before returning bytes to callers. Capability
 metadata reports `privacy-production-gate-v1`, keeps `productionReady = false`,
 and remains fail-closed with missing production gates and no audit references
-until real proving, verification, chain admission, deterministic testing,
-fuzzing, performance gates, and external audit signoff are complete.
+until real proving, verification, chain admission, witness privacy checks,
+deterministic testing, negative/adversarial testing, parser/verifier fuzzing, performance gates,
+and external audit signoff are complete.
 
 Kotlin also exposes the deterministic privacy FFI status/error-code contract
 for diagnostics and cross-language parity: `STATUS_ERROR`,

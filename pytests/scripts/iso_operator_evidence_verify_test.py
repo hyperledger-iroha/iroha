@@ -875,6 +875,215 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertIsNone(canary["receipt_summary"])
             self.assertIsNone(summary["receipt_verification"])
 
+    def test_plan_only_override_requires_matching_canary_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            notary_receipts, rail_receipts = write_https_receipt_dirs(root)
+            canary_path = write_canary(
+                root,
+                valid_canary_summary(
+                    receipt_entries=receipt_entries_from_dirs(notary_receipts, rail_receipts)
+                ),
+            )
+            trust_path = write_trust_summary(root / "trust")
+            summary_out = root / "evidence.summary.json"
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-plan-only",
+                    "--receipt-dir",
+                    str(notary_receipts),
+                    "--receipt-dir",
+                    str(rail_receipts),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--allow-plan-only requires at least one canary summary with plan_only=true",
+                stderr,
+            )
+            self.assertFalse(summary_out.exists())
+
+    def test_partial_canary_override_requires_matching_canary_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            notary_receipts, rail_receipts = write_https_receipt_dirs(root)
+            trust_path = write_trust_summary(root / "trust")
+            full_canary_path = write_canary(
+                root,
+                valid_canary_summary(
+                    receipt_entries=receipt_entries_from_dirs(notary_receipts, rail_receipts)
+                ),
+            )
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(full_canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-partial-canary",
+                    "--receipt-dir",
+                    str(notary_receipts),
+                    "--receipt-dir",
+                    str(rail_receipts),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--allow-partial-canary requires at least one canary summary "
+                "missing a rail or notary stage",
+                stderr,
+            )
+
+            partial_root = root / "partial"
+            partial_root.mkdir()
+            partial_body = valid_canary_summary(
+                receipt_entries=receipt_entries_from_dirs(rail_receipts)
+            )
+            partial_body["stages"] = [
+                partial_body["stages"][0],
+                partial_body["stages"][2],
+            ]
+            partial_body.pop("summary_sha256")
+            partial_canary_path = write_canary(partial_root, digest_summary(partial_body))
+            partial_summary_out = partial_root / "evidence.summary.json"
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(partial_canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-partial-canary",
+                    "--receipt-dir",
+                    str(rail_receipts),
+                    "--summary-out",
+                    str(partial_summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 0, stderr)
+            summary = json.loads(stdout)
+            self.assertTrue(summary["policy"]["allow_partial_canary"])
+            self.assertEqual(summary["canary_summaries"][0]["stage_names"], ["rail", "verify"])
+            self.assertEqual(
+                summary["receipt_verification"]["receipt_kind"],
+                ["iso-rail-gateway"],
+            )
+            self.assertEqual(json.loads(partial_summary_out.read_text(encoding="utf-8")), summary)
+
+    def test_unused_receipt_and_trust_overrides_are_rejected(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            notary_receipts, rail_receipts = write_https_receipt_dirs(root)
+            canary_path = write_canary(
+                root,
+                valid_canary_summary(
+                    receipt_entries=receipt_entries_from_dirs(notary_receipts, rail_receipts)
+                ),
+            )
+            trust_path = write_trust_summary(root / "trust")
+            cases = (
+                (
+                    "legacy",
+                    ["--allow-legacy-colr007"],
+                    "requires at least one rail receipt with legacy colr.007 message_type",
+                ),
+                (
+                    "default-profile",
+                    ["--allow-default-profile"],
+                    "requires at least one rail receipt without an explicit profile",
+                ),
+                (
+                    "record-only",
+                    ["--allow-record-only-trust"],
+                    "requires at least one trust summary verified with allow_record_only=true",
+                ),
+                (
+                    "synthetic",
+                    ["--allow-synthetic-trust"],
+                    "requires at least one trust summary verified with allow_synthetic_der=true",
+                ),
+                (
+                    "missing-source",
+                    ["--allow-missing-trust-source"],
+                    "requires at least one trust profile with source=null",
+                ),
+            )
+
+            for name, extra_args, message in cases:
+                with self.subTest(name=name):
+                    summary_out = root / f"unused-{name}.evidence.summary.json"
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                            "--receipt-dir",
+                            str(notary_receipts),
+                            "--receipt-dir",
+                            str(rail_receipts),
+                            "--summary-out",
+                            str(summary_out),
+                        ]
+                        + extra_args
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertFalse(summary_out.exists())
+
+    def test_canary_stage_receipts_only_cannot_be_combined_with_direct_receipts(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            notary_receipts, rail_receipts = write_https_receipt_dirs(root)
+            canary_path = write_canary(
+                root,
+                valid_canary_summary(
+                    receipt_entries=receipt_entries_from_dirs(notary_receipts, rail_receipts)
+                ),
+            )
+            trust_path = write_trust_summary(root / "trust")
+            summary_out = root / "evidence.summary.json"
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--receipt-dir",
+                    str(notary_receipts),
+                    "--receipt-dir",
+                    str(rail_receipts),
+                    "--allow-canary-stage-receipts-only",
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--allow-canary-stage-receipts-only cannot be combined with "
+                "--receipt or --receipt-dir",
+                stderr,
+            )
+            self.assertFalse(summary_out.exists())
+
     def test_symlinked_summary_output_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2971,7 +3180,10 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             trust_path = write_trust_summary(root)
-            notary_receipts, rail_receipts = write_https_receipt_dirs(root)
+            notary_receipts, rail_receipts = write_https_receipt_dirs(
+                root,
+                legacy_colr007=True,
+            )
             receipt_entries = receipt_entries_from_dirs(notary_receipts, rail_receipts)
             body = valid_canary_summary()
             body["stages"][0]["command"].append("--allow-legacy-colr007")
@@ -5789,6 +6001,44 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertTrue(summary["trust_summaries"][0]["profile_json_emittable"])
             self.assertIsNone(summary["trust_summaries"][0]["profile_json_sha256"])
             self.assertEqual(json.loads(summary_out.read_text(encoding="utf-8")), summary)
+
+    def test_profile_json_not_emitted_override_requires_matching_trust_summary(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            notary_receipts, rail_receipts = write_https_receipt_dirs(root)
+            canary_path = write_canary(
+                root,
+                valid_canary_summary(
+                    receipt_entries=receipt_entries_from_dirs(notary_receipts, rail_receipts)
+                ),
+            )
+            trust_path = write_trust_summary(root / "trust")
+            summary_out = root / "evidence.summary.json"
+
+            rc, stdout, stderr = run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--allow-profile-json-not-emitted",
+                    "--receipt-dir",
+                    str(notary_receipts),
+                    "--receipt-dir",
+                    str(rail_receipts),
+                    "--summary-out",
+                    str(summary_out),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "--allow-profile-json-not-emitted requires at least one trust "
+                "summary with profile_json_emitted=false",
+                stderr,
+            )
+            self.assertFalse(summary_out.exists())
 
     def test_trust_summary_profile_json_digest_is_required_when_emitted(self):
         with tempfile.TemporaryDirectory() as raw_root:

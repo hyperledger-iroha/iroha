@@ -40,8 +40,12 @@ public final class PrivacyNativeBridge {
               "chain admission path is not enabled",
               "cross-SDK parity is incomplete",
               "wallet/state support is incomplete",
+              "witness privacy checks are incomplete",
               "deterministic tests are incomplete",
+              "negative/adversarial tests are incomplete",
               "fuzzing gate is incomplete",
+              "parser fuzzing gate is incomplete",
+              "verifier fuzzing gate is incomplete",
               "performance gate is incomplete",
               "external audit signoff is missing",
               "implementation stage is not production-hardened",
@@ -412,8 +416,12 @@ public final class PrivacyNativeBridge {
     private final boolean chainAdmission;
     private final boolean sdkParity;
     private final boolean walletState;
+    private final boolean witnessPrivacyChecks;
     private final boolean deterministicTests;
+    private final boolean negativeAdversarialTests;
     private final boolean fuzzing;
+    private final boolean parserFuzzing;
+    private final boolean verifierFuzzing;
     private final boolean performanceGates;
     private final boolean externalAudit;
     private final List<String> missingProductionGates;
@@ -431,8 +439,12 @@ public final class PrivacyNativeBridge {
       this.chainAdmission = false;
       this.sdkParity = false;
       this.walletState = false;
+      this.witnessPrivacyChecks = false;
       this.deterministicTests = false;
+      this.negativeAdversarialTests = false;
       this.fuzzing = false;
+      this.parserFuzzing = false;
+      this.verifierFuzzing = false;
       this.performanceGates = false;
       this.externalAudit = false;
       this.missingProductionGates = PRODUCTION_GATE_MISSING;
@@ -475,12 +487,28 @@ public final class PrivacyNativeBridge {
       return walletState;
     }
 
+    public boolean hasWitnessPrivacyChecks() {
+      return witnessPrivacyChecks;
+    }
+
     public boolean hasDeterministicTests() {
       return deterministicTests;
     }
 
+    public boolean hasNegativeAdversarialTests() {
+      return negativeAdversarialTests;
+    }
+
     public boolean hasFuzzing() {
       return fuzzing;
+    }
+
+    public boolean hasParserFuzzing() {
+      return parserFuzzing;
+    }
+
+    public boolean hasVerifierFuzzing() {
+      return verifierFuzzing;
     }
 
     public boolean hasPerformanceGates() {

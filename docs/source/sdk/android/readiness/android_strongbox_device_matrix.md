@@ -6,16 +6,16 @@ This matrix gates production readiness for Android offline-offline payment
 flows. A device row is ready only after the lab attaches signed evidence for
 StrongBox/KeyMint attestation, one-use key rotation, rollback rejection, ABI-6
 recursive spend, ABI-7 one-hop recursive compact-token proof probing, and
-ABI-7 multi-hop recursive compact fail-closed probing.
+ABI-7 package-backed multi-hop recursive compact proof probing.
 
 | Device family | Minimum OS | StrongBox / KeyMint gate | Kagemusha recursive compact gate | Status |
 | --- | --- | --- | --- | --- |
-| Google Pixel 6 / 6a | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
-| Google Pixel 7 / 7 Pro | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
-| Google Pixel 8 / 8a / 8 Pro | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
-| Google Pixel Fold / Tablet | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
-| Samsung Galaxy S23 | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
-| Samsung Galaxy S24 | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; multi-hop probe must remain unavailable until append-batch composition is enabled | Blocked |
+| Google Pixel 6 / 6a | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Google Pixel 7 / 7 Pro | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Google Pixel 8 / 8a / 8 Pro | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Google Pixel Fold / Tablet | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Samsung Galaxy S23 | Android 14 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
+| Samsung Galaxy S24 | Android 15 | Pending lab attestation export | One-hop `recursive_compact_v1` proof probe required; package-backed multi-hop proof probe required | Blocked |
 
 Production release criteria:
 
@@ -23,9 +23,9 @@ Production release criteria:
 - ABI 7 recursive compact-token JNI probes prove and verify the packaged
   one-hop LEN=4 path on every required device family.
 - ABI 7 recursive compact prover calls that require multi-hop append-batch
-  composition are reported as unavailable state, while empty, malformed, or
-  dummy-proof local archives remain caller-input errors or soft-invalid verifier
-  results. Kotlin/JVM and Java Android validate recursive compact-token and
+  composition produce package-backed compact tokens when the key package is
+  supplied, while empty, malformed, or dummy-proof local archives remain
+  caller-input errors or soft-invalid verifier results. Kotlin/JVM and Java Android validate recursive compact-token and
   record-backed recursive aggregation inputs as non-empty Norito archives before
   JNI dispatch.
 - Wallet rollback tests prove that old encrypted wallet state cannot be restored
@@ -262,9 +262,9 @@ Production release criteria:
   bridge function contracts: one-hop prove/preverify/verify paths must route
   through the compact verifier-slice contract, tiny dummy proof payloads must
   fail the compact proof-size floor before expensive backend verification,
-  multi-hop proving must preserve the distinct recursive-compact-unavailable
-  mapping until append-batch composition is enabled, and bridge wrappers must
-  preserve that unavailable mapping. Evidence signed before the release cutoff
+  multi-hop proving must produce package-backed compact tokens with the
+  matching key artifacts, and bridge wrappers must preserve fail-closed
+  malformed-input handling. Evidence signed before the release cutoff
   or future-dated beyond the release validator clock-skew allowance remains
   blocked even when its signature and hashes are otherwise valid. Freshness checks
   use the scanner-validated signed-evidence timestamp from the slot report rather
@@ -381,7 +381,7 @@ Production release criteria:
   status, one-use key rotation, physical device attestation, rollback rejection,
   ABI-6 recursive spend probe, ABI-7 recursive compact one-hop and multi-hop
   probe state (`abi7_recursive_compact_jni_probe = one_hop_verified` and
-  `abi7_recursive_compact_prover_state = multi_hop_proof_composition_unavailable`),
+  `abi7_recursive_compact_prover_state = multi_hop_proof_composed`),
   raw test commands, signed evidence artifact path, and signed evidence artifact
   hash.
   Production `slot.json` is a closed schema: unexpected fields are rejected

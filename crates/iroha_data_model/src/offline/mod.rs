@@ -140,6 +140,9 @@ const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND: &str = "halo2/ipa";
 pub const KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MIN_LEN: u32 = 2;
 /// Maximum Pallas IPA opening length accepted by reserved Kagemusha recursive evidence.
 pub const KAGEMUSHA_RECURSIVE_PALLAS_IPA_BATCH_MAX_LEN: u32 = 128;
+/// Supported Pallas IPA opening lengths for recursive compact verifier-slice packages.
+pub const KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1: [u32; 7] =
+    [2, 4, 8, 16, 32, 64, 128];
 /// Maximum transcript label length accepted by Kagemusha Pallas opening archives.
 pub const KAGEMUSHA_RECURSIVE_PALLAS_OPEN_ENVELOPE_MAX_TRANSCRIPT_LABEL_BYTES: usize = 128;
 /// Current Kagemusha aggregation mode: every private hop proof is verified before folding.
@@ -2323,6 +2326,62 @@ mod model {
         pub lineage_verifier_key: VerifyingKeyBox,
         /// Packaged Reserved-lineage proving key archive.
         pub lineage_proving_key_archive: Vec<u8>,
+    }
+
+    /// Per-width prover artifacts for ABI-7 recursive compact tokens.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveCompactKeyArtifactEntryV1 {
+        /// Pallas IPA opening vector length supported by this entry.
+        pub verifier_opening_len: u32,
+        /// Verifier key for one-hop compact recursive proofs.
+        pub one_hop_verifier_key: VerifyingKeyBox,
+        /// Proving key archive for one-hop compact recursive proofs.
+        pub one_hop_proving_key_archive: Vec<u8>,
+        /// Verifier key for append compact recursive proofs.
+        pub append_verifier_key: VerifyingKeyBox,
+        /// Proving key archive for append compact recursive proofs.
+        pub append_proving_key_archive: Vec<u8>,
+    }
+
+    /// Portable all-width prover key package for ABI-7 recursive compact tokens.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveCompactKeyArtifactsV1 {
+        /// One entry for each supported recursive compact opening length.
+        pub entries: Vec<KagemushaRecursiveCompactKeyArtifactEntryV1>,
+    }
+
+    /// Per-width verifier keys for ABI-7 recursive compact tokens.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveCompactVerifierKeyEntryV1 {
+        /// Pallas IPA opening vector length supported by this entry.
+        pub verifier_opening_len: u32,
+        /// Verifier key for one-hop compact recursive proofs.
+        pub one_hop_verifier_key: VerifyingKeyBox,
+        /// Verifier key for append compact recursive proofs.
+        pub append_verifier_key: VerifyingKeyBox,
+    }
+
+    /// Portable all-width verifier-key package for ABI-7 recursive compact tokens.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveCompactVerifierKeysV1 {
+        /// One entry for each supported recursive compact opening length.
+        pub entries: Vec<KagemushaRecursiveCompactVerifierKeyEntryV1>,
     }
 
     /// Bridge request for the first recursive Kagemusha spendable state.
@@ -6637,7 +6696,280 @@ fn validate_kagemusha_recursive_spend_lineage_key_artifact_package_binding(
 fn is_supported_kagemusha_recursive_spend_lineage_verifier_opening_len(
     verifier_opening_len: u32,
 ) -> bool {
-    matches!(verifier_opening_len, 2 | 4 | 8 | 16 | 32 | 64 | 128)
+    KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1.contains(&verifier_opening_len)
+}
+
+fn validate_kagemusha_recursive_compact_verifier_key(
+    verifier_key: &VerifyingKeyBox,
+) -> Result<(), KagemushaFoldError> {
+    if verifier_key.backend.as_str() != KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND {
+        return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+            field: "recursive_compact_verifier_key",
+        });
+    }
+    if verifier_key.bytes.is_empty() {
+        return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+            field: "recursive_compact_verifier_key",
+        });
+    }
+    let circuit_id = kagemusha_lineage_vk_envelope_circuit_id(verifier_key)?;
+    if circuit_id != KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1 {
+        return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+            field: "recursive_compact_verifier_key",
+        });
+    }
+    Ok(())
+}
+
+fn validate_kagemusha_recursive_compact_package_widths<I>(
+    entries: I,
+) -> Result<(), KagemushaFoldError>
+where
+    I: IntoIterator<Item = u32>,
+{
+    let mut widths = entries.into_iter().collect::<Vec<_>>();
+    widths.sort_unstable();
+    if widths.as_slice() != KAGEMUSHA_RECURSIVE_COMPACT_SUPPORTED_OPENING_LENS_V1.as_slice() {
+        return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+            field: "recursive_compact_key_artifacts.entries",
+        });
+    }
+    Ok(())
+}
+
+impl KagemushaRecursiveCompactKeyArtifactEntryV1 {
+    /// Build and validate one recursive compact prover key-package entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the opening length is unsupported or any
+    /// verifier/proving key pair is not bound to the compact circuit id.
+    pub fn new(
+        verifier_opening_len: u32,
+        one_hop_verifier_key: VerifyingKeyBox,
+        one_hop_proving_key_archive: Vec<u8>,
+        append_verifier_key: VerifyingKeyBox,
+        append_proving_key_archive: Vec<u8>,
+    ) -> Result<Self, KagemushaFoldError> {
+        let entry = Self {
+            verifier_opening_len,
+            one_hop_verifier_key,
+            one_hop_proving_key_archive,
+            append_verifier_key,
+            append_proving_key_archive,
+        };
+        entry.validate_public_binding()?;
+        Ok(entry)
+    }
+
+    /// Validate this entry before proving.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any field violates the compact key
+    /// artifact contract.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
+        if !is_supported_kagemusha_recursive_spend_lineage_verifier_opening_len(
+            self.verifier_opening_len,
+        ) {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "verifier_opening_len",
+            });
+        }
+        validate_kagemusha_recursive_compact_verifier_key(&self.one_hop_verifier_key)?;
+        validate_kagemusha_recursive_compact_verifier_key(&self.append_verifier_key)?;
+        validate_kagemusha_recursive_spend_lineage_key_artifact_package_binding(
+            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+            &self.one_hop_verifier_key,
+            &self.one_hop_proving_key_archive,
+        )?;
+        validate_kagemusha_recursive_spend_lineage_key_artifact_package_binding(
+            KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+            &self.append_verifier_key,
+            &self.append_proving_key_archive,
+        )
+    }
+}
+
+impl KagemushaRecursiveCompactKeyArtifactsV1 {
+    /// Build and validate an all-width recursive compact prover package.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the package does not contain exactly one
+    /// valid entry for each supported opening length.
+    pub fn new(
+        entries: Vec<KagemushaRecursiveCompactKeyArtifactEntryV1>,
+    ) -> Result<Self, KagemushaFoldError> {
+        let package = Self { entries };
+        package.validate_public_binding()?;
+        Ok(package)
+    }
+
+    /// Validate this recursive compact prover package.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any entry is malformed or the supported
+    /// opening length set is incomplete.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
+        validate_kagemusha_recursive_compact_package_widths(
+            self.entries.iter().map(|entry| entry.verifier_opening_len),
+        )?;
+        for entry in &self.entries {
+            entry.validate_public_binding()?;
+        }
+        Ok(())
+    }
+
+    /// Return the prover entry for `verifier_opening_len`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the package is malformed or the width is
+    /// not present.
+    pub fn entry_for_opening_len(
+        &self,
+        verifier_opening_len: u32,
+    ) -> Result<&KagemushaRecursiveCompactKeyArtifactEntryV1, KagemushaFoldError> {
+        self.validate_public_binding()?;
+        self.entries
+            .iter()
+            .find(|entry| entry.verifier_opening_len == verifier_opening_len)
+            .ok_or(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "verifier_opening_len",
+            })
+    }
+
+    /// Return a verifier-only package derived from this prover package.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the prover package is malformed.
+    pub fn verifier_keys(
+        &self,
+    ) -> Result<KagemushaRecursiveCompactVerifierKeysV1, KagemushaFoldError> {
+        self.validate_public_binding()?;
+        KagemushaRecursiveCompactVerifierKeysV1::new(
+            self.entries
+                .iter()
+                .map(|entry| KagemushaRecursiveCompactVerifierKeyEntryV1 {
+                    verifier_opening_len: entry.verifier_opening_len,
+                    one_hop_verifier_key: entry.one_hop_verifier_key.clone(),
+                    append_verifier_key: entry.append_verifier_key.clone(),
+                })
+                .collect(),
+        )
+    }
+
+    /// Return the Norito-encoded size of this prover package.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Norito encoding fails.
+    pub fn norito_encoded_len(&self) -> Result<usize, norito::Error> {
+        to_bytes(self).map(|bytes| bytes.len())
+    }
+}
+
+impl KagemushaRecursiveCompactVerifierKeyEntryV1 {
+    /// Build and validate one recursive compact verifier package entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the opening length is unsupported or any
+    /// verifier key is not bound to the compact circuit id.
+    pub fn new(
+        verifier_opening_len: u32,
+        one_hop_verifier_key: VerifyingKeyBox,
+        append_verifier_key: VerifyingKeyBox,
+    ) -> Result<Self, KagemushaFoldError> {
+        let entry = Self {
+            verifier_opening_len,
+            one_hop_verifier_key,
+            append_verifier_key,
+        };
+        entry.validate_public_binding()?;
+        Ok(entry)
+    }
+
+    /// Validate this verifier package entry.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any field violates the verifier-key
+    /// package contract.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
+        if !is_supported_kagemusha_recursive_spend_lineage_verifier_opening_len(
+            self.verifier_opening_len,
+        ) {
+            return Err(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "verifier_opening_len",
+            });
+        }
+        validate_kagemusha_recursive_compact_verifier_key(&self.one_hop_verifier_key)?;
+        validate_kagemusha_recursive_compact_verifier_key(&self.append_verifier_key)
+    }
+}
+
+impl KagemushaRecursiveCompactVerifierKeysV1 {
+    /// Build and validate an all-width recursive compact verifier package.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the package does not contain exactly one
+    /// valid entry for each supported opening length.
+    pub fn new(
+        entries: Vec<KagemushaRecursiveCompactVerifierKeyEntryV1>,
+    ) -> Result<Self, KagemushaFoldError> {
+        let package = Self { entries };
+        package.validate_public_binding()?;
+        Ok(package)
+    }
+
+    /// Validate this recursive compact verifier package.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when any entry is malformed or the supported
+    /// opening length set is incomplete.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaFoldError> {
+        validate_kagemusha_recursive_compact_package_widths(
+            self.entries.iter().map(|entry| entry.verifier_opening_len),
+        )?;
+        for entry in &self.entries {
+            entry.validate_public_binding()?;
+        }
+        Ok(())
+    }
+
+    /// Return the verifier entry for `verifier_opening_len`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`KagemushaFoldError`] when the package is malformed or the width is
+    /// not present.
+    pub fn entry_for_opening_len(
+        &self,
+        verifier_opening_len: u32,
+    ) -> Result<&KagemushaRecursiveCompactVerifierKeyEntryV1, KagemushaFoldError> {
+        self.validate_public_binding()?;
+        self.entries
+            .iter()
+            .find(|entry| entry.verifier_opening_len == verifier_opening_len)
+            .ok_or(KagemushaFoldError::InvalidRecursiveSpendProof {
+                field: "verifier_opening_len",
+            })
+    }
+
+    /// Return the Norito-encoded size of this verifier package.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Norito encoding fails.
+    pub fn norito_encoded_len(&self) -> Result<usize, norito::Error> {
+        to_bytes(self).map(|bytes| bytes.len())
+    }
 }
 
 impl KagemushaRecursiveSpendLineageKeyArtifactsV1 {

@@ -964,6 +964,10 @@ python3 scripts/iso_trust_bundle_verify.py \
 Production evidence requires the trust summary to prove both
 `profile_json_emittable=true` and `profile_json_emitted=true`; a summary that
 could emit profile overrides but did not write them is local-audit evidence only.
+The aggregate evidence gate accepts `--allow-profile-json-not-emitted` only when
+at least one archived trust summary actually records
+`profile_json_emitted=false`, so an unused diagnostic override cannot be
+preserved as a non-production policy bit beside otherwise emitted profile JSON.
 Summaries that claim profile JSON was emitted while the archived source policy is
 not emittable are rejected even under local-audit allowances.
 When profile overrides are emitted, the trust summary is written only after the
@@ -1032,7 +1036,10 @@ requires timeout-bounded direct receipt archive verification from `--receipt` or
 `--receipt-dir` before emitting an evidence summary, and requires that direct archive's
 `receipt_sha256` entries cover every canary receipt-summary digest with the same
 receipt filename, receipt kind, successful status metadata, and kind-specific
-receipt metadata; direct receipt verification rejects rail receipts that omitted
+receipt metadata; the local canary-stage-only diagnostic override is rejected
+when any direct `--receipt` or `--receipt-dir` archive input is supplied, so
+direct replay evidence cannot carry that non-production policy bit; direct
+receipt verification rejects rail receipts that omitted
 an explicit profile unless `--allow-default-profile` is supplied, and that local
 override is preserved as an explicit receipt-summary policy flag;
 requires every non-legacy `iso-rail-gateway` canary receipt profile to have
@@ -1054,12 +1061,20 @@ CRL/OCSP DER digests and byte lengths that agree with the trust-bundle verifier
 summary; and scans
 archived commands/output for obvious secret leakage.
 Plan-only diagnostic archives must still record each planned stage's `dry_run`
-boolean. Bearer-token file arguments must be redacted whether represented as
+boolean, and the evidence gate accepts `--allow-plan-only` only when at least
+one archived canary summary records `plan_only=true`. Bearer-token file
+arguments must be redacted whether represented as
 `--bearer-token-file <path>` or `--bearer-token-file=<path>`. The `--allow-*`
 flags, including `--allow-legacy-colr007`,
 `--allow-missing-record-sources`, `--allow-canary-stage-receipts-only`, and
 `--allow-profile-json-not-emitted`, are for local test audits only and should not
-be present in production evidence archives. Even when local diagnostic
+be present in production evidence archives. The evidence gate also rejects
+`--allow-partial-canary` unless at least one archived canary summary is missing
+a rail or notary stage, rejects unused legacy/default-profile receipt overrides
+unless compact rail receipts actually carry legacy `colr.007` or missing
+profile evidence, and rejects unused record-only/synthetic/missing-source trust
+overrides unless compact trust summaries carry the corresponding diagnostic
+trust material. Even when local diagnostic
 `--allow-insecure-http` replay is enabled, archived child-command URLs still
 reject reserved documentation hosts and the checked-in `operator-canary.bank`
 template suffix.
@@ -1155,7 +1170,12 @@ of the supported rail/notary receipt evidence kinds while preserving
 `ok=true`, 2xx `status_code` success metadata, and the corresponding
 kind-specific notary or rail compact metadata. Evidence summaries that use the
 local canary-stage-only diagnostic path must still record
-`receipt_verification: null`; omitting the key is malformed replay input. XSD
+`receipt_verification: null` and must retain
+`policy.allow_canary_stage_receipts_only: true`; omitting the archive key or
+forging the policy flag back to `false` remains a blocker even under local
+readiness replay, the evidence gate rejects combining the policy flag with
+direct receipt archive inputs, and the readiness policy flag is still blocked
+when a forged direct receipt archive summary is present. XSD
 strict-mode flags, evidence-level production policy flags, and nested
 receipt-summary policy flags must all be present as booleans; evidence `ok`,
 canary `plan_only`, and

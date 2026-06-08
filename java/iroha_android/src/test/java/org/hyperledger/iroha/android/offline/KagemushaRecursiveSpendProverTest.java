@@ -316,6 +316,8 @@ public final class KagemushaRecursiveSpendProverTest {
         new IllegalArgumentException(
             "Kagemusha recursive compact token envelope verifier-key hash mismatch"));
     final byte[] validRecursiveCompactInput = kagemushaNoritoFrameWithPayload(0x4b);
+    final byte[] validRecursiveCompactKeyArtifacts = kagemushaNoritoFrameWithPayload(0xe1);
+    final byte[] validRecursiveCompactVerifierKeys = kagemushaNoritoFrameWithPayload(0xe2);
     final byte[] recursiveCompactCopyInput = kagemushaNoritoFrameWithPayload(0x4c);
     final byte[] expectedRecursiveCompactInput =
         Arrays.copyOf(recursiveCompactCopyInput, recursiveCompactCopyInput.length);
@@ -332,49 +334,89 @@ public final class KagemushaRecursiveSpendProverTest {
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    new byte[0], validRecursiveCompactInput));
+                    new byte[0], validRecursiveCompactInput, validRecursiveCompactKeyArtifacts));
     assertThrows(
         "pallasOpenEnvelopesArchive must not be empty",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    validRecursiveCompactInput, new byte[0]));
+                    validRecursiveCompactInput, new byte[0], validRecursiveCompactKeyArtifacts));
+    assertThrows(
+        "recursiveCompactKeyArtifactsArchive must not be empty",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput, validRecursiveCompactInput, new byte[0]));
     assertThrows(
         "recordBundleArchive must not exceed 67108864 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    oversizedRecursiveCompactInput, validRecursiveCompactInput));
+                    oversizedRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                    validRecursiveCompactKeyArtifacts));
     assertThrows(
         "pallasOpenEnvelopesArchive must not exceed 67108864 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    validRecursiveCompactInput, oversizedRecursiveCompactInput));
+                    validRecursiveCompactInput,
+                    oversizedRecursiveCompactInput,
+                    validRecursiveCompactKeyArtifacts));
+    assertThrows(
+        "recursiveCompactKeyArtifactsArchive must not exceed 67108864 bytes",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                    oversizedRecursiveCompactInput));
     assertThrows(
         "recordBundleArchive must be a valid Norito archive",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    new byte[] {1, 2}, validRecursiveCompactInput));
+                    new byte[] {1, 2},
+                    validRecursiveCompactInput,
+                    validRecursiveCompactKeyArtifacts));
     assertThrows(
         "pallasOpenEnvelopesArchive must be a valid Norito archive",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    validRecursiveCompactInput, new byte[] {1, 2}));
+                    validRecursiveCompactInput,
+                    new byte[] {1, 2},
+                    validRecursiveCompactKeyArtifacts));
+    assertThrows(
+        "recursiveCompactKeyArtifactsArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput, validRecursiveCompactInput, new byte[] {1, 2}));
     assertThrows(
         "recordBundleArchive must contain a non-empty Norito payload",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    kagemushaNoritoFrame(0x4b), validRecursiveCompactInput));
+                    kagemushaNoritoFrame(0x4b),
+                    validRecursiveCompactInput,
+                    validRecursiveCompactKeyArtifacts));
     assertThrows(
         "pallasOpenEnvelopesArchive must contain a non-empty Norito payload",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                    validRecursiveCompactInput, kagemushaNoritoFrame(0x4b)));
+                    validRecursiveCompactInput,
+                    kagemushaNoritoFrame(0x4b),
+                    validRecursiveCompactKeyArtifacts));
+    assertThrows(
+        "recursiveCompactKeyArtifactsArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                    kagemushaNoritoFrame(0xe1)));
     assertThrows(
         "bundleArchive must not be empty",
         () ->
@@ -396,22 +438,44 @@ public final class KagemushaRecursiveSpendProverTest {
             KagemushaRecursiveCompactPaymentTokenProver
                 .recursiveSpendCompactPaymentTokenFromBundle(kagemushaNoritoFrame(0x4b)));
     assertThrows(
-        () -> KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(new byte[0]));
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                new byte[0], validRecursiveCompactVerifierKeys));
     assertThrows(
         "compactTokenArchive must not exceed 67108864 bytes",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
-                oversizedRecursiveCompactInput));
+                oversizedRecursiveCompactInput, validRecursiveCompactVerifierKeys));
     assertThrows(
         "compactTokenArchive must be a valid Norito archive",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
-                new byte[] {1, 2}));
+                new byte[] {1, 2}, validRecursiveCompactVerifierKeys));
     assertThrows(
         "compactTokenArchive must contain a non-empty Norito payload",
         () ->
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
-                kagemushaNoritoFrame(0x4b)));
+                kagemushaNoritoFrame(0x4b), validRecursiveCompactVerifierKeys));
+    assertThrows(
+        "recursiveCompactVerifierKeysArchive must not be empty",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                validRecursiveCompactInput, new byte[0]));
+    assertThrows(
+        "recursiveCompactVerifierKeysArchive must not exceed 67108864 bytes",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                validRecursiveCompactInput, oversizedRecursiveCompactInput));
+    assertThrows(
+        "recursiveCompactVerifierKeysArchive must be a valid Norito archive",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                validRecursiveCompactInput, new byte[] {1, 2}));
+    assertThrows(
+        "recursiveCompactVerifierKeysArchive must contain a non-empty Norito payload",
+        () ->
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                validRecursiveCompactInput, kagemushaNoritoFrame(0xe2)));
     assertThrows(
         "verifierRecordArchive must not be empty",
         () ->

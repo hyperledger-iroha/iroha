@@ -1088,9 +1088,14 @@ def _prove_verified_recursive_aggregation_proof_bundle(
 def _prove_verified_recursive_compact_payment_token(
     record_bundle_archive: BytesLike,
     pallas_open_envelopes_archive: BytesLike,
+    recursive_compact_key_artifacts_archive: BytesLike,
 ) -> bytes:
     record_bundle = _norito_archive_bytes_named(record_bundle_archive, "record_bundle_archive")
     pallas_open_envelopes = _norito_archive_bytes_named(pallas_open_envelopes_archive, "pallas_open_envelopes_archive")
+    recursive_compact_key_artifacts = _norito_archive_bytes_named(
+        recursive_compact_key_artifacts_archive,
+        "recursive_compact_key_artifacts_archive",
+    )
     if not is_kagemusha_recursive_compact_payment_token_prover_available():
         raise RuntimeError(
             "recursive compact Kagemusha payment-token prover requires native "
@@ -1100,18 +1105,33 @@ def _prove_verified_recursive_compact_payment_token(
         _RECURSIVE_COMPACT_TOKEN_METHOD,
         record_bundle,
         pallas_open_envelopes,
+        recursive_compact_key_artifacts,
     )
 
 
-def _verify_recursive_compact_payment_token(compact_token_archive: BytesLike) -> bool:
+def _verify_recursive_compact_payment_token(
+    compact_token_archive: BytesLike,
+    recursive_compact_verifier_keys_archive: BytesLike,
+) -> bool:
     compact_token = _archive_bytes_named(compact_token_archive, "compact_token_archive")
     _assert_kagemusha_norito_archive(compact_token, "compact_token_archive")
+    recursive_compact_verifier_keys = _archive_bytes_named(
+        recursive_compact_verifier_keys_archive,
+        "recursive_compact_verifier_keys_archive",
+    )
+    _assert_kagemusha_norito_archive(
+        recursive_compact_verifier_keys,
+        "recursive_compact_verifier_keys_archive",
+    )
     if not is_kagemusha_recursive_compact_payment_token_verifier_available():
         raise RuntimeError(
             "recursive compact Kagemusha payment-token verifier requires native "
             "bridge ABI 7 with the compact verifier symbol"
         )
-    result = _native_method(_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD)(compact_token)
+    result = _native_method(_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD)(
+        compact_token,
+        recursive_compact_verifier_keys,
+    )
     if not isinstance(result, bool):
         raise RuntimeError(
             f"{_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD} returned non-boolean result"

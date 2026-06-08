@@ -3638,6 +3638,90 @@ class IsoProductionReadinessTest(unittest.TestCase):
             self.assertIn("evidence.policy.allow_profile_json_not_emitted", codes)
             self.assertIn("trust.profile_json_not_emitted", codes)
 
+    def test_profile_json_not_emitted_digest_must_be_recorded_null(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_root = root / "evidence"
+            evidence_root.mkdir()
+            notary_receipts, rail_receipts = evidence_test.write_https_receipt_dirs(
+                evidence_root
+            )
+            canary_path = evidence_test.write_canary(
+                evidence_root,
+                evidence_test.valid_canary_summary(
+                    receipt_entries=evidence_test.receipt_entries_from_dirs(
+                        notary_receipts,
+                        rail_receipts,
+                    )
+                ),
+            )
+            trust_path = evidence_test.write_trust_summary(
+                evidence_root / "trust",
+                emit_profile_json=False,
+            )
+            evidence_summary = evidence_root / "evidence.summary.json"
+            rc, _stdout, stderr = evidence_test.run_evidence(
+                [
+                    "--canary-summary",
+                    str(canary_path),
+                    "--trust-summary",
+                    str(trust_path),
+                    "--provider",
+                    "local-bank",
+                    "--environment",
+                    "preprod",
+                    "--allow-profile-json-not-emitted",
+                    "--receipt-dir",
+                    str(notary_receipts),
+                    "--receipt-dir",
+                    str(rail_receipts),
+                    "--summary-out",
+                    str(evidence_summary),
+                ]
+            )
+            self.assertEqual(rc, 0, stderr)
+            evidence_summary = add_archive_receipt_verification(evidence_summary)
+            cases = (
+                (
+                    "missing",
+                    lambda evidence: evidence["trust_summaries"][0].pop(
+                        "profile_json_sha256"
+                    ),
+                ),
+                (
+                    "non-null",
+                    lambda evidence: evidence["trust_summaries"][0].__setitem__(
+                        "profile_json_sha256",
+                        "0" * 64,
+                    ),
+                ),
+            )
+            for name, mutate in cases:
+                with self.subTest(name=name):
+                    evidence = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                    mutate(evidence)
+                    refresh_digest(evidence)
+                    mutated_path = write_json(
+                        root / f"{name}-profile-json-digest.summary.json",
+                        evidence,
+                    )
+
+                    rc, _stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(xsd_summary),
+                            "--evidence-summary",
+                            str(mutated_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(
+                        "profile_json_sha256 must be null when profile JSON was not emitted",
+                        stderr,
+                    )
+
     def test_profile_json_not_emittable_evidence_blocks_readiness(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -5698,6 +5782,53 @@ class IsoProductionReadinessTest(unittest.TestCase):
             diagnostic = json.loads(stdout)
             self.assertTrue(diagnostic["ok"])
             self.assertTrue(diagnostic["policy"]["allow_canary_stage_receipts_only"])
+
+            forged_policy = json.loads(evidence_summary.read_text(encoding="utf-8"))
+            forged_policy["policy"]["allow_canary_stage_receipts_only"] = False
+            refresh_digest(forged_policy)
+            forged_policy_path = write_json(
+                root / "forged-archive-receipt-policy.summary.json",
+                forged_policy,
+            )
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(forged_policy_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.archive_receipts_not_reverified", codes)
+
+            forged_policy_with_archive = json.loads(
+                add_archive_receipt_verification(
+                    write_evidence_summary(root / "forged-policy-with-archive")
+                ).read_text(encoding="utf-8")
+            )
+            forged_policy_with_archive["policy"][
+                "allow_canary_stage_receipts_only"
+            ] = True
+            refresh_digest(forged_policy_with_archive)
+            forged_policy_with_archive_path = write_json(
+                root / "forged-policy-with-archive.summary.json",
+                forged_policy_with_archive,
+            )
+            rc, stdout, stderr = run_readiness(
+                [
+                    "--xsd-summary",
+                    str(xsd_summary),
+                    "--evidence-summary",
+                    str(forged_policy_with_archive_path),
+                    "--allow-canary-stage-receipts-only",
+                ]
+            )
+            self.assertEqual(rc, 1, stderr)
+            codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
+            self.assertIn("evidence.policy.allow_canary_stage_receipts_only", codes)
+            self.assertNotIn("evidence.archive_receipts_not_reverified", codes)
 
             omitted = json.loads(evidence_summary.read_text(encoding="utf-8"))
             omitted.pop("receipt_verification")

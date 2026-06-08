@@ -1175,7 +1175,9 @@ Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
 `recursive_compact_v1` compact-token surface and probes
 `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Use
 `proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
-and `verifyRecursiveCompactPaymentToken`; gate them with `isNativeAvailable()`
+with record-bundle, Pallas open-envelope, and recursive compact key-artifact
+archives, and `verifyRecursiveCompactPaymentToken` with compact-token and
+recursive compact verifier-key archives; gate them with `isNativeAvailable()`
 and `isVerifierNativeAvailable()`. The recursive-spend compact projection
 verifier is exposed separately as
 `verifyRecursiveSpendCompactPaymentTokenProjection(...)` and
@@ -1287,8 +1289,9 @@ the operation-specific result schema before returning bytes to callers.
 Capability metadata reports `privacy-production-gate-v1`, keeps
 `productionReady = false`, and remains fail-closed with missing production
 gates and no audit references until real proving, verification, chain
-admission, deterministic testing, fuzzing, performance gates, and external
-audit signoff are complete.
+admission, witness privacy checks, deterministic testing,
+negative/adversarial testing, parser/verifier fuzzing, performance gates, and external audit
+signoff are complete.
 
 Android also exposes the deterministic privacy FFI status/error-code contract
 for diagnostics and cross-language parity: `STATUS_ERROR`,

@@ -156,6 +156,10 @@ def _kagemusha_input_archive(schema_byte: int = 0x50) -> bytes:
     return _kagemusha_norito_frame_with_payload(schema_byte)
 
 
+RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE = _kagemusha_input_archive(0xE1)
+RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE = _kagemusha_input_archive(0xE2)
+
+
 class _Native:
     def __init__(self) -> None:
         self.calls: list[tuple[str, bytes]] = []
@@ -349,22 +353,48 @@ def test_kagemusha_native_prover_helpers_reject_empty_requests(
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             b"",
             b"pallas",
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         )
     with pytest.raises(ValueError, match="pallas_open_envelopes_archive must not be empty"):
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             _kagemusha_input_archive(0xA2),
             b"",
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
+        )
+    with pytest.raises(
+        ValueError,
+        match="recursive_compact_key_artifacts_archive must not be empty",
+    ):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            _kagemusha_input_archive(0xA3),
+            _kagemusha_input_archive(0xA4),
+            b"",
         )
     with pytest.raises(ValueError, match="compact_token_archive must not be empty"):
-        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(b"")
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            b"",
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        )
+    with pytest.raises(
+        ValueError,
+        match="recursive_compact_verifier_keys_archive must not be empty",
+    ):
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            _kagemusha_input_archive(0x4B),
+            b"",
+        )
     with pytest.raises(ValueError, match="compact_token_archive must be a valid Norito archive"):
-        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(b"\x01")
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            b"\x01",
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        )
     with pytest.raises(
         ValueError,
         match="compact_token_archive must contain a non-empty Norito payload",
     ):
         getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
-            _kagemusha_norito_frame(0x4B)
+            _kagemusha_norito_frame(0x4B),
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
         )
 
     assert native.calls == []
@@ -399,6 +429,24 @@ def test_kagemusha_native_prover_helpers_reject_malformed_norito_requests() -> N
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             _kagemusha_input_archive(0xB3),
             b"\x01",
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
+        )
+    with pytest.raises(
+        ValueError,
+        match="recursive_compact_key_artifacts_archive must be a valid Norito archive",
+    ):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            _kagemusha_input_archive(0xB3),
+            _kagemusha_input_archive(0xB4),
+            b"\x01",
+        )
+    with pytest.raises(
+        ValueError,
+        match="recursive_compact_verifier_keys_archive must be a valid Norito archive",
+    ):
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            _kagemusha_input_archive(0x4B),
+            b"\x01",
         )
 
 
@@ -425,6 +473,24 @@ def test_kagemusha_native_prover_helpers_reject_empty_payload_norito_requests() 
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             _kagemusha_input_archive(0xB7),
             _kagemusha_norito_frame(0xB8),
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
+        )
+    with pytest.raises(
+        ValueError,
+        match="recursive_compact_key_artifacts_archive must contain a non-empty Norito payload",
+    ):
+        getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            _kagemusha_input_archive(0xB7),
+            _kagemusha_input_archive(0xB8),
+            _kagemusha_norito_frame(0xB9),
+        )
+    with pytest.raises(
+        ValueError,
+        match="recursive_compact_verifier_keys_archive must contain a non-empty Norito payload",
+    ):
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            _kagemusha_input_archive(0x4B),
+            _kagemusha_norito_frame(0x4C),
         )
 
 
@@ -510,20 +576,23 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             record_bundle,
             pallas_open_envelopes,
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         )
     with pytest.raises(RuntimeError, match="recursive compact Kagemusha payment-token verifier"):
         getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
-            _kagemusha_norito_frame_with_payload(0x4B)
+            _kagemusha_norito_frame_with_payload(0x4B),
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
         )
 
     def permissive_recursive_compact(
         record_bundle: bytes,
         pallas_open_envelopes: bytes,
+        key_artifacts: bytes,
     ) -> bytes:
         native.calls.append(
             (
                 "permissive_recursive_compact",
-                record_bundle + b"|" + pallas_open_envelopes,
+                record_bundle + b"|" + pallas_open_envelopes + b"|" + key_artifacts,
             )
         )
         return b"permissive_recursive_compact"
@@ -539,31 +608,41 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             record_bundle,
             pallas_open_envelopes,
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         )
     assert native.calls[-1] == (
         "permissive_recursive_compact",
-        MALFORMED_PROBE_ARCHIVE + b"|" + MALFORMED_PROBE_ARCHIVE,
+        MALFORMED_PROBE_ARCHIVE
+        + b"|"
+        + MALFORMED_PROBE_ARCHIVE
+        + b"|"
+        + MALFORMED_PROBE_ARCHIVE,
     )
 
-    def recursive_compact(record_bundle: bytes, pallas_open_envelopes: bytes) -> bytes:
-        native._reject_probe("recursive compact", record_bundle, pallas_open_envelopes)
+    def recursive_compact(
+        record_bundle: bytes,
+        pallas_open_envelopes: bytes,
+        key_artifacts: bytes,
+    ) -> bytes:
+        native._reject_probe("recursive compact", record_bundle, pallas_open_envelopes, key_artifacts)
         native.calls.append(
-            ("recursive_compact", record_bundle + b"|" + pallas_open_envelopes)
+            ("recursive_compact", record_bundle + b"|" + pallas_open_envelopes + b"|" + key_artifacts)
         )
         return _kagemusha_norito_frame_with_payload(0x4D)
 
     setattr(native, RECURSIVE_COMPACT_METHOD, recursive_compact)
-    setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, lambda compact_token: True)
+    setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, lambda compact_token, verifier_keys: True)
     assert kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available() is False
     assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is False
     with pytest.raises(RuntimeError, match="recursive compact Kagemusha payment-token verifier"):
         getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
-            _kagemusha_norito_frame_with_payload(0x4B)
+            _kagemusha_norito_frame_with_payload(0x4B),
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
         )
 
-    def recursive_compact_verify(compact_token: bytes) -> bool:
-        native._reject_probe("recursive compact verify", compact_token)
-        native.calls.append(("recursive_compact_verify", compact_token))
+    def recursive_compact_verify(compact_token: bytes, verifier_keys: bytes) -> bool:
+        native._reject_probe("recursive compact verify", compact_token, verifier_keys)
+        native.calls.append(("recursive_compact_verify", compact_token + b"|" + verifier_keys))
         return compact_token[6] == 0x4B
 
     setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, recursive_compact_verify)
@@ -575,9 +654,11 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
     )
 
     def unavailable_recursive_compact(
-        record_bundle: bytes, pallas_open_envelopes: bytes
+        record_bundle: bytes,
+        pallas_open_envelopes: bytes,
+        key_artifacts: bytes,
     ) -> bytes:
-        native._reject_probe("recursive compact", record_bundle, pallas_open_envelopes)
+        native._reject_probe("recursive compact", record_bundle, pallas_open_envelopes, key_artifacts)
         raise RuntimeError("recursive compact proof composition unavailable")
 
     setattr(native, RECURSIVE_COMPACT_METHOD, unavailable_recursive_compact)
@@ -586,6 +667,7 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             record_bundle,
             pallas_open_envelopes,
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         )
 
     setattr(native, RECURSIVE_COMPACT_METHOD, recursive_compact)
@@ -593,17 +675,24 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             record_bundle,
             pallas_open_envelopes,
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         )
         == _kagemusha_norito_frame_with_payload(0x4D)
     )
     valid_recursive_compact_token = _kagemusha_norito_frame_with_payload(0x4B)
     forged_recursive_compact_token = _kagemusha_norito_frame_with_payload(0x4C)
     assert (
-        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(valid_recursive_compact_token)
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            valid_recursive_compact_token,
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        )
         is True
     )
     assert (
-        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(forged_recursive_compact_token)
+        getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            forged_recursive_compact_token,
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        )
         is False
     )
     assert (
@@ -654,12 +743,29 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
     assert native.calls == [
         ("compact", record_bundle),
         ("recursive_aggregation", record_bundle + b"|" + pallas_open_envelopes),
-        ("permissive_recursive_compact", b"\x00|\x00"),
-        ("permissive_recursive_compact", b"\x00|\x00"),
-        ("permissive_recursive_compact", b"\x00|\x00"),
-        ("recursive_compact", record_bundle + b"|" + pallas_open_envelopes),
-        ("recursive_compact_verify", valid_recursive_compact_token),
-        ("recursive_compact_verify", forged_recursive_compact_token),
+        ("permissive_recursive_compact", b"\x00|\x00|\x00"),
+        ("permissive_recursive_compact", b"\x00|\x00|\x00"),
+        ("permissive_recursive_compact", b"\x00|\x00|\x00"),
+        (
+            "recursive_compact",
+            record_bundle
+            + b"|"
+            + pallas_open_envelopes
+            + b"|"
+            + RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
+        ),
+        (
+            "recursive_compact_verify",
+            valid_recursive_compact_token
+            + b"|"
+            + RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        ),
+        (
+            "recursive_compact_verify",
+            forged_recursive_compact_token
+            + b"|"
+            + RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        ),
         ("init", init_request),
         ("append", append_request),
         ("transition-profile-init", transition_init_request),
@@ -884,12 +990,16 @@ def test_recursive_compact_payment_token_verifier_rejects_non_boolean_native_res
 ) -> None:
     native = _Native()
 
-    def recursive_compact(record_bundle: bytes, pallas_open_envelopes: bytes) -> bytes:
-        native._reject_probe("recursive compact", record_bundle, pallas_open_envelopes)
+    def recursive_compact(
+        record_bundle: bytes,
+        pallas_open_envelopes: bytes,
+        key_artifacts: bytes,
+    ) -> bytes:
+        native._reject_probe("recursive compact", record_bundle, pallas_open_envelopes, key_artifacts)
         return b"recursive_compact"
 
-    def non_boolean_verify(compact_token: bytes) -> bytes:
-        native._reject_probe("recursive compact verify", compact_token)
+    def non_boolean_verify(compact_token: bytes, verifier_keys: bytes) -> bytes:
+        native._reject_probe("recursive compact verify", compact_token, verifier_keys)
         return b"not-a-boolean"
 
     setattr(native, RECURSIVE_COMPACT_METHOD, recursive_compact)
@@ -900,7 +1010,8 @@ def test_recursive_compact_payment_token_verifier_rejects_non_boolean_native_res
     assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is True
     with pytest.raises(RuntimeError, match="returned non-boolean result"):
         getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
-            _kagemusha_norito_frame_with_payload(0x4B)
+            _kagemusha_norito_frame_with_payload(0x4B),
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
         )
 
 
@@ -1136,20 +1247,24 @@ def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
         if method_name == RECURSIVE_AGGREGATION_METHOD:
             setattr(native, method_name, lambda record, pallas: b"accepted")
         elif method_name == RECURSIVE_COMPACT_METHOD:
-            setattr(native, method_name, lambda record, pallas: b"accepted")
+            setattr(native, method_name, lambda record, pallas, key_artifacts: b"accepted")
 
-            def rejecting_verify(archive: bytes) -> bool:
-                native._reject_probe("recursive compact verify", archive)
+            def rejecting_verify(archive: bytes, verifier_keys: bytes) -> bool:
+                native._reject_probe("recursive compact verify", archive, verifier_keys)
                 return False
 
             setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, rejecting_verify)
         elif method_name == RECURSIVE_COMPACT_VERIFY_METHOD:
-            def rejecting_recursive_compact(record: bytes, pallas: bytes) -> bytes:
-                native._reject_probe("recursive compact", record, pallas)
+            def rejecting_recursive_compact(
+                record: bytes,
+                pallas: bytes,
+                key_artifacts: bytes,
+            ) -> bytes:
+                native._reject_probe("recursive compact", record, pallas, key_artifacts)
                 return b"accepted"
 
             setattr(native, RECURSIVE_COMPACT_METHOD, rejecting_recursive_compact)
-            setattr(native, method_name, lambda archive: True)
+            setattr(native, method_name, lambda archive, verifier_keys: True)
         elif method_name == "kagemusha_recursive_spend_lineage_witness_from_init_result":
             setattr(native, method_name, lambda request, bundle: b"accepted")
         elif method_name == "kagemusha_recursive_spend_lineage_witness_append_result":
@@ -1182,6 +1297,7 @@ def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
                     getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
                         _kagemusha_input_archive(0xBB),
                         _kagemusha_input_archive(0xBC),
+                        RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
                     )
             else:
                 assert (
@@ -1193,7 +1309,8 @@ def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
                     match="recursive compact Kagemusha payment-token verifier",
                 ):
                     getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
-                        _kagemusha_norito_frame_with_payload(0x4B)
+                        _kagemusha_norito_frame_with_payload(0x4B),
+                        RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
                     )
         else:
             assert kagemusha.is_kagemusha_recursive_spend_available() is False
@@ -1202,11 +1319,11 @@ def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
 
     vague_prover_native = _Native()
 
-    def vague_recursive_compact_prover(record: bytes, pallas: bytes) -> bytes:
+    def vague_recursive_compact_prover(record: bytes, pallas: bytes, key_artifacts: bytes) -> bytes:
         raise RuntimeError("Kagemusha recursive compact proof unavailable")
 
-    def rejecting_recursive_compact_verify(archive: bytes) -> bool:
-        vague_prover_native._reject_probe("recursive compact verify", archive)
+    def rejecting_recursive_compact_verify(archive: bytes, verifier_keys: bytes) -> bool:
+        vague_prover_native._reject_probe("recursive compact verify", archive, verifier_keys)
         return True
 
     setattr(
@@ -1232,15 +1349,16 @@ def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
         getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             _kagemusha_input_archive(0xBD),
             _kagemusha_input_archive(0xBE),
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         )
 
     vague_verifier_native = _Native()
 
-    def rejecting_recursive_compact_prover(record: bytes, pallas: bytes) -> bytes:
-        vague_verifier_native._reject_probe("recursive compact", record, pallas)
+    def rejecting_recursive_compact_prover(record: bytes, pallas: bytes, key_artifacts: bytes) -> bytes:
+        vague_verifier_native._reject_probe("recursive compact", record, pallas, key_artifacts)
         return _kagemusha_input_archive(0xBF)
 
-    def vague_recursive_compact_verify(archive: bytes) -> bool:
+    def vague_recursive_compact_verify(archive: bytes, verifier_keys: bytes) -> bool:
         raise RuntimeError("Kagemusha recursive compact verifier unavailable")
 
     setattr(
@@ -1264,7 +1382,8 @@ def test_recursive_kagemusha_availability_rejects_permissive_native_probes(
     )
     with pytest.raises(RuntimeError, match="recursive compact Kagemusha payment-token verifier"):
         getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
-            _kagemusha_norito_frame_with_payload(0x4B)
+            _kagemusha_norito_frame_with_payload(0x4B),
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
         )
 
 
@@ -2159,8 +2278,8 @@ def test_recursive_kagemusha_availability_requires_bridge_abi_6(
         native.kagemusha_recursive_spend_bridge_abi_version = (
             lambda abi_version=abi_version: abi_version
         )
-        setattr(native, RECURSIVE_COMPACT_METHOD, lambda record, pallas: b"compact")
-        setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, lambda token: True)
+        setattr(native, RECURSIVE_COMPACT_METHOD, lambda record, pallas, key_artifacts: b"compact")
+        setattr(native, RECURSIVE_COMPACT_VERIFY_METHOD, lambda token, verifier_keys: True)
         monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
 
         assert kagemusha.is_kagemusha_recursive_spend_available() is False
@@ -2454,6 +2573,7 @@ def test_recursive_kagemusha_helpers_reject_oversized_inputs_before_copy_and_nat
         lambda: getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             oversized_archive,
             valid_archive,
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         ),
         "record_bundle_archive",
     )
@@ -2461,14 +2581,31 @@ def test_recursive_kagemusha_helpers_reject_oversized_inputs_before_copy_and_nat
         lambda: getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
             valid_archive,
             oversized_archive,
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         ),
         "pallas_open_envelopes_archive",
     )
     assert_oversized(
         lambda: getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
-            oversized_archive
+            oversized_archive,
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
         ),
         "compact_token_archive",
+    )
+    assert_oversized(
+        lambda: getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            valid_archive,
+            valid_archive,
+            oversized_archive,
+        ),
+        "recursive_compact_key_artifacts_archive",
+    )
+    assert_oversized(
+        lambda: getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            valid_archive,
+            oversized_archive,
+        ),
+        "recursive_compact_verifier_keys_archive",
     )
 
 

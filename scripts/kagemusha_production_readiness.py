@@ -2157,11 +2157,15 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
         "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_OPENING_LEN",
         "KAGEMUSHA_RECURSIVE_COMPACT_MIN_PROOF_BYTES",
         "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope",
-        "duplicated multi-hop compact Pallas archive must reject before unavailable",
-        "height-aware duplicated multi-hop compact Pallas archive must reject before unavailable",
-        "forged multi-hop compact Pallas metadata must reject before unavailable",
-        "reordered multi-hop compact Pallas archive must reject before unavailable",
-        "height-aware reordered multi-hop compact Pallas archive must reject before unavailable",
+        "height-aware detached compact Pallas archive must reject before proving",
+        "height-aware extra compact Pallas opening must reject before proving",
+        "height-aware missing compact Pallas opening must reject before proving",
+        "duplicated multi-hop compact Pallas archive must reject before proving",
+        "height-aware duplicated multi-hop compact Pallas archive must reject before proving",
+        "forged multi-hop compact Pallas metadata must reject before proving",
+        "height-aware forged multi-hop compact Pallas metadata must reject before proving",
+        "reordered multi-hop compact Pallas archive must reject before proving",
+        "height-aware reordered multi-hop compact Pallas archive must reject before proving",
     )
     for snippet in required_core_snippets:
         if snippet not in core_text:
@@ -2174,19 +2178,33 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
             )
     core_function_contracts = (
         (
-            "fn prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive(",
+            "fn prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes(",
             (
-                "decode_kagemusha_recursive_compact_pallas_open_envelopes(",
                 "kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs(",
                 "validate_kagemusha_recursive_one_hop_verifier_slice_preflight_binding(",
-                "return Err(KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE.to_owned())",
-                "4 => prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope::<4>",
+                "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope_dispatch(",
+            ),
+        ),
+        (
+            "fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
+            (
+                "prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes(",
+                "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_append_envelope_dispatch(",
+                "for hop_index in 1..hop_count",
+            ),
+        ),
+        (
+            "fn prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope_dispatch(",
+            (
+                "prove_halo2_ipa_kagemusha_recursive_compact_payment_token_one_hop_envelope::<$len>",
+                "match usize::try_from(preflight.opening_len)",
+                "4 => prove_len!(4)",
             ),
         ),
         (
             "pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(",
             (
-                "prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive(",
+                "prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
                 "proving_key_bytes",
                 "None",
             ),
@@ -2194,7 +2212,7 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
         (
             "pub fn prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_at_height(",
             (
-                "prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelope_archive(",
+                "prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
                 "proving_key_bytes",
                 "Some(block_height)",
             ),
@@ -2266,7 +2284,7 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
         (
             "pub unsafe extern \"C\" fn connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(",
             (
-                "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(",
+                "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(",
                 "is_kagemusha_recursive_compact_unavailable_error(&err)",
                 "BridgeError::KagemushaRecursiveCompactUnavailable",
             ),
@@ -2274,9 +2292,9 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
         (
             "pub unsafe extern \"C\" fn connect_norito_kagemusha_verify_recursive_compact_payment_token(",
             (
-                "preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box)",
+                "preverify_kagemusha_recursive_compact_payment_token(&token, vk_box)",
                 "Err(err) if is_kagemusha_recursive_compact_unavailable_error(&err) => {}",
-                "verify_kagemusha_recursive_compact_payment_token(&token, &vk_box)",
+                "verify_kagemusha_recursive_compact_payment_token(&token, vk_box)",
                 "*out_valid = 0",
             ),
         ),
@@ -2294,7 +2312,7 @@ def check_abi7_fail_closed(repo_root: Path) -> dict[str, Any]:
             )
     return {
         "ok": not blockers,
-        "state": "one_hop_wired_multi_hop_reserved" if not blockers else "unknown",
+        "state": "package_aware_multi_hop_composed" if not blockers else "unknown",
         "circuit_id": "kagemusha-recursive-compact-v1",
         "blockers": blockers,
     }
@@ -2568,6 +2586,26 @@ def _android_signed_evidence_summary(reports: list[dict[str, Any]]) -> dict[str,
             ("signed_at_utc", "signed_at_utc"),
             ("signed_evidence_artifact_sha256", "artifact_sha256"),
             ("signed_evidence_signer_public_key_sha256", "signer_public_key_sha256"),
+            ("offline_wallet_apk_path", "offline_wallet_apk_path"),
+            ("offline_wallet_apk_sha256", "offline_wallet_apk_sha256"),
+            ("d2d_payment_transcript_path", "d2d_payment_transcript_path"),
+            ("d2d_payment_transcript_sha256", "d2d_payment_transcript_sha256"),
+            (
+                "wallet_integrity_transcript_path",
+                "wallet_integrity_transcript_path",
+            ),
+            (
+                "wallet_integrity_transcript_sha256",
+                "wallet_integrity_transcript_sha256",
+            ),
+            (
+                "attestation_certificate_chain_path",
+                "attestation_certificate_chain_path",
+            ),
+            (
+                "attestation_certificate_chain_sha256",
+                "attestation_certificate_chain_sha256",
+            ),
         ):
             value = kagemusha.get(source_key)
             if isinstance(value, str) and value:

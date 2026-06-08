@@ -137,8 +137,12 @@ public sealed class PrivacyProductionGate
         bool chainAdmission,
         bool sdkParity,
         bool walletState,
+        bool witnessPrivacyChecks,
         bool deterministicTests,
+        bool negativeAdversarialTests,
         bool fuzzing,
+        bool parserFuzzing,
+        bool verifierFuzzing,
         bool performanceGates,
         bool externalAudit,
         IReadOnlyList<string> missing,
@@ -151,8 +155,12 @@ public sealed class PrivacyProductionGate
         ChainAdmission = chainAdmission;
         SdkParity = sdkParity;
         WalletState = walletState;
+        WitnessPrivacyChecks = witnessPrivacyChecks;
         DeterministicTests = deterministicTests;
+        NegativeAdversarialTests = negativeAdversarialTests;
         Fuzzing = fuzzing;
+        ParserFuzzing = parserFuzzing;
+        VerifierFuzzing = verifierFuzzing;
         PerformanceGates = performanceGates;
         ExternalAudit = externalAudit;
         Missing = missing;
@@ -167,8 +175,12 @@ public sealed class PrivacyProductionGate
             "chain admission path is not enabled",
             "cross-SDK parity is incomplete",
             "wallet/state support is incomplete",
+            "witness privacy checks are incomplete",
             "deterministic tests are incomplete",
+            "negative/adversarial tests are incomplete",
             "fuzzing gate is incomplete",
+            "parser fuzzing gate is incomplete",
+            "verifier fuzzing gate is incomplete",
             "performance gate is incomplete",
             "external audit signoff is missing",
             "implementation stage is not production-hardened",
@@ -191,9 +203,17 @@ public sealed class PrivacyProductionGate
 
     public bool WalletState { get; }
 
+    public bool WitnessPrivacyChecks { get; }
+
     public bool DeterministicTests { get; }
 
+    public bool NegativeAdversarialTests { get; }
+
     public bool Fuzzing { get; }
+
+    public bool ParserFuzzing { get; }
+
+    public bool VerifierFuzzing { get; }
 
     public bool PerformanceGates { get; }
 
@@ -213,8 +233,12 @@ public sealed class PrivacyProductionGate
             chainAdmission: false,
             sdkParity: false,
             walletState: false,
+            witnessPrivacyChecks: false,
             deterministicTests: false,
+            negativeAdversarialTests: false,
             fuzzing: false,
+            parserFuzzing: false,
+            verifierFuzzing: false,
             performanceGates: false,
             externalAudit: false,
             missing: MissingReasons,

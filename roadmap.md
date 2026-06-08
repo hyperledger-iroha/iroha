@@ -76,7 +76,8 @@ and completed history lives in [`status.md`](./status.md).
   proof backends, or proof attachments are malformed. The ABI-7
   `kagemusha-recursive-compact-v1` compact-token symbols now route one-hop
   LEN=4 record-backed Pallas openings through the compact verifier-slice proof
-  path while keeping multi-hop compact fail-closed. Core projection tests bind
+  path and route package-aware multi-hop compact proving through the append
+  verifier-slice loop while keeping production default selection reserved. Core projection tests bind
   folded public-input hash limbs, transcript limbs, witness count, hop count,
   verifier-key CID/hash, verifier-record windows, the one-hop verifier-slice
   side column, and compact verifier-key shape; compact-token envelope
@@ -108,16 +109,19 @@ and completed history lives in [`status.md`](./status.md).
   input/output overlap before hop proof decoding, and lineage witness replay
   applies full-bundle fold metadata, verifier-record set, and current-note
   shape/binding plus append-handoff and final-bundle gates before Pallas
-  archive or previous-proof parsing. Record-bound
-  multi-hop compact archives now also fail with an explicit composed private-hop
-  verifier-batch-unavailable diagnostic, preserving one-hop verifier-slice
-  binding coverage while the full compact circuit remains reserved. Multi-hop
-  Pallas archives with forged metadata, duplicated openings, or reordered
-  openings reject as record-backed preflight drift before the unavailable
-  sentinel, while the native bridge maps exactly ordered valid multi-hop
-  batches to the recursive-compact-unavailable code rather than treating them
-  as malformed input. The height-aware core compact prover enforces the same
-  duplicated/reordered preflight boundary. Kotlin/JVM and Java Android wrappers
+  archive or previous-proof parsing. Record-bound multi-hop compact archives
+  now require explicit packaged compact key artifacts on package-backed native
+  and SDK surfaces, preserving verifier-slice binding coverage while
+  production default selection remains reserved. Multi-hop
+  Pallas archives with missing openings, forged metadata, duplicated openings,
+  or reordered openings reject as record-backed preflight drift before the
+  proving path, while the native bridge maps exactly ordered valid multi-hop
+  batches plus the matching key package to produced recursive compact tokens
+  rather than treating them as malformed input. The height-aware core compact prover
+  enforces the same missing-opening, forged-metadata, duplicated-opening, and
+  reordered-opening multi-hop preflight boundary and also rejects detached
+  Pallas archives and extra one-hop Pallas openings before verifier-batch
+  composition diagnostics. Kotlin/JVM and Java Android wrappers
   classify the same unavailable diagnostics as reserved proof-composition state
   while keeping malformed local archive validation, compact-token
   public-instance row-shape diagnostics, and compact-token verifier-key hash
@@ -151,11 +155,13 @@ and completed history lives in [`status.md`](./status.md).
   binding, attestation certificate-chain path/hash-to-bytes binding with
   non-empty PEM/DER shape and payload-size checks, signed evidence artifact
   path/hash-to-bytes binding pinned to `evidence/signed-evidence.json`, a
-  closed `slot.json` field allowlist, structured
+  closed `slot.json` field allowlist, signed `artifact_digests` coverage for
+  release APK, certificate-chain, D2D handoff, and wallet-integrity bytes,
+  structured
 	  signed-evidence schema checks for slot identity, release APK
 	  path/hash-to-bytes binding, native bridge ABI version, physical-device
 	  attestation, ABI-7 `one_hop_verified` recursive compact JNI probe state plus
-	  `multi_hop_proof_composition_unavailable` prover state, production pass/fail
+	  `multi_hop_proof_composed` prover state, production pass/fail
 	  claims, raw command claims, canonical UTC
   `signed_at_utc`, D2D payment transcript path/hash binding under `handoff/`,
   wallet-integrity transcript path/hash binding for one-use key rotation and rollback rejection,
@@ -321,10 +327,14 @@ and completed history lives in [`status.md`](./status.md).
 	  evidence, and scanner-validated Android signed-evidence inventory, while
 	  recording bundle-relative per-slot Android signed-evidence artifact paths
 	  and SHA-256 digests plus the Reserved-lineage and compact key artifact size maps, and listing packaged lineage artifacts,
-	  compact key artifacts, the compact key generator log, and production proof logs with
+	  compact key artifacts, the compact key generator log, production proof logs,
+	  release APKs, D2D handoff transcripts, wallet-integrity transcripts, and
+	  attestation certificate-chain files with
 	  bundle-relative paths, SHA-256 digests, and byte sizes after revalidating each slot name while rejecting summary drift
 	  across repo-trust and external-evidence sections, duplicate JSON keys,
-	  unexpected top-level or section-level summary fields, per-section blockers
+	  unexpected top-level, section-level, or per-slot Android signed-evidence
+	  summary fields, missing Android signed-evidence summary fields, malformed
+	  summary digests or timestamps, per-section blockers
 	  in a ready summary, secret-looking paths, secret-looking
 	  strings anywhere inside the readiness summary, plain-text placeholder
 	  compact key artifacts in the compact-key artifact inventory, evidence outside `--bundle-root`, symlinked
@@ -415,16 +425,15 @@ and completed history lives in [`status.md`](./status.md).
 	  proof-composition is unavailable, plus a stale folded-token binding mutation
 	  and non-canonical compact verifier-key/hash regressions that hard-fail
 	  before the soft-invalid path.
-  Remaining compact-token release work is to package one-hop proving-key
-  artifacts for runtime-disabled production builds, compose the multi-hop append
-  verifier batch into the compact proof, and attach signed device-lab evidence
-  before enabling receiver admission or SDK default selection. The
+  Remaining compact-token release work is to attach signed device-lab evidence
+  and release evidence for packaged one-hop and append proving-key artifacts
+  before enabling SDK default selection. The
   production-readiness CI guard now treats that as the release contract and
   checks concrete ABI-7 core and bridge function bodies, not only loose marker
   text: ABI-6 Reserved-lineage may be advertised as the production
-  offline-offline route, but ABI-7 recursive compact remains a
-  blocker/default-disabled surface until
-  the composed proof exists.
+  offline-offline route, while ABI-7 recursive compact is implemented as an
+  explicit key-package-backed surface until release evidence opens default
+  selection.
 - Active BSC mainnet SCCP SDK hardening now directly gates malformed
   receipt-observed source-event logs: browser, Python, Swift, Kotlin/JVM, Java
   Android, and .NET tests reject matching BSC source-bridge logs with extra
@@ -2008,9 +2017,21 @@ and completed history lives in [`status.md`](./status.md).
 	  explicit freshness
 	  budgets for canary, trust-summary, and trust-source evidence plus direct
 		  receipt archive verification covering canary receipt digests and receipt
-		  kinds before archival, preserves compact trust bundle SHA-256, source
+		  kinds before archival, rejects an unused `--allow-plan-only` override
+		  unless at least one canary summary records `plan_only=true`, rejects
+		  `--allow-partial-canary` unless at least one canary summary is missing
+		  a rail or notary stage, rejects unused legacy/default-profile receipt
+		  overrides unless compact rail receipts actually carry legacy
+		  `colr.007` or missing profile evidence, rejects unused
+		  record-only/synthetic/missing-source trust overrides unless compact
+		  trust summaries carry the corresponding diagnostic trust material,
+		  rejects the canary-stage-only diagnostic
+		  override when direct `--receipt` or `--receipt-dir` archive inputs are
+		  supplied, preserves compact trust bundle SHA-256, source
 		  authority/version and URL/retrieval provenance, trust source freshness
 		  emission budgets, source trust-verifier diagnostic flags,
+		  rejects an unused `--allow-profile-json-not-emitted` override unless
+		  at least one trust summary records `profile_json_emitted=false`,
 		  revoked-certificate pin
 	  counts, certificate-policy OID counts,
 	  and compact trust-anchor/revoked/CRL/OCSP DER proof digests and byte lengths
@@ -2036,7 +2057,10 @@ and completed history lives in [`status.md`](./status.md).
 		  diagnostic flags, reports explicit diagnostic `source: null` compact
 		  trust profiles as blockers while keeping omitted source keys malformed,
 		  requires canary-stage-only evidence to record explicit
-		  `receipt_verification: null` instead of omitting the archive field, and
+		  `receipt_verification: null` plus the matching archived
+		  `allow_canary_stage_receipts_only` policy flag instead of omitting the
+		  archive field or forging production policy, while still blocking that
+		  policy flag when forged direct archive verification is present, and
   rechecks compact trust profile JSON emission and digest, CRL/OCSP revocation
 	  posture, direct archive/canary receipt digest/kind/status/metadata binding, and trust
 	  profile-count binding, while rejecting repeated or copied

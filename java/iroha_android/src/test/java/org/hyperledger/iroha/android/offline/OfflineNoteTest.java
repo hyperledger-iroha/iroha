@@ -23,15 +23,21 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
+import org.hyperledger.iroha.android.client.IrohaClient;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.tx.SignedTransaction;
 
 public final class OfflineNoteTest {
 
@@ -83,6 +89,7 @@ public final class OfflineNoteTest {
     toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment();
     toriiIssuerClientRejectsMalformedCertificateUsageLimits();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
+    offlineNoteTransactionSubmitterIncludesFeeMetadata();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
     walletRejectsDuplicateTokenAndAlreadyPendingInputs();
     walletRejectsExactAmountReceiveRequestReplayAfterRestart();
@@ -3156,6 +3163,34 @@ public final class OfflineNoteTest {
         "defund audit trail token id");
   }
 
+  private static void offlineNoteTransactionSubmitterIncludesFeeMetadata() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final CapturingIrohaClient client = new CapturingIrohaClient();
+    final Map<String, String> metadata =
+        IrohaOfflineNoteTransactionSubmitter.feeMetadata(
+            "xor#universal", string(payment, "recipient_account_id"));
+    final IrohaOfflineNoteTransactionSubmitter submitter =
+        new IrohaOfflineNoteTransactionSubmitter(
+            client,
+            new FakeSigner(),
+            string(derivation, "chain_id"),
+            string(payment, "sender_account_id"),
+            codec,
+            () -> 1_736_000_000_000L,
+            metadata);
+
+    submitter.submitAudit(audit(fixture)).get(5, TimeUnit.SECONDS);
+
+    assertTrue(client.submittedTransaction != null, "submitter should submit a transaction");
+    final TransactionPayload payload =
+        codec.decodeTransaction(client.submittedTransaction.encodedPayload());
+    assertTrue(metadata.equals(payload.metadata()), "fee metadata should round-trip");
+  }
+
   private static void walletSyncReconcilesPendingSpendChangeAndRedeemStates() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
@@ -4765,6 +4800,37 @@ public final class OfflineNoteTest {
         final List<OfflineNote.AuditBundle> bearerAuditTrail) {
       defunds.add(new DefundSubmission(redemption, bearerAuditTrail));
       return CompletableFuture.completedFuture(new ClientResponse(202, new byte[0], "accepted"));
+    }
+  }
+
+  private static final class CapturingIrohaClient implements IrohaClient {
+    private SignedTransaction submittedTransaction;
+
+    @Override
+    public CompletableFuture<ClientResponse> submitTransaction(final SignedTransaction transaction) {
+      submittedTransaction = transaction;
+      return CompletableFuture.completedFuture(new ClientResponse(202, new byte[0], "accepted"));
+    }
+  }
+
+  private static final class FakeSigner implements Signer {
+    @Override
+    public byte[] sign(final byte[] message) throws SigningException {
+      final byte[] suffix = "-signature".getBytes(StandardCharsets.UTF_8);
+      final byte[] combined = new byte[message.length + suffix.length];
+      System.arraycopy(message, 0, combined, 0, message.length);
+      System.arraycopy(suffix, 0, combined, message.length, suffix.length);
+      return combined;
+    }
+
+    @Override
+    public byte[] publicKey() {
+      return "fake-public-key".getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Override
+    public String algorithm() {
+      return "Ed25519";
     }
   }
 

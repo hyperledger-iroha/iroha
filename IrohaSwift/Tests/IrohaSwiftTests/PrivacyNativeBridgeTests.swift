@@ -948,8 +948,12 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertFalse(capabilities.productionGate.chainAdmission)
         XCTAssertFalse(capabilities.productionGate.sdkParity)
         XCTAssertFalse(capabilities.productionGate.walletState)
+        XCTAssertFalse(capabilities.productionGate.witnessPrivacyChecks)
         XCTAssertFalse(capabilities.productionGate.deterministicTests)
+        XCTAssertFalse(capabilities.productionGate.negativeAdversarialTests)
         XCTAssertFalse(capabilities.productionGate.fuzzing)
+        XCTAssertFalse(capabilities.productionGate.parserFuzzing)
+        XCTAssertFalse(capabilities.productionGate.verifierFuzzing)
         XCTAssertFalse(capabilities.productionGate.performanceGates)
         XCTAssertFalse(capabilities.productionGate.externalAudit)
         XCTAssertEqual(capabilities.productionGate.auditReferences, [])
@@ -962,6 +966,26 @@ final class PrivacyNativeBridgeTests: XCTestCase {
         XCTAssertTrue(
             capabilities.productionGate.missing.contains(
                 "chain admission path is not enabled"
+            )
+        )
+        XCTAssertTrue(
+            capabilities.productionGate.missing.contains(
+                "witness privacy checks are incomplete"
+            )
+        )
+        XCTAssertTrue(
+            capabilities.productionGate.missing.contains(
+                "negative/adversarial tests are incomplete"
+            )
+        )
+        XCTAssertTrue(
+            capabilities.productionGate.missing.contains(
+                "parser fuzzing gate is incomplete"
+            )
+        )
+        XCTAssertTrue(
+            capabilities.productionGate.missing.contains(
+                "verifier fuzzing gate is incomplete"
             )
         )
         XCTAssertTrue(

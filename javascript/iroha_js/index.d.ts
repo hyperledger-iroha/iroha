@@ -17603,9 +17603,11 @@ export function kagemushaProveVerifiedRecursiveAggregationProofBundleWithRecords
 export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
   recordBundleArchive: BinaryLike,
   pallasOpenEnvelopesArchive: BinaryLike,
+  recursiveCompactKeyArtifactsArchive: BinaryLike,
 ): Buffer;
 export function kagemushaVerifyRecursiveCompactPaymentToken(
   compactTokenArchive: BinaryLike,
+  recursiveCompactVerifierKeysArchive: BinaryLike,
 ): boolean;
 export function kagemushaRecursiveSpendCompactPaymentTokenFromBundle(
   bundleArchive: BinaryLike,

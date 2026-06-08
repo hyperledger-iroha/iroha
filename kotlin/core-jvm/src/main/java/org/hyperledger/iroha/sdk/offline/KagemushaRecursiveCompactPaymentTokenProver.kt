@@ -28,11 +28,15 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
         fun proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
             recordBundleArchive: ByteArray?,
             pallasOpenEnvelopesArchive: ByteArray?,
+            recursiveCompactKeyArtifactsArchive: ByteArray?,
         ): ByteArray {
             requireNativeInput(recordBundleArchive, "recordBundleArchive")
             requireNativeInput(pallasOpenEnvelopesArchive, "pallasOpenEnvelopesArchive")
+            requireNativeInput(recursiveCompactKeyArtifactsArchive, "recursiveCompactKeyArtifactsArchive")
             val recordBundle = ownedNativeInput(recordBundleArchive, "recordBundleArchive")
             val pallasOpenEnvelopes = ownedNativeInput(pallasOpenEnvelopesArchive, "pallasOpenEnvelopesArchive")
+            val keyArtifacts =
+                ownedNativeInput(recursiveCompactKeyArtifactsArchive, "recursiveCompactKeyArtifactsArchive")
             check(nativeAvailable) {
                 "$LIBRARY_NAME ABI 7 recursive compact-token prover/verifier is not available in this runtime"
             }
@@ -41,6 +45,7 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
                     nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                         recordBundle,
                         pallasOpenEnvelopes,
+                        keyArtifacts,
                     )
                 } catch (error: IllegalArgumentException) {
                     if (isRecursiveCompactUnavailable(error)) {
@@ -100,12 +105,17 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
         }
 
         @JvmStatic
-        fun verifyRecursiveCompactPaymentToken(compactTokenArchive: ByteArray?): Boolean {
+        fun verifyRecursiveCompactPaymentToken(
+            compactTokenArchive: ByteArray?,
+            recursiveCompactVerifierKeysArchive: ByteArray?,
+        ): Boolean {
             val compactToken = ownedNativeInput(compactTokenArchive, "compactTokenArchive")
+            val verifierKeys =
+                ownedNativeInput(recursiveCompactVerifierKeysArchive, "recursiveCompactVerifierKeysArchive")
             check(nativeVerifierAvailable) {
                 "$LIBRARY_NAME ABI 7 recursive compact-token verifier is not available in this runtime"
             }
-            return nativeVerifyRecursiveCompactPaymentToken(compactToken)
+            return nativeVerifyRecursiveCompactPaymentToken(compactToken, verifierKeys)
         }
 
         @JvmStatic
@@ -149,10 +159,11 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
                         nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                             ByteArray(0),
                             ByteArray(0),
+                            ByteArray(0),
                         )
                     }
                     val verifierRejects = KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
-                        nativeVerifyRecursiveCompactPaymentToken(ByteArray(0))
+                        nativeVerifyRecursiveCompactPaymentToken(ByteArray(0), ByteArray(0))
                     }
                     val projectionRejects = KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
                         nativeRecursiveSpendCompactPaymentTokenFromBundle(ByteArray(0))
@@ -168,7 +179,7 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
                 bridgeAbiVersion = { nativeBridgeAbiVersion() },
                 probeSymbol = {
                     KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe {
-                        nativeVerifyRecursiveCompactPaymentToken(ByteArray(0))
+                        nativeVerifyRecursiveCompactPaymentToken(ByteArray(0), ByteArray(0))
                     }
                 },
                 requiredBridgeAbiVersion = REQUIRED_BRIDGE_ABI_VERSION,
@@ -201,11 +212,13 @@ class KagemushaRecursiveCompactPaymentTokenProver private constructor() {
         private external fun nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
             recordBundleArchive: ByteArray,
             pallasOpenEnvelopesArchive: ByteArray,
+            recursiveCompactKeyArtifactsArchive: ByteArray,
         ): ByteArray?
 
         @JvmStatic
         private external fun nativeVerifyRecursiveCompactPaymentToken(
             compactTokenArchive: ByteArray,
+            recursiveCompactVerifierKeysArchive: ByteArray,
         ): Boolean
 
         @JvmStatic

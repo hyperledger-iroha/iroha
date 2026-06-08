@@ -355,11 +355,11 @@ source-marker leaf metadata, unreadable marker bytes, or non-UTF-8 ABI-7 and
 Reserved-lineage marker files return
 structured blockers instead of raw decode errors. The
 ABI-7 compact section also extracts the relevant Rust function bodies before
-trusting the checked-in source: compact record preflight must still reject
-multi-hop Pallas archives with the reserved unavailable diagnostic, one-hop
-Pallas archives must bind to the production LEN=4 verifier-slice key and either
+trusting the checked-in source: compact record preflight must reject malformed
+multi-hop Pallas archives before proof composition, one-hop and append Pallas
+archives must bind to the production LEN=4 verifier-slice keys and either
 consume packaged proving-key material or fail at the proving-key gate, and the C
-bridge must still map true multi-hop compact unavailability to
+bridge must still map true compact key-material unavailability to
 `KagemushaRecursiveCompactUnavailable` instead of a generic proof error. The
 readiness summary writer also rejects symlinked `--summary-out` ancestors and
 symlinked, hardlinked, non-regular, dangling-symlink, or unreadable-metadata
@@ -431,7 +431,9 @@ calls reject the same slot paths before parsing artifacts, reading transcript
 bindings, or hashing signed evidence. Signed-evidence artifact digest
 verification also revalidates required artifact paths for secret-looking names,
 symlinks, hardlinks, and non-regular files immediately before hashing the bytes
-claimed by `artifact_digests`. The Android device-lab root validator
+claimed by `artifact_digests`, including the `slot.json` release APK,
+attestation certificate-chain, D2D handoff, and wallet-integrity transcript
+paths. The Android device-lab root validator
 also rejects secret-looking paths and unreadable root metadata before slot
 discovery, and scan_slot(...) rejects unreadable slot directory or parent metadata
 before slot traversal. Scanner and rollup missing-root decisions also consume
@@ -544,15 +546,22 @@ signed-evidence inventory. The emitted manifest records bundle-relative
 per-slot Android signed-evidence artifact paths and SHA-256 digests for every
 validated device-lab slot, keeps the Reserved-lineage and ABI-7 compact
 artifact size maps from the recomputed readiness summary, records every packaged lineage artifact,
-compact key artifact, compact key generator log, and production proof log with
+compact key artifact, compact key generator log, production proof log, release
+APK, D2D handoff transcript, wallet-integrity transcript, and attestation
+certificate-chain file with
 bundle-relative path, SHA-256 digest, and byte size, and revalidates each slot
-name before
+name, signed-evidence summary field set, signed-evidence timestamp, summary
+digest, and slot-relative artifact path before
 constructing manifest paths. The verifier rejects summary drift, duplicate JSON keys,
-unexpected top-level or section-level summary fields, per-section blockers in a
-ready summary, secret-looking paths, evidence outside
+unexpected top-level, section-level, or per-slot Android signed-evidence summary
+fields, missing Android signed-evidence summary fields, malformed summary
+digests or timestamps, per-section blockers in a ready summary,
+secret-looking paths, evidence outside
 `--bundle-root`, secret-looking strings anywhere inside the readiness summary,
 plain-text placeholder compact key artifacts in the compact-key artifact
-inventory, symlinked bundle roots, and symlinked or hardlinked manifest outputs, and
+inventory, missing or digest-drifted Android release APK, D2D handoff,
+wallet-integrity, and attestation-chain artifacts, symlinked bundle roots, and
+symlinked or hardlinked manifest outputs, and
 records only bundle-relative evidence paths. If any release input path escapes
 `--bundle-root`, the verifier stops before loading any readiness JSON, proof
 evidence, compact-key evidence, Android device-lab tree, or artifact inventory.
@@ -1000,14 +1009,15 @@ Bridge ABI 7 keeps the recursive compact-token entry point
 `connect_norito_kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes`.
 The ABI-7 recursive compact-token symbols now route one-hop
 `kagemusha-recursive-compact-v1` compact proving when the native proof bundle
-carries the packaged compact one-hop proving-key archive,
-one-hop LEN=4 compact-token proof path inputs, and matching verifier-slice open-envelope
+carries packaged compact one-hop and append proving-key archives,
+LEN=4 compact-token proof path inputs, and matching verifier-slice open-envelope
 evidence. Routine production selection still uses the ABI-6 reserved-lineage
-recursive spend verifier and redemption surface until that packaged key has
-release evidence attached. A missing packaged key, the generic compact-token
-reservation, and the multi-hop verifier-batch reservation remain reserved ABI-7 state
-and return the recursive-compact-unavailable diagnostic instead of
-opening receiver admission or SDK default selection. The ABI-7 compact verifier
+recursive spend verifier and redemption surface until packaged key and physical
+device evidence is attached. Package-backed ABI-7 compact callers must pass the
+Norito key-artifact or verifier-key package explicitly; malformed or missing
+packages fail closed before proving or verification. Generic compact-token
+reservation and SDK default selection remain reserved ABI-7 state instead of
+opening receiver admission automatically. The ABI-7 compact verifier
 key remains CID-distinct from the ABI-6 recursive aggregation verifier key while
 reusing the semantic aggregation circuit shape for projection tests; those
 projection helpers are not a receiver-admission path.
@@ -1391,17 +1401,19 @@ ABI 7 reserves the same record-backed private-hop evidence for
 `kagemusha-recursive-compact-v1`. The public compact-token prover/verifier now
 admits the production LEN=4 one-hop verifier-slice profile and rejects semantic
 compact-CID envelopes that omit the in-circuit verifier-slice side column.
-Multi-hop compact tokens remain fail-closed until the append verifier batch is
-composed into the compact proof. Multi-hop Pallas verifier-batch archives with
-forged metadata, duplicated openings, or reordered openings fail as
-record-backed preflight drift before the recursive compact unavailable
-sentinel, so only an exactly ordered, record-bound multi-hop batch can reach
-the reserved proof-composition diagnostic. The height-aware core compact prover
-enforces the same preflight boundary before applying the reserved multi-hop
-diagnostic. Wallets that need
-production offline-offline spend-again behavior should use the recursive
-spendable-cash path, while recursive aggregation proof bundles remain
-admission-neutral.
+The package-aware compact helper now owns the append verifier-slice loop for
+multi-hop proof construction when compact key artifacts are supplied, but
+production default selection remains reserved for ABI-6 Reserved-lineage
+recursive spend until compact artifact/evidence gates open. Multi-hop Pallas
+verifier-batch archives with missing openings, forged metadata, duplicated
+openings, or reordered openings fail as record-backed preflight drift before
+compact proof generation. The height-aware core compact
+prover also rejects detached Pallas archives, extra one-hop Pallas openings,
+and the same missing-opening, forged-metadata, duplicated-opening, and
+reordered-opening multi-hop preflight drift before default selection can treat
+ABI-7 compact as production-ready. Wallets that need production offline-offline
+spend-again behavior should use the recursive spendable-cash path, while
+recursive aggregation proof bundles remain admission-neutral.
 Malformed bundles, oversized bundle hop counts, malformed hop shapes, root
 discontinuities, duplicate nullifiers or output commitments, tampered hop
 proofs, oversized hop proof payloads, missing or inactive records, verifier
@@ -1903,9 +1915,10 @@ metadata evidence builder are crate-private implementation helpers; public
 callers must use the record-backed Pallas preflight proof-bundle entry points.
 This proof path remains admission-neutral for compact-token receivers. The
 recursive compact-token helper verifies reserved projection shape for internal
-tests, while the public ABI-7 compact prover/verifier only opens the one-hop
-path when packaged compact proving-key and verifier-slice evidence are present;
-missing packaged key, multi-hop, and default-selection cases remain reserved.
+tests, while the public ABI-7 compact prover/verifier opens packaged one-hop and
+append proof paths only when compact proving-key and verifier-slice evidence are
+present; missing packaged keys fail closed and default-selection cases remain
+reserved.
 The combined builders reject native witness-count
 mismatches before native preflight or hop proof decoding, the public preflight
 rejects empty witness batches directly, and native preflight then rejects
@@ -2044,11 +2057,12 @@ large-stack non-native verifier harness. Full production fixed-window Pallas
 verifier materialization and composed MockProver acceptance/splice tests are
 heavyweight and ignored by default. The routine offline-offline production path
 uses the ABI-6 reserved-lineage recursive spend verifier and redemption surface,
-while ABI-7 recursive compact-token symbols have one-hop proof wiring only when
-the packaged compact one-hop proving-key archive and verifier-slice
-open-envelope evidence are present; missing packaged key and multi-hop cases
-remain reserved ABI-7 state. The ignored MockProver cases remain deep synthesis
-stress coverage for future verifier-layout changes.
+while ABI-7 recursive compact-token symbols have package-aware one-hop and
+append proof wiring when packaged compact proving-key archives and
+verifier-slice open-envelope evidence are present; malformed or absent packaged
+keys fail closed and production default selection remains reserved ABI-7 state.
+The ignored MockProver
+cases remain deep synthesis stress coverage for future verifier-layout changes.
 The routine Rust test suite also skips real Kagemusha folded-token, recursive
 aggregation, recursive-spend, and bridge success proof generators by default;
 those cases remain available as opt-in `--ignored --test-threads=1` runs so

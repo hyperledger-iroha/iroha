@@ -2742,18 +2742,34 @@ redistributable schemas, and official trust/revocation bundles.
 			  carry both executed `stages` and plan-only `planned_stages` branches,
 			  and readiness replay keeps plan-only compact summaries blocker-producing
 			  only when they retain `stage_windows: []` and explicitly recorded
-			  `receipt_summary: null`,
+			  `receipt_summary: null`; the evidence gate rejects
+			  `--allow-plan-only` unless at least one canary summary records
+			  `plan_only=true`, and rejects `--allow-partial-canary` unless at
+			  least one canary summary is missing a rail or notary stage,
+			  rejects unused legacy/default-profile receipt overrides unless
+			  compact rail receipts actually carry legacy `colr.007` or missing
+			  profile evidence, and rejects unused record-only/synthetic/missing-source
+			  trust overrides unless compact trust summaries carry the
+			  corresponding diagnostic trust material,
 			  and timeout-bounded direct receipt archive verification covering canary
 		  receipt digests, receipt filenames, receipt kinds, successful status
 		  metadata, kind-specific compact receipt metadata, and explicit rejection
 		  of rail default-profile fallback unless the local override is recorded by
-		  the receipt verifier,
+		  the receipt verifier; canary-stage-only diagnostic evidence is rejected
+		  when direct `--receipt` or `--receipt-dir` archive inputs are supplied
+		  and otherwise must retain
+		  both `receipt_verification: null` and the matching archived
+		  `allow_canary_stage_receipts_only` policy flag before readiness can treat
+		  the missing direct archive as an allowed local diagnostic, and that
+		  policy flag remains blocked when direct archive verification is present,
 	  requires exact expected `--provider` and `--environment` CLI context and
 	  records that context in the digest-bound evidence policy for readiness
 	  rechecking, requires explicit freshness budgets for canary, trust-summary,
 	  and trust-source evidence while recording them in the evidence policy,
 	  preserves compact trust profile JSON emission booleans and a digest
-	  recomputed from archived profile overrides, rejects profile-emittable drift
+	  recomputed from archived profile overrides, rejects an unused
+	  `--allow-profile-json-not-emitted` override unless at least one trust
+	  summary records `profile_json_emitted=false`, rejects profile-emittable drift
 	  and emitted-but-not-emittable contradictions against the archived trust
 	  source policy, `bundle_sha256`, required
 	  source authority/version plus source URL/retrieval provenance, the trust

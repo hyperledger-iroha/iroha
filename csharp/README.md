@@ -92,7 +92,9 @@ ABI-6-or-later native surface is available, otherwise fall back to
 The ABI-7 `recursive_compact_v1` compact-token symbols remain source-stable and
 probe `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend.
 Use `ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(...)`
-and `VerifyRecursiveCompactPaymentToken(...)`; gate them with
+with record-bundle, Pallas open-envelope, and recursive compact key-artifact
+archives, and `VerifyRecursiveCompactPaymentToken(...)` with compact-token and
+recursive compact verifier-key archives; gate them with
 `IsRecursiveCompactPaymentTokenProverAvailable()` and
 `IsRecursiveCompactPaymentTokenVerifierAvailable()`. The recursive-spend
 compact projection verifier is exposed separately as
@@ -100,16 +102,18 @@ compact projection verifier is exposed separately as
 `IsRecursiveSpendCompactPaymentTokenProjectionVerifierAvailable()`. It accepts
 raw Norito compact-token and verifier-record archives, rejects empty,
 malformed, oversized, or invalid-height inputs before P/Invoke dispatch, and
-returns the native boolean receiver result. ABI 7 now carries the
-one-hop LEN=4 compact-token proof path when the native bundle includes the
-packaged compact one-hop proving-key archive and matching verifier-slice
+returns the native boolean receiver result. ABI 7 now carries one-hop LEN=4 and
+package-backed multi-hop compact-token proof paths when the native bundle
+includes packaged compact proving-key archives and matching verifier-slice
 material. Production defaults still stay on ABI 6 Reserved-lineage recursive
-spend until that archive is shipped and signed for release. When the
-proof-composition reservation is reached for a missing packaged key, the
-generic compact-token reservation, or the multi-hop verifier-batch reservation,
-bridge error code `-312` marks reserved ABI-7 state. The C# wrapper surfaces
-that as `InvalidOperationException` instead of a generic proof rejection, while
-empty or malformed local archives fail as `ArgumentException`. For
+spend until that artifact set is shipped and signed for release. Empty,
+malformed, missing, or oversized local archives fail as `ArgumentException`;
+bridge error code `-312` remains classified as legacy reserved ABI-7 state. The
+ABI-7 launch boundary remains explicit: the one-hop LEN=4 compact-token proof
+path uses a packaged compact one-hop proving-key, while release evidence
+continues to track the proof-composition reservation, generic compact-token
+reservation, and multi-hop verifier-batch reservation. Missing native symbols
+still surface as `InvalidOperationException`. For
 Reserved-lineage branching, use `CanRedeemWitnessless(...)`,
 `RequiresLineageWitnessForRedeem(...)`, `PreferredAppendOutputCircuitId(...)`,
 `CanProveAppendOutputCircuitId(...)`, and
@@ -165,8 +169,9 @@ validates archive magic, length, CRC, the 64 MiB native size cap, and the
 operation-specific result schema before returning bytes to callers. Capability
 metadata reports `privacy-production-gate-v1`, keeps `ProductionReady = false`,
 and remains fail-closed with missing production gates and no audit references
-until real proving, verification, chain admission, deterministic testing,
-fuzzing, performance gates, and external audit signoff are complete.
+until real proving, verification, chain admission, witness privacy checks,
+deterministic testing, negative/adversarial testing, parser/verifier fuzzing, performance gates,
+and external audit signoff are complete.
 
 C# also exposes the deterministic privacy FFI status/error-code contract for
 diagnostics and cross-language parity: `StatusError`, `ErrorNullPointer`,

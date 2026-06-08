@@ -413,6 +413,10 @@ function privacyNoritoFrameFromPayload(schemaByte, payload) {
 
 const TEST_NORITO_COMPACT_LEN_FLAG = 0x02;
 const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
+  "c88489618a012c283ff3bb2ebabc7775",
+  "hex",
+);
+const OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
   "119f4df38a98ef5848ad0aadb9715779",
   "hex",
 );
@@ -1336,6 +1340,18 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       0x12,
     ),
   );
+  const oldHashProvingKey = Buffer.from(expectedProvingKey);
+  OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH.copy(oldHashProvingKey, 6);
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        expectedVerifierKey,
+        oldHashProvingKey,
+      ),
+    /lineage_proving_key_archive/,
+  );
   const exposedVerifierKey = directArtifacts.lineageVerifierKey;
   const exposedProvingKey = directArtifacts.lineageProvingKeyArchive;
   exposedVerifierKey[0] = 0;
@@ -1838,11 +1854,16 @@ test("package dist entrypoint exports Kagemusha recursive spend helpers", () => 
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         privacyNoritoFrameWithPayload(0x4a),
         privacyNoritoFrameWithPayload(0x4c),
-    ),
+        privacyNoritoFrameWithPayload(0x4d),
+      ),
     /recursive compact Kagemusha payment-token prover|unavailable in browser-only crypto builds|Native binding required/,
   );
   assert.throws(
-    () => kagemushaVerifyRecursiveCompactPaymentToken(privacyNoritoFrameWithPayload(0x4b)),
+    () =>
+      kagemushaVerifyRecursiveCompactPaymentToken(
+        privacyNoritoFrameWithPayload(0x4b),
+        privacyNoritoFrameWithPayload(0x4e),
+      ),
     /recursive compact Kagemusha payment-token verifier|unavailable in browser-only crypto builds|Native binding required/,
   );
   assert.throws(
@@ -2043,6 +2064,12 @@ test("package dist privacy proof envelopes preserve pending production backend t
     ["lattice-pcs-sis", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk", "LatticePcsSis"],
     ["jindo-lattice-pcs-zk-v0", "LatticePcsSis"],
+    ["Halo2IpaPasta", "Halo2IpaPasta"],
+    ["halo2/pasta/kagemusha-recursive-aggregation-v1", "Halo2IpaPasta"],
+    ["halo2/pasta/kagemusha-recursive-compact-v1", "Halo2IpaPasta"],
+    ["halo2/pasta/kagemusha-recursive-spend-lineage-v1", "Halo2IpaPasta"],
+    ["halo2/pasta/kagemusha-recursive-spend-lineage-onehop-v1", "Halo2IpaPasta"],
+    ["halo2/pasta/kagemusha-recursive-spend-lineage-append-v1", "Halo2IpaPasta"],
     ["stark/fri", "Stark"],
     ["stark/fri/sha256-goldilocks", "Stark"],
     ["stark/fri/poseidon2-goldilocks", "Stark"],
@@ -2360,6 +2387,7 @@ test("package dist privacy native availability clears request copies after failu
   });
   let throwingProbe;
   let badOutputProbe;
+  let badOutput;
 
   try {
     globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
@@ -2373,7 +2401,8 @@ test("package dist privacy native availability clears request copies after failu
     globalThis.__IROHA_NATIVE_BINDING__ = completeBinding({
       privacyVerifyProofV1(request) {
         badOutputProbe = request;
-        return Buffer.from([0x56]);
+        badOutput = Buffer.from([0x56]);
+        return badOutput;
       },
     });
     assert.equal(isPrivacyNativeAvailable(), false);
@@ -2387,6 +2416,7 @@ test("package dist privacy native availability clears request copies after failu
 
   assert.deepEqual(Buffer.from(throwingProbe), Buffer.alloc(privacyNoritoFrame(0x52).length));
   assert.deepEqual(Buffer.from(badOutputProbe), Buffer.alloc(privacyNoritoFrame(0x52).length));
+  assert.deepEqual(badOutput, Buffer.alloc(1));
 });
 
 test("package dist privacy native availability probes reject unsafe raw output", () => {

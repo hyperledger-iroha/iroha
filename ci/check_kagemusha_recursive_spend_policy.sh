@@ -361,15 +361,19 @@ ADVERSARIAL_COVERAGE = {
         "multi-hop proving requires the append verifier batch to be composed into the compact proof",
         "fn kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable",
         "Norito-valid data-model proof envelope must not decode as Pallas openings",
-        "detached compact Pallas archive must reject before unavailable",
-        "extra compact Pallas opening must reject before unavailable",
-        "missing compact Pallas opening must reject before unavailable",
-        "duplicated multi-hop compact Pallas archive must reject before unavailable",
-        "height-aware duplicated multi-hop compact Pallas archive must reject before unavailable",
-        "forged multi-hop compact Pallas metadata must reject before unavailable",
-        "reordered multi-hop compact Pallas archive must reject before unavailable",
-        "height-aware reordered multi-hop compact Pallas archive must reject before unavailable",
-        "record-bound multi-hop compact Pallas archive must reject before the unavailable gate",
+        "detached compact Pallas archive must reject before proving",
+        "height-aware detached compact Pallas archive must reject before proving",
+        "extra compact Pallas opening must reject before proving",
+        "height-aware extra compact Pallas opening must reject before proving",
+        "missing compact Pallas opening must reject before proving",
+        "height-aware missing compact Pallas opening must reject before proving",
+        "duplicated multi-hop compact Pallas archive must reject before proving",
+        "height-aware duplicated multi-hop compact Pallas archive must reject before proving",
+        "forged multi-hop compact Pallas metadata must reject before proving",
+        "height-aware forged multi-hop compact Pallas metadata must reject before proving",
+        "reordered multi-hop compact Pallas archive must reject before proving",
+        "height-aware reordered multi-hop compact Pallas archive must reject before proving",
+        "record-bound multi-hop compact Pallas archive must produce a token",
         "missing compact one-hop proving key archive",
         "ensure_kagemusha_recursive_compact_token_public_instance_context",
         "verifier_witness_batch_digest public instance digest must be non-zero",
@@ -596,18 +600,18 @@ ADVERSARIAL_COVERAGE = {
     ),
     "crates/connect_norito_bridge/src/lib.rs": (
         "kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs",
-        "malformed Pallas opening archives before the unavailable gate",
-        "detached valid Pallas opening archives before the unavailable gate",
+        "malformed Pallas opening archives before proving",
+        "detached valid Pallas opening archives before proving",
         "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
         "is_kagemusha_recursive_compact_unavailable_error",
         "Vec<iroha_zkp_halo2::OpenVerifyEnvelope>",
         "valid recursive compact Pallas envelope fixture must decode",
-        "ABI-7 compact prover must reject extra valid Pallas opening archives before the unavailable gate",
-        "ABI-7 compact prover must reject missing valid Pallas opening archives before the unavailable gate",
-        "ABI-7 compact prover must reject duplicated multi-hop valid Pallas opening archives before the unavailable gate",
-        "ABI-7 compact prover must reject forged multi-hop Pallas metadata before the unavailable gate",
-        "ABI-7 compact prover must reject reordered valid Pallas opening archives before the unavailable gate",
-        "valid multi-hop recursive compact Pallas archives must map to unavailable",
+        "ABI-7 compact prover must reject extra valid Pallas opening archives before proving",
+        "ABI-7 compact prover must reject missing valid Pallas opening archives before proving",
+        "ABI-7 compact prover must reject duplicated multi-hop valid Pallas opening archives before proving",
+        "ABI-7 compact prover must reject forged multi-hop Pallas metadata before proving",
+        "ABI-7 compact prover must reject reordered valid Pallas opening archives before proving",
+        "valid multi-hop recursive compact Pallas archives must produce a package-backed token",
         "shape-valid ABI-7 compact tokens with invalid proof bodies must return a soft invalid result",
         "ABI-7 compact verifier must reject non-canonical envelope verifier-key hashes before returning a soft invalid result",
         "non-canonical compact-token verifier-key hashes must clear stale valid flags",
@@ -702,8 +706,7 @@ ADVERSARIAL_COVERAGE = {
         "invalid Kagemusha recursive compact Pallas open-envelope archive",
         "invalid Kagemusha recursive compact record-backed Pallas preflight",
         "detached valid recursive compact Pallas archive must reject",
-        "valid multi-hop recursive compact archive must remain unavailable",
-        "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+        "valid multi-hop recursive compact archive must produce a token",
         "recursive compact prover must reject extra valid Pallas opening archive",
         "recursive compact prover must reject missing valid Pallas opening archive",
         "recursive compact prover must reject duplicated multi-hop valid Pallas opening archive",
@@ -815,8 +818,7 @@ ADVERSARIAL_COVERAGE = {
         "prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive",
         "failed to decode Kagemusha recursive compact Pallas open-envelope archive",
         "detached valid Pallas archive",
-        "valid multi-hop recursive compact archive must remain unavailable",
-        "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
+        "valid multi-hop recursive compact archive must produce a token",
         "recursive compact prover must reject extra valid Pallas opening archive",
         "recursive compact prover must reject missing valid Pallas opening archive",
         "recursive compact prover must reject duplicated multi-hop valid Pallas opening archive",
@@ -3579,32 +3581,47 @@ if mode == "--negative-control-core-recursive-compact-pallas-count":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
     mutated = source.replace(
-        "extra compact Pallas opening must reject before unavailable",
+        "extra compact Pallas opening must reject before proving",
         "extra compact Pallas opening may return unavailable",
         1,
     )
     mutated = mutated.replace(
-        "missing compact Pallas opening must reject before unavailable",
+        "height-aware detached compact Pallas archive must reject before proving",
+        "height-aware detached compact Pallas archive may return unavailable",
+        1,
+    )
+    mutated = mutated.replace(
+        "height-aware extra compact Pallas opening must reject before proving",
+        "height-aware extra compact Pallas opening may return unavailable",
+        1,
+    )
+    mutated = mutated.replace(
+        "missing compact Pallas opening must reject before proving",
         "missing compact Pallas opening may return unavailable",
         1,
     )
     mutated = mutated.replace(
-        "duplicated multi-hop compact Pallas archive must reject before unavailable",
+        "height-aware missing compact Pallas opening must reject before proving",
+        "height-aware missing compact Pallas opening may return unavailable",
+        1,
+    )
+    mutated = mutated.replace(
+        "duplicated multi-hop compact Pallas archive must reject before proving",
         "duplicated multi-hop compact Pallas archive may return unavailable",
         1,
     )
     mutated = mutated.replace(
-        "height-aware duplicated multi-hop compact Pallas archive must reject before unavailable",
+        "height-aware duplicated multi-hop compact Pallas archive must reject before proving",
         "height-aware duplicated multi-hop compact Pallas archive may return unavailable",
         1,
     )
     mutated = mutated.replace(
-        "reordered multi-hop compact Pallas archive must reject before unavailable",
+        "reordered multi-hop compact Pallas archive must reject before proving",
         "reordered multi-hop compact Pallas archive may return unavailable",
         1,
     )
     mutated = mutated.replace(
-        "height-aware reordered multi-hop compact Pallas archive must reject before unavailable",
+        "height-aware reordered multi-hop compact Pallas archive must reject before proving",
         "height-aware reordered multi-hop compact Pallas archive may return unavailable",
         1,
     )
@@ -3623,8 +3640,13 @@ if mode == "--negative-control-core-recursive-compact-pallas-metadata":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
     mutated = source.replace(
-        "forged multi-hop compact Pallas metadata must reject before unavailable",
+        "forged multi-hop compact Pallas metadata must reject before proving",
         "forged multi-hop compact Pallas metadata may return unavailable",
+        1,
+    )
+    mutated = mutated.replace(
+        "height-aware forged multi-hop compact Pallas metadata must reject before proving",
+        "height-aware forged multi-hop compact Pallas metadata may return unavailable",
         1,
     )
     if mutated == source:
@@ -3642,8 +3664,8 @@ if mode == "--negative-control-core-recursive-compact-cid-spoof-key":
     target = "crates/iroha_core/src/zk.rs"
     source = read(target)
     mutated = source.replace(
-        "CID-spoofed ABI-7 compact verifier key must reject before unavailable",
-        "CID-spoofed ABI-7 compact verifier key may return unavailable",
+        "CID-spoofed ABI-7 compact verifier key must reject",
+        "CID-spoofed ABI-7 compact verifier key may pass",
         1,
     )
     if mutated == source:
@@ -3699,22 +3721,22 @@ if mode == "--negative-control-bridge-recursive-compact-pallas-count":
     target = "crates/connect_norito_bridge/src/lib.rs"
     source = read(target)
     mutated = source.replace(
-        "ABI-7 compact prover must reject extra valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover must reject extra valid Pallas opening archives before proving",
         "ABI-7 compact prover may accept extra valid Pallas opening archives",
         1,
     )
     mutated = mutated.replace(
-        "ABI-7 compact prover must reject missing valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover must reject missing valid Pallas opening archives before proving",
         "ABI-7 compact prover may accept missing valid Pallas opening archives",
         1,
     )
     mutated = mutated.replace(
-        "ABI-7 compact prover must reject duplicated multi-hop valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover must reject duplicated multi-hop valid Pallas opening archives before proving",
         "ABI-7 compact prover may accept duplicated multi-hop valid Pallas opening archives",
         1,
     )
     mutated = mutated.replace(
-        "ABI-7 compact prover must reject reordered valid Pallas opening archives before the unavailable gate",
+        "ABI-7 compact prover must reject reordered valid Pallas opening archives before proving",
         "ABI-7 compact prover may accept reordered valid Pallas opening archives",
         1,
     )
@@ -3733,7 +3755,7 @@ if mode == "--negative-control-bridge-recursive-compact-pallas-metadata":
     target = "crates/connect_norito_bridge/src/lib.rs"
     source = read(target)
     mutated = source.replace(
-        "ABI-7 compact prover must reject forged multi-hop Pallas metadata before the unavailable gate",
+        "ABI-7 compact prover must reject forged multi-hop Pallas metadata before proving",
         "ABI-7 compact prover may accept forged multi-hop Pallas metadata",
         1,
     )
