@@ -555,7 +555,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "crossSdkFixtureParityArtifact",
             "nativeProverBundle verifierKeyHash must match destinationBinding",
             "SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
-            "SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
             "assertNativeEvmProverArtifactHasProductionSize",
             "must be at least",
             "contains forbidden prover dependency marker",
@@ -604,7 +604,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "crossSdkFixtureParityArtifact",
             "nativeProverBundle verifierKeyHash must match destinationBinding",
             "SCCP_NATIVE_EVM_PROVER_FORBIDDEN_ARTIFACT_MARKERS",
-            "SCCP_NATIVE_EVM_PROVER_MIN_ARTIFACT_BYTES_V1",
+            "SCCP_NATIVE_EVM_PROVER_MIN_PROOF_ARTIFACT_BYTES_V1",
             "assertNativeEvmProverArtifactHasProductionSize",
             "must be at least",
             "requireEthereumMainnetVerifiedNativeEvmProverArtifactsForRequest",
@@ -675,7 +675,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "crossSdkFixtureParityArtifact:",
             "flaggedArtifactBytes",
             "tinyProofArtifactBytes",
-            "proofArtifactBytes must be at least 256 bytes",
+            "proofArtifactBytes must be at least 65536 bytes",
             "proofArtifactBytes contains forbidden prover dependency marker",
             "verified native EVM prover artifacts",
             "buildEthereumCalldata({ proofResult })",
@@ -716,7 +716,7 @@ NATIVE_EVM_PROVER_ARTIFACT_VERIFIER_MARKERS = {
             "nativeProverSelfTest",
             "ipfs:proof-artifact.bin",
             "artifacts/eth-mainnet/proof.wasm",
-            "proofArtifactBytes must be at least 256 bytes",
+            "proofArtifactBytes must be at least 65536 bytes",
         ),
     },
     "swift-sdk": {
@@ -1906,6 +1906,40 @@ def test_release_readiness_report_guards_ethereum_beacon_rest_execution_payload_
     )
 
 
+def test_release_readiness_report_guards_ethereum_noncanonical_chain_id_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin noncanonical Ethereum chain-id guards."""
+
+    report = load_report_module()
+    assert report._ethereum_noncanonical_chain_id_gate_inventory_errors() == []
+
+    sparse_test = tmp_path / "sccpEthereumMainnet.test.js"
+    sparse_test.write_text("canonical JSON-RPC quantity\n", encoding="utf-8")
+    errors = report._ethereum_noncanonical_chain_id_gate_inventory_errors(
+        (
+            (
+                sparse_test,
+                (
+                    'for (const chainId of ["1", 1, "0x01", "0X1", " 0x1", "0x1 "])',
+                    "canonical JSON-RPC quantity",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "Ethereum mainnet noncanonical chain id SDK test inventory" in error
+        and str(sparse_test) in error
+        and (
+            'missing marker: for (const chainId of ["1", 1, "0x01", '
+            '"0X1", " 0x1", "0x1 "])'
+        )
+        in error
+        for error in errors
+    )
+
+
 def test_release_readiness_report_guards_ethereum_sync_committee_roster_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -3047,6 +3081,48 @@ def test_release_readiness_report_blocks_missing_ethereum_beacon_rest_finalized_
         "validation_blockers": [blocker],
     }
     assert readiness["source_inventory"]["ethereum_native_receipt_finality_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
+def test_release_readiness_report_blocks_missing_ethereum_noncanonical_chain_id_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when noncanonical chain-id guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "Ethereum mainnet noncanonical chain id SDK test inventory "
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js missing marker: "
+        "canonical JSON-RPC quantity"
+    )
+    monkeypatch.setattr(
+        report,
+        "_ethereum_noncanonical_chain_id_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["ethereum_noncanonical_chain_id_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"][
+        "ethereum_beacon_rest_finalized_header_shape_gate"
+    ] == {
         "validation_status": "passed",
         "validation_blockers": [],
     }

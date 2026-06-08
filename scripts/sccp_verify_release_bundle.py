@@ -340,6 +340,7 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "public discovery documentation source inventory",
     "Ethereum no-proxy data-collection source inventory",
     "Ethereum native receipt-finality source inventory",
+    "Ethereum noncanonical chain-id source inventory",
     "Ethereum Beacon REST finalized-header shape source inventory",
     "Ethereum Beacon REST execution-payload binding source inventory",
     "Ethereum sync-committee roster source inventory",
@@ -578,6 +579,7 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "public_discovery_documentation_gate",
     "ethereum_data_collection_no_proxy_gate",
     "ethereum_native_receipt_finality_gate",
+    "ethereum_noncanonical_chain_id_gate",
     "ethereum_beacon_rest_finalized_header_shape_gate",
     "ethereum_beacon_rest_execution_payload_binding_gate",
     "ethereum_sync_committee_roster_gate",
@@ -1961,6 +1963,27 @@ ETHEREUM_NONCANONICAL_CHAIN_ID_TEST_MARKERS = (
         (
             "test_collect_receipt_proof_rejects_noncanonical_chain_id_quantity",
             'rpc_response("0x01")',
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _ethereum_noncanonical_chain_id_gate_inventory_errors(",
+            '"ethereum_noncanonical_chain_id_gate"',
+            "SCCP Ethereum noncanonical chain-id source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_ethereum_noncanonical_chain_id_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_ethereum_noncanonical_chain_id_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_ethereum_noncanonical_chain_id_inventory_gate",
         ),
     ),
 )
@@ -8226,6 +8249,7 @@ def _render_readiness_markdown(
             "- SCCP public discovery documentation source inventory must pin supported launch-lane and verifier-target wording so unsupported lanes cannot re-enter Torii discovery evidence silently.",
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum native receipt-finality source inventory must pin Swift/Kotlin/JVM/Java Android/.NET receipt-proof builders to require finalized-header root, sync-committee root, and beacon slot before local proving can run.",
+            "- SCCP Ethereum noncanonical chain-id source inventory must pin public SDK and evidence-script regressions that reject noncanonical Ethereum eth_chainId quantities such as 0x01, uppercase, padded, numeric, or whitespace-wrapped values before local source-proof evidence can be accepted.",
             "- SCCP Ethereum Beacon REST finalized-header shape source inventory must pin public SDK validators and negative tests for non-zero parent/state/body roots plus 96-byte finalized-header signatures before local finality evidence can be accepted.",
             "- SCCP Ethereum Beacon REST execution-payload binding source inventory must pin Beacon target-header/root/block reads, light-client finality-update evidence, execution block-hash/receipts-root binding, and C# SSZ root parity vectors before local finality evidence can be accepted.",
             "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",

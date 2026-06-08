@@ -128,7 +128,7 @@ pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1: &str =
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_execution_proof_statement_digest"}"#;
+    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_execution_proof_statement_digest(params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound))"}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1: &str =
     BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
@@ -19899,6 +19899,25 @@ mod tests {
     }
 
     #[test]
+    fn service_runtime_state_validate_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut runtime_state = sample_service_runtime_state();
+        runtime_state.materialized_bundle_hash = zero_digest;
+        let error = runtime_state
+            .validate()
+            .expect_err("materialized bundle placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "materialized_bundle_hash");
+
+        let mut runtime_state = sample_service_runtime_state();
+        runtime_state.last_receipt_id = Some(zero_digest);
+        let error = runtime_state
+            .validate()
+            .expect_err("last receipt placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "last_receipt_id");
+    }
+
+    #[test]
     fn inrou_host_capability_record_validate_accepts_hosting_advert() {
         sample_inrou_host_capability_record()
             .validate()
@@ -19954,6 +19973,25 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn inrou_replica_runtime_state_validate_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut runtime_state = sample_inrou_replica_runtime_state();
+        runtime_state.materialized_bundle_hash = zero_digest;
+        let error = runtime_state
+            .validate()
+            .expect_err("materialized bundle placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "materialized_bundle_hash");
+
+        let mut runtime_state = sample_inrou_replica_runtime_state();
+        runtime_state.last_receipt_id = Some(zero_digest);
+        let error = runtime_state
+            .validate()
+            .expect_err("last receipt placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "last_receipt_id");
     }
 
     #[test]
@@ -20032,6 +20070,25 @@ mod tests {
     }
 
     #[test]
+    fn service_deployment_state_validate_rejects_zero_prehash_manifest_hash_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut deployment = sample_service_deployment_state();
+        deployment.current_service_manifest_hash = zero_digest;
+        let error = deployment
+            .validate()
+            .expect_err("current service manifest placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "current_service_manifest_hash");
+
+        let mut deployment = sample_service_deployment_state();
+        deployment.current_container_manifest_hash = zero_digest;
+        let error = deployment
+            .validate()
+            .expect_err("current container manifest placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "current_container_manifest_hash");
+    }
+
+    #[test]
     fn service_audit_event_validate_rejects_zero_sequence() {
         let event = SoraServiceAuditEventV1 {
             schema_version: SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
@@ -20070,6 +20127,46 @@ mod tests {
     }
 
     #[test]
+    fn service_audit_event_validate_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut event = sample_service_audit_event();
+        event.service_manifest_hash = zero_digest;
+        let error = event
+            .validate()
+            .expect_err("service manifest placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "service_manifest_hash");
+
+        let mut event = sample_service_audit_event();
+        event.container_manifest_hash = zero_digest;
+        let error = event
+            .validate()
+            .expect_err("container manifest placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "container_manifest_hash");
+
+        let mut event = sample_service_audit_event();
+        event.governance_tx_hash = Some(zero_digest);
+        let error = event
+            .validate()
+            .expect_err("governance transaction placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "governance_tx_hash");
+
+        let mut event = sample_service_audit_event();
+        event.policy_snapshot_hash = Some(zero_digest);
+        let error = event
+            .validate()
+            .expect_err("policy snapshot placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "policy_snapshot_hash");
+
+        let mut event = sample_service_audit_event();
+        event.consent_evidence_hash = Some(zero_digest);
+        let error = event
+            .validate()
+            .expect_err("consent evidence placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "consent_evidence_hash");
+    }
+
+    #[test]
     fn service_state_entry_validate_allows_plaintext_rows() {
         let mut entry = sample_state_entry();
         entry.encryption = SoraStateEncryptionV1::Plaintext;
@@ -20094,6 +20191,16 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn service_state_entry_validate_rejects_zero_prehash_governance_hash_sentinel() {
+        let mut entry = sample_state_entry();
+        entry.governance_tx_hash = zero_prehash_statement_hash();
+        let error = entry
+            .validate()
+            .expect_err("governance transaction placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "governance_tx_hash");
     }
 
     #[test]
@@ -20270,6 +20377,25 @@ mod tests {
     }
 
     #[test]
+    fn service_mailbox_message_validate_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut message = sample_service_mailbox_message();
+        message.message_id = zero_digest;
+        let error = message
+            .validate()
+            .expect_err("message placeholder id must fail admission");
+        assert_zero_prehash_digest_error(error, "message_id");
+
+        let mut message = sample_service_mailbox_message();
+        message.payload_commitment = zero_digest;
+        let error = message
+            .validate()
+            .expect_err("payload placeholder commitment must fail admission");
+        assert_zero_prehash_digest_error(error, "payload_commitment");
+    }
+
+    #[test]
     fn runtime_receipt_validate_rejects_uncertified_query_receipt() {
         let receipt = SoraRuntimeReceiptV1 {
             schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
@@ -20333,6 +20459,60 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn runtime_receipt_validate_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut receipt = sample_runtime_receipt();
+        receipt.receipt_id = zero_digest;
+        let error = receipt
+            .validate()
+            .expect_err("receipt placeholder id must fail admission");
+        assert_zero_prehash_digest_error(error, "receipt_id");
+
+        let mut receipt = sample_runtime_receipt();
+        receipt.request_commitment = zero_digest;
+        let error = receipt
+            .validate()
+            .expect_err("request placeholder commitment must fail admission");
+        assert_zero_prehash_digest_error(error, "request_commitment");
+
+        let mut receipt = sample_runtime_receipt();
+        receipt.result_commitment = zero_digest;
+        let error = receipt
+            .validate()
+            .expect_err("result placeholder commitment must fail admission");
+        assert_zero_prehash_digest_error(error, "result_commitment");
+
+        let mut receipt = sample_runtime_receipt();
+        receipt.placement_id = Some(zero_digest);
+        let error = receipt
+            .validate()
+            .expect_err("placement placeholder id must fail admission");
+        assert_zero_prehash_digest_error(error, "placement_id");
+
+        let mut receipt = sample_runtime_receipt();
+        receipt.mailbox_message_id = Some(zero_digest);
+        let error = receipt
+            .validate()
+            .expect_err("mailbox message placeholder id must fail admission");
+        assert_zero_prehash_digest_error(error, "mailbox_message_id");
+
+        let mut receipt = sample_runtime_receipt();
+        receipt.journal_artifact_hash = Some(zero_digest);
+        let error = receipt
+            .validate()
+            .expect_err("journal artifact placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "journal_artifact_hash");
+
+        let mut receipt = sample_runtime_receipt();
+        receipt.checkpoint_artifact_hash = Some(zero_digest);
+        let error = receipt
+            .validate()
+            .expect_err("checkpoint artifact placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "checkpoint_artifact_hash");
     }
 
     #[test]

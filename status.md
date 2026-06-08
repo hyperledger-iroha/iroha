@@ -2,11 +2,64 @@
 
 Last updated: 2026-06-08
 
-## 2026-06-08 SCCP Substrate/Polkadot launch-scope note
+## 2026-06-08 Sumeragi roster/cache fast aggregate exactness wiring
 
+- Removed the remaining generic `Safety` invariant from the
+  `block-roster-caches-fast`, `block-sync-roster-evidence-fast`, and
+  `block-sync-history-roster-fast` configs so each fast mode checks its
+  explicit aggregate and component exactness invariants directly.
+- Updated the formal README inventory/table wording to call these three modes
+  aggregate exactness checks. The roadmap already tracks these items as
+  aggregate exactness work.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockRosterCachesGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncRosterEvidenceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncHistoryRosterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-roster-caches-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-roster-evidence-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-history-roster-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-roster-caches-fast`
+    (`BlockRosterCacheExactness` produced `9` verification conditions; the
+    checker inspected `22` state invariants at state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-roster-evidence-fast`
+    (`BlockSyncRosterEvidenceExactness` produced `7` verification conditions;
+    the checker inspected `18` state invariants at state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-history-roster-fast`
+    (`BlockSyncHistoryRosterExactness` produced `9` verification conditions;
+    the checker inspected `22` state invariants at state `0`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP retired platform-family launch-scope note
+
+- Retired platform-family lanes are explicitly outside SCCP launch support for
+  now.
 - Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 - Kept the active SCCP launch scope limited to Ethereum, BSC, Solana, TON, and
   TRON in the public bridge-proof, backlog, and roadmap notes.
+
+## 2026-06-08 SCCP Ethereum noncanonical chain-id readiness gate
+
+- Promoted the existing Ethereum noncanonical `eth_chainId` source inventory
+  into the SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as `ethereum_noncanonical_chain_id_gate`.
+- The gate pins public SDK and evidence-script negative coverage for padded,
+  uppercase, numeric, and whitespace-wrapped chain-id responses before local
+  source-proof evidence can be accepted.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'noncanonical_chain_id_gate or noncanonical_chain_id'`
+    (`3` passed, `178` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'noncanonical_chain_id_inventory_gate or noncanonical_chain_id'`
+    (`3` passed, `315` deselected)
 
 ## 2026-06-08 Sumeragi BlockCreated admission aggregate exactness
 
@@ -33,13 +86,6 @@ Last updated: 2026-06-08
   - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
     (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
     `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
-
-## 2026-06-08 SCCP retired platform-family launch-scope note
-
-- Retired platform-family lanes are explicitly outside SCCP launch support for
-  now.
-- Kept the active SCCP launch scope limited to Ethereum, BSC, Solana, TON, and
-  TRON in the public bridge-proof, backlog, and roadmap notes.
 
 ## 2026-06-08 Sumeragi BlockCreated frontier wire aggregate exactness
 

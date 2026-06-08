@@ -6938,7 +6938,7 @@ verification, and full networking details.
 - `SumeragiCommitmentSnapshotBuilderGate_fast.cfg`: CI-friendly lane/dataspace commitment snapshot builder check.
 - `SumeragiCommitmentSnapshotBuilderGate_bug_*.cfg`: expected-failure block-context, aggregate-field, dataspace-id, and sorted-order mutations.
 - `SumeragiCollectorPlanGate.tla`: collector retry/gossip state helper model.
-- `SumeragiCollectorPlanGate_fast.cfg`: CI-friendly collector retry/gossip state helper check.
+- `SumeragiCollectorPlanGate_fast.cfg`: CI-friendly collector retry/gossip state aggregate exactness check.
 - `SumeragiCollectorPlanGate_bug_*.cfg`: expected-failure construction, sent-count, target-preservation, peek, next, exhaustion, and one-shot gossip mutations.
 - `SumeragiCollectorSelectionGate.tla`: collector fanout/selection helper model.
 - `SumeragiCollectorSelectionGate_fast.cfg`: CI-friendly collector fanout/selection helper check.
@@ -7069,7 +7069,7 @@ verification, and full networking details.
 - `SumeragiVotingSignerCountGate_fast.cfg`: CI-friendly voting signer-count helper check.
 - `SumeragiVotingSignerCountGate_bug_*.cfg`: expected-failure empty, zero-roster, boundary, out-of-range, duplicate-collapse, full-roster, and padding mutations.
 - `SumeragiBuildSignersBitmapGate.tla`: signer-bitmap construction helper model.
-- `SumeragiBuildSignersBitmapGate_fast.cfg`: CI-friendly signer-bitmap construction helper check.
+- `SumeragiBuildSignersBitmapGate_fast.cfg`: CI-friendly signer-bitmap construction aggregate exactness check.
 - `SumeragiBuildSignersBitmapGate_bug_*.cfg`: expected-failure length, bit placement, OR, boundary, out-of-range, duplicate-collapse, full-roster, and padding mutations.
 - `SumeragiSignerIndexNormalizationGate.tla`: canonical/view signer-index normalization helper model.
 - `SumeragiSignerIndexNormalizationGate_fast.cfg`: CI-friendly canonical/view signer-index normalization helper check.
@@ -7132,19 +7132,19 @@ verification, and full networking details.
 - `SumeragiRosterArtifactSelectionGate_fast.cfg`: CI-friendly roster artifact selection aggregate check.
 - `SumeragiRosterArtifactSelectionGate_bug_*.cfg`: expected-failure view priority, artifact attachment, mismatch preference, stake-resolution, input/root, epoch, and genesis-stub mutations.
 - `SumeragiBlockRosterCachesGate.tla`: block roster cache key/cache helper model.
-- `SumeragiBlockRosterCachesGate_fast.cfg`: CI-friendly block roster cache key/cache aggregate check.
+- `SumeragiBlockRosterCachesGate_fast.cfg`: CI-friendly block roster cache key/cache aggregate exactness check.
 - `SumeragiBlockRosterCachesGate_bug_*.cfg`: expected-failure roster-key, signer-key, signer-cache, and roster-selection-cache mutations.
 - `SumeragiBlockSyncRosterEvidenceGate.tla`: block-sync roster evidence helper model.
-- `SumeragiBlockSyncRosterEvidenceGate_fast.cfg`: CI-friendly block-sync roster evidence aggregate check.
+- `SumeragiBlockSyncRosterEvidenceGate_fast.cfg`: CI-friendly block-sync roster evidence aggregate exactness check.
 - `SumeragiBlockSyncRosterEvidenceGate_bug_*.cfg`: expected-failure proof classification, NPoS stake, has-roster, and selection-apply mutations.
 - `SumeragiBlockSyncHistoryRosterGate.tla`: block-sync history roster helper model.
-- `SumeragiBlockSyncHistoryRosterGate_fast.cfg`: CI-friendly block-sync history roster aggregate check.
+- `SumeragiBlockSyncHistoryRosterGate_fast.cfg`: CI-friendly block-sync history roster aggregate exactness check.
 - `SumeragiBlockSyncHistoryRosterGate_bug_*.cfg`: expected-failure history filter, derivation, source, height/view, and fallback mutations.
 - `SumeragiPersistedRosterSelectionGate.tla`: persisted block-sync roster selection helper model.
 - `SumeragiPersistedRosterSelectionGate_fast.cfg`: CI-friendly persisted roster selection aggregate check.
 - `SumeragiPersistedRosterSelectionGate_bug_*.cfg`: expected-failure source precedence, cache, sidecar, previous-evidence, and fail-closed mutations.
 - `SumeragiBlockSyncUpdateRosterHydrationGate.tla`: BlockSyncUpdate roster hydration wrapper model.
-- `SumeragiBlockSyncUpdateRosterHydrationGate_fast.cfg`: CI-friendly BlockSyncUpdate roster hydration aggregate check.
+- `SumeragiBlockSyncUpdateRosterHydrationGate_fast.cfg`: CI-friendly BlockSyncUpdate roster hydration aggregate exactness check.
 - `SumeragiBlockSyncUpdateRosterHydrationGate_bug_*.cfg`: expected-failure source order, fallback, apply, and NPoS stake-fill mutations.
 - `SumeragiRosterIndexProjectionGate.tla`: roster index projection and epoch-manager normalization model.
 - `SumeragiRosterIndexProjectionGate_fast.cfg`: CI-friendly roster index projection aggregate check.
@@ -7168,7 +7168,7 @@ verification, and full networking details.
 - `SumeragiPrevalidatedCommitArtifactGate_fast.cfg`: CI-friendly prevalidated commit artifact trust aggregate check.
 - `SumeragiPrevalidatedCommitArtifactGate_bug_*.cfg`: expected-failure artifact, commit-QC, root, phase, and witness trust-gate mutations.
 - `SumeragiCommitJobDispatchGate.tla`: commit-job dispatch ownership gate model.
-- `SumeragiCommitJobDispatchGate_fast.cfg`: CI-friendly commit-job dispatch aggregate check.
+- `SumeragiCommitJobDispatchGate_fast.cfg`: CI-friendly commit-job dispatch aggregate exactness check.
 - `SumeragiCommitJobDispatchGate_bug_*.cfg`: expected-failure duplicate suppression, pending retention, worker enqueue, queue-full, inline fallback, worker disconnect, return-value, and ownership-exclusivity mutations.
 - `SumeragiCommitWorkerConfigGate.tla`: commit-worker channel capacity helper model.
 - `SumeragiCommitWorkerConfigGate_fast.cfg`: CI-friendly commit-worker channel capacity aggregate check.
@@ -13929,7 +13929,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `proposal-batch-fast` | 1 | CI proposal batch trim/canonicalization helper check |
 | `lane-interleave-fast` | 1 | CI lane interleave routing-decision helper check |
 | `commitment-snapshot-builder-fast` | 0 | CI lane/dataspace commitment snapshot builder check |
-| `collector-plan-fast` | 1 | CI collector retry/gossip state helper check |
+| `collector-plan-fast` | 1 | CI collector retry/gossip state aggregate exactness check |
 | `collector-selection-fast` | 1 | CI collector fanout/selection helper check |
 | `topology-mutation-fast` | 1 | CI topology ordered-roster mutation helper check |
 | `prf-leader-shuffle-fast` | 1 | CI PRF leader/shuffle topology helper check |
@@ -13952,7 +13952,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `manifest-gate-reschedule-fast` | 1 | CI manifest-gated quorum-reschedule branch check |
 | `qc-signers-fast` | 2 | CI QC signer-bitmap admission check |
 | `qc-signer-count-fast` | 1 | CI raw QC signer-bitmap population-count helper check |
-| `build-signers-bitmap-fast` | 1 | CI signer-bitmap construction helper check |
+| `build-signers-bitmap-fast` | 1 | CI signer-bitmap construction aggregate exactness check |
 | `signer-index-normalization-fast` | 1 | CI canonical/view signer-index normalization helper check |
 | `commit-roots-fast` | 2 | CI commit-root consistency check |
 | `commit-pipeline-recovery-fast` | 2 | CI commit-pipeline recovery gate check |
@@ -13987,11 +13987,11 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `roster-validation-cached-fast` | 1 | CI cached roster-validation wrapper helper check |
 | `roster-validation-core-fast` | 1 | CI core roster-validation aggregate check |
 | `roster-artifact-selection-fast` | 1 | CI roster artifact selection aggregate check |
-| `block-roster-caches-fast` | 1 | CI block roster cache key/cache aggregate check |
-| `block-sync-roster-evidence-fast` | 1 | CI block-sync roster evidence aggregate check |
-| `block-sync-history-roster-fast` | 1 | CI block-sync history roster aggregate check |
+| `block-roster-caches-fast` | 1 | CI block roster cache key/cache aggregate exactness check |
+| `block-sync-roster-evidence-fast` | 1 | CI block-sync roster evidence aggregate exactness check |
+| `block-sync-history-roster-fast` | 1 | CI block-sync history roster aggregate exactness check |
 | `persisted-roster-selection-fast` | 1 | CI persisted block-sync roster selection aggregate check |
-| `block-sync-update-roster-fast` | 1 | CI BlockSyncUpdate roster hydration aggregate check |
+| `block-sync-update-roster-fast` | 1 | CI BlockSyncUpdate roster hydration aggregate exactness check |
 | `roster-index-projection-fast` | 1 | CI roster index projection aggregate check |
 | `membership-view-hash-fast` | 1 | CI membership-view hash preimage aggregate check |
 | `membership-mismatch-status-fast` | 1 | CI membership snapshot/mismatch status aggregate check |
@@ -13999,7 +13999,7 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `membership-mismatch-ingress-fast` | 1 | CI membership mismatch advert ingress and fail-closed aggregate check |
 | `consensus-params-ingress-fast` | 1 | CI inbound consensus-params advert handling aggregate check |
 | `prevalidated-commit-artifact-fast` | 1 | CI prevalidated commit artifact trust aggregate check |
-| `commit-job-dispatch-fast` | 1 | CI commit-job dispatch aggregate check |
+| `commit-job-dispatch-fast` | 1 | CI commit-job dispatch aggregate exactness check |
 | `commit-worker-config-fast` | 1 | CI commit-worker channel capacity aggregate check |
 | `commit-stage-timing-threshold-fast` | 1 | CI slow commit-stage timing threshold aggregate check |
 | `commit-inflight-timeout-fast` | 1 | CI commit-inflight timeout aggregate check |

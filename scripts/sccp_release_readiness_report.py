@@ -384,6 +384,24 @@ def _ethereum_native_receipt_finality_gate_inventory_errors(
         ]
 
 
+def _ethereum_noncanonical_chain_id_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for noncanonical Ethereum chain-id guards."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(verifier, "_ethereum_noncanonical_chain_id_inventory_errors")
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "Ethereum mainnet noncanonical chain id source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
 def _ethereum_beacon_rest_finalized_header_shape_gate_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -2930,6 +2948,9 @@ def _build_report(
     ethereum_native_receipt_finality_gate_blockers = (
         _ethereum_native_receipt_finality_gate_inventory_errors()
     )
+    ethereum_noncanonical_chain_id_gate_blockers = (
+        _ethereum_noncanonical_chain_id_gate_inventory_errors()
+    )
     ethereum_beacon_rest_finalized_header_shape_gate_blockers = (
         _ethereum_beacon_rest_finalized_header_shape_gate_inventory_errors()
     )
@@ -3024,6 +3045,12 @@ def _build_report(
                 else "blocked"
             ),
             "validation_blockers": ethereum_native_receipt_finality_gate_blockers,
+        },
+        "ethereum_noncanonical_chain_id_gate": {
+            "validation_status": (
+                "passed" if not ethereum_noncanonical_chain_id_gate_blockers else "blocked"
+            ),
+            "validation_blockers": ethereum_noncanonical_chain_id_gate_blockers,
         },
         "ethereum_beacon_rest_finalized_header_shape_gate": {
             "validation_status": (
@@ -3200,6 +3227,7 @@ def _build_report(
         and not public_discovery_documentation_gate_blockers
         and not ethereum_data_collection_no_proxy_gate_blockers
         and not ethereum_native_receipt_finality_gate_blockers
+        and not ethereum_noncanonical_chain_id_gate_blockers
         and not ethereum_beacon_rest_finalized_header_shape_gate_blockers
         and not ethereum_beacon_rest_execution_payload_binding_gate_blockers
         and not ethereum_sync_committee_roster_gate_blockers
@@ -3227,6 +3255,7 @@ def _build_report(
     blockers.extend(public_discovery_documentation_gate_blockers)
     blockers.extend(ethereum_data_collection_no_proxy_gate_blockers)
     blockers.extend(ethereum_native_receipt_finality_gate_blockers)
+    blockers.extend(ethereum_noncanonical_chain_id_gate_blockers)
     blockers.extend(ethereum_beacon_rest_finalized_header_shape_gate_blockers)
     blockers.extend(ethereum_beacon_rest_execution_payload_binding_gate_blockers)
     blockers.extend(ethereum_sync_committee_roster_gate_blockers)
@@ -3700,6 +3729,7 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP public discovery documentation source inventory must pin supported launch-lane and verifier-target wording so unsupported lanes cannot re-enter Torii discovery evidence silently.",
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum native receipt-finality source inventory must pin Swift/Kotlin/JVM/Java Android/.NET receipt-proof builders to require finalized-header root, sync-committee root, and beacon slot before local proving can run.",
+            "- SCCP Ethereum noncanonical chain-id source inventory must pin public SDK and evidence-script regressions that reject noncanonical Ethereum eth_chainId quantities such as 0x01, uppercase, padded, numeric, or whitespace-wrapped values before local source-proof evidence can be accepted.",
             "- SCCP Ethereum Beacon REST finalized-header shape source inventory must pin public SDK validators and negative tests for non-zero parent/state/body roots plus 96-byte finalized-header signatures before local finality evidence can be accepted.",
             "- SCCP Ethereum Beacon REST execution-payload binding source inventory must pin Beacon target-header/root/block reads, light-client finality-update evidence, execution block-hash/receipts-root binding, and C# SSZ root parity vectors before local finality evidence can be accepted.",
             "- SCCP Ethereum sync-committee roster source inventory must pin exact 512-authority mainnet rosters, unit validator weights, 342-participant quorum fixtures, and 81,925-byte next-sync-committee payload vectors across public SDKs before local finality evidence can be accepted.",

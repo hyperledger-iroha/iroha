@@ -38,6 +38,10 @@ and completed history lives in [`status.md`](./status.md).
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
   as `0x1` and padded values such as `01` remain evidence blockers.
+- SCCP release readiness now treats Ethereum noncanonical chain-id coverage as
+  a production gate: public SDK and evidence-script regressions must continue
+  rejecting padded, uppercase, numeric, and whitespace-wrapped `eth_chainId`
+  values before local source-proof evidence is accepted.
 - Keep the direct-Serde migration closed: `scripts/serde_allowlist.txt` is
   empty, and `make guards` keeps new direct `serde_json` usage and retired
   non-Norito codec dependencies, including renamed retired-codec package

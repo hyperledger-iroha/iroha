@@ -2380,6 +2380,9 @@ fn verify_soracloud_fhe_full_bootstrap_execution_proofs(
         .enumerate()
     {
         let claim = BfvFullBootstrapExecutionProofClaimV1 {
+            slot_index: u32::try_from(slot_index).map_err(|_| {
+                invalid_parameter("FHE full-bootstrap execution proof slot index overflow")
+            })?,
             input_ciphertext: input_ciphertext.clone(),
             output_ciphertext: output_ciphertext.clone(),
             bound_mode: proof_bound_mode,
@@ -15279,8 +15282,10 @@ mod tests {
             .slots
             .iter()
             .zip(output.slots.iter())
-            .map(|(input_ciphertext, output_ciphertext)| {
+            .enumerate()
+            .map(|(slot_index, (input_ciphertext, output_ciphertext))| {
                 let claim = BfvFullBootstrapExecutionProofClaimV1 {
+                    slot_index: u32::try_from(slot_index).expect("slot index fits u32"),
                     input_ciphertext: input_ciphertext.clone(),
                     output_ciphertext: output_ciphertext.clone(),
                     bound_mode,
@@ -15321,8 +15326,10 @@ mod tests {
             .slots
             .iter()
             .zip(output.slots.iter())
-            .map(|(input_ciphertext, output_ciphertext)| {
+            .enumerate()
+            .map(|(slot_index, (input_ciphertext, output_ciphertext))| {
                 let claim = BfvFullBootstrapExecutionProofClaimV1 {
+                    slot_index: u32::try_from(slot_index).expect("slot index fits u32"),
                     input_ciphertext: input_ciphertext.clone(),
                     output_ciphertext: output_ciphertext.clone(),
                     bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
@@ -18965,6 +18972,44 @@ mod tests {
         )
         .expect_err("surplus full-bootstrap execution proofs must fail exact proof count");
         assert_invalid_parameter_contains(err, "proof count must match output slot count");
+
+        let mut duplicate_slot_input = input.clone();
+        duplicate_slot_input.slots[1] = duplicate_slot_input.slots[0].clone();
+        let mut duplicate_slot_output = output.clone();
+        duplicate_slot_output.slots[1] = duplicate_slot_output.slots[0].clone();
+        let duplicate_slot_proofs = sample_full_bootstrap_execution_proofs_for_claims(
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &artifacts,
+            &duplicate_slot_input,
+            &duplicate_slot_output,
+            input_bound,
+            output_bound,
+            [0x63; Hash::LENGTH],
+        );
+        assert_ne!(
+            duplicate_slot_proofs[0].statement_hash, duplicate_slot_proofs[1].statement_hash,
+            "slot index must separate otherwise identical full-bootstrap execution claims"
+        );
+        let mut slot_index_replay = duplicate_slot_proofs;
+        slot_index_replay.swap(0, 1);
+        let err = verify_soracloud_fhe_full_bootstrap_execution_proofs(
+            &mut stx,
+            &params,
+            &evaluation_keys,
+            &transcript,
+            &job,
+            std::slice::from_ref(&duplicate_slot_input),
+            &[input_bound],
+            &duplicate_slot_output,
+            Some(output_bound),
+            BfvCiphertextBoundModeV1::ExactResidualMultiple,
+            Some(&artifacts),
+            &slot_index_replay,
+        )
+        .expect_err("slot-index replay must fail even when ciphertext slots are duplicated");
+        assert_invalid_parameter_contains(err, "statement hash mismatch for slot 0");
 
         let mut reordered_proofs = proofs;
         reordered_proofs.swap(0, 1);

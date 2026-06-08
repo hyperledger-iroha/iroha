@@ -1481,6 +1481,8 @@ pub enum BfvFullBootstrapExecutionProofBoundModeV1 {
 #[cfg_attr(feature = "json", derive(JsonSerialize, JsonDeserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct BfvFullBootstrapExecutionProofClaimV1 {
+    /// Zero-based output envelope slot proved by this claim.
+    pub slot_index: u32,
     /// Ciphertext entering the full-bootstrap circuit.
     pub input_ciphertext: BfvCiphertext,
     /// Claimed ciphertext emitted by the full-bootstrap circuit.
@@ -6404,6 +6406,12 @@ pub fn bfv_full_bootstrap_execution_proof_statement_digest_v1(
     claim: &BfvFullBootstrapExecutionProofClaimV1,
 ) -> Result<Hash, BfvError> {
     validate_public_key(params, public_key)?;
+    if usize::try_from(claim.slot_index).map_or(true, |slot_index| slot_index >= params.degree()) {
+        return Err(BfvError::InvalidParameters(
+            "BFV full-bootstrap execution proof slot index exceeds parameter slot capacity"
+                .to_owned(),
+        ));
+    }
     validate_bfv_full_bootstrap_execution_artifacts_preflight_v1(
         params,
         bootstrap_key,
@@ -20414,6 +20422,7 @@ mod tests {
         )
         .expect("encrypt claimed output");
         let exact_claim = BfvFullBootstrapExecutionProofClaimV1 {
+            slot_index: 0,
             input_ciphertext: input.clone(),
             output_ciphertext: output.clone(),
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::ExactResidualMultiple,
@@ -20455,6 +20464,23 @@ mod tests {
         assert_ne!(
             exact_statement, bounded_statement,
             "exact and bounded full-bootstrap execution statements must be separated"
+        );
+
+        let different_slot_claim = BfvFullBootstrapExecutionProofClaimV1 {
+            slot_index: 1,
+            ..exact_claim.clone()
+        };
+        let different_slot_statement = bfv_full_bootstrap_execution_proof_statement_digest_v1(
+            &params,
+            &public_key,
+            &bootstrap_key,
+            &artifacts,
+            &different_slot_claim,
+        )
+        .expect("different slot statement");
+        assert_ne!(
+            exact_statement, different_slot_statement,
+            "execution proof statements must bind the output envelope slot index"
         );
 
         let mut alternate_artifacts = artifacts.clone();
@@ -20624,6 +20650,21 @@ mod tests {
             ),
             "ciphertext c0 length",
             "execution proof statements must reject malformed claimed outputs",
+        );
+        let oversized_slot_claim = BfvFullBootstrapExecutionProofClaimV1 {
+            slot_index: u32::from(params.polynomial_degree),
+            ..exact_claim.clone()
+        };
+        assert_error_contains(
+            bfv_full_bootstrap_execution_proof_statement_digest_v1(
+                &params,
+                &public_key,
+                &bootstrap_key,
+                &artifacts,
+                &oversized_slot_claim,
+            ),
+            "slot index",
+            "execution proof statements must reject out-of-capacity slot indexes",
         );
         let oversized_bounded_claim = BfvFullBootstrapExecutionProofClaimV1 {
             bound_mode: BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise,

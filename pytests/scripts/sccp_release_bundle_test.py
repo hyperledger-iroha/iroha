@@ -5925,6 +5925,37 @@ def test_release_bundle_verifier_rejects_missing_ethereum_native_receipt_finalit
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_missing_ethereum_noncanonical_chain_id_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the noncanonical chain-id gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_noncanonical_chain_id_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_noncanonical_chain_id_gate"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_missing_ethereum_beacon_rest_finalized_header_shape_inventory_gate(
     tmp_path: Path,
 ) -> None:
