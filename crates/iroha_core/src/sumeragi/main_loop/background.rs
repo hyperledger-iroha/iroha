@@ -212,7 +212,7 @@ pub(super) fn dispatch_background_request(
     }
 }
 
-fn background_request_allows_blocking(request: &BackgroundRequest) -> bool {
+pub(super) fn background_request_allows_blocking(request: &BackgroundRequest) -> bool {
     // Treat consensus payloads as non-droppable; the caller may fall back to inline sends.
     match request {
         BackgroundRequest::Post { .. }

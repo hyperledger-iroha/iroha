@@ -1,6 +1,2036 @@
 # Status
 
-Last updated: 2026-06-07
+Last updated: 2026-06-08
+
+## 2026-06-08 BlockCreated admission runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiBlockCreatedAdmissionGate.tla`, covering all `24` direct
+  `BlockCreated` admission cases: authoritative and stale-recovery accepts,
+  duplicate handling, aborted replay revival, pending/inflight deferral,
+  future-height parent and gap repair, empty payload trigger gating, proposal
+  mismatch handling, local-removal and stale drops, lock and ownership
+  rejection, proposal-hint failures, locked-QC rejection, and RBC payload
+  mismatch rejection.
+- Aligned `BlockCreated` handling with the formal side-effect gates: duplicate
+  observations now refresh frontier/missing-block state without creating a new
+  authoritative slot owner, far-future gaps also arm range-pull repair from the
+  committed anchor, proposal-mismatch preservation clears obsolete
+  missing-block requests, and RBC payload mismatches drop before admission
+  without sidecar recovery accounting or retained pending/owner state.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_created_admission_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh block-created-admission-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh block-created-admission-fast`
+  - TLC and Apalache sweeps for all `54`
+    `block-created-admission-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_created_admission_{tlc,apalache}/`.
+
+## 2026-06-08 Raw QC signer-count runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiQcSignerCountGate.tla`, covering all `12` raw bitmap anchor cases:
+  empty, zero-byte, low/high bit, full byte, sparse two/three-byte maps,
+  padding bits, alternating pair, two full bytes, three zero bytes, and mixed
+  three-byte input.
+- The matrix drives `qc_signer_count(...)` directly through lightweight QC
+  values with no roster dependency, confirming that the helper counts every set
+  bit in every aggregate bitmap byte without truncation, saturation, or padding
+  interpretation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core qc_signer_count_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh qc-signer-count-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh qc-signer-count-fast`
+  - TLC and Apalache sweeps for all `13` `qc-signer-count-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/qc_signer_count_{tlc,apalache}/`.
+
+## 2026-06-08 QC signer-bitmap runtime gate
+
+- Added inline runtime parity coverage for `SumeragiQcSignerBitmap.tla`,
+  covering the parser/admission contract for canonical bitmap length,
+  out-of-range padding bits, observer padding, exact quorum, under-quorum
+  rejection, and two-byte signer maps.
+- The matrix drives `parse_signers_bitmap(...)` directly with distinct
+  `voting_len` and `topology_len` values, then checks that accepted QCs are
+  based only on voting signers via `commit_quorum_from_len(...)`. Observer bits
+  remain visible in the parsed-present set but do not satisfy quorum.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core qc_signer_bitmap_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh qc-signers-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh qc-signers-fast`
+  - TLC and Apalache sweeps for all `4` `qc-signers-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/qc_signers_{tlc,apalache}/`.
+
+## 2026-06-08 Peer-admin detection runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiPeerAdminDetectionGate.tla`, covering all `10` instruction-ID
+  cases and all `11` accepted-transaction cases from the formal model.
+- The runtime matrix uses `OpaqueInstruction` to exercise exact, mixed-case,
+  prefixed/suffixed, reversed, unrelated, and empty wire IDs without depending
+  on concrete peer-admin constructors. It also verifies that only external
+  signed instruction batches are inspected, non-instruction executables are
+  ignored, empty/non-admin batches are false, and any admin instruction in a
+  mixed batch is sufficient.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core peer_admin_detection_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh peer-admin-detection-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh peer-admin-detection-fast`
+  - TLC and Apalache sweeps for all `18` `peer-admin-detection-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/peer_admin_detection_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal admission runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiProposalAdmissionGate.tla`, covering all `18` proposal metadata
+  admission cases: accepted proposals with new/current/stale/promoted highest
+  QCs, lock-lag highest-QC deferral after admission, stale height/view drops,
+  proposal/highest-QC epoch and height mismatches, parent mismatch,
+  stored/local metadata mismatches, committed-edge conflicts, missing future
+  highest-QC deferral, and locked-QC rejection.
+- Aligned `handle_proposal(...)` with the proposal-hint path by treating an
+  incoming highest QC that exactly matches `actor.highest_qc` as locally known
+  before missing-dependency deferral. This lets proposal admission validate
+  pending/inflight local metadata for current highest-QC references instead of
+  deferring them solely because Kura does not yet contain the block.
+- The runtime matrix observes concrete side effects across proposal cache
+  insertion, proposal-slot observation, highest-QC mutation, dependency
+  requests/defer markers, PRF and leader-index status, phase sampling, deferred
+  vote replay, proposal-seen and committed-cache pruning, committed-edge
+  suppression, and the no commit-pipeline/no payload-phase-progress guarantees.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_admission_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh proposal-admission-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh proposal-admission-fast`
+  - TLC and Apalache sweeps for all `43` `proposal-admission-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_admission_{tlc,apalache}/`.
+
+## 2026-06-08 Stale RBC hint repair runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiStaleRbcHintRepairGate.tla`, covering all `11` stale RBC
+  proposal-hint repair cases: hint-backed chunk admission, DA-disabled denial,
+  non-repair-kind denial, non-frontier height denial, missing cached hint,
+  cached hint height/view/hash mismatches, and rejected-stale no-side-effect
+  guarantees.
+- Tightened `stale_frontier_proposal_hint_matches(...)` so the stale-RBC
+  admission bridge checks the cached hint's embedded height and view in
+  addition to the block hash. Normal `ProposalCache::insert_hint` entries
+  already satisfy this; the explicit guard matches the formal exact-hint
+  identity rule and protects the repair path against malformed cache state.
+- The runtime matrix drives the concrete handlers: `RbcChunk` verifies accepted
+  stale chunks are stashed and arm exact-frontier body repair, while
+  `RbcChunkRequest` verifies non-repair kinds still drop as stale without
+  pending-RBC or repair-slot side effects.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core stale_rbc_hint_repair_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh stale-rbc-hint-repair-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh stale-rbc-hint-repair-fast`
+  - TLC and Apalache sweeps for all `11` `stale-rbc-hint-repair-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/stale_rbc_hint_repair_{tlc,apalache}/`.
+
+## 2026-06-08 Stale proposal-hint repair runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiStaleProposalHintRepairGate.tla`, covering all `13` stale
+  proposal-hint repair cases: exact committed-QC repair, DA-disabled denial,
+  non-active height denial, local-view boundary checks, missing committed QC,
+  committed-QC height/view/hash/epoch mismatches, and rejected-stale
+  no-side-effect guarantees.
+- Exposed `stale_proposal_hint_can_seed_frontier_repair` internally to sibling
+  main-loop tests and verified that its DA guard, active-height check,
+  one-view-late requirement, and exact committed-QC comparison match the formal
+  gate. The `da_disabled` matrix row flips the actor's effective runtime timing
+  after DA-enabled harness startup so the test exercises the production guard
+  without disabling DA during consensus initialization.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core stale_proposal_hint_repair_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh stale-proposal-hint-repair-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh stale-proposal-hint-repair-fast`
+  - TLC and Apalache sweeps for all `14`
+    `stale-proposal-hint-repair-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/stale_proposal_hint_repair_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal hint admission runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiProposalHintAdmissionGate.tla`, covering all `19` proposal-hint
+  admission cases: accepted highest-QC updates, current/stale highest hints,
+  phase promotion, committed-conflict cache replacement, lock-lag update
+  deferral, stale height/view drops, malformed highest-QC references, cached
+  conflicts, committed-edge conflict suppression, missing future dependencies,
+  local block metadata mismatches, and locked-QC rejection.
+- The matrix observes the handler's concrete side effects across cache
+  installation, slot observation, highest-QC updates to the incoming QC,
+  dependency markers/requests, PRF context updates, phase sampling, deferred
+  vote replay, old observed-slot pruning, committed-height cache pruning, and
+  committed-edge suppression telemetry.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_hint_admission_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh proposal-hint-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh proposal-hint-fast`
+  - TLC and Apalache sweeps for all `40` `proposal-hint-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_hint_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal cache runtime gate
+
+- Extracted a `ProposalCacheShape` projection in
+  `crates/iroha_core/src/sumeragi/main_loop/proposals.rs`, covering bounded
+  hint/proposal counts, independent limit enforcement, live-key-only observed
+  timestamps, and observed timestamps for every live cache entry.
+- Rewired `ProposalCache` mutations through debug assertions against that
+  projection while preserving the existing behavior: hint and proposal limits
+  are enforced independently, overflow evicts the lowest key in the overflowing
+  map, zero-cap inserts are immediately evicted, shared observed timestamps
+  survive when the other cache kind remains live, and pruning removes committed
+  heights from all maps.
+- Added inline runtime parity coverage for `SumeragiProposalCacheGate.tla`,
+  including all `15` formal cases for empty cache, under/over/zero-limit
+  insertions, replacement, pops, missing pops, shared observed timestamps,
+  eviction telemetry, and pruning.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_cache_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh proposal-cache-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-cache-fast`
+  - TLC and Apalache sweeps for all `25` `proposal-cache-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_cache_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal mismatch runtime gate
+
+- Extracted `ProposalMismatchKind` and `proposal_mismatch_kind(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/proposals.rs`, covering the
+  formal mismatch priority order: height, view, parent hash, transaction root,
+  state root, then payload hash.
+- Rewired `detect_proposal_mismatch(...)` through the projection while
+  preserving the existing detailed mismatch payloads and reason strings.
+  The projection keeps the zero parent/transaction-root defaults for missing
+  header roots and the zero state-root compatibility rule, while still checking
+  payload hash after a compatible zero state root.
+- Added inline runtime parity coverage for `SumeragiProposalMismatchGate.tla`,
+  including matching full headers, genesis parent default, missing tx-root
+  default, state-root zero compatibility, state-zero plus payload mismatch,
+  each individual mismatch kind, and all formal priority cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_mismatch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh proposal-mismatch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-mismatch-fast`
+  - TLC and Apalache sweeps for all `15` `proposal-mismatch-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_mismatch_{tlc,apalache}/`.
+
+## 2026-06-08 Invalid proposal evidence runtime gate
+
+- Extracted an `InvalidProposal` evidence projection in
+  `crates/iroha_core/src/sumeragi/main_loop.rs` and split proposer-index
+  fallback into `proposer_index_from_signature_index(...)`, covering wrapper
+  kind/payload preservation, first-signature proposer selection, zero fallback
+  for absent or out-of-range signature indices, header view, caller-supplied
+  epoch, caller-supplied payload hash, QC parent/height binding, block height,
+  and reason string preservation.
+- Rewired `invalid_proposal_evidence(...)` and
+  `build_invalid_proposal_evidence(...)` through debug assertions against that
+  projection while preserving the existing evidence payload, kind, proposal
+  construction, and validation behavior.
+- Added inline runtime parity coverage for
+  `SumeragiInvalidProposalEvidenceBuildGate.tla`, including wrapper
+  proposal/reason preservation, no-signature fallback, first-signature builder
+  fields, multi-signature first-index selection, header-vs-QC view, arg-vs-QC
+  epoch, payload hash, QC subject/height, parent, block height, and reason
+  cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core invalid_proposal_evidence_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh invalid-proposal-evidence-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh invalid-proposal-evidence-fast`
+  - TLC and Apalache sweeps for all `16`
+    `invalid-proposal-evidence-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/invalid_proposal_evidence_{tlc,apalache}/`.
+
+## 2026-06-08 Block body response dispatch runtime gate
+
+- Extracted the ordering and bypass contract behind
+  `dispatch_block_body_response_with_plain_fallback(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `block_body_response_dispatch_decision(...)`, covering created-companion
+  frame-cap admission, plain BlockCreated fallback for BlockSyncUpdate bodies,
+  rich BlockBodyResponse dispatch, direct commit-QC companion dispatch, and the
+  relative positions of all sends.
+- Rewired the live helper through the projection with debug assertions and made
+  `dispatch_block_created_companion_for_body_response(...)` report whether the
+  cap-gated companion was actually sent. The dispatch sequence remains:
+  under-cap created companion, optional plain fallback for sync bodies, the
+  original response, then optional direct commit-QC companion; every dispatch
+  still uses the bypass/background path.
+- Added inline runtime parity coverage for
+  `SumeragiBlockBodyResponseDispatchGate.tla`, including created/sync,
+  under-cap/over-cap, no-QC/QC combinations, ordering positions, always-sent
+  response, and all-bypass expectations.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_body_response_dispatch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-response-dispatch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-response-dispatch-fast`
+  - TLC and Apalache sweeps for all `14`
+    `block-body-response-dispatch-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_body_response_dispatch_{tlc,apalache}/`.
+
+## 2026-06-08 Detached block-body commit-QC runtime gate
+
+- Extracted the branch contract behind
+  `handle_detached_block_body_commit_qc(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `detached_block_body_commit_qc_decision(...)`, covering no-QC no-op,
+  cached-before clearing without re-handling, post-`handle_qc` cache checks,
+  and fail-closed no-clear outcomes when the QC is still absent from cache.
+- Rewired the live helper through the projection with debug assertions while
+  preserving ordering: absent detached QCs return before cache reads, already
+  cached QCs clear the missing-commit-QC request as obsolete without calling
+  `handle_qc`, and handled QCs clear only when the target QC is cached after
+  the handling attempt, regardless of whether `handle_qc` returned `Ok` or
+  `Err`.
+- Added inline runtime parity coverage for
+  `SumeragiDetachedBlockBodyCommitQcGate.tla`, including no-QC,
+  no-QC-with-cache, cached-before, handle-success cache/no-cache, and
+  handle-error cache/no-cache cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core detached_block_body_commit_qc_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-detached-commit-qc-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-detached-commit-qc-fast`
+  - TLC and Apalache sweeps for all `10`
+    `block-body-detached-commit-qc-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/detached_block_body_commit_qc_{tlc,apalache}/`.
+
+## 2026-06-08 Block body direct commit-QC runtime gate
+
+- Extracted the source-selection contract behind
+  `direct_commit_qc_from_block_body_response(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `block_body_direct_commit_qc_update_source(...)` and
+  `block_body_direct_commit_qc_created_source(...)`, covering body identity
+  validation, embedded commit-QC priority, checkpoint-derived commit-QC
+  fallback, local direct commit-QC fallback, and fail-closed no-source cases.
+- Rewired the live BlockBodyResponse helper through those projections with
+  debug assertions while preserving lazy source priority: update responses use
+  embedded QC first, then checkpoint QC, then local direct QC; created
+  responses can only use local direct QC, and mismatched hash/height/view
+  tuples return no QC before consulting any source.
+- Added inline runtime parity coverage for
+  `SumeragiBlockBodyDirectCommitQcGate.tla`, including update embedded,
+  embedded-over-checkpoint, checkpoint, checkpoint-over-local, local-only,
+  no-QC, hash/height/view mismatch, created local, created no-QC, and
+  created hash/height/view mismatch cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_body_direct_commit_qc_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-direct-commit-qc-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-direct-commit-qc-fast`
+  - TLC and Apalache sweeps for all `14`
+    `block-body-direct-commit-qc-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_body_direct_commit_qc_{tlc,apalache}/`.
+
+## 2026-06-08 Materialize-QC runtime gate
+
+- Extracted the branch contract behind `materialize_qc_for_header(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/commit.rs` into
+  `materialize_qc_decision(...)`, covering cached-QC priority, empty-roster
+  Kura recovery, non-empty vote formation, recovery after a form miss, rebuilt
+  QC success, cache insertion for materialized QCs, and fail-closed outcomes.
+- Rewired the live helper through the projection with debug assertions at the
+  cached, empty-roster recovery/no-recovery, try-form, formed, recovered, and
+  rebuilt branches while leaving the existing signature, stake, root-filter,
+  quorum, aggregate, and canonical signer mapping checks intact.
+- Added inline runtime parity coverage for `SumeragiMaterializeQcGate.tla`,
+  including cached existing, empty roster recovery/no-recovery, formed votes,
+  recovery after form miss, NPoS missing stake, commit-root filter empty,
+  no-votes, permissioned under-quorum/quorum, prepare quorum, NPoS signer map
+  and stake-quorum failures, aggregate errors, and canonical mapping failures.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core materialize_qc_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh materialize-qc-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh materialize-qc-fast`
+  - TLC and Apalache sweeps for all `17` `materialize-qc-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/materialize_qc_{tlc,apalache}/`.
+
+## 2026-06-08 Direct commit-QC for block runtime gate
+
+- Extracted the source-selection and local vote-formation gate behind
+  `direct_commit_qc_for_block(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `direct_commit_qc_for_block_decision(...)`, covering cache priority,
+  world-QC consultation, primary-vs-fallback topology selection, quorum-floor
+  admission, commit-phase/block-subject formation, and cached readback after
+  forming a QC from votes.
+- Rewired the runtime helper through the projection at the cache, world,
+  topology, quorum, and formed-QC readback points while preserving behavior:
+  cached QCs return before world reads, world QCs return before vote formation,
+  a non-empty exact-round roster blocks fallback topology, `min_votes` is
+  floored to `1`, and locally formed QCs are returned only after cache
+  readback for the same block/height/view.
+- Added inline runtime parity coverage for
+  `SumeragiDirectCommitQcForBlockGate.tla`, including cache/world priority,
+  no-try-after-cache/world, primary/fallback topology cases, no-topology,
+  zero-min floor, enough/under-quorum vote gates, formed/no-form results, and
+  try phase/subject binding.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core direct_commit_qc_for_block_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh direct-commit-qc-for-block-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh direct-commit-qc-for-block-fast`
+  - TLC and Apalache sweeps for all `16` `direct-commit-qc-for-block-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/direct_commit_qc_for_block_{tlc,apalache}/`.
+
+## 2026-06-08 Block body repair epoch runtime gate
+
+- Extracted the commit-QC epoch source selection behind
+  `observed_commit_qc_epoch_for_body_repair(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `block_body_repair_epoch_deferred_source(...)`,
+  `block_body_repair_epoch_pending_source(...)`, and
+  `block_body_repair_epoch_decision(...)`.
+- Rewired the runtime helper through those projections while preserving source
+  priority: exact cached commit QC first, matching deferred missing-payload
+  commit QC second, then a pending block only when commit-QC observation and
+  epoch metadata are both present.
+- Added inline runtime parity coverage for
+  `SumeragiBlockBodyRepairEpochGate.tla`, covering cache-only,
+  cache-over-deferred, cache-over-pending, deferred-only,
+  deferred-over-pending, pending-only, all deferred phase/hash/height/view
+  mismatches, missing pending observation, missing pending epoch, and no-source
+  rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_body_repair_epoch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-repair-epoch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-repair-epoch-fast`
+  - TLC and Apalache sweeps for all `13` `block-body-repair-epoch-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_body_repair_epoch_{tlc,apalache}/`.
+
+## 2026-06-08 Same-height block body repair runtime gate
+
+- Extracted the same-height exact block-body repair admission logic in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `same_height_block_body_repair_source_matches(...)` and
+  `same_height_block_body_repair_decision(...)`, covering the frontier-height
+  gate plus pending missing-block, deferred missing-payload QC, and active
+  missing commit-QC repair sources.
+- Rewired `allow_same_height_block_body_repair(...)` through those projections
+  while preserving the old short-circuit order: pending actionable commit
+  evidence is checked first, deferred actionable commit QCs second, and active
+  missing commit-QC repair only when neither source already admits repair.
+- Added inline runtime parity coverage for
+  `SumeragiSameHeightBlockBodyRepairGate.tla`, including pending/deferred/active
+  source acceptance, multiple-source acceptance, non-frontier rejection, every
+  pending/deferred phase/hash/height/view/actionable mismatch, and no-source
+  rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core same_height_block_body_repair_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh same-height-block-body-repair-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh same-height-block-body-repair-fast`
+  - TLC and Apalache sweeps for all `15`
+    `same-height-block-body-repair-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/same_height_block_body_repair_{tlc,apalache}/`.
+
+## 2026-06-08 Block body request-stash runtime gate
+
+- Extracted the exact block-body requester stash-window calculation in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `block_body_request_stash_window_decision(...)`, exposing the effective
+  missing-request margin, saturated lower bound, saturated upper bound, and
+  final stash decision.
+- Rewired `should_stash_pending_block_body_request(...)` through the pure
+  projection while preserving the configured margin floor of `1`, inclusive
+  next-height and upper-bound behavior, stale/same-height rejection, and
+  Rust-style saturating arithmetic at height boundaries.
+- Added inline runtime parity coverage for
+  `SumeragiBlockBodyRequestStashGate.tla`, including zero/one margins,
+  within-margin and upper-bound acceptance, beyond/same/stale rejection,
+  zero-committed next-height acceptance, and saturated lower/upper edges.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_body_request_stash_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-request-stash-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-request-stash-fast`
+  - TLC and Apalache sweeps for all `11` `block-body-request-stash-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_body_request_stash_{tlc,apalache}/`.
+
+## 2026-06-08 Block body repair runtime gate
+
+- Extracted the RBC exact block-body repair admission check in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `BlockBodyResponsePayloadIdentity` and
+  `block_body_repair_gate_decision(...)`, covering DA enablement,
+  exact-frontier height, RBC session presence, metadata alignment,
+  authoritative-payload absence, expected payload hash presence, response
+  hash/height/view identity, and payload-hash equality.
+- Rewired `allow_rbc_session_block_body_repair(...)` through the pure gate
+  while preserving its existing admission requirements for both
+  `BlockCreated` and `BlockSyncUpdate` body variants.
+- Added inline runtime parity coverage for
+  `SumeragiBlockBodyRepairGate.tla`, including the two happy body variants
+  and every negative DA, frontier, session, metadata, authoritative-payload,
+  expected-hash, identity, and payload-hash case.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_body_repair_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-repair-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-repair-fast`
+  - TLC and Apalache sweeps for all `12` `block-body-repair-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_body_repair_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSync future-window runtime gate
+
+- Extracted the generic future consensus-message window in
+  `crates/iroha_core/src/sumeragi/main_loop.rs` into a pure
+  `future_consensus_message_drop_decision(...)` projection for disabled
+  windows, height-window drops, view-window drops, view-change signal
+  allowance, missing phase views, and expired view-age allowance.
+- Added BlockSync-specific future-window projections in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` for requested
+  missing-block margins, far-ahead detection, lower unresolved gaps,
+  known-block/parent short-circuits, and fallback to the generic future
+  height/view window.
+- Rewired `should_drop_future_consensus_message(...)` and
+  `should_drop_future_block_sync_update(...)` through those projections while
+  preserving the important ordering: known blocks bypass all gates, requested
+  far-ahead updates drop before parent availability, lower unresolved gaps drop
+  before parent availability, known parents allow connected chains before the
+  generic future window, and generic height/view windows remain exclusive at
+  their boundaries.
+- Added inline runtime parity coverage for
+  `SumeragiBlockSyncFutureWindowGate.tla`, covering all requested, lower-gap,
+  parent, height-window, view-window, disabled-window, expired-view, and
+  missing-phase-view cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_future_window_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-future-window-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-future-window-fast`
+  - TLC and Apalache sweeps for all `17`
+    `block-sync-future-window-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_future_window_{tlc,apalache}/`.
+
+## 2026-06-08 Deferred BlockSyncUpdate replay runtime gate
+
+- Added a pure replay projection in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` for
+  `try_replay_deferred_block_sync_updates(...)`, covering empty queues,
+  commit/validation blockers, ordered key selection, remove-before-handle,
+  update/sender forwarding, handler-error warning, and single-entry
+  consumption.
+- Rewired the live replay helper through that projection with debug
+  assertions while preserving the existing behavior: replay is blocked while
+  commit or validation work is in flight, the first ordered deferred key is
+  removed before handling, handler errors are logged without reinserting the
+  entry, and later ordered entries remain buffered.
+- Added inline runtime parity coverage for
+  `SumeragiDeferredBlockSyncReplayGate.tla`, including empty/blocker cases,
+  success/error replay, remove-missing behavior, ordered-key selection, and
+  later-entry preservation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core deferred_block_sync_replay_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-replay-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh deferred-block-sync-replay-fast`
+  - TLC and Apalache sweeps for all `16`
+    `deferred-block-sync-replay-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/deferred_block_sync_replay_{tlc,apalache}/`.
+
+## 2026-06-08 Deferred BlockSyncUpdate cache runtime gate
+
+- Added pure cache/defer projections in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` for deferred
+  `BlockSyncUpdate` key construction, insert-vs-merge decisions, commit-vote
+  stripping, bounded cap enforcement after cache writes, and deferred status
+  recording.
+- Rewired `cache_deferred_block_sync_update(...)` and
+  `defer_block_sync_update(...)` through those projections with debug
+  assertions, preserving the full `(height, view, block_hash)` cache key,
+  same-key merge semantics, cap enforcement after insert and merge paths, and
+  `BlockSyncUpdate`/`Deferred`/`CommitPipelineActive` accounting after the
+  cache path runs.
+- Added inline runtime parity coverage for
+  `SumeragiDeferredBlockSyncCacheGate.tla`, covering new entries, sender-none
+  entries, same-key merge/preserve cases, full-key distinctness, cap
+  after-insert/after-merge cases, cache-before-record ordering, and recorded
+  consensus status labels.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core deferred_block_sync_cache_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-cache-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh deferred-block-sync-cache-fast`
+  - TLC and Apalache sweeps for all `20`
+    `deferred-block-sync-cache-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/deferred_block_sync_cache_{tlc,apalache}/`.
+
+## 2026-06-08 Deferred BlockSyncUpdate helper runtime gate
+
+- Extracted the helper decisions behind deferred `BlockSyncUpdate` handling in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into pure
+  projections for validation-inflight blocking, deferral reason priority,
+  merge/fill semantics, commit-evidence detection, and bounded queue eviction
+  ordering/counts.
+- Rewired the live helper methods through those projections while preserving
+  existing side effects: commit work still outranks validation and pending
+  work, certified exact-frontier bypass suppresses all deferral reasons,
+  incoming commit sidecars only fill missing fields, incoming senders replace
+  only when present, evidence entries are retained ahead of sparse entries,
+  and queue eviction metrics increment only for actual removals.
+- Added inline runtime parity coverage for
+  `SumeragiDeferredBlockSyncHelperGate.tla`, covering the validation,
+  deferral, merge, evidence, cap-zero, under-limit, eviction-order, and metric
+  cases represented in the formal model.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core deferred_block_sync_helper_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-helper-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh deferred-block-sync-helper-fast`
+  - TLC and Apalache sweeps for all `29`
+    `deferred-block-sync-helper-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/deferred_block_sync_helper_{tlc,apalache}/`.
+
+## 2026-06-08 Pending response flush runtime gate
+
+- Extracted the readiness decisions for
+  `flush_pending_fetch_requests_if_ready(...)` and
+  `flush_pending_block_body_requests_if_ready(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into a focused
+  pending-flush projection covering absent entries, canonical committed
+  deferral, payload-build admission, pending-entry removal, fetch batch
+  fanout arguments, exact body response construction, requester targeting, and
+  fallback dispatch usage.
+- Rewired both live readiness wrappers through that projection with debug
+  assertions around the existing side effects, including canonical Norito
+  encoding checks that an exact `BlockBodyResponse` body matches the payload
+  built for the block hash/height/view.
+- Added inline runtime parity coverage for
+  `SumeragiPendingResponseFlushGate.tla`, covering absent/deferred/ready/empty
+  fetch and exact-body entries, exact recorded requester targeting, disabled
+  fetch bypass arguments, and exact body hash/height/view/payload binding.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core pending_response_flush_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh pending-response-flush-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-response-flush-fast`
+  - TLC and Apalache sweeps for all `30`
+    `pending-response-flush-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/pending_response_flush_{tlc,apalache}/`.
+
+## 2026-06-08 Fetch-pending responses batch runtime gate
+
+- Extracted the fanout decisions inside
+  `send_fetch_pending_block_responses(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into focused
+  helpers for commit-QC-only dispatch/restash, payload-build admission, and
+  per-peer payload/companion/argument projection.
+- Rewired the live batch path through those decisions while preserving
+  commit-QC-only exclusion from payload fanout, consensus exact-body companion
+  emission, per-peer hintless `BlockSyncUpdate` policy, roster-update
+  `BlockCreated` companion ordering, created-payload bypass arguments, and
+  requester roster/priority argument forwarding.
+- Added inline runtime parity coverage for
+  `SumeragiFetchPendingResponsesBatchGate.tla`, covering empty batches,
+  commit-QC-only success/failure, mixed commit-QC and payload peers, consensus
+  companions, hintless allow/downgrade per peer, roster-update companions,
+  plain created payloads, plain other payloads, and forced bypass.
+- Tightened the formal `HintlessAllowArgForwarded` expected-failure invariant
+  so the `hintless-drops-allow-arg` mutation is rejected by both TLC and
+  Apalache instead of relying only on TLC's aggregate match rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core fetch_pending_responses_batch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh fetch-pending-responses-batch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fetch-pending-responses-batch-fast`
+  - TLC and Apalache sweeps for all `26`
+    `fetch-pending-responses-batch-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/fetch_pending_responses_batch_{tlc,apalache}/`.
+
+## 2026-06-08 Fetch-pending response send runtime gate
+
+- Extracted the branch decisions inside
+  `send_fetch_pending_block_response(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into focused
+  preflight and frame-cap helpers covering hintless downgrade, cached-QC
+  application, update trimming, bypass selection, direct commit-QC companion
+  dispatch, fallback `BlockCreated` emission, and oversized payload drops.
+- Rewired the live send path through those decisions with debug assertions
+  around the existing side effects, preserving direct commit-QC-before-payload
+  ordering and the original bypass decision when an oversized
+  `BlockSyncUpdate` falls back to `BlockCreated`.
+- Added inline runtime parity coverage for
+  `SumeragiFetchPendingResponseSendGate.tla`, covering background, forced,
+  consensus, highest-QC, hintless allow/downgrade, trim/fallback/drop,
+  direct-QC companion, created-payload, and eager RBC payload cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core fetch_pending_response_send_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh fetch-pending-response-send-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fetch-pending-response-send-fast`
+  - TLC and Apalache sweeps for all `26`
+    `fetch-pending-response-send-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/fetch_pending_response_send_{tlc,apalache}/`.
+
+## 2026-06-08 Background fallback runtime gate
+
+- Extracted `dispatch_background_fallback(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop.rs` through an internal
+  `BackgroundFallbackNetworkDispatch` projection so the live fallback path
+  constructs the exact `Post` or `Broadcast` operation before handing it to the
+  network.
+- Added focused runtime parity coverage for
+  `SumeragiBackgroundFallbackGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, covering post block,
+  post control-flow, post native-AMX, broadcast block, broadcast control-flow,
+  and broadcast native-AMX fallback projections.
+- The matrix validates post-vs-broadcast preservation, peer targeting for
+  posts and no peer on broadcasts, block priority preservation via
+  `BlockMessage::priority()`, high-priority control/native messages, and
+  payload class preservation across all fallback request kinds.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core background_fallback_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh background-fallback-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh background-fallback-fast`
+  - TLC and Apalache sweeps for all `13` `background-fallback-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/background_fallback_{tlc,apalache}/`.
+
+## 2026-06-08 Background bypass runtime gate
+
+- Extracted the background scheduler branch table in
+  `crates/iroha_core/src/sumeragi/main_loop.rs` into
+  `BackgroundScheduleAction` plus private helpers for bypass eligibility and
+  final schedule action selection.
+- The live `schedule_background(...)` and `schedule_background_via_queue(...)`
+  paths now share the same decision helper, preserving disabled-worker inline
+  dispatch, forced queueing for via-queue calls, immediate fallback for
+  approved post/broadcast consensus payloads, and queued handling for control
+  flow plus native-AMX requests.
+- Added runtime parity coverage for `SumeragiBackgroundBypassGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, covering all post and
+  broadcast message classes, broadcast fetch/QC non-bypass cases, control and
+  native non-bypass cases, via-queue override behavior, and disabled-worker
+  inline behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core background_bypass_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh background-bypass-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh background-bypass-fast`
+  - TLC and Apalache sweeps for all `13` `background-bypass-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/background_bypass_{tlc,apalache}/`.
+
+## 2026-06-08 Background dispatch runtime gate
+
+- Exposed `background_request_allows_blocking(...)` at `pub(super)` scope in
+  `crates/iroha_core/src/sumeragi/main_loop/background.rs` so focused runtime
+  tests can assert the non-droppable consensus background request policy
+  directly.
+- Added telemetry-enabled runtime parity coverage for
+  `SumeragiBackgroundDispatchGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, covering all six
+  `BackgroundRequest` variants across ready, full, no-worker, and disconnected
+  channel states.
+- The matrix validates ready-queue enqueue metrics, full-queue overflow
+  without drop, missing/disconnected worker drop accounting without overflow,
+  stable kind labels, and returned request reconstruction for caller-side
+  fallback.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core background_dispatch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh background-dispatch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh background-dispatch-fast`
+  - TLC and Apalache sweeps for all `9` `background-dispatch-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/background_dispatch_{tlc,apalache}/`.
+
+## 2026-06-08 Background frame-cap runtime gate
+
+- Added focused runtime parity coverage for
+  `SumeragiBackgroundFrameCapGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, using real consensus
+  wire lengths and the live `block_message_frame_cap(...)`,
+  `trim_block_sync_update_for_frame_cap(...)`,
+  `trim_block_body_response_for_frame_cap(...)`,
+  `direct_block_sync_update_fallback_for_body_response(...)`, and
+  `prepare_background_block_message(...)` paths.
+- The matrix covers control vs payload cap selection, under-cap preservation,
+  oversized payload/update/response drops, commit-vote trimming, permissioned
+  stake removal, permissioned and NPoS commit-QC/checkpoint trim order, NPoS
+  stake preservation, embedded response-update trimming, direct
+  `BlockSyncUpdate` fallback preference, downgrade to `BlockCreated` when
+  direct fallback cannot fit, and final oversized response drops.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core background_frame_cap_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh background-frame-cap-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh background-frame-cap-fast`
+  - TLC and Apalache sweeps for all `19` `background-frame-cap-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/background_frame_cap_{tlc,apalache}/`.
+
+## 2026-06-08 Fetch block body handler runtime gate
+
+- Extracted `handle_fetch_block_body(...)` branch selection in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into a private
+  decision helper covering exact local dispatch, canonical committed-tip
+  deferral, pending-body requester stashing, frontier-slot requester stashing,
+  requester removal, deferred status recording, dedup release count, and use
+  of the plain-fallback response helper.
+- Wired the live handler through the decision helper while preserving the
+  existing dispatch, stash, status, and dedup-release operations.
+- Added focused runtime parity coverage for
+  `SumeragiFetchBlockBodyHandleGate.tla`, covering exact `BlockCreated`
+  dispatch, proof-bearing dispatch, canonical committed deferral, local
+  identity mismatches, no-local frontier/window/outside-window stash behavior,
+  requester removal, deferred records, dedup release, and plain-fallback helper
+  admission.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_fetch_block_body_handle --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh fetch-block-body-handle-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fetch-block-body-handle-fast`
+  - TLC and Apalache sweeps for all `22`
+    `fetch-block-body-handle-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/fetch_block_body_handle_{tlc,apalache}/`.
+
+## 2026-06-08 Fetch response deferral runtime gate
+
+- Extracted the canonical committed fetch/body response deferral decision in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into private
+  helpers for committed-hash status, response message shape, and the pure
+  height/hash/proof-sidecar predicate used by
+  `should_defer_canonical_committed_fetch_response(...)`.
+- Added focused runtime parity coverage for
+  `SumeragiFetchResponseDeferralGate.tla`, covering canonical `BlockCreated`
+  and bare `BlockSyncUpdate` deferral, non-deferral when commit-QC or
+  validator-checkpoint sidecars are present, non-block messages, next-height
+  and historical responses, committed-hash mismatch, and unknown committed hash.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_fetch_response_deferral --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh fetch-response-deferral-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fetch-response-deferral-fast`
+  - TLC and Apalache sweeps for all `10`
+    `fetch-response-deferral-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/fetch_response_deferral_{tlc,apalache}/`.
+
+## 2026-06-08 QC-insufficient warning throttle runtime gate
+
+- Added focused runtime parity coverage for
+  `SumeragiQcInsufficientWarningThrottleGate.tla` against
+  `QcInsufficientWarningThrottle::allow(...)` and `clear()` in
+  `crates/iroha_core/src/sumeragi/main_loop.rs`, covering
+  per-kind/phase/hash/height/view keying, strict cooldown suppression,
+  cooldown-boundary emission, suppressed-count replay, zero-cooldown behavior,
+  GC boundary/expiry handling, and clear semantics.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core qc_insufficient_warning_throttle --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh qc-insufficient-warning-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-insufficient-warning-fast`
+  - TLC and Apalache sweeps for all `14`
+    `qc-insufficient-warning-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/qc_insufficient_warning_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSync warning throttle runtime gate
+
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncWarningThrottleGate.tla` against
+  `BlockSyncWarningThrottle::allow(...)` and `clear()` in
+  `crates/iroha_core/src/sumeragi/main_loop.rs`, covering per-kind/hash/height
+  and view keying, strict cooldown suppression, cooldown-boundary emission,
+  suppressed-count replay, burst caps and burst-window reset behavior,
+  zero-cap/zero-cooldown behavior, GC boundary/expiry handling, and clear
+  semantics for both entries and burst counters.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_warning_throttle --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-warning-throttle-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-warning-throttle-fast`
+  - TLC and Apalache sweeps for all `21`
+    `block-sync-warning-throttle-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_warning_throttle_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate commit-conflict runtime gate
+
+- Extracted committed-height BlockSyncUpdate conflict predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through helpers for conflict detection, commit-QC validation
+  admission, evidence emission, drop status classification, missing-request
+  clearing, genesis-stub allowance, and consensus mode-tag selection.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncCommitConflictGate.tla`, anchoring height-zero and
+  absent/same-hash continuation, no-QC conflict drops, invalid-QC conflict
+  drops without evidence, valid-QC conflict evidence emission with the incoming
+  certificate and `commit_conflict_finality` reason, evidence-broadcast-error
+  drop preservation, stake-snapshot propagation, NPoS mode/tag validation, and
+  height-1/view-0 genesis-stub allowance.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_commit_conflict --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-commit-conflict-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-commit-conflict-fast`
+  - TLC and Apalache sweeps for all `24`
+    `block-sync-commit-conflict-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_commit_conflict_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate stale-view runtime gate
+
+- Extracted the BlockSyncUpdate stale-view admission predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through helpers for commit-evidence detection, stale-view drop
+  selection, and `BlockSyncUpdate` / `Dropped` / `StaleView` status recording.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncStaleViewGate.tla`, anchoring fresh-view continuation,
+  stale unrequested unknown drops, requested recovery continuation, locally
+  known block continuation, incoming-QC/checkpoint/commit-vote evidence
+  continuation, stable drop status classification, `Ok(())` return behavior,
+  and preservation of missing-block request state.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_stale_view --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-stale-view-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-stale-view-fast`
+  - TLC and Apalache sweeps for all `15`
+    `block-sync-stale-view-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_stale_view_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate selected-QC cache runtime gate
+
+- Extracted selected-roster unknown-block QC cache predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired
+  `cache_block_sync_qc_for_unknown_block(...)` through the same topology,
+  QC-shape, locked-QC conflict, stale-lock, non-extending, signer-tally,
+  process-acceptance, locked-QC update, missing-context quarantine, and final
+  validation-drop gates used by the selected-QC runtime path.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedQcCacheGate.tla`, anchoring early drops before
+  tally, same-height and stale locked-QC handling, non-extending deferral/drop
+  behavior, fresh signer tally validation, precommit signer and validated-tally
+  recording, `process_precommit_qc(...)` argument forwarding, reject-before-cache
+  behavior, locked-QC update ordering, quarantine removal, commit-QC/cache
+  persistence, missing-context quarantine, and terminal validation drops.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_qc_cache --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-cache-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-qc-cache-fast`
+  - TLC and Apalache sweeps for all `33`
+    `block-sync-selected-qc-cache-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_qc_cache_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate selected-QC process runtime gate
+
+- Extracted selected-roster post-prefilter QC processing predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through them for cached-versus-fresh signer tally selection,
+  block-known-for-commit projection, accepted-QC cache/record gating, commit
+  application, DA cleanup, pending epoch observation, and unknown-block QC
+  caching after the wrapper returns.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedQcProcessGate.tla`, anchoring cached tally reuse,
+  fresh tally validation, tally-error terminal handling, precommit signer and
+  validated-tally recording, `process_precommit_qc(...)` argument forwarding,
+  reject-before-cache behavior, known-block commit application and pipeline
+  request, DA-only RBC cleanup, unknown pending epoch observation, no-QC no-op
+  behavior, and creation-error suppression of unknown-block QC caching.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_qc_process --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-process-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-qc-process-fast`
+  - TLC and Apalache sweeps for all `23`
+    `block-sync-selected-qc-process-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_qc_process_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate selected-QC prefilter runtime gate
+
+- Extracted selected-roster post-apply QC prefilter predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  `block_sync_apply_qc_after_block(...)` closure through them for empty
+  topology recovery, QC hash/height/epoch/phase shape ignores, same-height
+  locked-QC drops, stale-lock drops, non-extending missing-payload deferral,
+  non-extending locked drops, and allowed non-extending retention.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedQcPrefilterGate.tla`, anchoring early `Ok(())`
+  returns before tally, locked-QC status/metric recording, missing locked
+  payload quarantine, lock-conflict logging, continuation to signer tally, and
+  process-precommit eligibility across the model's topology, shape, locked
+  conflict, non-extending, and continuation cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_qc_prefilter --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-prefilter-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-qc-prefilter-fast`
+  - TLC and Apalache sweeps for all `20`
+    `block-sync-selected-qc-prefilter-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_qc_prefilter_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate selected-apply runtime gate
+
+- Extracted selected-roster BlockSyncUpdate apply/recovery helpers in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through them for non-extending QC admission, same-height frontier
+  conflict protection, payload-mismatch preservation, authoritative frontier
+  supersede, recovery-mode selection, signed-quorum commit-QC repair, sparse
+  next-height payload recovery, payload-unapplied status, and post-apply QC
+  selection.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedApplyGate.tla`, anchoring the selected-apply
+  matrix across selection/incoming QC evidence, commit certs, checkpoints,
+  commit-vote recovery, aborted revival policy, observed epoch projection,
+  signed-quorum repair side effects, sparse recovery requests, ready-for-QC
+  gating, payload-unapplied status, and QC application.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_apply --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-apply-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-apply-fast`
+  - TLC and Apalache sweeps for all `35`
+    `block-sync-selected-apply-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_apply_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSync recovery-mode runtime gate
+
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncRecoveryModeGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`, anchoring
+  the existing stale BlockCreated and `BlockSyncRecoveryMode` helper contracts
+  without changing production behavior.
+- The matrix covers height-at-or-below stale detection, stale BlockCreated
+  admission by missing request, retained match, or recovery evidence, no-signal
+  stale rejection, authoritative frontier supersede permissions for signed
+  quorum and commit-evidence repair only, stale-without-request bypass for
+  requested-payload and commit-evidence repair only, aborted-pending revival
+  only for commit-evidence repair with the explicit flag, and observed
+  commit-QC epoch projection only from commit-evidence repair.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_recovery_mode --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-recovery-mode-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-recovery-mode-fast`
+  - TLC and Apalache sweeps for all `25`
+    `block-sync-recovery-mode-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_recovery_mode_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate selected-quorum runtime gate
+
+- Extracted selected-roster BlockSyncUpdate quorum helpers in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through them for sparse exact-frontier request admission, missing-QC
+  request eligibility, NPoS vote-only deferral, and repair/drop gating.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedQuorumGate.tla`, anchoring QC/commit-cert/signature/
+  checkpoint quorum sources, explicit and tracked sparse frontier admission,
+  sparse rejection for zero signers, commit-vote suppression, non-frontier and
+  unrequested sparse drops, missing-QC request marking and quorum recomputation,
+  NPoS vote-only deferred returns, classic request continuation, in-slot repair
+  deferral, quorum-missing drop status/reasons/metrics, invalid-QC drop
+  exceptions for block quorum and checkpoint evidence, `Ok(())` terminal paths,
+  apply continuation, and no missing-block cleanup from these terminal drops.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_quorum --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-quorum-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-quorum-fast`
+  - TLC and Apalache sweeps for all `30`
+    `block-sync-selected-quorum-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_quorum_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate selected-QC runtime gate
+
+- Extracted selected-roster BlockSyncUpdate QC-gate helpers in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through them for QC source precedence, shape filtering, aggregate-ok
+  shortcuts, cached-QC recovery, aggregate fallback, and invalid-payload drop
+  decisions.
+- Added focused runtime parity coverage for `SumeragiBlockSyncSelectedQcGate.tla`
+  using real `Qc` values, including adversarial height/hash/epoch/phase shape
+  mutations. The matrix anchors incoming-over-selection-over-checkpoint-over-
+  world-over-cached source precedence, shape rejection before validation,
+  missing-context quarantine, final validation drops, incoming-QC replacement
+  metrics, cached recovery, aggregate fallback acceptance gating, cached and
+  selected aggregate verification shortcuts, hard-lock evidence stripping,
+  usable-QC cache/quarantine cleanup, selected commit-cert projection, invalid
+  incoming-QC payload drops, `Ok(())` invalid-payload returns, and no
+  missing-block cleanup from invalid QC drops.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_qc --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-qc-fast`
+  - TLC and Apalache sweeps for all `33` `block-sync-selected-qc-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_qc_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate selected-signatures runtime gate
+
+- Extracted the selected-roster BlockSyncUpdate signature-gate predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through them for signer-cache insertion, ahead-of-frontier deferral,
+  gap requests, and roster/QC evidence continuation.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedSignaturesGate.tla`, anchoring cache-hit reuse,
+  validated-signer caching only with a cache key, parent-only versus gap
+  deferral, effective-topology and selected-roster request context, deferred
+  status/reason and payload-only recovery forwarding, non-deferrable invalid
+  signature drops, evidence-backed empty-signer continuation, terminal drop
+  status/metrics/reasons, QC-candidate continuation, `Ok(())` terminal returns,
+  and no missing-block cleanup from signature drops.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_signatures --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-signatures-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-signatures-fast`
+  - TLC and Apalache sweeps for all `29`
+    `block-sync-selected-signatures-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_signatures_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate known-selected-roster runtime gate
+
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncKnownSelectedRosterGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`, reusing the tagged
+  known-block commit-QC chooser from the known-roster gate.
+- The matrix anchors selected-roster source/vote-roster bookkeeping,
+  checkpoint recording, prepared-but-unknown commit-roster records,
+  known-block-only commit-roster persistence, incoming-over-selection-over-
+  checkpoint QC replay priority, redundant replay suppression, selected-QC
+  `commit_qc_match` projection, enqueue gating, missing commit-QC cleanup from
+  either local QC cache or local commit-roster snapshot, missing-block cleanup,
+  and known/unknown return behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_known_selected_roster --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-known-selected-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-known-selected-roster-fast`
+  - TLC and Apalache sweeps for all `29`
+    `block-sync-known-selected-roster-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_known_selected_roster_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate known-roster runtime gate
+
+- Extracted the selected-roster known-block commit-QC candidate chooser in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and added focused
+  parity coverage for the `SumeragiBlockSyncKnownRosterGate.tla` contract.
+- The new matrix anchors selected-roster source/vote-roster bookkeeping,
+  checkpoint recording, commit-roster preparation and known-block-only
+  persistence, synthesized versus selected checkpoint persistence, stake
+  inclusion, known-only vote processing, incoming-over-selection-over-checkpoint
+  QC replay priority, redundant replay suppression only when both QC cache and
+  local snapshot match, `commit_qc_match` argument projection, enqueue gating,
+  missing commit-QC/block cleanup, and known/unknown return behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_known_roster --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-known-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-known-roster-fast`
+  - TLC and Apalache sweeps for all `28`
+    `block-sync-known-roster-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_known_roster_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate no-roster runtime gate
+
+- Extracted the no-verifiable-roster known vote-only predicate and
+  effective/trusted fallback roster chooser in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`, then added focused
+  parity coverage for the `SumeragiBlockSyncNoRosterGate.tla` contract.
+- The new matrix anchors known vote-only classification, vote processing
+  suppression when a local commit-roster snapshot is present, missing-block
+  clear behavior and reason for known drops, known hinted drop classification,
+  effective-before-trusted fallback topology selection, exact-frontier repair
+  deferral, missing-QC request/failover calls, unknown drop status/reason and
+  metrics, and terminal `Ok(())`/no-continue behavior.
+- The runtime regression stores a known non-frontier block without a local
+  commit-roster snapshot, seeds the vote roster needed for vote admission, and
+  verifies a vote-only no-roster `BlockSyncUpdate` processes the attached commit
+  vote without deferring or recording missing-roster drop status.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_no_roster --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-no-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-no-roster-fast`
+  - TLC and Apalache sweeps for all `25` `block-sync-no-roster-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_no_roster_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate snapshot-roster runtime gate
+
+- Extracted the known-block commit-roster snapshot selection constructor in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and added focused
+  parity coverage for the `SumeragiBlockSyncSnapshotRosterGate.tla` contract.
+- The new matrix anchors nonempty snapshot gating, journal source provenance,
+  snapshot roster/QC/checkpoint preservation, stake inclusion only when the
+  local stake snapshot matches the selected roster, snapshot cache-key gating,
+  snapshot precedence over persisted/cache/fresh fallbacks, persisted-before-
+  cache/fresh ordering, fresh cache insertion only for certified keyed
+  selections, no-selection behavior, and sidecar-quarantine propagation.
+- The known-block NPoS runtime regression now also asserts the snapshot-derived
+  `BlockSyncRosterSelection` is cached under the local snapshot key with
+  `CommitRosterJournal` provenance and the local roster/QC/checkpoint/stake,
+  after mismatched incoming sidecars are filtered out.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_snapshot --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-snapshot-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-snapshot-roster-fast`
+  - TLC and Apalache sweeps for all `22`
+    `block-sync-snapshot-roster-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_snapshot_roster_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate snapshot-hint runtime gate
+
+- Extracted the known-block snapshot-hint sidecar filter in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and added focused
+  parity coverage for the `SumeragiBlockSyncSnapshotHintGate.tla` contract.
+- The new pure matrix anchors no-snapshot and snapshot-known behavior, QC
+  hash/roster preservation, same-roster revalidation, mismatched-roster QC
+  dropping, checkpoint hash filtering, local-stake-gated stake preservation,
+  and the model-only same-hash/different-roster case.
+- The runtime NPoS regression now stores a non-frontier known block with a
+  local commit-roster snapshot, then verifies mismatched incoming QC,
+  checkpoint, and stake sidecars do not replace the local snapshot, do not
+  enqueue incoming-QC work, and do not defer the update.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_snapshot_hint --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-snapshot-hint-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-snapshot-hint-fast`
+  - TLC and Apalache sweeps for all `21`
+    `block-sync-snapshot-hint-bug-*` modes; all produced the expected invariant
+    rejection.
+
+## 2026-06-07 BlockSyncUpdate vote-placeholder runtime gate
+
+- Extracted the BlockSyncUpdate frontier vote-placeholder gate and embedded
+  commit-vote subject matcher in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`, then added focused
+  parity coverage for the `SumeragiBlockSyncVotePlaceholderGate.tla` contract.
+- The new coverage anchors no-vote rejection, valid and two-valid vote
+  placeholder counts, invalid phase/hash/height/view/epoch filtering, mixed
+  vote filtering, QC/checkpoint sidecar rejection, stake sidecar neutrality,
+  exact-frontier/known-local/requested-missing guards, and a runtime NPoS
+  vote-only BlockSyncUpdate path that notes an exact-fetch placeholder without
+  materializing the payload or deferring the update.
+- The direct frontier placeholder regression now also asserts that placeholder
+  creation does not enter generic missing-block retries, emit topology-wide
+  `FetchPendingBlock` traffic, defer block-sync updates, or record
+  consensus-message status.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vote_placeholder --lib --features telemetry -- --nocapture`
+    (`4` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-vote-placeholder-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-vote-placeholder-fast`
+  - TLC and Apalache sweeps for all `20`
+    `block-sync-vote-placeholder-bug-*` modes; all produced the expected
+    invariant rejection.
+
+## 2026-06-07 DA implicit BlockSyncUpdate recovery runtime gate
+
+- Extracted the DA implicit recovery predicate in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and added focused
+  parity coverage for the `SumeragiBlockSyncImplicitRecoveryGate.tla` contract.
+- The new coverage anchors already-requested preservation, DA-disabled,
+  known-local, above-frontier, and implicit-disallowed rejection, same-height,
+  next-height, and `u64::MAX` saturated-boundary admission, plus an actor-level
+  next-height check that the implicit flag continues into payload handling
+  without recording consensus-message status, clearing tracked requests, or
+  deferring the update by itself.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_implicit_recovery --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-implicit-recovery-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-implicit-recovery-fast`
+  - TLC and Apalache sweeps for all `12`
+    `block-sync-implicit-recovery-bug-*` modes; all produced the expected
+    invariant rejection.
+
+## 2026-06-07 Known hintless BlockSyncUpdate runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncKnownHintlessGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors the already-known hintless fast path clearing tracked
+  missing-block requests without recording consensus-message status, unknown
+  hintless and unknown QC-hint updates continuing to entry deferral, known
+  QC/checkpoint/stake hints bypassing the hintless skip and preserving their
+  sidecars in the deferred cache, and known vote hints continuing to the later
+  vote-only fast path.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_known_hintless_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-known-hintless-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-known-hintless-fast`
+  - TLC and Apalache sweeps for all `12`
+    `block-sync-known-hintless-bug-*` modes; all produced the expected invariant
+    rejection.
+
+## 2026-06-07 Block-sync vote deferral runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncVoteDeferralGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors valid and mismatched embedded commit-vote filtering,
+  permissioned implicit frontier recovery, NPoS unsolicited vote-only recovery
+  blocking, explicit NPoS missing-block recovery preservation, known vote-only
+  fast-path precedence over entry deferral, deferred update vote stripping, and
+  QC/checkpoint/stake sidecar preservation through the deferred cache.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_vote_deferral_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-vote-deferral-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-vote-deferral-fast`
+  - TLC and Apalache sweeps for all `22`
+    `block-sync-vote-deferral-bug-*` modes; all produced the expected invariant
+    rejection.
+
+## 2026-06-07 Block-sync roster status runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncRosterStatusGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/status.rs`.
+- The new matrix anchors commit/checkpoint pair source accounting, individual
+  commit-QC/checkpoint/history/sidecar/journal source counters, unknown-source
+  no-op behavior, missing and unsolicited `ShareBlocks` drop counters, repeated
+  increment accumulation, direct roster snapshot projection, top-level snapshot
+  inclusion, and reset-after-records clearing.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_roster_status_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-roster-status-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-roster-status-fast`
+  - TLC and Apalache sweeps for all `24`
+    `block-sync-roster-status-bug-*` modes; all produced the expected invariant
+    rejection.
+
+## 2026-06-07 Uncertified block-sync roster admission runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncRosterGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`.
+- The new matrix anchors that explicit missing-block requests allow stale,
+  same-height, next-height, and future uncertified roster selection, while
+  unrequested updates are admitted only at `local_height.saturating_add(1)`,
+  including the `u64::MAX` saturation edge, and reject same/stale/future
+  heights.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core formal_gate_matrix_matches_requested_and_next_height_policy --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-roster-fast`
+  - TLC and Apalache sweeps for all `9` `block-sync-roster-bug-*` modes; all
+    produced the expected invariant rejection.
+
+## 2026-06-07 Cached BlockSyncUpdate QC/vote attachment runtime gate
+
+- Added focused runtime parity coverage for the `SumeragiApplyCachedQcsGate.tla`
+  contract in `crates/iroha_core/src/sumeragi/main_loop/commit.rs`.
+- The new matrix anchors existing-QC preservation, existing-checkpoint
+  preservation, checkpoint synthesis only after a final QC exists, no-QC/no-vote
+  no-op behavior, NPoS stake-snapshot repair/preservation, permissioned
+  stake-snapshot non-repair, NPoS signer-history stake-snapshot cloning,
+  matching cached-vote attachment, existing-vote preservation, and
+  wrong-context vote rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core apply_cached_qcs_to_block_sync_update_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh apply-cached-qcs-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh apply-cached-qcs-fast`
+  - TLC and Apalache sweeps for all `16` `apply-cached-qcs-bug-*` modes; all
+    produced the expected invariant rejection.
+
+## 2026-06-07 BlockSyncUpdate target-selection runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncUpdateTargetsGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/commit.rs`.
+- The new matrix anchors zero-limit and empty-world fail-closed behavior, local
+  peer exclusion, registered/trusted stray priority, unregistered-stray
+  rejection, online-world preference over offline fallback, offline world
+  fallback when no world peer is online, gossip-cap enforcement, and
+  only-local no-target behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_update_targets_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-update-targets-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-update-targets-fast`
+  - TLC and Apalache sweeps for all `11`
+    `block-sync-update-targets-bug-*` modes; all produced the expected
+    invariant rejection.
+
+## 2026-06-07 Commit-QC-only fetch response runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiCommitQcOnlyFetchResponseGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new direct-dispatch matrix anchors certified proof before direct
+  `CommitCert`, direct-QC return/no-rebroadcast/no-fallback behavior,
+  no-QC/no-vote deferral, cached commit-vote rebroadcast with requester
+  deduplication, and signed-quorum `BlockSyncUpdate` fallback without inventing
+  a direct `CommitCert`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core commit_qc_only_fetch_response_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh commit-qc-only-fetch-response-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-qc-only-fetch-response-fast`
+  - TLC and Apalache sweeps for all `16`
+    `commit-qc-only-fetch-response-bug-*` modes; all produced the expected
+    invariant rejection.
+
+## 2026-06-07 Signed-quorum fetch fallback runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiSignedQuorumFetchFallbackGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors committed-hash gating, permissioned quorum acceptance
+  and under-quorum rejection, single-validator quorum flooring, NPoS
+  roster-cache stake snapshot acceptance, NPoS state-snapshot priority over a
+  passing cache snapshot, and NPoS stake-quorum error rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core signed_quorum_fetch_fallback_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh signed-quorum-fetch-fallback-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh signed-quorum-fetch-fallback-fast`
+  - TLC and Apalache sweeps for all `16`
+    `signed-quorum-fetch-fallback-bug-*` modes; all produced the expected
+    invariant rejection.
+
+## 2026-06-07 Known-block QC drain runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiKnownBlockQcDrainGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors observable drain behavior: empty queue no-progress,
+  initial budget exhaustion preserving queued work, one-item progress and
+  no-progress removal, two-item progress aggregation, two-item no-progress
+  removal, and per-tick cap preservation for remaining work.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core known_block_qc_drain_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh known-block-qc-drain-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh known-block-qc-drain-fast`
+  - TLC and Apalache sweeps for all `18` `known-block-qc-drain-bug-*` modes;
+    all produced the expected invariant rejection.
+
+## 2026-06-07 Known-block QC work runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiKnownBlockQcWorkGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors constructible preparation branches: QC/block
+  identity, height, epoch, and phase rejection; missing locked-payload
+  deferral for same-height and non-extending QCs; stale locked-QC drops;
+  retained same-height and non-extending known-lock work; extending work; no
+  lock work; and preservation of block, topology, stake snapshot, consensus
+  mode, mode tag, PRF seed, commit-QC match, and `aggregate_ok = None`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core known_block_qc_work_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh known-block-qc-work-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh known-block-qc-work-fast`
+  - TLC and Apalache sweeps for all `22` `known-block-qc-work-bug-*` modes;
+    all produced the expected invariant rejection.
+
+## 2026-06-07 Known-block QC enqueue runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiKnownBlockQcEnqueueGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors full QC work-key projection, duplicate suppression
+  without overwrite/status/wake side effects, new-work preservation, deferred
+  consensus-message accounting, wake delivery, and full wake-channel
+  no-rollback behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core known_block_qc_enqueue_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh known-block-qc-enqueue-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh known-block-qc-enqueue-fast`
+  - TLC and Apalache sweeps for all `27` `known-block-qc-enqueue-bug-*`
+    modes; all produced the expected invariant rejection.
+
+## 2026-06-07 Block-sync locked-QC runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncLockedQcGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors locked-chain extension checks, missing locked-payload
+  newer-view bypass and same-view rejection, same-height conflict gating,
+  same-height recoverability, stale-against-lock checks, and missing locked
+  payload deferral side effects: payload request, locked-payload quarantine,
+  and locked-QC consensus drop accounting.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_locked_qc_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-locked-qc-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-locked-qc-fast`
+  - TLC and Apalache sweeps for all `22` `block-sync-locked-qc-bug-*` modes;
+    all produced the expected invariant rejection.
+
+## 2026-06-07 Block-sync QC status runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncQcStatusGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/status.rs`.
+- The new test anchors block-sync QC status reset behavior, all seven QC
+  counters, snapshot projection, repeated counter accumulation, final-drop
+  reason overwrite, and post-record reset clearing.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_qc_status_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-qc-status-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-qc-status-fast`
+  - TLC and Apalache sweeps for all `24` `block-sync-qc-status-bug-*` modes;
+    all produced the expected invariant rejection.
+
+## 2026-06-07 Block-sync QC fallback runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncQcFallbackGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new tests anchor the retryable QC-validation classifier and the aggregate
+  fallback acceptance matrix across permissioned and NPoS modes, including
+  commit-only/no-nested-QC requirements, aggregate and bitmap rejection,
+  permissioned quorum flooring, explicit NPoS stake snapshot requirements,
+  stake-quorum rejection, and stake snapshot error rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_qc_fallback_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-qc-fallback-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-qc-fallback-fast`
+  - TLC and Apalache sweeps for all `19` `block-sync-qc-fallback-bug-*`
+    modes; all produced the expected invariant rejection.
+
+## 2026-06-07 QC validation reason runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiQcValidationReasonGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors all `17` `QcValidationError` variants to their exact
+  telemetry labels, verifies `qc_validation_reason(...)` uses the same
+  projection, and checks the hard/soft evidence boundary plus `InvalidQc`
+  evidence reason preservation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core qc_validation_reason_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh qc-validation-reason-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-validation-reason-fast`
+  - TLC and Apalache sweeps for all `17` `qc-validation-reason-bug-*` modes;
+    all produced the expected invariant rejection.
+
+## 2026-06-07 QC validation evidence runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiQcValidationEvidenceGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new tests anchor hard `QcValidationError` variants emitting `InvalidQc`
+  evidence with the cloned QC and exact telemetry reason, soft local-context or
+  quorum failures emitting no evidence, successful `validate_qc_with_evidence`
+  returning `(Ok, None)`, and hard validation failure returning `(Err,
+  Some(InvalidQc))` with the failing certificate preserved.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core qc_validation_evidence_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh qc-validation-evidence-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh qc-validation-evidence-fast`
+  - TLC and Apalache sweeps for all `24` `qc-validation-evidence-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/qc-validation-evidence-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Invalid-QC shape runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiInvalidQcShapeGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/evidence.rs`.
+- The new matrix anchors empty signer-bitmap detection, `(height, view) =
+  (0, 0)` sentinel detection, empty-bitmap detection when height is zero but
+  view is nonzero, non-emission for height-zero-alone, view-zero-alone, and
+  valid nonempty/nonzero QCs, plus exact `InvalidQc` kind, cloned certificate
+  payload, and fixed diagnostic reason preservation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core invalid_qc_shape_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh invalid-qc-shape-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh invalid-qc-shape-fast`
+  - TLC and Apalache sweeps for all `16` `invalid-qc-shape-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/invalid-qc-shape-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Double-vote recording runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiDoubleVoteRecordingGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/evidence.rs`.
+- The new tests anchor bare and topology-aware double-vote detection,
+  root-only commit equivocation, cross-phase commit evidence, canonical swapped
+  keys, rotated signer identity, same raw index/different peer rejection,
+  out-of-range signer rejection, and `record_double_vote` control flow through
+  no-evidence, duplicate-store, store-validation rejection, fresh-store
+  persisted duplicate, horizon rejection, swapped duplicate, cross-phase, and
+  commit-root persistence paths.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core double_vote_recording_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh double-vote-recording-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh double-vote-recording-fast`
+  - TLC and Apalache sweeps for all `37` `double-vote-recording-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/double-vote-recording-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Evidence validation runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiEvidenceValidationGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/evidence.rs`.
+- The new validation tests anchor the full result lattice for kind/payload
+  matching, invalid-QC acceptance, double-vote positive cases
+  (`DoublePrepare`, block-conflicting `DoubleCommit`, root-conflicting
+  `DoubleCommit`, and cross-phase commit evidence), double-vote rejection
+  order, invalid-proposal height/parent checks with view reset ignored, and
+  censorship receipt validation including unique-signer quorum and precedence
+  over quorum checks.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core evidence_validation_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh evidence-validation-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh evidence-validation-fast`
+  - TLC and Apalache sweeps for all `39` `evidence-validation-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/evidence-validation-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Evidence canonicalization runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiEvidenceCanonicalizationGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/evidence.rs`.
+- The new tests anchor order-insensitive double-vote and censorship evidence
+  keys, duplicate receipt preservation, evidence-kind/key binding,
+  canonicalization preserving invalid-QC and invalid-proposal payloads, subject
+  height/view extraction, block-reference extraction, store canonicalization and
+  duplicate rejection, WSV persistence metadata defaults, and valid censorship
+  persistence at the latest submitted height.
+- Runtime persistence does not insert missing-subject evidence because empty
+  censorship evidence is rejected by validation first; the missing-subject path
+  remains covered at the subject-extraction helper boundary.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core evidence_canonicalization_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh evidence-canonicalization-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh evidence-canonicalization-fast`
+  - TLC and Apalache sweeps for all `37`
+    `evidence-canonicalization-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/evidence-canonicalization-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Evidence-horizon runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiEvidenceHorizonGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs` and mirrored the same
+  matrix for the optional configured-horizon persistence helper in
+  `crates/iroha_core/src/sumeragi/evidence.rs`.
+- The new tests anchor zero-horizon filtering disabled, missing subject height
+  defaulting to the current committed height, saturating lower-bound
+  calculation, inclusive lower-bound acceptance, stale evidence rejection,
+  future subject-height acceptance, and the unconfigured-horizon persistence
+  path.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core evidence_horizon_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh evidence-horizon-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh evidence-horizon-fast`
+  - TLC and Apalache sweeps for all `11` `evidence-horizon-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/evidence-horizon-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Vote duplicate-key runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVoteDuplicateKeyGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/votes.rs`.
+- The new helper tests anchor raw vote-key field projection, signer public-key
+  identity binding, raw projection from identity keys, missing-log rejection,
+  every raw-key slot mutation (`phase`, `height`, `view`, `epoch`, `signer`,
+  `chain_order_hash`, `rechain_seq`), block-hash duplicate rejection,
+  non-`NEW_VIEW` highest-QC ignorance, and `NEW_VIEW` exact highest-QC matching
+  without absent-highest wildcarding.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vote_duplicate_key_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vote-duplicate-key-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh vote-duplicate-key-fast`
+  - TLC and Apalache sweeps for all `15` `vote-duplicate-key-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/vote-duplicate-key-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Vote-admission runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVoteAdmissionGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new vote-admission tests anchor accepted prepare vote recording, roster
+  metadata cache writes, signer-identity indexing, duplicate immutability,
+  rejection of non-`NEW_VIEW` highest-QC references, chain-order binding
+  mismatches, invalid signatures, and signed `NEW_VIEW` highest-QC rejection
+  for missing highest QC, invalid highest phase, hash mismatch, height
+  mismatch, and local block metadata mismatch before accepting a matching
+  highest-QC reference.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vote_admission_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vote-admission-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh vote-admission-fast`
+  - TLC and Apalache sweeps for all `31` `vote-admission-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/vote-admission-{tlc,apalache}-*.log`.
+
+## 2026-06-07 VRF penalties-report runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfPenaltiesReportGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/epoch_report.rs`.
+- The new report-store tests anchor initial empty state, report field
+  preservation, latest-epoch tracking by latest write rather than max epoch,
+  exact same-epoch replacement without merging stale fields, multi-epoch
+  retention, missing-epoch reads, side-effect-free reads, clear resetting both
+  reports and latest epoch, and post-clear update behavior. The report-store
+  tests now use a local mutex guard to serialize access to the global
+  in-memory store.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_penalties_report_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vrf-penalties-report-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-penalties-report-fast`
+  - TLC and Apalache sweeps for all `17` `vrf-penalties-report-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_penalties_report_{tlc,apalache}/`.
+
+## 2026-06-07 VRF local-state runtime gate
+
+- Added focused runtime parity coverage for the `SumeragiVrfLocalStateGate.tla`
+  contract in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new local-state tests anchor fresh-state zeroing, same-epoch material and
+  sent-flag preservation, epoch-switch material clearing, commit and reveal note
+  behavior for same and new epochs, actor creation for all current supported
+  consensus modes (`Permissioned` and `Npos`), actor epoch refresh, and actor
+  reset clearing.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_local_state_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vrf-local-state-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-local-state-fast`
+  - TLC and Apalache sweeps for all `12` `vrf-local-state-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_local_state_{tlc,apalache}/`.
+
+## 2026-06-07 VRF material-derivation runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfMaterialDerivationGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new derivation tests reconstruct the canonical VRF input message
+  (`domain || chain_hash || epoch_be || signer_u64_be`), verify signing with
+  the supplied private key, assert reveal-as-hash-of-signature-payload and
+  commitment-as-hash-of-reveal layering, lock the reveal/commitment tuple
+  shape, and reject mutated drop, endian, order, chain-only, message-hash, raw
+  signature, swapped-return, and context-change variants.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_material_derivation_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vrf-material-derivation-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-material-derivation-fast`
+  - TLC and Apalache sweeps for all `17` `vrf-material-derivation-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_material_derivation_{tlc,apalache}/`.
+
+## 2026-06-07 VRF epoch-restore runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfEpochRestoreGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/epoch.rs`.
+- The new epoch-manager unit tests anchor unfinalized restore of commits,
+  reveals, late reveals, zero-roster state, zero-length flooring, window-offset
+  clamping, contiguous restored rosters, transient report clearing, finalized
+  restore seed derivation and input clearing, saturating finalized epoch
+  advance, snapshot roster-vs-hint selection, empty snapshot penalty lists,
+  wrong-epoch merge no-op behavior, missing-observation hydration, conflict
+  preservation, late-reveal hydration, and identity/report preservation during
+  observation merge.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_epoch_restore_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vrf-epoch-restore-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-epoch-restore-fast`
+  - TLC and Apalache sweeps for all `22` `vrf-epoch-restore-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_epoch_restore_{tlc,apalache}/`.
+
+## 2026-06-07 VRF epoch-boundary runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfEpochBoundaryGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/epoch.rs`.
+- The new epoch-manager unit tests anchor height-zero and non-boundary no-op
+  behavior, boundary snapshot and penalty preservation, late-reveal
+  participation without entropy contribution, fallback and explicit roster
+  penalties, empty-roster suppression, deterministic signer-ordered entropy,
+  `next_epoch` and reset clearing, take-style consumption, and saturating epoch
+  advance.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_epoch_boundary_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh vrf-epoch-boundary-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-epoch-boundary-fast`
+  - TLC and Apalache sweeps for all `23` `vrf-epoch-boundary-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_epoch_boundary_{tlc,apalache}/`.
+
+## 2026-06-07 VRF epoch-window runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfEpochWindowGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/epoch.rs`.
+- The new epoch-manager unit tests anchor zero-length epoch clamping, commit
+  and reveal offset clamping, height-zero position/epoch behavior, one-based
+  position mapping, `(height - 1)` epoch indexing, modulo position wrapping,
+  commit boundary inclusion, reveal start-after-commit behavior, reveal
+  boundary inclusion, empty reveal windows when the reveal end is before the
+  commit end, and commit/reveal admission rejection at window edges.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_epoch_window_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh vrf-epoch-window-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-epoch-window-fast`
+  - TLC and Apalache sweeps for all `17` `vrf-epoch-window-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_epoch_window_{tlc,apalache}/`.
+
+## 2026-06-07 VRF admission runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfMessageAdmissionGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, plus a test-only
+  `VrfActor::local_state()` getter and `main_loop`-scoped visibility for the
+  VRF process helpers.
+- The new tests anchor commit and reveal acceptance, duplicate same-value
+  idempotence, epoch/roster/window/rewrite rejection, missing-commit and
+  commitment-mismatch reveal rejection, accepted late reveals without PRF
+  refresh, local-signer-only VRF state updates, signed external rebroadcast,
+  network-origin rebroadcast suppression, missing/bad signature rejection,
+  out-of-topology signer rejection, and missing-manager drop behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_admission_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh vrf-admission-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-admission-fast`
+  - TLC and Apalache sweeps for all `21` `vrf-admission-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_admission_{tlc,apalache}/`.
+
+## 2026-06-07 Same-height no-proposal storm runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiSameHeightNoProposalStormGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new helper-level tests anchor strict dependency-progress advancement,
+  no-op and progress reset behavior, cooldown owner preservation versus stale
+  owner dropping, committed/frontier/proposal progress clearing, storm
+  record/count semantics, same-view preservation, higher-view increments,
+  dependency timestamp maxing, forced-break suppression and forced recovery,
+  and active-pending idle escalation gates through missing-QC storm recording.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core same_height_no_proposal_storm_formal_gate --lib --features telemetry -- --nocapture`
+    (`4` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh same-height-no-proposal-storm-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh same-height-no-proposal-storm-fast`
+  - TLC and Apalache sweeps for all `36`
+    `same-height-no-proposal-storm-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/same_height_no_proposal_storm_{tlc,apalache}/`.
+
+## 2026-06-07 Frontier-recovery advance runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiFrontierRecoveryAdvanceGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new helper-level tests anchor recovery reason to view-change cause
+  mapping, non-frontier and passive catch-up suppression, non-hard-cap
+  same-height evidence seeding, hard-cap non-exact seed rejection, stale
+  no-actionable cleanup, last-view/dependency-progress maxing, catch-up
+  cooldown and window advancement, cleanup-to-rotate arming, and rotate-armed
+  no-allow/same-view/grace/elapsed behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core frontier_recovery_advance_formal_gate --lib --features telemetry -- --nocapture`
+    (`4` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh frontier-recovery-advance-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; JVM_ARGS="-Xss16m -Xmx16g" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-recovery-advance-fast`
+    (the default Apalache heap exhausted on this model before rerunning with
+    the larger heap)
+  - TLC and Apalache sweeps for all `36`
+    `frontier-recovery-advance-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/frontier_recovery_advance_{tlc,apalache}/`.
+
+## 2026-06-07 Frontier-repair view-change runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiFrontierRepairViewChangeGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new helper-level tests anchor cause and frontier-height filtering,
+  quorum/stake-quorum exact-repair suppression, urgent exact-body fetch
+  emission, direct-view-advance and authoritative-payload fallthrough,
+  exact-view mismatch, unarmed/body-present/wrong-mode rejection, passive
+  committed-anchor catch-up precedence without repair seeding, and
+  reassembly-only suppression that seeds catch-up recovery without inventing an
+  exact-slot fetch owner.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core frontier_repair_view_change_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh frontier-repair-view-change-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-repair-view-change-fast`
+  - TLC and Apalache sweeps for all `26`
+    `frontier-repair-view-change-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/frontier_repair_view_change_{tlc,apalache}/`.
 
 ## 2026-06-07 Canonical-frontier reanchor runtime gate
 

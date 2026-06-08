@@ -17,6 +17,14 @@
 #     --roster configs/soranexus/taira/validator_roster.local.toml \
 #     --output dist/taira-edge/taira.sora.org.conf
 #
+# Dedicated Soracloud runtime aliases can be pinned to local service listeners
+# from this same roster. Keep these in the local copy, uncomment and adjust the
+# upstream for the shared edge host, and rerender nginx before cutover:
+#
+# [[soracloud_alias_routes]]
+# alias = "solswap-indexer.sora"
+# edge_upstream = "127.0.0.1:8788"
+#
 # Every validator must set its own `torii_public_address`. `https://taira.sora.org`
 # is the current public Torii root, while per-validator Torii hostnames remain
 # valid when you want validator-specific ingress.

@@ -123,6 +123,11 @@ impl VrfActor {
         self.local.is_none()
     }
 
+    #[cfg(test)]
+    pub(super) fn local_state(&self) -> Option<&VrfLocalState> {
+        self.local.as_ref()
+    }
+
     pub(super) fn state_mut(
         &mut self,
         consensus_mode: ConsensusMode,
@@ -482,7 +487,7 @@ impl Actor {
         Ok(())
     }
 
-    fn process_vrf_commit(
+    pub(super) fn process_vrf_commit(
         &mut self,
         height: u64,
         roster_len_hint: u32,
@@ -566,7 +571,7 @@ impl Actor {
         Ok(note_result)
     }
 
-    fn process_vrf_reveal(
+    pub(super) fn process_vrf_reveal(
         &mut self,
         height: u64,
         roster_len_hint: u32,

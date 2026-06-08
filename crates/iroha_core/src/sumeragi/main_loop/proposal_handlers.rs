@@ -13,10 +13,24 @@ pub(super) fn invalid_proposal_evidence(
     proposal: crate::sumeragi::consensus::Proposal,
     reason: String,
 ) -> crate::sumeragi::consensus::Evidence {
-    crate::sumeragi::consensus::Evidence {
+    #[cfg(debug_assertions)]
+    let expected_reason = reason.clone();
+    let evidence = crate::sumeragi::consensus::Evidence {
         kind: crate::sumeragi::consensus::EvidenceKind::InvalidProposal,
         payload: crate::sumeragi::consensus::EvidencePayload::InvalidProposal { proposal, reason },
+    };
+    #[cfg(debug_assertions)]
+    {
+        let projection = super::invalid_proposal_evidence_projection(&evidence)
+            .expect("invalid proposal evidence must contain proposal payload");
+        debug_assert_eq!(
+            projection.kind,
+            crate::sumeragi::consensus::EvidenceKind::InvalidProposal
+        );
+        debug_assert_eq!(projection.proposal, proposal);
+        debug_assert_eq!(projection.reason, expected_reason);
     }
+    evidence
 }
 
 #[inline]
@@ -260,7 +274,7 @@ impl Actor {
             || (locked_chain_committed && locally_conflicts_with_locked)
     }
 
-    fn should_clear_missing_request_on_stale_block_drop(
+    pub(crate) fn should_clear_missing_request_on_stale_block_drop(
         &self,
         hash: HashOf<BlockHeader>,
         height: u64,
@@ -705,7 +719,7 @@ impl Actor {
         Ok(())
     }
 
-    fn stale_proposal_hint_can_seed_frontier_repair(
+    pub(super) fn stale_proposal_hint_can_seed_frontier_repair(
         &self,
         hint: &super::message::ProposalHint,
         local_view: u64,
@@ -1028,6 +1042,8 @@ impl Actor {
             );
             return Ok(());
         }
+        let matches_current_highest_qc =
+            self.highest_qc.is_some_and(|current| current == highest_qc);
         let committed_qc_height = self.latest_committed_qc().map_or(0, |qc| qc.height);
         if let Some(stored_height) = self
             .kura
@@ -1078,26 +1094,27 @@ impl Actor {
                 );
                 return Ok(());
             }
-        } else if highest_qc.height <= committed_qc_height {
-            let committed_conflict_suppressed =
-                self.suppress_committed_edge_conflicting_highest_qc(highest_qc, "proposal");
-            info!(
-                height,
-                view,
-                committed_height = committed_qc_height,
-                highest_height = highest_qc.height,
-                block = %highest_qc.subject_block_hash,
-                payload = %proposal.payload_hash,
-                committed_conflict_suppressed,
-                "dropping proposal: highest QC block missing locally for committed height"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::Proposal,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::MissingHighestQc,
-            );
-            return Ok(());
-        } else {
+        } else if !matches_current_highest_qc {
+            if highest_qc.height <= committed_qc_height {
+                let committed_conflict_suppressed =
+                    self.suppress_committed_edge_conflicting_highest_qc(highest_qc, "proposal");
+                info!(
+                    height,
+                    view,
+                    committed_height = committed_qc_height,
+                    highest_height = highest_qc.height,
+                    block = %highest_qc.subject_block_hash,
+                    payload = %proposal.payload_hash,
+                    committed_conflict_suppressed,
+                    "dropping proposal: highest QC block missing locally for committed height"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::Proposal,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::MissingHighestQc,
+                );
+                return Ok(());
+            }
             info!(
                 height,
                 view,
@@ -1285,6 +1302,42 @@ impl Actor {
             now,
             false,
         );
+    }
+
+    fn note_frontier_block_created_observed(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
+        sender: Option<&PeerId>,
+        now: Instant,
+    ) {
+        let leader = sender
+            .cloned()
+            .filter(|peer| peer != self.common_config.peer.id());
+        let voters = leader.iter().cloned().collect();
+        let updated = self.update_frontier_slot(
+            block_hash,
+            height,
+            view,
+            leader,
+            voters,
+            /*block_created_seen*/ true,
+            /*exact_fetch_armed*/ true,
+            true,
+            frontier_info,
+            None,
+            now,
+        );
+        if updated {
+            self.clear_missing_block_request(
+                &block_hash,
+                MissingBlockClearReason::PayloadAvailable,
+            );
+            self.clear_missing_block_view_change(&block_hash);
+        }
+        let _ = self.maybe_release_committed_edge_conflict_owner("frontier_block_created_observed");
     }
 
     fn note_frontier_block_created_authoritatively(
@@ -2530,6 +2583,8 @@ impl Actor {
                 );
             }
             if height > expected_height.saturating_add(1) {
+                let _ =
+                    self.request_range_pull_from_anchor(expected_height, "block_created_gap", now);
                 self.request_missing_parents_for_gap(
                     &active_commit_topology,
                     None,
@@ -2915,7 +2970,7 @@ impl Actor {
                     }
                 }
             }
-            self.note_frontier_block_created(
+            self.note_frontier_block_created_observed(
                 block_hash,
                 height,
                 view,
@@ -3757,6 +3812,7 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Dropped,
                     super::status::ConsensusMessageReason::PayloadMismatch,
                 );
+                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
                 self.clear_payload_mismatch_state(session_key, block_hash, height, view);
                 self.finalize_collector_plan(false);
                 return Ok(());
@@ -4011,6 +4067,58 @@ impl Actor {
             }
             (0, 0)
         };
+        if da_enabled {
+            let mut should_update_status = false;
+            let mut mismatch_expected = None;
+            {
+                if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get_mut(&session_key) {
+                    if let Some(expected_hash) = session.payload_hash() {
+                        if expected_hash != payload_hash {
+                            session.invalid = true;
+                            mismatch_expected = Some(expected_hash);
+                        }
+                    }
+                    should_update_status = true;
+                }
+            }
+            if should_update_status
+                && let Some(session) = self
+                    .subsystems
+                    .da_rbc
+                    .rbc
+                    .sessions
+                    .get(&session_key)
+                    .cloned()
+            {
+                self.update_rbc_status_entry(session_key, &session, false);
+            }
+            if let Some(expected_hash) = mismatch_expected {
+                debug!(
+                    height,
+                    view,
+                    expected = ?expected_hash,
+                    observed = ?payload_hash,
+                    "BlockCreated payload hash mismatches RBC session"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::BlockCreated,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::PayloadMismatch,
+                );
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .pop_proposal(height, view);
+                self.subsystems
+                    .propose
+                    .proposal_cache
+                    .pop_hint(height, view);
+                self.clear_missing_block_request(&block_hash, MissingBlockClearReason::Obsolete);
+                self.clear_payload_mismatch_state(session_key, block_hash, height, view);
+                self.finalize_collector_plan(false);
+                return Ok(());
+            }
+        }
         if self
             .pending
             .pending_processing
@@ -4304,16 +4412,30 @@ impl Actor {
                         super::status::ConsensusMessageOutcome::Dropped,
                         super::status::ConsensusMessageReason::PayloadMismatch,
                     );
-                    self.invalidate_proposal(
-                        block_hash,
-                        height,
-                        view,
-                        format!(
-                            "payload hash mismatch: expected {expected_hash:?}, observed {payload_hash:?}",
-                        ),
-                        allow_frontier_owner_preserve_on_payload_mismatch
-                            && self.preserve_contiguous_frontier_owner_on_payload_mismatch(height, view),
-                    )?;
+                    self.subsystems
+                        .propose
+                        .proposal_cache
+                        .pop_proposal(height, view);
+                    self.subsystems
+                        .propose
+                        .proposal_cache
+                        .pop_hint(height, view);
+                    self.pending.pending_blocks.remove(&block_hash);
+                    if self.authoritative_slot_owner_hash(height, view) == Some(block_hash) {
+                        self.slot_tracker
+                            .authoritative_block_slots
+                            .remove(&(height, view));
+                    }
+                    self.slot_tracker
+                        .authoritative_block_frontiers
+                        .remove(&(height, view, block_hash));
+                    self.slot_tracker
+                        .retained_branches
+                        .remove(&(height, view, block_hash));
+                    self.clear_missing_block_request(
+                        &block_hash,
+                        MissingBlockClearReason::Obsolete,
+                    );
                     self.clear_payload_mismatch_state(session_key, block_hash, height, view);
                     self.finalize_collector_plan(false);
                     return Ok(());
@@ -4556,6 +4678,22 @@ impl Actor {
 mod tests {
     use super::{BlockSyncRecoveryMode, allow_stale_block_created, stale_height};
 
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Action {
+        StaleTrue,
+        StaleFalse,
+        AdmitStaleBlock,
+        RejectStaleBlock,
+        AllowSupersede,
+        RejectSupersede,
+        AllowStaleWithoutRequest,
+        RejectStaleWithoutRequest,
+        AllowAbortedRevival,
+        RejectAbortedRevival,
+        EpochNone,
+        EpochSome,
+    }
+
     #[test]
     fn stale_height_rejects_committed_or_lower() {
         assert!(stale_height(1, 1));
@@ -4633,5 +4771,281 @@ mod tests {
         };
         assert!(revival_mode.allows_aborted_revival_without_local_commit_qc());
         assert_eq!(revival_mode.observed_commit_qc_epoch(), None);
+    }
+
+    #[test]
+    fn block_sync_recovery_mode_formal_gate_matrix() {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum Candidate {
+            StaleEqual,
+            StaleBelow,
+            StaleAbove,
+            AllowMissingRequest,
+            AllowRetainedMatch,
+            AllowRecoveryEvidence,
+            AllowNoSignal,
+            PayloadOnlySupersede,
+            RequestedPayloadSupersede,
+            SignedQuorumSupersede,
+            CommitEvidenceSupersede,
+            PayloadOnlyStaleWithoutRequest,
+            RequestedPayloadStaleWithoutRequest,
+            SignedQuorumStaleWithoutRequest,
+            CommitEvidenceStaleWithoutRequest,
+            PayloadOnlyAbortedRevival,
+            RequestedPayloadAbortedRevival,
+            SignedQuorumAbortedRevival,
+            CommitEvidenceNoFlagAbortedRevival,
+            CommitEvidenceFlagAbortedRevival,
+            PayloadOnlyEpoch,
+            RequestedPayloadEpoch,
+            SignedQuorumEpoch,
+            CommitEvidenceNoEpoch,
+            CommitEvidenceSomeEpoch,
+        }
+
+        let cases = [
+            (Candidate::StaleEqual, Action::StaleTrue),
+            (Candidate::StaleBelow, Action::StaleTrue),
+            (Candidate::StaleAbove, Action::StaleFalse),
+            (Candidate::AllowMissingRequest, Action::AdmitStaleBlock),
+            (Candidate::AllowRetainedMatch, Action::AdmitStaleBlock),
+            (Candidate::AllowRecoveryEvidence, Action::AdmitStaleBlock),
+            (Candidate::AllowNoSignal, Action::RejectStaleBlock),
+            (Candidate::PayloadOnlySupersede, Action::RejectSupersede),
+            (
+                Candidate::RequestedPayloadSupersede,
+                Action::RejectSupersede,
+            ),
+            (Candidate::SignedQuorumSupersede, Action::AllowSupersede),
+            (Candidate::CommitEvidenceSupersede, Action::AllowSupersede),
+            (
+                Candidate::PayloadOnlyStaleWithoutRequest,
+                Action::RejectStaleWithoutRequest,
+            ),
+            (
+                Candidate::RequestedPayloadStaleWithoutRequest,
+                Action::AllowStaleWithoutRequest,
+            ),
+            (
+                Candidate::SignedQuorumStaleWithoutRequest,
+                Action::RejectStaleWithoutRequest,
+            ),
+            (
+                Candidate::CommitEvidenceStaleWithoutRequest,
+                Action::AllowStaleWithoutRequest,
+            ),
+            (
+                Candidate::PayloadOnlyAbortedRevival,
+                Action::RejectAbortedRevival,
+            ),
+            (
+                Candidate::RequestedPayloadAbortedRevival,
+                Action::RejectAbortedRevival,
+            ),
+            (
+                Candidate::SignedQuorumAbortedRevival,
+                Action::RejectAbortedRevival,
+            ),
+            (
+                Candidate::CommitEvidenceNoFlagAbortedRevival,
+                Action::RejectAbortedRevival,
+            ),
+            (
+                Candidate::CommitEvidenceFlagAbortedRevival,
+                Action::AllowAbortedRevival,
+            ),
+            (Candidate::PayloadOnlyEpoch, Action::EpochNone),
+            (Candidate::RequestedPayloadEpoch, Action::EpochNone),
+            (Candidate::SignedQuorumEpoch, Action::EpochNone),
+            (Candidate::CommitEvidenceNoEpoch, Action::EpochNone),
+            (Candidate::CommitEvidenceSomeEpoch, Action::EpochSome),
+        ];
+
+        for (candidate, expected) in cases {
+            let actual = match candidate {
+                Candidate::StaleEqual => {
+                    if stale_height(5, 5) {
+                        Action::StaleTrue
+                    } else {
+                        Action::StaleFalse
+                    }
+                }
+                Candidate::StaleBelow => {
+                    if stale_height(4, 5) {
+                        Action::StaleTrue
+                    } else {
+                        Action::StaleFalse
+                    }
+                }
+                Candidate::StaleAbove => {
+                    if stale_height(6, 5) {
+                        Action::StaleTrue
+                    } else {
+                        Action::StaleFalse
+                    }
+                }
+                Candidate::AllowMissingRequest => {
+                    if allow_stale_block_created(true, false, false) {
+                        Action::AdmitStaleBlock
+                    } else {
+                        Action::RejectStaleBlock
+                    }
+                }
+                Candidate::AllowRetainedMatch => {
+                    if allow_stale_block_created(false, true, false) {
+                        Action::AdmitStaleBlock
+                    } else {
+                        Action::RejectStaleBlock
+                    }
+                }
+                Candidate::AllowRecoveryEvidence => {
+                    if allow_stale_block_created(false, false, true) {
+                        Action::AdmitStaleBlock
+                    } else {
+                        Action::RejectStaleBlock
+                    }
+                }
+                Candidate::AllowNoSignal => {
+                    if allow_stale_block_created(false, false, false) {
+                        Action::AdmitStaleBlock
+                    } else {
+                        Action::RejectStaleBlock
+                    }
+                }
+                Candidate::PayloadOnlySupersede => recovery_mode_action(
+                    BlockSyncRecoveryMode::PayloadOnly,
+                    RecoveryModeAction::Supersede,
+                ),
+                Candidate::RequestedPayloadSupersede => recovery_mode_action(
+                    BlockSyncRecoveryMode::RequestedPayloadRepair,
+                    RecoveryModeAction::Supersede,
+                ),
+                Candidate::SignedQuorumSupersede => recovery_mode_action(
+                    BlockSyncRecoveryMode::SignedQuorumFrontierRepair,
+                    RecoveryModeAction::Supersede,
+                ),
+                Candidate::CommitEvidenceSupersede => recovery_mode_action(
+                    BlockSyncRecoveryMode::CommitEvidenceRepair {
+                        observed_commit_qc_epoch: None,
+                        allow_aborted_revival_without_local_commit_qc: false,
+                    },
+                    RecoveryModeAction::Supersede,
+                ),
+                Candidate::PayloadOnlyStaleWithoutRequest => recovery_mode_action(
+                    BlockSyncRecoveryMode::PayloadOnly,
+                    RecoveryModeAction::StaleWithoutRequest,
+                ),
+                Candidate::RequestedPayloadStaleWithoutRequest => recovery_mode_action(
+                    BlockSyncRecoveryMode::RequestedPayloadRepair,
+                    RecoveryModeAction::StaleWithoutRequest,
+                ),
+                Candidate::SignedQuorumStaleWithoutRequest => recovery_mode_action(
+                    BlockSyncRecoveryMode::SignedQuorumFrontierRepair,
+                    RecoveryModeAction::StaleWithoutRequest,
+                ),
+                Candidate::CommitEvidenceStaleWithoutRequest => recovery_mode_action(
+                    BlockSyncRecoveryMode::CommitEvidenceRepair {
+                        observed_commit_qc_epoch: None,
+                        allow_aborted_revival_without_local_commit_qc: false,
+                    },
+                    RecoveryModeAction::StaleWithoutRequest,
+                ),
+                Candidate::PayloadOnlyAbortedRevival => recovery_mode_action(
+                    BlockSyncRecoveryMode::PayloadOnly,
+                    RecoveryModeAction::AbortedRevival,
+                ),
+                Candidate::RequestedPayloadAbortedRevival => recovery_mode_action(
+                    BlockSyncRecoveryMode::RequestedPayloadRepair,
+                    RecoveryModeAction::AbortedRevival,
+                ),
+                Candidate::SignedQuorumAbortedRevival => recovery_mode_action(
+                    BlockSyncRecoveryMode::SignedQuorumFrontierRepair,
+                    RecoveryModeAction::AbortedRevival,
+                ),
+                Candidate::CommitEvidenceNoFlagAbortedRevival => recovery_mode_action(
+                    BlockSyncRecoveryMode::CommitEvidenceRepair {
+                        observed_commit_qc_epoch: None,
+                        allow_aborted_revival_without_local_commit_qc: false,
+                    },
+                    RecoveryModeAction::AbortedRevival,
+                ),
+                Candidate::CommitEvidenceFlagAbortedRevival => recovery_mode_action(
+                    BlockSyncRecoveryMode::CommitEvidenceRepair {
+                        observed_commit_qc_epoch: None,
+                        allow_aborted_revival_without_local_commit_qc: true,
+                    },
+                    RecoveryModeAction::AbortedRevival,
+                ),
+                Candidate::PayloadOnlyEpoch => recovery_mode_action(
+                    BlockSyncRecoveryMode::PayloadOnly,
+                    RecoveryModeAction::ObservedEpoch,
+                ),
+                Candidate::RequestedPayloadEpoch => recovery_mode_action(
+                    BlockSyncRecoveryMode::RequestedPayloadRepair,
+                    RecoveryModeAction::ObservedEpoch,
+                ),
+                Candidate::SignedQuorumEpoch => recovery_mode_action(
+                    BlockSyncRecoveryMode::SignedQuorumFrontierRepair,
+                    RecoveryModeAction::ObservedEpoch,
+                ),
+                Candidate::CommitEvidenceNoEpoch => recovery_mode_action(
+                    BlockSyncRecoveryMode::CommitEvidenceRepair {
+                        observed_commit_qc_epoch: None,
+                        allow_aborted_revival_without_local_commit_qc: false,
+                    },
+                    RecoveryModeAction::ObservedEpoch,
+                ),
+                Candidate::CommitEvidenceSomeEpoch => recovery_mode_action(
+                    BlockSyncRecoveryMode::CommitEvidenceRepair {
+                        observed_commit_qc_epoch: Some(42),
+                        allow_aborted_revival_without_local_commit_qc: false,
+                    },
+                    RecoveryModeAction::ObservedEpoch,
+                ),
+            };
+            assert_eq!(actual, expected, "{candidate:?} mismatch");
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum RecoveryModeAction {
+        Supersede,
+        StaleWithoutRequest,
+        AbortedRevival,
+        ObservedEpoch,
+    }
+
+    fn recovery_mode_action(mode: BlockSyncRecoveryMode, action: RecoveryModeAction) -> Action {
+        match action {
+            RecoveryModeAction::Supersede => {
+                if mode.allows_authoritative_frontier_owner_supersede() {
+                    Action::AllowSupersede
+                } else {
+                    Action::RejectSupersede
+                }
+            }
+            RecoveryModeAction::StaleWithoutRequest => {
+                if mode.allows_stale_recovery_without_request() {
+                    Action::AllowStaleWithoutRequest
+                } else {
+                    Action::RejectStaleWithoutRequest
+                }
+            }
+            RecoveryModeAction::AbortedRevival => {
+                if mode.allows_aborted_revival_without_local_commit_qc() {
+                    Action::AllowAbortedRevival
+                } else {
+                    Action::RejectAbortedRevival
+                }
+            }
+            RecoveryModeAction::ObservedEpoch => {
+                if mode.observed_commit_qc_epoch().is_some() {
+                    Action::EpochSome
+                } else {
+                    Action::EpochNone
+                }
+            }
+        }
     }
 }

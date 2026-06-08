@@ -180,6 +180,33 @@ def parse_soracloud_alias_routes(
     return routes
 
 
+def load_soracloud_alias_route_specs(roster_path: Path) -> list[str]:
+    payload = _load_toml(roster_path)
+    routes_raw = payload.get("soracloud_alias_routes", [])
+    if routes_raw is None:
+        return []
+    if not isinstance(routes_raw, list):
+        raise ValueError("roster `soracloud_alias_routes` must be an array of tables")
+
+    route_specs: list[str] = []
+    for index, raw in enumerate(routes_raw, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Soracloud alias route entry #{index} must be a TOML table")
+        context = f"Soracloud alias route `{index}`"
+        alias = _require_string(raw, "alias", context)
+        upstream_source = raw.get(
+            "edge_upstream",
+            raw.get("upstream_address", raw.get("upstream")),
+        )
+        if not isinstance(upstream_source, str) or not upstream_source.strip():
+            raise ValueError(
+                f"{context} must set `edge_upstream`, `upstream_address`, or `upstream` "
+                "to a non-empty host:port value"
+            )
+        route_specs.append(f"{alias}={upstream_source.strip()}")
+    return route_specs
+
+
 def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
     payload = _load_toml(roster_path)
     validators_raw = payload.get("validators")
@@ -866,8 +893,12 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         validators = load_edge_validators(Path(args.roster))
+        soracloud_alias_route_specs = [
+            *load_soracloud_alias_route_specs(Path(args.roster)),
+            *args.soracloud_alias_route,
+        ]
         soracloud_alias_routes = parse_soracloud_alias_routes(
-            args.soracloud_alias_route,
+            soracloud_alias_route_specs,
             mon_host_suffix=args.mon_host_suffix,
         )
     except ValueError as error:

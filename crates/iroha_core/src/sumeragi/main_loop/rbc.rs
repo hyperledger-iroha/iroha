@@ -3597,7 +3597,9 @@ impl Actor {
                 .propose
                 .proposal_cache
                 .get_hint(height, view)
-                .is_some_and(|hint| hint.block_hash == block_hash)
+                .is_some_and(|hint| {
+                    hint.height == height && hint.view == view && hint.block_hash == block_hash
+                })
     }
 
     #[allow(clippy::too_many_lines)]
@@ -6442,6 +6444,20 @@ impl Actor {
                     super::status::ConsensusMessageOutcome::Deferred,
                     defer_kind,
                 );
+            }
+            self.maybe_emit_rbc_ready(key)?;
+            if self
+                .subsystems
+                .da_rbc
+                .rbc
+                .sessions
+                .get(&key)
+                .is_none_or(|session| session.delivered || session.is_invalid())
+            {
+                self.subsystems.da_rbc.rbc.ready_deferral.remove(&key);
+                self.subsystems.da_rbc.rbc.deliver_deferral.remove(&key);
+                self.publish_rbc_backlog_snapshot();
+                return Ok(());
             }
             if matches!(
                 defer_kind,
