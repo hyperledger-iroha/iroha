@@ -4858,6 +4858,40 @@ async fn handler_contracts_rollups_swaps_candles_get(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_contracts_rollups_uranai_markets_history_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    AxQuery(params): AxQuery<crate::routing::UranaiMarketHistoryParams>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    let limits = crate::routing::app_query_limits();
+    let mut params = params;
+    let page_limit = limits.clamp_page_limit(params.limit)?;
+    params.limit = Some(page_limit);
+    if !trusted_internal {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        let cost = limits.rate_limit_cost(page_limit);
+        let key_hint = params
+            .contract_alias
+            .as_deref()
+            .or(params.contract_address.as_deref())
+            .unwrap_or(params.market_id.as_str());
+        check_access_enforced_with_cost(&app, &headers, Some(remote_ip), key_hint, enforce, cost)
+            .await?;
+    }
+    routing::handle_v1_contracts_rollups_uranai_markets_history_get(
+        app.state.clone(),
+        crate::NoritoQuery(params),
+        app.telemetry.clone(),
+    )
+    .await
+    .map(IntoResponse::into_response)
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_trader_activity_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -36558,6 +36592,10 @@ impl Torii {
                 .route(
                     "/v1/contracts/rollups/swaps/candles",
                     get(handler_contracts_rollups_swaps_candles_get),
+                )
+                .route(
+                    "/v1/contracts/rollups/uranai/markets/history",
+                    get(handler_contracts_rollups_uranai_markets_history_get),
                 )
                 .route(
                     "/v1/contracts/rollups/trader/activity",

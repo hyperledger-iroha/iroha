@@ -158,6 +158,11 @@ const MAX_INST_ROWS: usize = 8192;
 pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
 /// Canonical backend family identifier for native STARK/FRI verification.
 pub const ZK_BACKEND_STARK_FRI_V1: &str = iroha_data_model::zk::ZK_BACKEND_STARK_FRI_V1;
+const STARK_FRI_V1_PRODUCTION_PROFILES: &[&str] = &[
+    "sha256-goldilocks",
+    "poseidon2-goldilocks",
+    "sha256_goldilocks.v1",
+];
 /// Canonical circuit identifier suffix for proved IVM execution commitments.
 pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
 /// Halo2 IPA parameter degree used by the canonical IVM execution binding circuit.
@@ -3442,7 +3447,12 @@ pub fn is_pending_production_backend_label(backend: &str) -> bool {
 /// STARK/FRI verifier profile.
 #[inline]
 pub(crate) fn is_stark_fri_v1_backend(backend: &str) -> bool {
-    iroha_data_model::zk::is_stark_fri_v1_backend_label(backend)
+    if backend == ZK_BACKEND_STARK_FRI_V1 {
+        return true;
+    }
+    backend
+        .strip_prefix("stark/fri/")
+        .is_some_and(|profile| STARK_FRI_V1_PRODUCTION_PROFILES.contains(&profile))
 }
 
 /// Returns `true` for backend labels that require a trusted setup and are not

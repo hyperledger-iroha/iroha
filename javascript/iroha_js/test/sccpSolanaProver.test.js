@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { AccountAddress } from "../src/address.js";
 import { noritoEncodeInstruction } from "../src/norito.js";
@@ -11,6 +12,7 @@ import {
   SCCP_DOMAIN_ETH,
   SCCP_DOMAIN_BSC,
   SCCP_ETH_MAINNET_NETWORK_ID,
+  SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
   SCCP_CODEC_TEXT_UTF8,
   SCCP_CODEC_EVM_HEX,
   SCCP_CODEC_SOLANA_BASE58,
@@ -18,6 +20,8 @@ import {
   SCCP_CODEC_TRON_BASE58CHECK,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
   SCCP_BSC_MAINNET_NETWORK_ID,
+  SCCP_BSC_TESTNET_EVM_CHAIN_ID,
+  SCCP_BSC_TESTNET_NETWORK_ID,
   SCCP_STARK_FRI_PROOF_FAMILY_V1,
   SCCP_SOURCE_STATE_MAX_PROOF_BYTES,
   SCCP_SOURCE_STATE_MAX_PROOF_LABEL_BYTES,
@@ -64,6 +68,8 @@ import {
   TAIRA_XOR_BURN_TO_TAIRA_SELECTOR_V1,
   SCCP_ZERO_HASH_V1,
   SCCP_ETH_MAINNET_SLOTS_PER_SYNC_COMMITTEE_PERIOD,
+  BscMainnetSccp,
+  BscTestnetSccp,
   BscMainnetSccpProver,
   EvmSccpProver,
   SolanaSccpSourceStateProver,
@@ -171,6 +177,7 @@ import {
   canonicalSccpMerkleProofBytes,
   canonicalSccpMessageProofBundleBytes,
   canonicalSccpPayloadEnvelopeBytes,
+  sccpMerkleRootFromCommitment,
   canonicalTonSccpShardProofBytes,
   canonicalTonSccpFullLightClientAuditStatementBytes,
   canonicalTonShardStateProofPublicInputsBytes,
@@ -201,6 +208,8 @@ import {
   ethSyncCommitteeTransitionSignatureHash,
   bscMainnetSccpDestinationBinding,
   bscMainnetSccpDestinationBindingHash,
+  bscTestnetSccpDestinationBinding,
+  bscTestnetSccpDestinationBindingHash,
   evmSccpDestinationBinding,
   evmSccpDestinationBindingHash,
   evmSccpReceiptProofHash,
@@ -475,6 +484,25 @@ const sampleEvmDestinationBindingInput = (overrides = {}) => ({
 
 const sampleEvmDestinationBinding = (overrides = {}) =>
   evmSccpDestinationBinding(sampleEvmDestinationBindingInput(overrides));
+
+const sampleBscDestinationBindingInput = (overrides = {}) => ({
+  targetDomain: SCCP_DOMAIN_BSC,
+  verifierAddress: `0x${"11".repeat(20)}`,
+  bridgeAddress: `0x${"22".repeat(20)}`,
+  verifierCodeHash: `0x${"bb".repeat(32)}`,
+  verifierKeyHash: `0x${"cc".repeat(32)}`,
+  ...overrides,
+});
+
+const sampleBscMainnetDestinationBinding = (overrides = {}) =>
+  bscMainnetSccpDestinationBinding(
+    sampleBscDestinationBindingInput(overrides),
+  );
+
+const sampleBscTestnetDestinationBinding = (overrides = {}) =>
+  bscTestnetSccpDestinationBinding(
+    sampleBscDestinationBindingInput(overrides),
+  );
 
 const sampleTronDestinationBindingInput = (overrides = {}) => ({
   networkId: `0x${"33".repeat(32)}`,
@@ -830,6 +858,13 @@ const groth16ProofBytes = (words = []) => {
   return out;
 };
 const GROTH16_PROOF_BYTES = groth16ProofBytes();
+const groth16ProofBytesForPublicInputs = (publicInputs) =>
+  groth16ProofBytes([
+    abiWord(1),
+    testHexToBytes(publicInputs.messageId, 32),
+    abiWord(SCCP_DOMAIN_SORA),
+    testHexToBytes(publicInputs.commitmentRoot, 32),
+  ]);
 const SOLANA_SIGNATURE_55 =
   "2hxGyn4y9Mjkii76BqmxVoNYbTs3tw97bmtZRXnDoZPAw7VZTWhhk1aV11DtFgYGVibPaty4PQLHVLaKrT24NxGU";
 const SOLANA_ZERO_SIGNATURE = "1".repeat(64);
@@ -1299,6 +1334,236 @@ const sampleEvmPublicInputs = {
   commitmentRoot: `0x${"33".repeat(32)}`,
   finalityHeight: 19n,
   finalityBlockHash: `0x${"44".repeat(32)}`,
+};
+
+const sampleBridgeSubmitMessageBundle = ({ publicInputs, targetDomain }) => {
+  const recipientCodec =
+    targetDomain === SCCP_DOMAIN_TRON
+      ? SCCP_CODEC_TRON_BASE58CHECK
+      : SCCP_CODEC_EVM_HEX;
+  const recipient =
+    targetDomain === SCCP_DOMAIN_TRON
+      ? "TJRabPrwbZy45sbavfcjinPJC18kjpRTv8"
+      : `0x${"11".repeat(20)}`;
+  const transferPayload = {
+    version: 1,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: targetDomain,
+    nonce: "1",
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: SCCP_TAIRA_XOR_ASSET_KEY_V1,
+    amount: "1000",
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender: TAIRA_ACCOUNT_ID,
+    recipient_codec: recipientCodec,
+    recipient,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id:
+      targetDomain === SCCP_DOMAIN_TRON
+        ? SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1
+        : SCCP_TAIRA_BSC_XOR_ROUTE_ID_V1,
+  };
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    target_domain: targetDomain,
+    message_id: publicInputs.messageId,
+    payload_hash: publicInputs.payloadHash,
+  };
+  const merkleProof = { steps: [] };
+  return {
+    version: 1,
+    commitment_root: sccpMerkleRootFromCommitment(commitment, merkleProof),
+    commitment,
+    merkle_proof: merkleProof,
+    payload: { kind: "Transfer", value: transferPayload },
+    finality_proof: "0x010203",
+  };
+};
+
+const NATIVE_EVM_TEST_SDKS = Object.freeze([
+  ["javascript", "pure-typescript"],
+  ["swift", "native-swift"],
+  ["kotlin", "native-kotlin"],
+  ["java-android", "native-java"],
+  ["dotnet", "native-csharp"],
+]);
+
+const testSha256Hex = (bytes) =>
+  `0x${createHash("sha256").update(bytes).digest("hex")}`;
+
+const nativeEvmFixtureBytes = (length, seed) => {
+  const out = new Uint8Array(length);
+  for (let index = 0; index < out.length; index += 1) {
+    out[index] = 0x80 + ((seed + index * 17 + (index >>> 3)) % 0x40);
+  }
+  return out;
+};
+
+const nativeEvmFixtureJsonBytes = (value) =>
+  testTextEncoder.encode(JSON.stringify(value));
+
+const nativeEvmFixtureHex32 = (seed) =>
+  `0x${Array.from({ length: 32 }, (_, index) =>
+    (1 + ((seed + index * 29) % 255)).toString(16).padStart(2, "0"),
+  ).join("")}`;
+
+const nativeEvmFixturePublicSignalWords = (seed) =>
+  Array.from({ length: 9 }, (_, index) =>
+    nativeEvmFixtureHex32(seed + index * 11),
+  );
+
+const bscNativeEvmProfile = (network) => {
+  if (network === "mainnet") {
+    return {
+      chain: "bsc-mainnet",
+      chainId: SCCP_BSC_MAINNET_EVM_CHAIN_ID,
+      networkId: SCCP_BSC_MAINNET_NETWORK_ID,
+      bundleId: "sccp:bsc:native-evm-groth16-prover:bsc-mainnet:v1",
+      parityFixtureSchema:
+        "sccp-bsc-mainnet-native-evm-cross-sdk-fixture-parity-v1",
+      selfTestFixtureSchema:
+        "sccp-bsc-mainnet-native-evm-prover-self-test-v1",
+      SccpClass: BscMainnetSccp,
+      destinationBinding: sampleBscMainnetDestinationBinding,
+      destinationBindingHash: bscMainnetSccpDestinationBindingHash,
+    };
+  }
+  return {
+    chain: "bsc-testnet",
+    chainId: SCCP_BSC_TESTNET_EVM_CHAIN_ID,
+    networkId: SCCP_BSC_TESTNET_NETWORK_ID,
+    bundleId: "sccp:bsc:native-evm-groth16-prover:bsc-testnet:v1",
+    parityFixtureSchema:
+      "sccp-bsc-testnet-native-evm-cross-sdk-fixture-parity-v1",
+    selfTestFixtureSchema:
+      "sccp-bsc-testnet-native-evm-prover-self-test-v1",
+    SccpClass: BscTestnetSccp,
+    destinationBinding: sampleBscTestnetDestinationBinding,
+    destinationBindingHash: bscTestnetSccpDestinationBindingHash,
+  };
+};
+
+const createBscNativeEvmFixture = ({ network = "testnet" } = {}) => {
+  const profile = bscNativeEvmProfile(network);
+  const proofArtifactBytes = nativeEvmFixtureBytes(64 * 1024 + 17, 3);
+  const provingKeyBytes = nativeEvmFixtureBytes(64 * 1024 + 29, 7);
+  const verifierKeyBytes = nativeEvmFixtureBytes(257, 11);
+  const implementationBytesBySdk = Object.fromEntries(
+    NATIVE_EVM_TEST_SDKS.map(([sdk], index) => [
+      sdk,
+      nativeEvmFixtureBytes(1024 + index * 37, 19 + index * 23),
+    ]),
+  );
+  const proofArtifactHash = testSha256Hex(proofArtifactBytes);
+  const provingKeyHash = testSha256Hex(provingKeyBytes);
+  const verifierKeyHash = testSha256Hex(verifierKeyBytes);
+  const destinationBinding = profile.destinationBinding({ verifierKeyHash });
+  assert.equal(
+    profile.destinationBindingHash(destinationBinding),
+    destinationBinding.bindingHash,
+  );
+  const sdkArtifacts = NATIVE_EVM_TEST_SDKS.map(
+    ([sdk, implementation], index) => ({
+      sdk,
+      implementation,
+      proofArtifactHash,
+      provingKeyHash,
+      implementationArtifact: `artifacts/${profile.chain}/${sdk}.native`,
+      implementationHash: testSha256Hex(implementationBytesBySdk[sdk]),
+      index,
+    }),
+  ).map(({ index, ...artifact }) => artifact);
+  const paritySdkResult = {
+    receiptProofHash: nativeEvmFixtureHex32(41),
+    sourceProofHash: nativeEvmFixtureHex32(42),
+    destinationBindingHash: destinationBinding.bindingHash,
+    publicSignalWords: nativeEvmFixturePublicSignalWords(43),
+    calldataHash: nativeEvmFixtureHex32(53),
+    toriiSubmitPayloadHash: nativeEvmFixtureHex32(54),
+  };
+  const selfTestSdkResult = {
+    requestHash: nativeEvmFixtureHex32(61),
+    witnessHash: nativeEvmFixtureHex32(62),
+    sourceProofHash: nativeEvmFixtureHex32(63),
+    proofHash: nativeEvmFixtureHex32(64),
+    publicSignalWords: nativeEvmFixturePublicSignalWords(65),
+    calldataHash: nativeEvmFixtureHex32(75),
+    toriiSubmitPayloadHash: nativeEvmFixtureHex32(76),
+  };
+  const sdkResults = (value) =>
+    Object.fromEntries(
+      NATIVE_EVM_TEST_SDKS.map(([sdk]) => [sdk, structuredClone(value)]),
+    );
+  const parityFixture = {
+    schema: profile.parityFixtureSchema,
+    domain: SCCP_DOMAIN_BSC,
+    chain: profile.chain,
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proofArtifactHash,
+    provingKeyHash,
+    verifierKeyHash,
+    destinationBindingHash: destinationBinding.bindingHash,
+    ...paritySdkResult,
+    sdkResults: sdkResults(paritySdkResult),
+  };
+  const selfTestFixture = {
+    schema: profile.selfTestFixtureSchema,
+    domain: SCCP_DOMAIN_BSC,
+    chain: profile.chain,
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    proofArtifactHash,
+    provingKeyHash,
+    verifierKeyHash,
+    destinationBindingHash: destinationBinding.bindingHash,
+    ...selfTestSdkResult,
+    sdkResults: sdkResults(selfTestSdkResult),
+  };
+  const crossSdkFixtureParityBytes =
+    nativeEvmFixtureJsonBytes(parityFixture);
+  const nativeProverSelfTestBytes =
+    nativeEvmFixtureJsonBytes(selfTestFixture);
+  const nativeProverBundle = {
+    schema: SCCP_NATIVE_EVM_PROVER_BUNDLE_SCHEMA_V1,
+    bundleId: profile.bundleId,
+    domain: SCCP_DOMAIN_BSC,
+    chain: profile.chain,
+    proofBackend: SCCP_EVM_GROTH16_BN254_PROOF_BACKEND_V1,
+    noWasm: true,
+    remoteProverRequired: false,
+    browserImplementation: "pure-typescript",
+    proofArtifactHash,
+    proofArtifact: `artifacts/${profile.chain}/proof-artifact.bin`,
+    provingKeyHash,
+    provingKey: `artifacts/${profile.chain}/proving-key.bin`,
+    verifierKeyHash,
+    verifierKey: `artifacts/${profile.chain}/verifier-key.bin`,
+    destinationBindingHash: destinationBinding.bindingHash,
+    crossSdkFixtureParityArtifact: `artifacts/${profile.chain}/cross-sdk-parity.json`,
+    nativeProverSelfTestArtifact: `artifacts/${profile.chain}/self-test.json`,
+    auditHashes: {
+      circuit_security_audit: nativeEvmFixtureHex32(81),
+      native_implementation_audit: nativeEvmFixtureHex32(82),
+      reproducible_build_attestation: nativeEvmFixtureHex32(83),
+      cross_sdk_fixture_parity: testSha256Hex(crossSdkFixtureParityBytes),
+      native_prover_self_test: testSha256Hex(nativeProverSelfTestBytes),
+      no_wasm_no_remote_scan: nativeEvmFixtureHex32(84),
+    },
+    nativeSdkArtifacts: sdkArtifacts,
+  };
+  return {
+    profile,
+    destinationBinding,
+    nativeProverBundle,
+    proofArtifactBytes,
+    provingKeyBytes,
+    verifierKeyBytes,
+    crossSdkFixtureParityBytes,
+    nativeProverSelfTestBytes,
+    implementationBytes: implementationBytesBySdk.javascript,
+    sdk: "javascript",
+  };
 };
 
 test("rejects boolean SCCP domains in web portal payload helpers", () => {
@@ -6441,6 +6706,121 @@ test("BSC mainnet SDK facade pins EVM-family proofs to chain id 56", async () =>
   );
 });
 
+test("BSC high-level facades require route-bound native prover artifacts", async () => {
+  for (const network of ["mainnet", "testnet"]) {
+    const fixture = createBscNativeEvmFixture({ network });
+    const { SccpClass } = fixture.profile;
+    const input = {
+      publicInputs: {
+        ...sampleEvmPublicInputs,
+        targetDomain: SCCP_DOMAIN_BSC,
+      },
+      bundleBytes: [5, 6, 7],
+      sourceProofBytes: [9, 10],
+      sourceDomain: SCCP_DOMAIN_SORA,
+      statementHash: HEX32_G,
+      destinationBinding: fixture.destinationBinding,
+    };
+    const constructorOptions = {
+      destinationBinding: fixture.destinationBinding,
+      nativeProverBundle: fixture.nativeProverBundle,
+      proofArtifactBytes: fixture.proofArtifactBytes,
+      provingKeyBytes: fixture.provingKeyBytes,
+      verifierKeyBytes: fixture.verifierKeyBytes,
+      crossSdkFixtureParityBytes: fixture.crossSdkFixtureParityBytes,
+      nativeProverSelfTestBytes: fixture.nativeProverSelfTestBytes,
+      implementationBytes: fixture.implementationBytes,
+      sdk: fixture.sdk,
+    };
+    let selfTestCalls = 0;
+    let proofCalls = 0;
+    const outboundProver = {
+      async prove(request) {
+        proofCalls += 1;
+        assert.equal(request.targetDomain, SCCP_DOMAIN_BSC);
+        assert.equal(request.destinationBinding.networkId, fixture.profile.networkId);
+        assert.equal(
+          request.destinationBindingHash,
+          fixture.nativeProverBundle.destinationBindingHash,
+        );
+        assert.equal(
+          request.proofArtifactHash,
+          fixture.nativeProverBundle.proofArtifactHash,
+        );
+        assert.equal(
+          request.provingKeyHash,
+          fixture.nativeProverBundle.provingKeyHash,
+        );
+        return {
+          proofBytes: groth16ProofBytesForPublicInputs(request.publicInputs),
+        };
+      },
+    };
+    const bridge = new SccpClass({
+      ...constructorOptions,
+      nativeProverSelfTest({ expectedResult, nativeProverArtifacts }) {
+        selfTestCalls += 1;
+        assert.equal(nativeProverArtifacts.nativeProverBundle.chain, fixture.profile.chain);
+        assert.equal(
+          nativeProverArtifacts.nativeProverBundle.destinationBindingHash,
+          fixture.destinationBinding.bindingHash,
+        );
+        return expectedResult;
+      },
+      outboundProver,
+    });
+
+    const proofResult = await bridge.proveOutboundToBsc(input);
+    assert.equal(selfTestCalls, 1);
+    assert.equal(proofCalls, 1);
+    assert.equal(
+      proofResult.proofArtifactHash,
+      fixture.nativeProverBundle.proofArtifactHash,
+    );
+    assert.equal(
+      proofResult.provingKeyHash,
+      fixture.nativeProverBundle.provingKeyHash,
+    );
+    const submission = bridge.buildBscCalldata({ proofResult });
+    assert.equal(submission.targetDomain, SCCP_DOMAIN_BSC);
+    assert.equal(submission.destinationBindingHash, fixture.destinationBinding.bindingHash);
+    assert.equal(submission.callData.length, 676);
+
+    const originalNativeProverArtifacts = bridge.nativeProverArtifacts;
+    bridge.nativeProverArtifacts = {
+      ...originalNativeProverArtifacts,
+      proofArtifactHash: HEX32_A,
+    };
+    assert.throws(
+      () => bridge.buildBscCalldata({ proofResult }),
+      /nativeProverArtifacts artifact hashes must match proofResult/,
+    );
+    bridge.nativeProverArtifacts = originalNativeProverArtifacts;
+
+    const withoutArtifacts = new SccpClass({
+      destinationBinding: fixture.destinationBinding,
+      outboundProver,
+    });
+    await assert.rejects(
+      () => withoutArtifacts.proveOutboundToBsc(input),
+      /requires verified native EVM prover artifacts/,
+    );
+    assert.throws(
+      () => withoutArtifacts.buildBscCalldata({ proofResult }),
+      /submission requires verified native EVM prover artifacts/,
+    );
+
+    const withoutSelfTest = new SccpClass({
+      ...constructorOptions,
+      outboundProver,
+    });
+    await assert.rejects(
+      () => withoutSelfTest.proveOutboundToBsc(input),
+      /native prover self-test|self-test hook/,
+    );
+  }
+});
+
 test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   const evmBinding = sampleEvmDestinationBinding();
   const request = buildEvmSccpProofRequest({
@@ -6612,8 +6992,18 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   assert.notEqual(submission.callData[0], 0);
 
   const tronBinding = sampleTronDestinationBinding();
-  const tronRequest = buildTronSccpProofRequest({
+  const tronMessageBundle = sampleBridgeSubmitMessageBundle({
     publicInputs: sampleTronPublicInputs,
+    targetDomain: SCCP_DOMAIN_TRON,
+  });
+  const tronSubmitPublicInputs = {
+    ...sampleTronPublicInputs,
+    commitmentRoot: tronMessageBundle.commitment_root,
+  };
+  const tronSubmitProofBytes =
+    groth16ProofBytesForPublicInputs(tronSubmitPublicInputs);
+  const tronRequest = buildTronSccpProofRequest({
+    publicInputs: tronSubmitPublicInputs,
     bundleBytes: [5, 6, 7],
     sourceProofBytes: [9, 10],
     sourceDomain: SCCP_DOMAIN_SORA,
@@ -6621,7 +7011,7 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
     destinationBinding: tronBinding,
   });
   const tronProofResult = wrapTronSccpProofResult(
-    GROTH16_PROOF_BYTES,
+    tronSubmitProofBytes,
     tronRequest,
   );
   const tronSubmission = buildTronSccpSubmission({
@@ -6671,8 +7061,8 @@ test("builds EVM-family and TRON Groth16 contract-call submissions", () => {
   assert.deepEqual(
     tronSubmission.callData,
     sccpSubmitMessageProofCallData(
-      GROTH16_PROOF_BYTES,
-      sampleTronPublicInputs,
+      tronSubmitProofBytes,
+      tronSubmitPublicInputs,
       tronProofResult.statementHash,
     ),
   );
@@ -7078,8 +7468,18 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
     "0x3ad95ac3e5bc2892f768aae40a3b7ba673d561858b7d1318fbb9f6eba83207bf",
   );
   assert.equal(evmSccpDestinationBindingHash(evmInput), evmBinding.bindingHash);
-  const evmRequest = buildEvmSccpProofRequest({
+  const evmMessageBundle = sampleBridgeSubmitMessageBundle({
     publicInputs: sampleEvmPublicInputs,
+    targetDomain: SCCP_DOMAIN_ETH,
+  });
+  const evmSubmitPublicInputs = {
+    ...sampleEvmPublicInputs,
+    commitmentRoot: evmMessageBundle.commitment_root,
+  };
+  const evmSubmitProofBytes =
+    groth16ProofBytesForPublicInputs(evmSubmitPublicInputs);
+  const evmRequest = buildEvmSccpProofRequest({
+    publicInputs: evmSubmitPublicInputs,
     bundleBytes: [5, 6, 7],
     sourceProofBytes: [9, 10],
     sourceDomain: SCCP_DOMAIN_SORA,
@@ -7088,12 +7488,8 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   });
   assert.equal(evmRequest.destinationBindingHash, evmBinding.bindingHash);
   const evmSubmissionForSubmit = buildEvmSccpSubmission({
-    proofResult: wrapEvmSccpProofResult(GROTH16_PROOF_BYTES, evmRequest),
+    proofResult: wrapEvmSccpProofResult(evmSubmitProofBytes, evmRequest),
   });
-  const evmMessageBundle = {
-    commitment: { message_id: sampleEvmPublicInputs.messageId },
-    commitment_root: sampleEvmPublicInputs.commitmentRoot,
-  };
   const evmSubmitPayload = buildEvmSccpBridgeProofSubmitPayload({
     authority: "alice@sora",
     publicKeyHex: "ed0123",
@@ -7128,16 +7524,21 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   assert.equal(evmSubmitPayload.creation_time_ms, 123);
   assert.equal(
     evmSubmitPayload.proof_bytes_hex,
-    `0x${Array.from(GROTH16_PROOF_BYTES, (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
+    `0x${Array.from(evmSubmitProofBytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
   );
   assert.throws(
     () =>
       buildEvmSccpBridgeProofSubmitPayload({
         authority: "alice@sora",
-        messageBundle: {
-          ...evmMessageBundle,
-          commitment: { message_id: HEX32_D },
-        },
+        messageBundle: (() => {
+          const bundle = structuredClone(evmMessageBundle);
+          bundle.commitment.message_id = HEX32_D;
+          bundle.commitment_root = sccpMerkleRootFromCommitment(
+            bundle.commitment,
+            bundle.merkle_proof,
+          );
+          return bundle;
+        })(),
         submission: evmSubmissionForSubmit,
         destinationBinding: evmBinding,
       }),
@@ -7151,6 +7552,26 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
           ...evmMessageBundle,
           commitment_root: HEX32_D,
         },
+        submission: evmSubmissionForSubmit,
+        destinationBinding: evmBinding,
+      }),
+    /messageBundle\.commitmentRoot must match the commitment Merkle proof/,
+  );
+  assert.throws(
+    () =>
+      buildEvmSccpBridgeProofSubmitPayload({
+        authority: "alice@sora",
+        messageBundle: (() => {
+          const bundle = structuredClone(evmMessageBundle);
+          bundle.merkle_proof.steps = [
+            { sibling_hash: HEX32_D, sibling_is_left: false },
+          ];
+          bundle.commitment_root = sccpMerkleRootFromCommitment(
+            bundle.commitment,
+            bundle.merkle_proof,
+          );
+          return bundle;
+        })(),
         submission: evmSubmissionForSubmit,
         destinationBinding: evmBinding,
       }),
@@ -7271,8 +7692,18 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
     tronSccpDestinationBindingHash(tronInput),
     tronBinding.bindingHash,
   );
-  const tronRequest = buildTronSccpProofRequest({
+  const tronMessageBundle = sampleBridgeSubmitMessageBundle({
     publicInputs: sampleTronPublicInputs,
+    targetDomain: SCCP_DOMAIN_TRON,
+  });
+  const tronSubmitPublicInputs = {
+    ...sampleTronPublicInputs,
+    commitmentRoot: tronMessageBundle.commitment_root,
+  };
+  const tronSubmitProofBytes =
+    groth16ProofBytesForPublicInputs(tronSubmitPublicInputs);
+  const tronRequest = buildTronSccpProofRequest({
+    publicInputs: tronSubmitPublicInputs,
     bundleBytes: [5, 6, 7],
     sourceProofBytes: [9, 10],
     sourceDomain: SCCP_DOMAIN_SORA,
@@ -7281,12 +7712,8 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   });
   assert.equal(tronRequest.destinationBindingHash, tronBinding.bindingHash);
   const tronSubmissionForSubmit = buildTronSccpSubmission({
-    proofResult: wrapTronSccpProofResult(GROTH16_PROOF_BYTES, tronRequest),
+    proofResult: wrapTronSccpProofResult(tronSubmitProofBytes, tronRequest),
   });
-  const tronMessageBundle = {
-    commitment: { message_id: sampleTronPublicInputs.messageId },
-    commitment_root: sampleTronPublicInputs.commitmentRoot,
-  };
   const tronSubmitPayload = buildTronSccpBridgeProofSubmitPayload({
     authority: "alice@sora",
     messageBundle: tronMessageBundle,
@@ -7315,7 +7742,7 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
   );
   assert.equal(
     tronSubmitPayload.proof_bytes_hex,
-    `0x${Array.from(GROTH16_PROOF_BYTES, (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
+    `0x${Array.from(tronSubmitProofBytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`,
   );
   assert.throws(
     () =>
@@ -7325,6 +7752,26 @@ test("derives EVM and TRON destination bindings for UI provers", () => {
           ...tronMessageBundle,
           commitment_root: HEX32_D,
         },
+        submission: tronSubmissionForSubmit,
+        destinationBinding: tronBinding,
+      }),
+    /messageBundle\.commitmentRoot must match the commitment Merkle proof/,
+  );
+  assert.throws(
+    () =>
+      buildTronSccpBridgeProofSubmitPayload({
+        authority: "alice@sora",
+        messageBundle: (() => {
+          const bundle = structuredClone(tronMessageBundle);
+          bundle.merkle_proof.steps = [
+            { sibling_hash: HEX32_D, sibling_is_left: false },
+          ];
+          bundle.commitment_root = sccpMerkleRootFromCommitment(
+            bundle.commitment,
+            bundle.merkle_proof,
+          );
+          return bundle;
+        })(),
         submission: tronSubmissionForSubmit,
         destinationBinding: tronBinding,
       }),
@@ -13952,17 +14399,29 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
   const payloadHash = sccpPayloadHash(
     canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
   );
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    targetDomain: SCCP_DOMAIN_SORA,
+    messageId,
+    payloadHash,
+  };
+  const merkleProof = { steps: [] };
+  const commitmentRoot = sccpMerkleRootFromCommitment(
+    {
+      version: commitment.version,
+      kind: commitment.kind,
+      target_domain: commitment.targetDomain,
+      message_id: commitment.messageId,
+      payload_hash: commitment.payloadHash,
+    },
+    merkleProof,
+  );
   const messageBundle = {
     version: 1,
-    commitmentRoot: HEX32_D,
-    commitment: {
-      version: 1,
-      kind: "Transfer",
-      targetDomain: SCCP_DOMAIN_SORA,
-      messageId,
-      payloadHash,
-    },
-    merkleProof: { steps: [] },
+    commitmentRoot,
+    commitment,
+    merkleProof,
     payload: { kind: "Transfer", value: payload },
     finalityProof: "0x010203",
   };
@@ -13978,7 +14437,7 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
     sourceEventDigest,
     txId: "11".repeat(32),
     messageId,
-    commitmentRoot: HEX32_D,
+    commitmentRoot,
   };
 
   const bound = bindTairaXorTronToTairaSourceProofPackage({
@@ -13993,7 +14452,7 @@ test("binds TAIRA XOR TRON-source proof packages for TAIRA settlement", () => {
 
   assert.equal(bound.txId, "11".repeat(32));
   assert.equal(bound.messageId, messageId);
-  assert.equal(bound.commitmentRoot, HEX32_D);
+  assert.equal(bound.commitmentRoot, commitmentRoot);
   assert.equal(bound.sourceEventDigest, sourceEventDigest);
   assert.equal(bound.amount, amount.toString());
   assert.deepEqual(bound.settlement, {
@@ -14051,17 +14510,29 @@ test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
   const payloadHash = sccpPayloadHash(
     canonicalSccpPayloadEnvelopeBytes({ kind: "Transfer", value: payload }),
   );
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    targetDomain: SCCP_DOMAIN_SORA,
+    messageId,
+    payloadHash,
+  };
+  const merkleProof = { steps: [] };
+  const commitmentRoot = sccpMerkleRootFromCommitment(
+    {
+      version: commitment.version,
+      kind: commitment.kind,
+      target_domain: commitment.targetDomain,
+      message_id: commitment.messageId,
+      payload_hash: commitment.payloadHash,
+    },
+    merkleProof,
+  );
   const messageBundle = {
     version: 1,
-    commitmentRoot: HEX32_D,
-    commitment: {
-      version: 1,
-      kind: "Transfer",
-      targetDomain: SCCP_DOMAIN_SORA,
-      messageId,
-      payloadHash,
-    },
-    merkleProof: { steps: [] },
+    commitmentRoot,
+    commitment,
+    merkleProof,
     payload: { kind: "Transfer", value: payload },
     finalityProof: "0x010203",
   };
@@ -14081,7 +14552,7 @@ test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
     sourceEventDigest,
     txId: `0x${"11".repeat(32)}`,
     messageId,
-    commitmentRoot: HEX32_D,
+    commitmentRoot,
   };
 
   const bound = bindTairaXorBscToTairaSourceProofPackage({
@@ -14096,7 +14567,7 @@ test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
 
   assert.equal(bound.txId, `0x${"11".repeat(32)}`);
   assert.equal(bound.messageId, messageId);
-  assert.equal(bound.commitmentRoot, HEX32_D);
+  assert.equal(bound.commitmentRoot, commitmentRoot);
   assert.equal(bound.sourceEventDigest, sourceEventDigest);
   assert.equal(bound.amount, amount.toString());
   assert.deepEqual(bound.settlement, {
@@ -14167,6 +14638,22 @@ test("binds TAIRA XOR BSC-source proof packages for TAIRA settlement", () => {
         pkg.commitmentRoot = HEX32_A;
       }),
     /commitmentRoot/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.commitmentRoot = HEX32_A;
+      }),
+    /commitmentRoot.*Merkle proof/u,
+  );
+  assert.throws(
+    () =>
+      bind((pkg) => {
+        pkg.messageBundle.merkleProof.steps = [
+          { sibling_hash: HEX32_A, sibling_is_left: false },
+        ];
+      }),
+    /commitmentRoot.*Merkle proof/u,
   );
   assert.throws(
     () =>

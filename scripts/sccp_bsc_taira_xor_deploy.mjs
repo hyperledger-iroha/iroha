@@ -1407,6 +1407,72 @@ async function readArtifactUnderRoot(root, value, label) {
   };
 }
 
+const PRODUCTION_PROOF_MATERIAL_SHAPE_MIN_BYTES = 4096;
+const PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES = 16;
+const PRODUCTION_PROOF_MATERIAL_MAX_REPEATED_PATTERN_BYTES = 64;
+
+function repeatedPrefixPatternLength(
+  bytes,
+  maxPatternLength = PRODUCTION_PROOF_MATERIAL_MAX_REPEATED_PATTERN_BYTES,
+) {
+  const maxLength = Math.min(maxPatternLength, Math.floor(bytes.length / 2));
+  for (let length = 1; length <= maxLength; length += 1) {
+    let repeated = true;
+    for (let index = length; index < bytes.length; index += 1) {
+      if (bytes[index] !== bytes[index % length]) {
+        repeated = false;
+        break;
+      }
+    }
+    if (repeated) {
+      return length;
+    }
+  }
+  return 0;
+}
+
+function constantByteDelta(bytes) {
+  if (bytes.length < 16) {
+    return null;
+  }
+  const delta = (bytes[1] - bytes[0] + 256) & 0xff;
+  for (let index = 2; index < bytes.length; index += 1) {
+    if (((bytes[index] - bytes[index - 1] + 256) & 0xff) !== delta) {
+      return null;
+    }
+  }
+  return delta;
+}
+
+function assertProductionProofMaterialShape(artifact, label) {
+  const bytes = artifact.bytes;
+  if (bytes.length < PRODUCTION_PROOF_MATERIAL_SHAPE_MIN_BYTES) {
+    return;
+  }
+  const repeatedPatternLength = repeatedPrefixPatternLength(bytes);
+  if (repeatedPatternLength > 0) {
+    throw new Error(
+      `${label} looks like placeholder proof material: repeated ${repeatedPatternLength}-byte pattern.`,
+    );
+  }
+  const arithmeticDelta = constantByteDelta(bytes);
+  if (arithmeticDelta !== null) {
+    throw new Error(
+      `${label} looks like placeholder proof material: arithmetic byte sequence with step ${arithmeticDelta}.`,
+    );
+  }
+  const uniqueBytes = new Set();
+  for (const byte of bytes) {
+    uniqueBytes.add(byte);
+    if (uniqueBytes.size >= PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES) {
+      return;
+    }
+  }
+  throw new Error(
+    `${label} looks like placeholder proof material: only ${uniqueBytes.size} unique byte values across ${bytes.length} bytes.`,
+  );
+}
+
 async function normalizeAuditHashOrFile(root, value, label) {
   const text = normalizeNonEmptyText(value, label);
   if (/^(?:0x)?[0-9a-f]{64}$/iu.test(text)) {
@@ -1728,6 +1794,8 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
     );
     sdkArtifacts.push({ ...artifact, sdk, implementation });
   }
+  assertProductionProofMaterialShape(proofArtifact, "proof artifact");
+  assertProductionProofMaterialShape(provingKey, "proving key");
   const auditHashes = await readNativeProverAuditHashes(root, options, {
     parityFixture,
     selfTestFixture,

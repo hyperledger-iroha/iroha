@@ -23249,6 +23249,7 @@ function normalizePipelineTransactionStatus(
     };
     return {
       ...record,
+      routes: Array.isArray(record.routes) ? record.routes : [],
       kind: record.kind == null ? "Transaction" : String(record.kind),
       status: normalizedStatus,
       content: {
@@ -23291,6 +23292,7 @@ function normalizePipelineTransactionStatus(
   };
   return {
     ...record,
+    ...(Array.isArray(record.routes) ? { routes: record.routes } : {}),
     kind,
     content: normalizedContent,
   };
