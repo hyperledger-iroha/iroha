@@ -342,6 +342,7 @@ import {
   tronWitnessSchedulePayloadHash,
   sccpTransferMessageId,
   sccpPayloadHash,
+  sccpMerkleRootFromCommitment,
 } from "../src/sccp.js";
 
 const HEX32_A = `0x${"aa".repeat(32)}`;
@@ -1271,14 +1272,135 @@ function sampleEthExecutionHeaderRlp(
   ]);
 }
 
-const sampleTonPublicInputs = {
-  version: 1,
-  messageId: HEX32_D,
-  payloadHash: HEX32_E,
-  targetDomain: SCCP_DOMAIN_TON,
-  commitmentRoot: HEX32_F,
-  finalityHeight: 19n,
-  finalityBlockHash: HEX32_A,
+const buildSampleTonProofBundleFixture = ({
+  sourceDomain = SCCP_DOMAIN_SORA,
+  senderCodec = SCCP_CODEC_TEXT_UTF8,
+  sender = "alice@sora",
+  nonce = 327n,
+  amount = 42n,
+  routeId = "sccp-ton-proof-request",
+  merkleProof = { steps: [] },
+} = {}) => {
+  const payload = {
+    version: 1,
+    source_domain: sourceDomain,
+    dest_domain: SCCP_DOMAIN_TON,
+    nonce,
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: "xor#ton",
+    amount,
+    sender_codec: senderCodec,
+    sender,
+    recipient_codec: SCCP_CODEC_TON_RAW,
+    recipient: `0:${"12".repeat(32)}`,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: routeId,
+  };
+  const payloadEnvelope = { kind: "Transfer", value: payload };
+  const payloadBytes = canonicalSccpPayloadEnvelopeBytes(payloadEnvelope);
+  const messageId = sccpTransferMessageId(payload);
+  const payloadHash = sccpPayloadHash(payloadBytes);
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    target_domain: SCCP_DOMAIN_TON,
+    message_id: messageId,
+    payload_hash: payloadHash,
+  };
+  const commitmentRoot = sccpMerkleRootFromCommitment(commitment, merkleProof);
+  return Object.freeze({
+    publicInputs: Object.freeze({
+      version: 1,
+      messageId,
+      payloadHash,
+      targetDomain: SCCP_DOMAIN_TON,
+      commitmentRoot,
+      finalityHeight: 19n,
+      finalityBlockHash: HEX32_A,
+    }),
+    bundleBytes: canonicalSccpMessageProofBundleBytes({
+      version: 1,
+      commitment_root: commitmentRoot,
+      commitment,
+      merkle_proof: merkleProof,
+      payload: payloadEnvelope,
+      finality_proof: [0x71, 0x72],
+    }),
+  });
+};
+
+const sampleTonProofBundleFixture = buildSampleTonProofBundleFixture();
+
+const sampleTonPublicInputs = sampleTonProofBundleFixture.publicInputs;
+const sampleTonBundleBytes = sampleTonProofBundleFixture.bundleBytes;
+
+const readU32LeFromBytes = (bytes, offset, label) => {
+  if (offset + 4 > bytes.length) {
+    throw new TypeError(`${label} is too short`);
+  }
+  return (
+    bytes[offset] |
+    (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) |
+    (bytes[offset + 3] << 24)
+  ) >>> 0;
+};
+
+const u32LeBytes = (value) =>
+  Uint8Array.from([
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 24) & 0xff,
+  ]);
+
+const readCanonicalVecRange = (bytes, offset, label) => {
+  const length = readU32LeFromBytes(bytes, offset, label);
+  const bytesStart = offset + 4;
+  const bytesEnd = bytesStart + length;
+  if (bytesEnd > bytes.length) {
+    throw new TypeError(`${label} exceeds bundle length`);
+  }
+  return {
+    lengthOffset: offset,
+    bytesStart,
+    bytesEnd,
+    bytes: bytes.subarray(bytesStart, bytesEnd),
+    nextOffset: bytesEnd,
+  };
+};
+
+const splitCanonicalSccpMessageProofBundleBytes = (bundleBytes) => {
+  const bytes = Uint8Array.from(bundleBytes);
+  let offset = 33;
+  const commitment = readCanonicalVecRange(bytes, offset, "commitment");
+  offset = commitment.nextOffset;
+  const merkleProof = readCanonicalVecRange(bytes, offset, "merkle_proof");
+  offset = merkleProof.nextOffset;
+  const payload = readCanonicalVecRange(bytes, offset, "payload");
+  offset = payload.nextOffset;
+  const finalityProof = readCanonicalVecRange(bytes, offset, "finality_proof");
+  return { commitment, merkleProof, payload, finalityProof };
+};
+
+const replaceCanonicalSccpMessageProofBundleVec = (
+  bundleBytes,
+  range,
+  replacementBytes,
+) => {
+  const bytes = Uint8Array.from(bundleBytes);
+  const replacement = Uint8Array.from(replacementBytes);
+  const prefix = bytes.subarray(0, range.lengthOffset);
+  const suffix = bytes.subarray(range.bytesEnd);
+  const out = new Uint8Array(
+    prefix.length + 4 + replacement.length + suffix.length,
+  );
+  out.set(prefix, 0);
+  out.set(u32LeBytes(replacement.length), prefix.length);
+  out.set(replacement, prefix.length + 4);
+  out.set(suffix, prefix.length + 4 + replacement.length);
+  return out;
 };
 
 const sampleTronPublicInputs = {
@@ -9394,7 +9516,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
   const rawMessageInput = {
     publicInputs: sampleTonPublicInputs,
     proofBytes: Uint8Array.from([1, 2, 3, 4]),
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     statementHash: HEX32_B,
     destinationBindingHash: HEX32_G,
     metadataBytes: Uint8Array.from([8, 9]),
@@ -9410,7 +9532,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
 
   const request = buildTonSccpProofRequest({
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: Uint8Array.from([9, 10]),
     statementHash: HEX32_B,
     destinationBindingHash: HEX32_G,
@@ -9424,7 +9546,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
   );
   const messageBodyBoc = buildSccpTonMessageBodyBoc({
     proofResult,
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     metadataBytes: Uint8Array.from([8, 9]),
   });
 
@@ -9440,7 +9562,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
 
   const submission = buildTonSccpSubmission({
     proofResult,
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     metadataBytes: Uint8Array.from([8, 9]),
   });
   assert.equal(submission.envelopeEncoding, SCCP_TON_MESSAGE_BODY_BOC_V1);
@@ -9460,18 +9582,21 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
 
   const proofResultSubmission = buildTonSccpSubmission({
     proofResult,
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     metadataBytes: Uint8Array.from([8, 9]),
   });
   assert.equal(proofResultSubmission.envelopeHex, submission.envelopeHex);
-  assert.deepEqual(Array.from(proofResult.bundleBytes), [5, 6, 7]);
+  assert.deepEqual(
+    Array.from(proofResult.bundleBytes),
+    Array.from(sampleTonBundleBytes),
+  );
   assert.deepEqual(Array.from(proofResult.sourceProofBytes), [9, 10]);
   assert.throws(
     () =>
       buildTonSccpSubmission({
         proofResult,
         proof_result: proofResult,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult must not use multiple aliases/,
   );
@@ -9479,7 +9604,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: { ...proofResult, proof_bytes: proofResult.proofBytes },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.proofBytes must not use multiple aliases/,
   );
@@ -9487,7 +9612,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: { ...proofResult, request_hash: proofResult.requestHash },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.requestHash must not use multiple aliases/,
   );
@@ -9498,7 +9623,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
           ...proofResult,
           proof_context: proofResult.proofContext,
         },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.proofContext must not use multiple aliases/,
   );
@@ -9506,8 +9631,8 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
-        bundle_bytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
+        bundle_bytes: sampleTonBundleBytes,
       }),
     /bundleBytes must not use multiple aliases/,
   );
@@ -9516,7 +9641,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         publicInputs: null,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /publicInputs must be an object/,
   );
@@ -9525,7 +9650,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         proofBytes: null,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofBytes must be bytes or hex/,
   );
@@ -9534,7 +9659,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         statementHash: null,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /statementHash/,
   );
@@ -9543,7 +9668,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         destinationBindingHash: null,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /destinationBindingHash/,
   );
@@ -9551,7 +9676,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     Uint8Array.from([1, 2, 3, 4]),
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: Uint8Array.from([5, 6, 7]),
+      bundleBytes: sampleTonBundleBytes,
       statementHash: HEX32_B,
       destinationBindingHash: HEX32_G,
       sourceStateVerifierHash: HEX32_C,
@@ -9561,7 +9686,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
   );
   const omittedSourceProofSubmission = buildTonSccpSubmission({
     proofResult: omittedSourceProofResult,
-    bundleBytes: Uint8Array.from([5, 6, 7]),
+    bundleBytes: sampleTonBundleBytes,
     metadataBytes: Uint8Array.from([8, 9]),
   });
   assert.equal(omittedSourceProofResult.sourceProofBytes.length, 0);
@@ -9574,7 +9699,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       () =>
         buildTonSccpSubmission({
           proofResult,
-          bundleBytes: Uint8Array.from([5, 6, 7]),
+          bundleBytes: sampleTonBundleBytes,
           metadataBytes: badMetadataBytes,
         }),
       /metadataBytes must be bytes or hex|metadataBytes must be canonical hex/,
@@ -9584,7 +9709,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: { ...proofResult, proofContext: false },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.proofContext must be an object/,
   );
@@ -9592,7 +9717,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: { ...proofResult, proofContext: null },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.proofContext must be an object/,
   );
@@ -9613,14 +9738,14 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
         },
         bundleBytes: Uint8Array.from([5, 6, 8]),
       }),
-    /proofResult\.requestHash must match bundleBytes and sourceProofBytes/,
+    /bundleBytes\.version must be 1/,
   );
   assert.throws(
     () =>
       buildTonSccpSubmission({
         proofResult,
         proofBytes: Uint8Array.from([4, 3, 2, 1]),
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofBytes must match proofResult\.proofBytes/,
   );
@@ -9629,7 +9754,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         publicInputs: { ...sampleTonPublicInputs, messageId: HEX32_A },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /publicInputs must match proofResult\.publicInputs/,
   );
@@ -9637,7 +9762,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: { ...proofResult, envelopeHash: HEX32_A },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.envelopeHash must match wrapped proof bytes/,
   );
@@ -9648,7 +9773,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
           ...proofResult,
           sourceStateVerifierHash: SCCP_ZERO_HASH_V1,
         },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.sourceStateVerifierHash must not be zero/,
   );
@@ -9662,7 +9787,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
             targetDomain: SCCP_DOMAIN_TON,
           },
         },
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofResult\.sourceAdapterDeploymentBinding\.targetDomain must be SORA/,
   );
@@ -9675,7 +9800,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
           targetDomain: SCCP_DOMAIN_SOL,
         },
         proofBytes: Uint8Array.from([1, 2, 3, 4]),
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_B,
         destinationBindingHash: HEX32_G,
       }),
@@ -9712,7 +9837,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
       buildTonSccpSubmission({
         proofResult,
         proofBytes: Uint8Array.from([0, 0]),
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
       }),
     /proofBytes must not be all zero/,
   );
@@ -9725,7 +9850,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult: oversizedTonMessageResult,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
         metadataBytes: Uint8Array.from([8, 9]),
       }),
     /TON BOC contains too many cells/,
@@ -9750,7 +9875,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
     () =>
       buildTonSccpSubmission({
         proofResult,
-        bundleBytes: Uint8Array.from([5, 6, 7]),
+        bundleBytes: sampleTonBundleBytes,
         destinationBindingHash: HEX32_G,
         manifest,
       }),
@@ -9761,7 +9886,7 @@ test("builds TON SCCP internal message BOC in browser-safe JavaScript", () => {
 test("binds TON proof requests to relay context and source adapter deployment", () => {
   const request = buildTonSccpProofRequest({
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: [5, 6, 7],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [9, 10],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -9813,7 +9938,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     request.requestHash,
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       sourceProofBytes: [9, 10],
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
@@ -9826,7 +9951,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     request.requestHash,
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       sourceProofBytes: [9, 10],
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
@@ -9838,7 +9963,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
   assert.notEqual(
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       sourceProofBytes: [9, 10],
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
@@ -9848,7 +9973,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     }).requestHash,
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7, 9],
+      bundleBytes: sampleTonBundleBytes,
       sourceProofBytes: [10],
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
@@ -9859,7 +9984,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
   );
   const validTonProofRequestInput = () => ({
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: [5, 6, 7],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [9, 10],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -9903,7 +10028,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -9930,7 +10055,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierId: "debug-ton-state-verifier",
@@ -9944,7 +10069,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: SCCP_ZERO_HASH_V1,
@@ -9957,7 +10082,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: TON_TEMPLATE_SOURCE_STATE_VERIFIER_HASH,
@@ -9970,7 +10095,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -9983,7 +10108,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -9994,7 +10119,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10011,7 +10136,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10066,7 +10191,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: new Uint8Array(
           SCCP_SOURCE_STATE_MAX_PROOF_BYTES + 1,
         ).fill(1),
@@ -10082,7 +10207,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10097,7 +10222,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
           ...sampleTonPublicInputs,
           targetDomain: SCCP_DOMAIN_SOL,
         },
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10110,7 +10235,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         backend: "debug-ton-backend",
@@ -10124,7 +10249,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: { ...sampleTonPublicInputs, payloadHash: `${HEX32_E} ` },
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10137,7 +10262,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: { ...sampleTonPublicInputs, finalityHeight: "019" },
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10150,7 +10275,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: ` ${HEX32_G}`,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10163,7 +10288,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10176,7 +10301,7 @@ test("binds TON proof requests to relay context and source adapter deployment", 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -10193,23 +10318,174 @@ test("binds TON proof requests to relay context and source adapter deployment", 
   exposedBundle[0] = 99;
   exposedSourceProof[0] = 99;
   assert.notEqual(request.publicInputsBytes[0], 99);
-  assert.deepEqual(Array.from(request.bundleBytes), [5, 6, 7]);
+  assert.deepEqual(
+    Array.from(request.bundleBytes),
+    Array.from(sampleTonBundleBytes),
+  );
   assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
 });
 
+test("rejects TON proof requests with non-canonical or mismatched SCCP bundle bytes", () => {
+  const validTonProofRequestInput = (overrides = {}) => ({
+    publicInputs: sampleTonPublicInputs,
+    bundleBytes: sampleTonBundleBytes,
+    statementHash: HEX32_G,
+    destinationBindingHash: HEX32_H,
+    sourceStateVerifierHash: HEX32_C,
+    sourceAdapterDeploymentHash: HEX32_A,
+    sourceAdapterDeploymentReceiptHash: HEX32_B,
+    ...overrides,
+  });
+
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({ bundleBytes: [5, 6, 7] }),
+      ),
+    /bundleBytes\.version must be 1/,
+  );
+
+  const swappedBundle = buildSampleTonProofBundleFixture({ nonce: 328n });
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({ bundleBytes: swappedBundle.bundleBytes }),
+      ),
+    /bundleBytes must match publicInputs/,
+  );
+
+  const tamperedCommitment = Uint8Array.from(sampleTonBundleBytes);
+  tamperedCommitment[1 + 32 + 4 + 6] ^= 0x01;
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({ bundleBytes: tamperedCommitment }),
+      ),
+    /bundleBytes\.commitment must match payload|bundleBytes\.commitment_root must match merkle proof/,
+  );
+
+  const ranges = splitCanonicalSccpMessageProofBundleBytes(sampleTonBundleBytes);
+  const payloadWithTrailingByte = Uint8Array.from([
+    ...ranges.payload.bytes,
+    0,
+  ]);
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          bundleBytes: replaceCanonicalSccpMessageProofBundleVec(
+            sampleTonBundleBytes,
+            ranges.payload,
+            payloadWithTrailingByte,
+          ),
+        }),
+      ),
+    /bundleBytes\.payload must not contain trailing bytes/,
+  );
+
+  const unsupportedPayloadKind = Uint8Array.from(ranges.payload.bytes);
+  unsupportedPayloadKind[0] = 0xff;
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          bundleBytes: replaceCanonicalSccpMessageProofBundleVec(
+            sampleTonBundleBytes,
+            ranges.payload,
+            unsupportedPayloadKind,
+          ),
+        }),
+      ),
+    /bundleBytes\.payload contains unsupported SCCP payload kind/,
+  );
+
+  const merkleProofWithTrailingByte = Uint8Array.from([
+    ...ranges.merkleProof.bytes,
+    0,
+  ]);
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          bundleBytes: replaceCanonicalSccpMessageProofBundleVec(
+            sampleTonBundleBytes,
+            ranges.merkleProof,
+            merkleProofWithTrailingByte,
+          ),
+        }),
+      ),
+    /bundleBytes\.merkle_proof must not contain trailing bytes/,
+  );
+
+  const oneStepBundle = buildSampleTonProofBundleFixture({
+    merkleProof: {
+      steps: [{ sibling_hash: HEX32_C, sibling_is_left: true }],
+    },
+  });
+  const oneStepRanges = splitCanonicalSccpMessageProofBundleBytes(
+    oneStepBundle.bundleBytes,
+  );
+  const merkleProofWithInvalidDirection = Uint8Array.from(
+    oneStepRanges.merkleProof.bytes,
+  );
+  merkleProofWithInvalidDirection[4 + 32] = 2;
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          publicInputs: oneStepBundle.publicInputs,
+          bundleBytes: replaceCanonicalSccpMessageProofBundleVec(
+            oneStepBundle.bundleBytes,
+            oneStepRanges.merkleProof,
+            merkleProofWithInvalidDirection,
+          ),
+        }),
+      ),
+    /bundleBytes\.merkle_proof\.steps\[0\]\.sibling_is_left must be 0 or 1/,
+  );
+
+  const ethToTonBundle = buildSampleTonProofBundleFixture({
+    sourceDomain: SCCP_DOMAIN_ETH,
+    senderCodec: SCCP_CODEC_EVM_HEX,
+    sender: "0x1111111111111111111111111111111111111111",
+    routeId: "sccp-eth-ton-proof-request",
+  });
+  assert.throws(
+    () =>
+      buildTonSccpProofRequest(
+        validTonProofRequestInput({
+          publicInputs: ethToTonBundle.publicInputs,
+          bundleBytes: ethToTonBundle.bundleBytes,
+        }),
+      ),
+    /sourceProofBytes required for non-SORA source bundle/,
+  );
+
+  const nonSoraRequest = buildTonSccpProofRequest(
+    validTonProofRequestInput({
+      publicInputs: ethToTonBundle.publicInputs,
+      bundleBytes: ethToTonBundle.bundleBytes,
+      sourceProofBytes: [0x51, 0x52, 0x53],
+    }),
+  );
+  assert.deepEqual(Array.from(nonSoraRequest.sourceProofBytes), [
+    0x51, 0x52, 0x53,
+  ]);
+  assert.throws(
+    () =>
+      wrapTonSccpProofResult([1, 2, 3, 4], {
+        ...nonSoraRequest,
+        sourceProofBytes: new Uint8Array(),
+      }),
+    /TON SCCP proof request must be canonical/,
+  );
+});
+
 test("matches TON proof request hash golden vector across SDKs", () => {
-  const publicInputs = {
-    version: 1,
-    messageId: `0x${"11".repeat(32)}`,
-    payloadHash: `0x${"22".repeat(32)}`,
-    targetDomain: SCCP_DOMAIN_TON,
-    commitmentRoot: `0x${"33".repeat(32)}`,
-    finalityHeight: 123456789n,
-    finalityBlockHash: `0x${"44".repeat(32)}`,
-  };
+  const publicInputs = sampleTonPublicInputs;
   const request = buildTonSccpProofRequest({
     publicInputs,
-    bundleBytes: [1, 2, 3, 4, 5, 6, 7, 8, 9],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [0x51, 0x52, 0x53],
     statementHash: `0x${"55".repeat(32)}`,
     destinationBindingHash: `0x${"66".repeat(32)}`,
@@ -10224,7 +10500,7 @@ test("matches TON proof request hash golden vector across SDKs", () => {
 
   assert.equal(
     `0x${Buffer.from(canonicalSccpMessageTransparentPublicInputsBytes(publicInputs)).toString("hex")}`,
-    "0x011111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222204000000333333333333333333333333333333333333333333333333333333333333333315cd5b07000000004444444444444444444444444444444444444444444444444444444444444444",
+    "0x01806384e356636c10ee3bbbb90674a80410a86be034616abb811586b21ac81fc4367a4f9061f46a282eeeda95bc68c727888bde665bd89d0ebbc6dae266e3a26404000000377eb92928595d90759d66529f96acf34afd4ef64cd2327ab6f65876fb3cf93e1300000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   );
   assert.equal(
     request.sourceAdapterDeploymentBindingHash,
@@ -10232,7 +10508,7 @@ test("matches TON proof request hash golden vector across SDKs", () => {
   );
   assert.equal(
     request.requestHash,
-    "0xb3a61f09923efd639a0263de6b45eec6ddd5de679bfaab1b6ec1c591fd1b1d1b",
+    "0x2a292741b8e8d8454699eda954592904e8260e6b8a41cc840f5d9c48732c3bbe",
   );
 
   const proofResult = wrapTonSccpProofResult(
@@ -10241,7 +10517,7 @@ test("matches TON proof request hash golden vector across SDKs", () => {
   );
   assert.equal(
     proofResult.envelopeHash,
-    "0xa2bc6697b237fd4b2dd3f60f187a184793104a99372dcdf60c7ec585ef32f5ab",
+    "0x9ed8e54d81c13a61939dedffb36c487f33d32a128ba95a0d29b33c5d25be6489",
   );
 });
 
@@ -10274,7 +10550,7 @@ test("rejects non-empty all-zero source proof bytes in SCCP proof requests", () 
     () =>
       buildTonSccpProofRequest({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: zeroSourceProofBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -10306,7 +10582,7 @@ test("rejects non-empty all-zero source proof bytes in SCCP proof requests", () 
   assert.equal(
     buildTonSccpProofRequest({
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
       sourceStateVerifierHash: HEX32_C,
@@ -10321,7 +10597,7 @@ test("rejects non-empty all-zero source proof bytes in SCCP proof requests", () 
       () =>
         buildTonSccpProofRequest({
           publicInputs: sampleTonPublicInputs,
-          bundleBytes: [5, 6, 7],
+          bundleBytes: sampleTonBundleBytes,
           sourceProofBytes: badSourceProofBytes,
           statementHash: HEX32_G,
           destinationBindingHash: HEX32_H,
@@ -12389,7 +12665,7 @@ test("does not generate TON SCCP proofs without a linked local prover", async ()
     () =>
       prover.prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -12413,7 +12689,7 @@ test("rejects non-production TON SCCP input before invoking the linked prover", 
     () =>
       prover.prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: [9, 10],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -12477,7 +12753,7 @@ test("accepts callable and snake_case SCCP witness providers for UI proof genera
   const tonResult = await tonProver.prove(
     {
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
       sourceStateVerifierHash: HEX32_C,
@@ -12624,7 +12900,7 @@ test("resolves SCCP UI witness providers before web local prover callbacks", asy
   }).prove(
     {
       publicInputs: sampleTonPublicInputs,
-      bundleBytes: [5, 6, 7],
+      bundleBytes: sampleTonBundleBytes,
       statementHash: HEX32_G,
       destinationBindingHash: HEX32_H,
       sourceStateVerifierHash: HEX32_C,
@@ -12849,7 +13125,10 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
       );
       request.bundleBytes[0] = 99;
       request.sourceProofBytes[0] = 99;
-      assert.deepEqual(Array.from(request.bundleBytes), [5, 6, 7]);
+      assert.deepEqual(
+        Array.from(request.bundleBytes),
+        Array.from(sampleTonBundleBytes),
+      );
       assert.deepEqual(Array.from(request.sourceProofBytes), [9, 10]);
       return {
         proofBytes: [1, 2, 3, 4],
@@ -12863,7 +13142,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
 
   const result = await prover.prove({
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: [5, 6, 7],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [9, 10],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -12873,7 +13152,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
   });
   const request = buildTonSccpProofRequest({
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: [5, 6, 7],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [9, 10],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -12905,7 +13184,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
         },
       }).prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: [9, 10],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -12924,7 +13203,7 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
         }),
       }).prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: [9, 10],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -12948,7 +13227,10 @@ test("wraps TON proof bytes with an immutable request-bound envelope hash", asyn
   const exposedSourceProof = result.sourceProofBytes;
   exposedBundle[0] = 99;
   exposedSourceProof[0] = 99;
-  assert.deepEqual(Array.from(result.bundleBytes), [5, 6, 7]);
+  assert.deepEqual(
+    Array.from(result.bundleBytes),
+    Array.from(sampleTonBundleBytes),
+  );
   assert.deepEqual(Array.from(result.sourceProofBytes), [9, 10]);
   assert.match(result.requestHash, /^0x[0-9a-f]{64}$/);
   assert.match(result.envelopeHash, /^0x[0-9a-f]{64}$/);
@@ -13183,7 +13465,7 @@ test("accepts submit-ready SCCP prover requests with omitted source proof materi
       TonSccpProver,
       {
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
         sourceStateVerifierHash: HEX32_C,
@@ -13240,7 +13522,7 @@ test("rejects all-zero proof bytes across SCCP local prover wrappers", async () 
         prove: async () => ({ proofBytes: [0, 0] }),
       }).prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: [9, 10],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,
@@ -13257,7 +13539,7 @@ test("rejects TON, EVM, and TRON prover results with mismatched metadata", async
   const tronBinding = sampleTronDestinationBinding();
   const tonRequestInput = {
     publicInputs: sampleTonPublicInputs,
-    bundleBytes: [5, 6, 7],
+    bundleBytes: sampleTonBundleBytes,
     sourceProofBytes: [9, 10],
     statementHash: HEX32_G,
     destinationBindingHash: HEX32_H,
@@ -13535,7 +13817,7 @@ test("rejects SCCP prover results bound to a different request context", async (
         }),
       }).prove({
         publicInputs: sampleTonPublicInputs,
-        bundleBytes: [5, 6, 7],
+        bundleBytes: sampleTonBundleBytes,
         sourceProofBytes: [9, 10],
         statementHash: HEX32_G,
         destinationBindingHash: HEX32_H,

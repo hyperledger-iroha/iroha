@@ -42,7 +42,7 @@ Additional front ends (for example a Tauri shell) can hook into `mochi-core` lat
 - Genesis and key material are created through `kagami` invocations with user provided inputs (chain ID, initial accounts, assets).
 - Configuration files are generated from TOML templates, filling in Torii and P2P ports, storage paths, snapshot settings, and trusted peer lists. Generated configs are stored beneath a per-network workspace directory.
 - The supervisor tracks process lifecycles, streams stdout/stderr for log surfaces, and polls `/status`, `/metrics`, and `/configuration` endpoints for health.
-- A thin Torii client layer wraps HTTP and WebSocket calls, leaning on the Iroha Rust client crates where possible to avoid reimplementing SCALE encoding/decoding.
+- A thin Torii client layer wraps HTTP and WebSocket calls, leaning on the Iroha Rust client crates where possible to avoid reimplementing retired codec encoding/decoding.
 
 ## User Flows Backed by `mochi-core`
 

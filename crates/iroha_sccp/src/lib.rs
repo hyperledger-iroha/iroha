@@ -737,20 +737,14 @@ fn decode_hex_bytes(value: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-#[cfg(feature = "serde")]
-mod serde_utils {
+mod json_utils {
     use alloc::{
-        borrow::ToOwned,
         format,
         string::{String, ToString},
         vec::Vec,
     };
 
-    use serde::{
-        Deserialize, Deserializer, Serializer,
-        de::{self, Visitor},
-        ser::SerializeSeq,
-    };
+    use norito::json::{self, Error, JsonDeserialize, Parser};
 
     fn encode_hex(bytes: &[u8]) -> String {
         const LUT: &[u8; 16] = b"0123456789abcdef";
@@ -763,371 +757,266 @@ mod serde_utils {
         out
     }
 
-    fn strip_hex_prefix(value: &str) -> &str {
-        value
-            .strip_prefix("0x")
-            .or_else(|| value.strip_prefix("0X"))
-            .unwrap_or(value)
+    fn decode_hex_vec(value: &str) -> Result<Vec<u8>, Error> {
+        super::decode_hex_bytes(value)
+            .ok_or_else(|| Error::Message("invalid hex byte string".into()))
     }
 
-    fn decode_nibble(byte: u8) -> Option<u8> {
-        match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            b'A'..=b'F' => Some(byte - b'A' + 10),
-            _ => None,
-        }
+    fn decode_hex_fixed<const N: usize>(value: &str) -> Result<[u8; N], Error> {
+        super::decode_fixed_hex_bytes::<N>(value)
+            .ok_or_else(|| Error::Message(format!("expected {N}-byte hex string")))
     }
 
-    fn decode_hex_vec(value: &str) -> Result<Vec<u8>, String> {
-        let raw = strip_hex_prefix(value).as_bytes();
-        if !raw.len().is_multiple_of(2) {
-            return Err("hex value must have an even number of digits".to_owned());
+    fn parse_decimal_u64(parser: &mut Parser<'_>) -> Result<u64, Error> {
+        parser.skip_ws();
+        if parser.peek() == Some(b'"') {
+            return parser
+                .parse_string()?
+                .parse::<u64>()
+                .map_err(|err| Error::Message(format!("failed to parse u64 string: {err}")));
         }
-
-        let mut out = Vec::with_capacity(raw.len() / 2);
-        let mut idx = 0usize;
-        while idx < raw.len() {
-            let hi = decode_nibble(raw[idx])
-                .ok_or_else(|| format!("invalid hex digit at position {idx}"))?;
-            let lo = decode_nibble(raw[idx + 1])
-                .ok_or_else(|| format!("invalid hex digit at position {}", idx + 1))?;
-            out.push((hi << 4) | lo);
-            idx += 2;
-        }
-        Ok(out)
+        parser.parse_u64()
     }
 
-    fn decode_hex_fixed<const N: usize>(value: &str) -> Result<[u8; N], String> {
-        let bytes = decode_hex_vec(value)?;
-        if bytes.len() != N {
-            return Err(format!("expected {N} bytes, got {}", bytes.len()));
+    fn parse_decimal_u128(parser: &mut Parser<'_>) -> Result<u128, Error> {
+        parser.skip_ws();
+        if parser.peek() == Some(b'"') {
+            return parser
+                .parse_string()?
+                .parse::<u128>()
+                .map_err(|err| Error::Message(format!("failed to parse u128 string: {err}")));
         }
-        let mut out = [0u8; N];
-        out.copy_from_slice(&bytes);
-        Ok(out)
-    }
-
-    struct DecimalStringVisitor<T> {
-        label: &'static str,
-        marker: core::marker::PhantomData<T>,
-    }
-
-    impl<T> DecimalStringVisitor<T> {
-        const fn new(label: &'static str) -> Self {
-            Self {
-                label,
-                marker: core::marker::PhantomData,
-            }
-        }
-    }
-
-    impl Visitor<'_> for DecimalStringVisitor<u64> {
-        type Value = u64;
-
-        fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            write!(
-                formatter,
-                "{} encoded as a decimal string or integer",
-                self.label
-            )
-        }
-
-        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(value)
-        }
-
-        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            u64::try_from(value)
-                .map_err(|_| E::custom(format!("{} must not be negative", self.label)))
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            value.parse::<u64>().map_err(|err| {
-                E::custom(format!(
-                    "failed to parse {} decimal string: {err}",
-                    self.label
-                ))
-            })
-        }
-
-        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            self.visit_str(&value)
-        }
-    }
-
-    impl Visitor<'_> for DecimalStringVisitor<u128> {
-        type Value = u128;
-
-        fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            write!(
-                formatter,
-                "{} encoded as a decimal string or integer",
-                self.label
-            )
-        }
-
-        fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            Ok(u128::from(value))
-        }
-
-        fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            u128::try_from(value)
-                .map_err(|_| E::custom(format!("{} must not be negative", self.label)))
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            value.parse::<u128>().map_err(|err| {
-                E::custom(format!(
-                    "failed to parse {} decimal string: {err}",
-                    self.label
-                ))
-            })
-        }
-
-        fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
-        where
-            E: de::Error,
-        {
-            self.visit_str(&value)
-        }
+        parser.parse_u64().map(u128::from)
     }
 
     pub mod hex32 {
-        use super::{Deserialize, Deserializer, Serializer, String, decode_hex_fixed, encode_hex};
+        use super::{Error, Parser, decode_hex_fixed, encode_hex, json};
 
-        pub fn serialize<S>(value: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            serializer.serialize_str(&encode_hex(value))
+        pub fn serialize(value: &[u8; 32], out: &mut String) {
+            json::write_json_string(&encode_hex(value), out);
         }
 
-        pub fn deserialize<'de, D>(deserializer: D) -> Result<[u8; 32], D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            let value = String::deserialize(deserializer)?;
-            decode_hex_fixed::<32>(&value).map_err(serde::de::Error::custom)
+        pub fn deserialize(parser: &mut Parser<'_>) -> Result<[u8; 32], Error> {
+            let value = parser.parse_string()?;
+            decode_hex_fixed::<32>(&value)
         }
     }
 
     pub mod bytes_hex {
-        use super::{
-            Deserialize, Deserializer, Serializer, String, Vec, decode_hex_vec, encode_hex,
-        };
+        use super::{Error, Parser, Vec, decode_hex_vec, encode_hex, json};
 
-        pub fn serialize<S>(value: &[u8], serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            serializer.serialize_str(&encode_hex(value))
+        pub fn serialize(value: &[u8], out: &mut String) {
+            json::write_json_string(&encode_hex(value), out);
         }
 
-        pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            let value = String::deserialize(deserializer)?;
-            decode_hex_vec(&value).map_err(serde::de::Error::custom)
+        pub fn deserialize(parser: &mut Parser<'_>) -> Result<Vec<u8>, Error> {
+            let value = parser.parse_string()?;
+            decode_hex_vec(&value)
         }
     }
 
     pub mod vec_bytes_hex {
         use super::{
-            Deserialize, Deserializer, SerializeSeq, Serializer, String, Vec, decode_hex_vec,
-            encode_hex,
+            Error, JsonDeserialize, Parser, String, Vec, decode_hex_vec, encode_hex, json,
         };
 
-        pub fn serialize<S>(value: &[Vec<u8>], serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            let mut seq = serializer.serialize_seq(Some(value.len()))?;
-            for item in value {
-                seq.serialize_element(&encode_hex(item))?;
+        pub fn serialize(value: &[Vec<u8>], out: &mut String) {
+            out.push('[');
+            for (index, item) in value.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                json::write_json_string(&encode_hex(item), out);
             }
-            seq.end()
+            out.push(']');
         }
 
-        pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            let values = Vec::<String>::deserialize(deserializer)?;
+        pub fn deserialize(parser: &mut Parser<'_>) -> Result<Vec<Vec<u8>>, Error> {
+            let values = <Vec<String> as JsonDeserialize>::json_deserialize(parser)?;
             values
                 .into_iter()
-                .map(|value| decode_hex_vec(&value).map_err(serde::de::Error::custom))
+                .map(|value| decode_hex_vec(&value))
                 .collect()
         }
     }
 
     pub mod u64_string {
-        use super::{DecimalStringVisitor, Deserializer, Serializer, ToString};
+        use super::{Error, Parser, ToString, json, parse_decimal_u64};
 
-        #[allow(clippy::trivially_copy_pass_by_ref)]
-        pub fn serialize<S>(value: &u64, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            serializer.serialize_str(&value.to_string())
+        pub fn serialize(value: &u64, out: &mut String) {
+            json::write_json_string(&value.to_string(), out);
         }
 
-        pub fn deserialize<'de, D>(deserializer: D) -> Result<u64, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            deserializer.deserialize_any(DecimalStringVisitor::<u64>::new("u64"))
+        pub fn deserialize(parser: &mut Parser<'_>) -> Result<u64, Error> {
+            parse_decimal_u64(parser)
         }
     }
 
     pub mod u128_string {
-        use super::{DecimalStringVisitor, Deserializer, Serializer, ToString};
+        use super::{Error, Parser, ToString, json, parse_decimal_u128};
 
-        pub fn serialize<S>(value: &u128, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            serializer.serialize_str(&value.to_string())
+        pub fn serialize(value: &u128, out: &mut String) {
+            json::write_json_string(&value.to_string(), out);
         }
 
-        pub fn deserialize<'de, D>(deserializer: D) -> Result<u128, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            deserializer.deserialize_any(DecimalStringVisitor::<u128>::new("u128"))
+        pub fn deserialize(parser: &mut Parser<'_>) -> Result<u128, Error> {
+            parse_decimal_u128(parser)
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct BurnPayloadV1 {
     pub version: u8,
     pub source_domain: u32,
     pub dest_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub nonce: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub sora_asset_id: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u128_string"))]
+    #[norito(with = "json_utils::u128_string")]
     pub amount: u128,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub recipient: H256,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct TokenAddPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub nonce: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub sora_asset_id: H256,
     pub decimals: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub name: [u8; 32],
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub symbol: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct TokenControlPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub nonce: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub sora_asset_id: H256,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct AssetRegisterPayloadV1 {
     pub version: u8,
     pub target_domain: u32,
     pub home_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub nonce: u64,
     pub asset_id_codec: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub asset_id: Vec<u8>,
     pub decimals: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct RouteActivatePayloadV1 {
     pub version: u8,
     pub source_domain: u32,
     pub target_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub nonce: u64,
     pub asset_id_codec: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub asset_id: Vec<u8>,
     pub route_id_codec: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub route_id: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct TransferPayloadV1 {
     pub version: u8,
     pub source_domain: u32,
     pub dest_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub nonce: u64,
     pub asset_home_domain: u32,
     pub asset_id_codec: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub asset_id: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u128_string"))]
+    #[norito(with = "json_utils::u128_string")]
     pub amount: u128,
     pub sender_codec: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub sender: Vec<u8>,
     pub recipient_codec: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub recipient: Vec<u8>,
     pub route_id_codec: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub route_id: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+)]
 pub enum SccpPayloadV1 {
     AssetRegister(AssetRegisterPayloadV1),
     RouteActivate(RouteActivatePayloadV1),
@@ -1146,9 +1035,15 @@ impl SccpPayloadV1 {
     const TOKEN_RESUME_DISCRIMINANT: u8 = 5;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpHubMessageKind {
     Burn,
     TokenAdd,
@@ -1159,113 +1054,170 @@ pub enum SccpHubMessageKind {
     Transfer,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpHubCommitmentV1 {
     pub version: u8,
     pub kind: SccpHubMessageKind,
     pub target_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub message_id: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub payload_hash: H256,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpMerkleStepV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub sibling_hash: H256,
     pub sibling_is_left: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpMerkleProofV1 {
     pub steps: Vec<SccpMerkleStepV1>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum NexusConsensusPhaseV1 {
     Prepare = 1,
     Commit = 2,
     NewView = 3,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct NexusQcRefV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub height: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub view: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub subject_block_hash: H256,
     pub phase: NexusConsensusPhaseV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct NexusCommitQcV1 {
     pub version: u8,
     pub phase: NexusConsensusPhaseV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub height: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub view: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub epoch: u64,
     pub mode_tag: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub subject_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub parent_state_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub post_state_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub chain_order_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub rechain_seq: u64,
     pub highest_qc: Option<NexusQcRefV1>,
     pub validator_set_hash_version: u16,
     pub validator_public_keys: Vec<String>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub validator_set_pops: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub signers_bitmap: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub bls_aggregate_signature: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct NexusBridgeFinalityProofV1 {
     pub version: u8,
     pub chain_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub height: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub commitment_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub block_header_bytes: Vec<u8>,
     pub commit_qc: NexusCommitQcV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSourceChainProofEnvelopeV1 {
     pub version: u8,
     pub source_domain: u32,
@@ -1273,115 +1225,140 @@ pub struct SccpSourceChainProofEnvelopeV1 {
     pub source_chain: String,
     pub source_proof_plan: SccpSourceProofPlanV1,
     pub finality_model: SccpProofFinalityModelV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub message_id: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub source_event_digest: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub commitment_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub finality_height: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub finality_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub finalized_header_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub receipt_or_message_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub consensus_proof: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub message_inclusion_proof: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub inclusion_branch: Vec<Vec<u8>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSourceAdapterVerificationProofV1 {
     pub version: u8,
     pub proof_family: String,
     pub circuit_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub proof_bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSourceStateVerificationProofV1 {
     pub version: u8,
     pub proof_family: String,
     pub circuit_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub proof_bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSourceVerifierEvidenceV1 {
     pub version: u8,
     pub source_domain: u32,
     pub source_chain: String,
     pub source_proof_plan: SccpSourceProofPlanV1,
     pub finality_model: SccpProofFinalityModelV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub adapter_proof_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub adapter_transcript_hash: H256,
     pub adapter_circuit_id: String,
     pub source_trust_anchor_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub source_trust_anchor_hash: H256,
     pub consensus_verifier_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub consensus_verifier_hash: H256,
     pub message_inclusion_verifier_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub message_inclusion_verifier_hash: H256,
     pub finality_policy_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub finality_policy_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub source_state_verifier_id: String,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_state_verifier_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub source_bridge_emitter_id: String,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub source_bridge_emitter_address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_bridge_emitter_code_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_bridge_network_id: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub source_bridge_owner_address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_bridge_config_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_adapter_deployment_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_adapter_deployment_receipt_hash: H256,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpSourceVerifierMaterialV1 {
     pub version: u8,
     pub source_domain: u32,
@@ -1397,42 +1374,44 @@ pub struct SccpSourceVerifierMaterialV1 {
     pub message_inclusion_verifier_hash: H256,
     pub finality_policy_id: String,
     pub finality_policy_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub source_state_verifier_id: String,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_state_verifier_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub source_bridge_emitter_id: String,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub source_bridge_emitter_address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_bridge_emitter_code_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_bridge_network_id: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub source_bridge_owner_address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_bridge_config_hash: H256,
     pub placeholder_material: bool,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpSourceAdapterEngineDeploymentV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub target_domain: u32,
     pub source_chain: String,
@@ -1440,64 +1419,62 @@ pub struct SccpSourceAdapterEngineDeploymentV1 {
     pub finality_model: SccpProofFinalityModelV1,
     pub adapter_proof_family: String,
     pub adapter_circuit_id: String,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub adapter_verifier_vk_hash: H256,
     pub source_trust_anchor_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub source_trust_anchor_hash: H256,
     pub consensus_verifier_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub consensus_verifier_hash: H256,
     pub message_inclusion_verifier_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub message_inclusion_verifier_hash: H256,
     pub finality_policy_id: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub finality_policy_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub source_state_verifier_id: String,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_state_verifier_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub solana_tower_replay_verifier_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub solana_full_accountsdb_lattice_verifier_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub solana_bank_fork_choice_verifier_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub ton_masterchain_config_verifier_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub ton_validator_set_transition_verifier_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub ton_shard_accounts_dictionary_verifier_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub source_bridge_emitter_id: String,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub source_bridge_emitter_address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_bridge_emitter_code_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_bridge_network_id: H256,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub source_bridge_owner_address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(default, with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub source_bridge_config_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub deployment_receipt_hash: H256,
 }
 
@@ -1570,72 +1547,92 @@ impl Default for SccpSourceVerifierMaterialV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSourceConsensusProofV1 {
     pub version: u8,
     pub source_domain: u32,
     pub source_chain: String,
     pub source_proof_plan: SccpSourceProofPlanV1,
     pub finality_model: SccpProofFinalityModelV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub finality_height: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub finality_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub receipt_or_message_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub finalized_header_hash: H256,
     pub adapter_proof: SccpSourceAdapterProofV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub adapter_transcript_hash: H256,
     pub verifier_evidence: SccpSourceVerifierEvidenceV1,
     pub adapter_verification_proof: SccpSourceAdapterVerificationProofV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSourceMessageInclusionProofV1 {
     pub version: u8,
     pub source_domain: u32,
     pub target_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub message_id: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub source_event_digest: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub source_event_leaf_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub receipt_or_message_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub leaf_index: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpEthBeaconSyncCommitteeProofV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub total_weight: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub signed_weight: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub sync_committee_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub sync_committee_public_keys: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub sync_committee_weights: Vec<u64>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub sync_committee_pops: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub signers_bitmap: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub aggregate_signature: Vec<u8>,
 }
 
@@ -1655,37 +1652,43 @@ impl Default for SccpEthBeaconSyncCommitteeProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpEthSyncCommitteeTransitionProofV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub from_sync_period: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub to_sync_period: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub transition_slot: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub finalized_beacon_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub parent_sync_committee_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub next_sync_committee_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub next_sync_committee_payload: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub next_sync_committee_payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub next_sync_committee_branch_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transition_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transition_signature_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub sync_committee_proof: SccpEthBeaconSyncCommitteeProofV1,
 }
@@ -1711,79 +1714,90 @@ impl Default for SccpEthSyncCommitteeTransitionProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpEvmBeaconSourceProofV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub beacon_slot: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub execution_block_number: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub execution_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub execution_header_rlp: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub execution_receipts_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub beacon_finalized_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub beacon_proposer_index: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub beacon_parent_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub beacon_state_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub beacon_body_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub execution_payload_branch: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub sync_committee_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub sync_committee_signature_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub receipt_trie_proof_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub sync_committee_proof: SccpEthBeaconSyncCommitteeProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub sync_committee_transition_proofs: Vec<SccpEthSyncCommitteeTransitionProofV1>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub receipt_root_index: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub receipt_trie_proof_nodes: Vec<Vec<u8>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpBscValidatorSetSealProofV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub total_power: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub signed_power: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub commit_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub validator_public_keys: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_powers: Vec<u64>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub signers_bitmap: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub signatures: Vec<Vec<u8>>,
 }
 
@@ -1802,19 +1816,26 @@ impl Default for SccpBscValidatorSetSealProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpBscValidatorStorageProofV1 {
     pub version: u8,
     pub validator_index: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub storage_slot: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub storage_value: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub storage_value_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub storage_proof_nodes: Vec<Vec<u8>>,
 }
 
@@ -1831,29 +1852,35 @@ impl Default for SccpBscValidatorStorageProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpBscValidatorSetMetadataProofV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub validator_contract_address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub account_proof_nodes: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub storage_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub validator_set_length_slot: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub validator_set_length_value: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub validator_set_length_value_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub validator_set_length_proof_nodes: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_storage_proofs: Vec<SccpBscValidatorStorageProofV1>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub metadata_proof_hash: H256,
 }
 
@@ -1874,42 +1901,47 @@ impl Default for SccpBscValidatorSetMetadataProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpBscValidatorSetTransitionProofV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub from_validator_epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub to_validator_epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub transition_block_number: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub transition_header_rlp: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transition_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub parent_validator_set_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub next_validator_set_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub next_validator_set_payload: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub next_validator_set_payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_set_metadata_proof: SccpBscValidatorSetMetadataProofV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub validator_set_metadata_proof_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transition_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transition_seal_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub seal_proof: SccpBscValidatorSetSealProofV1,
 }
@@ -1937,230 +1969,265 @@ impl Default for SccpBscValidatorSetTransitionProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpBscValidatorSetSourceProofV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub validator_epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub block_number: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub receipts_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub validator_set_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub commit_seal_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub receipt_trie_proof_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub seal_proof: SccpBscValidatorSetSealProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_set_transition_proofs: Vec<SccpBscValidatorSetTransitionProofV1>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub receipt_root_index: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub receipt_trie_proof_nodes: Vec<Vec<u8>>,
 }
 
 /// Solana StakeHistory sysvar entry opened for the signed epoch transcript.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSolanaStakeHistoryEntryV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub effective: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub activating: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub deactivating: u64,
 }
 
 /// Solana account opening metadata bound to SCCP vote/stake account hashes.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSolanaAccountOpeningV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub owner: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub lamports: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub rent_epoch: u64,
     pub executable: bool,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub data_hash: H256,
 }
 
 /// Merkle branch proving a Solana account opening is included in a finalized account root.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSolanaAccountInclusionBranchV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub siblings: Vec<Vec<u8>>,
 }
 
 /// Parsed Solana vote account data bound to SCCP vote-account openings.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSolanaVoteAccountDataV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub node_pubkey: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub authorized_voter: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub authorized_withdrawer: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub inflation_rewards_collector: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub block_revenue_collector: Vec<u8>,
     pub inflation_rewards_commission_bps: u16,
     pub block_revenue_commission_bps: u16,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub pending_delegator_rewards: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub bls_pubkey_compressed: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub root_slot: u64,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tower_vote_slots: Vec<u64>,
 }
 
 /// Parsed Solana stake account delegation data bound to SCCP stake openings.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSolanaStakeAccountDataV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub staker: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub withdrawer: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub voter_pubkey: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub delegated_stake: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub activation_epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub deactivation_epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub warmup_cooldown_rate_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub credits_observed: u64,
     pub stake_flags: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSolanaFinalizedVoteProofV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub total_stake: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub signed_stake: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub vote_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub validator_public_keys: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_stakes: Vec<u64>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_delegated_stakes: Vec<u64>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_activation_epochs: Vec<u64>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_deactivation_epochs: Vec<u64>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub validator_vote_account_addresses: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub validator_stake_account_addresses: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub validator_vote_account_hashes: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub validator_stake_account_hashes: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_vote_account_openings: Vec<SccpSolanaAccountOpeningV1>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_stake_account_openings: Vec<SccpSolanaAccountOpeningV1>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_vote_account_data: Vec<SccpSolanaVoteAccountDataV1>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_stake_account_data: Vec<SccpSolanaStakeAccountDataV1>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub validator_vote_account_raw_data: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub validator_stake_account_raw_data: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_vote_account_inclusion_branches: Vec<SccpSolanaAccountInclusionBranchV1>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_stake_account_inclusion_branches: Vec<SccpSolanaAccountInclusionBranchV1>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub stake_history_sysvar_opening: SccpSolanaAccountOpeningV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub stake_history_sysvar_raw_data: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub stake_history_sysvar_inclusion_branch: SccpSolanaAccountInclusionBranchV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub stake_history_entries: Vec<SccpSolanaStakeHistoryEntryV1>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub accounts_lt_hash: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub accounts_lt_hash_proof: SccpSourceStateVerificationProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tower_replay_verification_proof: SccpSourceStateVerificationProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub full_accountsdb_lattice_verification_proof: SccpSourceStateVerificationProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub bank_fork_choice_verification_proof: SccpSourceStateVerificationProofV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub signers_bitmap: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub signatures: Vec<Vec<u8>>,
 }
 
@@ -2204,57 +2271,63 @@ impl Default for SccpSolanaFinalizedVoteProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSolanaFinalityContextV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub rooted_slot: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub parent_slot: u64,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tower_vote_slots: Vec<u64>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub parent_bank_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub bank_signature_count: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub bank_hash_hard_fork_data: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub epoch_stake_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub stake_activation_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub stake_account_state_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub stake_history_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub stake_history_sysvar_account_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub account_inclusion_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub accounts_lt_hash_checksum: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub accounts_lt_hash_proof_public_inputs_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub tower_lockout_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub tower_replay_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub bank_fork_hash: H256,
 }
@@ -2285,55 +2358,66 @@ impl Default for SccpSolanaFinalityContextV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSolanaFinalizedSourceProofV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub finalized_slot: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub blockhash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub bank_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transaction_status_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub message_proof_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub transaction_signature: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub emitter_program_id: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub finality_context: SccpSolanaFinalityContextV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub vote_proof: SccpSolanaFinalizedVoteProofV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTonMasterchainValidatorSignaturesProofV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub total_weight: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub signed_weight: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub block_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub validator_public_keys: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_weights: Vec<u64>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub signers_bitmap: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub signatures: Vec<Vec<u8>>,
 }
 
@@ -2352,46 +2436,51 @@ impl Default for SccpTonMasterchainValidatorSignaturesProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTonValidatorSetTransitionProofV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub from_validator_set_seqno: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub to_validator_set_seqno: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub masterchain_seqno: u64,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub masterchain_workchain_id: i32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub masterchain_shard: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub masterchain_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub masterchain_file_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub parent_validator_set_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub next_validator_set_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub next_validator_set_payload: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub next_validator_set_payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub next_validator_set_config_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transition_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transition_signature_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_signature_proof: SccpTonMasterchainValidatorSignaturesProofV1,
 }
@@ -2420,34 +2509,41 @@ impl Default for SccpTonValidatorSetTransitionProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTonMasterchainConfigProofV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub masterchain_seqno: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub masterchain_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub shard_state_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub config_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub validator_set_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub validator_set_payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub config_leaf_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub config_leaf_index: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub config_value_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub config_dictionary_proof_boc: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub config_inclusion_branch: Vec<Vec<u8>>,
 }
@@ -2472,121 +2568,124 @@ impl Default for SccpTonMasterchainConfigProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTonMasterchainSourceProofV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub masterchain_seqno: u64,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub masterchain_workchain_id: i32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub masterchain_shard: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub masterchain_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub masterchain_file_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub validator_set_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub masterchain_config_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub masterchain_config_proof_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub shard_workchain_id: i32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub shard_shard: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub shard_seqno: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub shard_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub shard_file_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub shard_state_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transaction_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub transaction_lt: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub shard_state_proof_boc: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub shard_state_dictionary_root: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub shard_state_dictionary_key_bit_len: u16,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub shard_state_dictionary_key: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub shard_state_dictionary_proof_boc: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub shard_state_leaf_index: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub shard_state_inclusion_branch: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub shard_state_verification_proof: SccpSourceStateVerificationProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub masterchain_config_verification_proof: SccpSourceStateVerificationProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_set_transition_verification_proof: SccpSourceStateVerificationProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub shard_accounts_dictionary_verification_proof: SccpSourceStateVerificationProofV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub masterchain_signature_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub shard_proof_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_signature_proof: SccpTonMasterchainValidatorSignaturesProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub masterchain_config_proof: SccpTonMasterchainConfigProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub validator_set_transition_proofs: Vec<SccpTonValidatorSetTransitionProofV1>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTronDposWitnessSealProofV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub total_weight: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub signed_weight: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub solid_block_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub witness_addresses: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub witness_weights: Vec<u64>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub signers_bitmap: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex"))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     pub signatures: Vec<Vec<u8>>,
 }
 
@@ -2606,43 +2705,49 @@ impl Default for SccpTronDposWitnessSealProofV1 {
 }
 
 /// TRON raw block-header proof for the solid block.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTronSolidBlockHeaderProofV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub raw_data: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub witness_signature: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub parent_raw_data: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub parent_witness_signature: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub raw_data_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32", default))]
+    #[norito(with = "json_utils::hex32")]
     #[norito(default)]
     pub parent_raw_data_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub block_id: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub tx_trie_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub account_state_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub parent_block_id: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub witness_address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub timestamp_ms: u64,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub header_version: u32,
 }
@@ -2669,34 +2774,40 @@ impl Default for SccpTronSolidBlockHeaderProofV1 {
 }
 
 /// Signed TRON ancestor header linked to the solid block's parent chain.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTronSignedBlockHeaderProofV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub raw_data: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub witness_signature: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub raw_data_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub block_id: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub tx_trie_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub account_state_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub parent_block_id: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub witness_address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub timestamp_ms: u64,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub header_version: u32,
 }
@@ -2719,35 +2830,41 @@ impl Default for SccpTronSignedBlockHeaderProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 /// Signed transition from one TRON DPoS witness schedule to the next.
 pub struct SccpTronWitnessScheduleTransitionProofV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub from_witness_schedule_epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub to_witness_schedule_epoch: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub transition_block_number: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transition_block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub parent_witness_schedule_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub next_witness_schedule_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub next_witness_schedule_payload: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub next_witness_schedule_payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transition_message_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transition_seal_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub seal_proof: SccpTronDposWitnessSealProofV1,
 }
@@ -2772,67 +2889,69 @@ impl Default for SccpTronWitnessScheduleTransitionProofV1 {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTronDposSourceProofV1 {
     pub version: u8,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub solid_block_number: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub block_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub witness_schedule_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub witness_seal_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub receipt_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub transaction_root: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solid_block_header_proof: SccpTronSolidBlockHeaderProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solid_block_ancestor_headers: Vec<SccpTronSignedBlockHeaderProofV1>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solid_block_confirmation_headers: Vec<SccpTronSignedBlockHeaderProofV1>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub receipt_root_index: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub receipt_root_branch: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub receipt_trie_proof_nodes: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub transaction_index: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string", default))]
+    #[norito(with = "json_utils::u64_string")]
     #[norito(default)]
     pub transaction_count: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex", default))]
+    #[norito(with = "json_utils::bytes_hex")]
     #[norito(default)]
     pub transaction_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::vec_bytes_hex", default))]
+    #[norito(with = "json_utils::vec_bytes_hex")]
     #[norito(default)]
     pub transaction_merkle_branch: Vec<Vec<u8>>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub receipt_proof_hash: H256,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub witness_seal_proof: SccpTronDposWitnessSealProofV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub witness_schedule_transition_proofs: Vec<SccpTronWitnessScheduleTransitionProofV1>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+)]
 #[allow(clippy::large_enum_variant)]
 pub enum SccpSourceAdapterProofV1 {
     EthereumBeaconReceipt(SccpEvmBeaconSourceProofV1),
@@ -2842,55 +2961,83 @@ pub enum SccpSourceAdapterProofV1 {
     TronDposReceipt(SccpTronDposSourceProofV1),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct NexusSccpBurnProofV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub commitment_root: H256,
     pub commitment: SccpHubCommitmentV1,
     pub merkle_proof: SccpMerkleProofV1,
     pub payload: BurnPayloadV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub finality_proof: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct NexusSccpMessageProofV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub commitment_root: H256,
     pub commitment: SccpHubCommitmentV1,
     pub merkle_proof: SccpMerkleProofV1,
     pub payload: SccpPayloadV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub finality_proof: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpMessageTransparentPublicInputsV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub message_id: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub payload_hash: H256,
     pub target_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub commitment_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub finality_height: u64,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub finality_block_hash: H256,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct NexusSccpMessageTransparentProofV1 {
     pub version: u8,
     pub local_domain: u32,
@@ -2906,15 +3053,21 @@ pub struct NexusSccpMessageTransparentProofV1 {
     pub finality_model: SccpProofFinalityModelV1,
     pub verifier_target: SccpProofVerifierTargetV1,
     pub public_inputs: SccpMessageTransparentPublicInputsV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub proof_bytes: Vec<u8>,
     pub submission_package: SccpCounterpartySubmissionPackageV1,
     pub bundle: NexusSccpMessageProofV1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpTransparentChainFamilyV1 {
     Evm,
     Solana,
@@ -2922,9 +3075,16 @@ pub enum SccpTransparentChainFamilyV1 {
     Tron,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpMessageTransparentInnerProofV1 {
     pub version: u8,
     pub chain_family: SccpTransparentChainFamilyV1,
@@ -2945,9 +3105,9 @@ pub struct SccpMessageTransparentInnerProofV1 {
     pub verifier_target: SccpProofVerifierTargetV1,
     pub public_inputs: SccpMessageTransparentPublicInputsV1,
     pub payload_kind: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub statement_hash: H256,
 }
 
@@ -2966,9 +3126,9 @@ pub struct SccpOpenVerifyEnvelopeSummaryV1 {
     pub aux_len_bytes: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+)]
 pub enum SccpNormalizedCodecValueV1 {
     TextUtf8 { value: String },
     EvmHex { bytes: [u8; 20] },
@@ -2978,9 +3138,16 @@ pub enum SccpNormalizedCodecValueV1 {
     SoraAssetId { bytes: H256 },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpAssetRegisterProjectionV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -2990,9 +3157,16 @@ pub struct SccpAssetRegisterProjectionV1 {
     pub decimals: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpRouteActivateProjectionV1 {
     pub version: u8,
     pub source_domain: u32,
@@ -3002,9 +3176,16 @@ pub struct SccpRouteActivateProjectionV1 {
     pub route_id: SccpNormalizedCodecValueV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTransferProjectionV1 {
     pub version: u8,
     pub source_domain: u32,
@@ -3018,9 +3199,17 @@ pub struct SccpTransferProjectionV1 {
     pub route_id: SccpNormalizedCodecValueV1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTokenAddProjectionV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -3031,9 +3220,17 @@ pub struct SccpTokenAddProjectionV1 {
     pub symbol: [u8; 32],
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpTokenControlProjectionV1 {
     pub version: u8,
     pub target_domain: u32,
@@ -3041,9 +3238,9 @@ pub struct SccpTokenControlProjectionV1 {
     pub sora_asset_id: H256,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+)]
 pub enum SccpPayloadProjectionV1 {
     AssetRegister(SccpAssetRegisterProjectionV1),
     RouteActivate(SccpRouteActivateProjectionV1),
@@ -3053,17 +3250,31 @@ pub enum SccpPayloadProjectionV1 {
     TokenResume(SccpTokenControlProjectionV1),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpSubmissionArgumentV1 {
     pub key: String,
     pub description: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpCounterpartySubmissionTemplateV1 {
     pub version: u8,
     pub encoding: String,
@@ -3072,9 +3283,16 @@ pub struct SccpCounterpartySubmissionTemplateV1 {
     pub required_arguments: Vec<SccpSubmissionArgumentV1>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpCounterpartyProofJobV1 {
     pub version: u8,
     pub chain_family: SccpTransparentChainFamilyV1,
@@ -3099,9 +3317,15 @@ pub struct SccpCounterpartyProofJobV1 {
     pub bundle: NexusSccpMessageProofV1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpProofFinalityModelV1 {
     EthereumBeaconExecution,
     BscValidatorSet,
@@ -3110,9 +3334,15 @@ pub enum SccpProofFinalityModelV1 {
     TronDpos,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpProofVerifierTargetV1 {
     EvmContract,
     SolanaProgram,
@@ -3120,23 +3350,42 @@ pub enum SccpProofVerifierTargetV1 {
     TronContract,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpProofSecurityModelV1 {
     RecursiveZk,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpAnchorGovernanceV1 {
     CryptographicProof,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Default,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpLaunchModeV1 {
     AllLanesAtOnce,
     #[default]
@@ -3144,25 +3393,46 @@ pub enum SccpLaunchModeV1 {
     BscMainnetLane,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Default,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpProofSubmitterPolicyV1 {
     #[default]
     Permissionless,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Default,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpRouteActivationPolicyV1 {
     #[default]
     GovernanceAllowlist,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Default,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpSourceProofPlanV1 {
     #[default]
     Unknown,
@@ -3209,9 +3479,291 @@ macro_rules! impl_str_json_enum {
                     norito::json::Error::Message(format!("{err}: `{value}`", err = $err))
                 })
             }
+
+            fn json_from_value(
+                value: &norito::json::Value,
+            ) -> Result<Self, norito::json::Error> {
+                let Some(value) = value.as_str() else {
+                    return Err(norito::json::Error::Message(format!(
+                        "{err}: expected string",
+                        err = $err,
+                    )));
+                };
+                value.parse().map_err(|_| {
+                    norito::json::Error::Message(format!("{err}: `{value}`", err = $err))
+                })
+            }
         }
     };
 }
+
+fn json_external_tagged_variant<'a>(
+    type_name: &'static str,
+    value: &'a norito::json::Value,
+) -> Result<(&'a str, &'a norito::json::Value), norito::json::Error> {
+    let Some(object) = value.as_object() else {
+        return Err(norito::json::Error::Message(format!(
+            "{type_name} must be an externally tagged object"
+        )));
+    };
+    if object.len() != 1 {
+        return Err(norito::json::Error::Message(format!(
+            "{type_name} must contain exactly one variant key"
+        )));
+    }
+    let (tag, payload) = object.iter().next().expect("object length checked above");
+    Ok((tag.as_str(), payload))
+}
+
+fn json_required_field<'a>(
+    type_name: &'static str,
+    value: &'a norito::json::Value,
+    field: &'static str,
+) -> Result<&'a norito::json::Value, norito::json::Error> {
+    let Some(object) = value.as_object() else {
+        return Err(norito::json::Error::Message(format!(
+            "{type_name} variant payload must be an object"
+        )));
+    };
+    object.get(field).ok_or_else(|| {
+        norito::json::Error::Message(format!("missing `{field}` field in {type_name} payload"))
+    })
+}
+
+fn json_fixed_hex_field<const N: usize>(
+    type_name: &'static str,
+    value: &norito::json::Value,
+    field: &'static str,
+) -> Result<[u8; N], norito::json::Error> {
+    let field_value = json_required_field(type_name, value, field)?;
+    let Some(raw) = field_value.as_str() else {
+        return Err(norito::json::Error::Message(format!(
+            "`{field}` field in {type_name} payload must be a hex string"
+        )));
+    };
+    decode_fixed_hex_bytes::<N>(raw).ok_or_else(|| {
+        norito::json::Error::Message(format!(
+            "`{field}` field in {type_name} payload must be a {N}-byte hex string"
+        ))
+    })
+}
+
+fn write_json_key(out: &mut String, key: &str) {
+    norito::json::write_json_string(key, out);
+    out.push(':');
+}
+
+fn write_prefixed_hex_json(out: &mut String, bytes: &[u8]) {
+    norito::json::write_json_string(&encode_0x_lower_hex(bytes), out);
+}
+
+macro_rules! impl_external_tagged_tuple_json_enum {
+    ($ty:ident, $err:literal, { $($variant:ident($payload:ty) => $label:literal),+ $(,)? }) => {
+        impl norito::json::FastJsonWrite for $ty {
+            fn write_json(&self, out: &mut String) {
+                out.push('{');
+                match self {
+                    $(
+                        Self::$variant(payload) => {
+                            write_json_key(out, $label);
+                            norito::json::JsonSerialize::json_serialize(payload, out);
+                        }
+                    ),+
+                }
+                out.push('}');
+            }
+        }
+
+        impl norito::json::JsonDeserialize for $ty {
+            fn json_deserialize(
+                parser: &mut norito::json::Parser<'_>,
+            ) -> Result<Self, norito::json::Error> {
+                let value = <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+                Self::json_from_value(&value)
+            }
+
+            fn json_from_value(
+                value: &norito::json::Value,
+            ) -> Result<Self, norito::json::Error> {
+                let (tag, payload) = json_external_tagged_variant(stringify!($ty), value)?;
+                match tag {
+                    $(
+                        $label => Ok(Self::$variant(<$payload as norito::json::JsonDeserialize>::json_from_value(payload)?)),
+                    )+
+                    other => Err(norito::json::Error::Message(format!(
+                        "{}: unknown variant `{}`",
+                        $err, other
+                    ))),
+                }
+            }
+        }
+    };
+}
+
+impl_str_json_enum!(SccpHubMessageKind, "unsupported SCCP hub message kind", {
+    SccpHubMessageKind::Burn => "Burn",
+    SccpHubMessageKind::TokenAdd => "TokenAdd",
+    SccpHubMessageKind::TokenPause => "TokenPause",
+    SccpHubMessageKind::TokenResume => "TokenResume",
+    SccpHubMessageKind::AssetRegister => "AssetRegister",
+    SccpHubMessageKind::RouteActivate => "RouteActivate",
+    SccpHubMessageKind::Transfer => "Transfer",
+});
+
+impl_str_json_enum!(NexusConsensusPhaseV1, "unsupported Nexus consensus phase", {
+    NexusConsensusPhaseV1::Prepare => "Prepare",
+    NexusConsensusPhaseV1::Commit => "Commit",
+    NexusConsensusPhaseV1::NewView => "NewView",
+});
+
+impl_external_tagged_tuple_json_enum!(SccpPayloadV1, "unsupported SCCP payload variant", {
+    AssetRegister(AssetRegisterPayloadV1) => "AssetRegister",
+    RouteActivate(RouteActivatePayloadV1) => "RouteActivate",
+    Transfer(TransferPayloadV1) => "Transfer",
+    TokenAdd(TokenAddPayloadV1) => "TokenAdd",
+    TokenPause(TokenControlPayloadV1) => "TokenPause",
+    TokenResume(TokenControlPayloadV1) => "TokenResume",
+});
+
+impl_external_tagged_tuple_json_enum!(
+    SccpSourceAdapterProofV1,
+    "unsupported SCCP source adapter proof variant",
+    {
+        EthereumBeaconReceipt(SccpEvmBeaconSourceProofV1) => "EthereumBeaconReceipt",
+        BscValidatorSetReceipt(SccpBscValidatorSetSourceProofV1) => "BscValidatorSetReceipt",
+        SolanaFinalizedTransaction(SccpSolanaFinalizedSourceProofV1) => "SolanaFinalizedTransaction",
+        TonMasterchainShard(SccpTonMasterchainSourceProofV1) => "TonMasterchainShard",
+        TronDposReceipt(SccpTronDposSourceProofV1) => "TronDposReceipt",
+    }
+);
+
+impl_str_json_enum!(
+    SccpTransparentChainFamilyV1,
+    "unsupported SCCP transparent chain family",
+    {
+        SccpTransparentChainFamilyV1::Evm => "Evm",
+        SccpTransparentChainFamilyV1::Solana => "Solana",
+        SccpTransparentChainFamilyV1::Ton => "Ton",
+        SccpTransparentChainFamilyV1::Tron => "Tron",
+    }
+);
+
+impl norito::json::FastJsonWrite for SccpNormalizedCodecValueV1 {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        match self {
+            Self::TextUtf8 { value } => {
+                write_json_key(out, "TextUtf8");
+                out.push('{');
+                write_json_key(out, "value");
+                norito::json::JsonSerialize::json_serialize(value, out);
+                out.push('}');
+            }
+            Self::EvmHex { bytes } => {
+                write_json_key(out, "EvmHex");
+                out.push('{');
+                write_json_key(out, "bytes");
+                write_prefixed_hex_json(out, bytes);
+                out.push('}');
+            }
+            Self::SolanaBase58 { bytes } => {
+                write_json_key(out, "SolanaBase58");
+                out.push('{');
+                write_json_key(out, "bytes");
+                write_prefixed_hex_json(out, bytes);
+                out.push('}');
+            }
+            Self::TonRaw { workchain, account } => {
+                write_json_key(out, "TonRaw");
+                out.push('{');
+                write_json_key(out, "workchain");
+                norito::json::JsonSerialize::json_serialize(workchain, out);
+                out.push(',');
+                write_json_key(out, "account");
+                write_prefixed_hex_json(out, account);
+                out.push('}');
+            }
+            Self::TronBase58Check { payload } => {
+                write_json_key(out, "TronBase58Check");
+                out.push('{');
+                write_json_key(out, "payload");
+                write_prefixed_hex_json(out, payload);
+                out.push('}');
+            }
+            Self::SoraAssetId { bytes } => {
+                write_json_key(out, "SoraAssetId");
+                out.push('{');
+                write_json_key(out, "bytes");
+                write_prefixed_hex_json(out, bytes);
+                out.push('}');
+            }
+        }
+        out.push('}');
+    }
+}
+
+impl norito::json::JsonDeserialize for SccpNormalizedCodecValueV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value =
+            <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(parser)?;
+        Self::json_from_value(&value)
+    }
+
+    fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+        let (tag, payload) = json_external_tagged_variant("SccpNormalizedCodecValueV1", value)?;
+        match tag {
+            "TextUtf8" => Ok(Self::TextUtf8 {
+                value: <String as norito::json::JsonDeserialize>::json_from_value(
+                    json_required_field("SccpNormalizedCodecValueV1", payload, "value")?,
+                )?,
+            }),
+            "EvmHex" => Ok(Self::EvmHex {
+                bytes: json_fixed_hex_field::<20>("SccpNormalizedCodecValueV1", payload, "bytes")?,
+            }),
+            "SolanaBase58" => Ok(Self::SolanaBase58 {
+                bytes: json_fixed_hex_field::<32>("SccpNormalizedCodecValueV1", payload, "bytes")?,
+            }),
+            "TonRaw" => Ok(Self::TonRaw {
+                workchain: <i32 as norito::json::JsonDeserialize>::json_from_value(
+                    json_required_field("SccpNormalizedCodecValueV1", payload, "workchain")?,
+                )?,
+                account: json_fixed_hex_field::<32>(
+                    "SccpNormalizedCodecValueV1",
+                    payload,
+                    "account",
+                )?,
+            }),
+            "TronBase58Check" => Ok(Self::TronBase58Check {
+                payload: json_fixed_hex_field::<21>(
+                    "SccpNormalizedCodecValueV1",
+                    payload,
+                    "payload",
+                )?,
+            }),
+            "SoraAssetId" => Ok(Self::SoraAssetId {
+                bytes: json_fixed_hex_field::<32>("SccpNormalizedCodecValueV1", payload, "bytes")?,
+            }),
+            other => Err(norito::json::Error::Message(format!(
+                "unsupported SCCP normalized codec value variant `{other}`"
+            ))),
+        }
+    }
+}
+
+impl_external_tagged_tuple_json_enum!(
+    SccpPayloadProjectionV1,
+    "unsupported SCCP payload projection variant",
+    {
+        AssetRegister(SccpAssetRegisterProjectionV1) => "AssetRegister",
+        RouteActivate(SccpRouteActivateProjectionV1) => "RouteActivate",
+        Transfer(SccpTransferProjectionV1) => "Transfer",
+        TokenAdd(SccpTokenAddProjectionV1) => "TokenAdd",
+        TokenPause(SccpTokenControlProjectionV1) => "TokenPause",
+        TokenResume(SccpTokenControlProjectionV1) => "TokenResume",
+    }
+);
 
 impl_str_json_enum!(SccpLaunchModeV1, "unsupported SCCP launch mode", {
     SccpLaunchModeV1::AllLanesAtOnce => "AllLanesAtOnce",
@@ -3256,11 +3808,43 @@ impl_str_json_enum!(
     }
 );
 
+impl_str_json_enum!(
+    SccpProofVerifierTargetV1,
+    "unsupported SCCP proof verifier target",
+    {
+        SccpProofVerifierTargetV1::EvmContract => "EvmContract",
+        SccpProofVerifierTargetV1::SolanaProgram => "SolanaProgram",
+        SccpProofVerifierTargetV1::TonContract => "TonContract",
+        SccpProofVerifierTargetV1::TronContract => "TronContract",
+    }
+);
+
+impl_str_json_enum!(
+    SccpProofSecurityModelV1,
+    "unsupported SCCP proof security model",
+    {
+        SccpProofSecurityModelV1::RecursiveZk => "RecursiveZk",
+    }
+);
+
+impl_str_json_enum!(
+    SccpAnchorGovernanceV1,
+    "unsupported SCCP anchor governance",
+    {
+        SccpAnchorGovernanceV1::CryptographicProof => "CryptographicProof",
+    }
+);
+
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpProductionPolicyV1 {
     pub version: u8,
     pub launch_mode: SccpLaunchModeV1,
@@ -3282,10 +3866,15 @@ impl Default for SccpProductionPolicyV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpSourceAdapterEngineReadinessV1 {
     pub version: u8,
     pub domain: u32,
@@ -3294,10 +3883,8 @@ pub struct SccpSourceAdapterEngineReadinessV1 {
     pub finality_model: SccpProofFinalityModelV1,
     pub adapter_proof_family: String,
     pub adapter_circuit_id: String,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub source_verifier_material: SccpSourceVerifierMaterialV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub source_verifier_material_ready: bool,
     pub adapter_statement_binding_ready: bool,
@@ -3307,7 +3894,6 @@ pub struct SccpSourceAdapterEngineReadinessV1 {
     pub external_message_inclusion_verifier_ready: bool,
     pub source_trust_anchor_ready: bool,
     pub production_ready: bool,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub blockers: Vec<String>,
 }
@@ -3337,155 +3923,113 @@ impl Default for SccpSourceAdapterEngineReadinessV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpRouteAllowlistReadinessV1 {
     pub version: u8,
     pub domain: u32,
     pub chain: String,
     pub activation_policy: SccpRouteActivationPolicyV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub route_allowlist_id: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub route_allowlist_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub route_canary_status: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub route_canary_evidence_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub route_canary_route_allowlist_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub route_canary_destination_binding_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_transaction_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_log_index: Option<u32>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_receipt_block_number: Option<u64>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_receipt_block_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_receipt_block_finalized: Option<bool>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_block_receipts_root: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_call_data_sha256: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_message_id: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_payload_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_target_domain: Option<u32>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_statement_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_commitment_root: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_finality_height: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_finality_block_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_proof_version: Option<u32>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_proof_source_domain: Option<u32>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub evm_route_canary_used_message_proof: Option<bool>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_transaction_id: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_transaction_owner_address: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_block_number: Option<u64>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_block_timestamp: Option<u64>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_log_index: Option<u32>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_message_id: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_call_data_sha256: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_payload_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_target_domain: Option<u32>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_statement_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_commitment_root: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_finality_height: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_finality_block_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_proof_version: Option<u32>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_proof_source_domain: Option<u32>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_used_message_proof: Option<bool>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_raw_data_owner_matches_transaction: Option<bool>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_signature_sha256: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_signature_recovered_address: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub tron_route_canary_signature_recovers_to_owner: Option<bool>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub ton_route_canary_account_state_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub ton_route_canary_last_transaction_lt: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub ton_route_canary_last_transaction_hash: Option<String>,
     pub routes_allowlisted: bool,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub blockers: Vec<String>,
 }
@@ -3550,10 +4094,15 @@ impl Default for SccpRouteAllowlistReadinessV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpLaneProductionReadinessV1 {
     pub version: u8,
     pub domain: u32,
@@ -3562,7 +4111,6 @@ pub struct SccpLaneProductionReadinessV1 {
     pub destination_verifier_plan: SccpDestinationVerifierPlanV1,
     pub verifier_backend: SccpVerifierBackendV1,
     pub source_adapter_engine: SccpSourceAdapterEngineReadinessV1,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub route_allowlist: SccpRouteAllowlistReadinessV1,
     pub source_adapter_ready: bool,
@@ -3571,7 +4119,6 @@ pub struct SccpLaneProductionReadinessV1 {
     pub routes_allowlisted: bool,
     pub permissionless_submission: bool,
     pub production_ready: bool,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub blockers: Vec<String>,
 }
@@ -3602,11 +4149,18 @@ impl Default for SccpLaneProductionReadinessV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Default,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
 pub enum SccpDestinationVerifierPlanV1 {
-    // Keep V1 Norito tags stable; index 5 remains a reserved legacy slot.
+    // Keep V1 Norito tags stable; index 5 remains a reserved retired-network slot.
     #[codec(index = 0)]
     #[default]
     Unknown,
@@ -3671,10 +4225,15 @@ impl norito::json::JsonDeserialize for SccpDestinationVerifierPlanV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpDestinationRolloutV1 {
     pub version: u8,
     pub domain: u32,
@@ -3682,91 +4241,62 @@ pub struct SccpDestinationRolloutV1 {
     pub verifier_plan: SccpDestinationVerifierPlanV1,
     pub immutable_verifier_ready: bool,
     pub anchors_ready: bool,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub verifier_identity: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub verifier_code_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub verifier_key_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub destination_network_id: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub destination_bridge_address: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub destination_binding_key: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub destination_binding_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub anchor_id: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_rpc_commitment: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_program_owner: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_programdata_owner: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_program_immutable: Option<bool>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_program_account_data_base64: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_programdata_address: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_programdata_slot: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_expected_programdata_slot: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_program_account_context_slot: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_programdata_account_context_slot: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_programdata_metadata_blake2b256: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_programdata_metadata_base64: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_programdata_executable_blake2b256: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub solana_programdata_executable_base64: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub ton_account_status: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub ton_account_state_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub ton_last_transaction_lt: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub ton_last_transaction_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub ton_verifier_code_boc_root_hash: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub ton_verifier_code_boc: Option<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub blockers: Vec<String>,
 }
@@ -3814,29 +4344,39 @@ impl Default for SccpDestinationRolloutV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpDestinationBindingV1 {
     pub version: u8,
     pub key: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub binding_hash: H256,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpSourceAdapterDeploymentBindingV1 {
     pub version: u8,
     pub source_domain: u32,
     pub target_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub source_adapter_deployment_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub source_adapter_deployment_receipt_hash: H256,
 }
 
@@ -3846,14 +4386,14 @@ pub struct SccpSourceAdapterDeploymentBindingV1 {
     Debug,
     PartialEq,
     Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[norito(tag = "family", content = "detail", rename_all = "snake_case")]
 pub enum SccpVerifierBackendFamilyV1 {
-    // Keep V1 Norito tags stable; index 4 remains a reserved legacy slot.
+    // Keep V1 Norito tags stable; index 4 remains a reserved retired-network slot.
     #[codec(index = 0)]
     EvmSecp256k1Keccak,
     #[codec(index = 1)]
@@ -3871,10 +4411,15 @@ pub enum SccpVerifierBackendFamilyV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpVerifierBackendV1 {
     pub version: u8,
     pub family: SccpVerifierBackendFamilyV1,
@@ -3882,80 +4427,105 @@ pub struct SccpVerifierBackendV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpSubmissionArgumentValueV1 {
     pub key: String,
     pub encoding: String,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub bytes: Vec<u8>,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpEvmWordPublicInputsV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub message_id: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub payload_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub target_domain_word: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub commitment_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub finality_height_word: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub finality_block_hash: H256,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpEvmAttestationSignatureV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub signer_address: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub signature_bytes: Vec<u8>,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpEvmAttestationEnvelopeV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub message_id: H256,
     pub source_domain: u32,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub commitment_root: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub native_proof_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub destination_binding_hash: H256,
     pub signatures: Vec<SccpEvmAttestationSignatureV1>,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpEvmContractSubmissionPayloadV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub proof_bytes: Vec<u8>,
     pub public_inputs: SccpEvmWordPublicInputsV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub public_inputs_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub statement_hash: H256,
     pub destination_binding: SccpDestinationBindingV1,
     pub attestation: SccpEvmAttestationEnvelopeV1,
@@ -4061,110 +4631,140 @@ pub struct SccpTonProofResultV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpEvmGroth16ContractSubmissionPayloadV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub proof_bytes: Vec<u8>,
     pub public_inputs: SccpEvmWordPublicInputsV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub statement_hash: H256,
     pub destination_binding: SccpDestinationBindingV1,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpTronContractSubmissionPayloadV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub proof_bytes: Vec<u8>,
     pub public_inputs: SccpEvmWordPublicInputsV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub statement_hash: H256,
     pub destination_binding: SccpDestinationBindingV1,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[allow(clippy::struct_field_names)]
 pub struct SccpSolanaProgramSubmissionPayloadV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub proof_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub public_inputs_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub bundle_bytes: Vec<u8>,
     pub destination_binding: SccpDestinationBindingV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub destination_binding_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub statement_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub proof_context_hash: H256,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[allow(clippy::struct_field_names)]
 pub struct SccpTonInternalMessageSubmissionPayloadV1 {
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub message_body_boc: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    #[norito(with = "json_utils::u64_string")]
     pub query_id: u64,
     pub destination_binding: SccpDestinationBindingV1,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub destination_binding_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub proof_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub public_inputs_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub bundle_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub statement_hash: H256,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[allow(clippy::struct_field_names)]
 pub struct SccpLocalAdmissionSubmissionPayloadV1 {
     pub version: u8,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub proof_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub public_inputs_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub bundle_bytes: Vec<u8>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub statement_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub source_verifier_material_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    #[norito(with = "json_utils::hex32")]
     pub source_adapter_engine_deployment_hash: H256,
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 #[norito(tag = "platform", content = "payload", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum SccpPlatformSubmissionPayloadV1 {
-    // Keep V1 Norito tags stable; index 5 remains a reserved legacy slot.
+    // Keep V1 Norito tags stable; index 5 remains a reserved retired-network slot.
     #[codec(index = 0)]
     EvmContractCall(SccpEvmContractSubmissionPayloadV1),
     #[codec(index = 1)]
@@ -4180,10 +4780,15 @@ pub enum SccpPlatformSubmissionPayloadV1 {
 }
 
 #[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
 )]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub struct SccpCounterpartySubmissionPackageV1 {
     pub version: u8,
     pub proof_family: String,
@@ -4193,13 +4798,20 @@ pub struct SccpCounterpartySubmissionPackageV1 {
     pub verifier_entrypoint: String,
     pub platform_payload: SccpPlatformSubmissionPayloadV1,
     pub arguments: Vec<SccpSubmissionArgumentValueV1>,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    #[norito(with = "json_utils::bytes_hex")]
     pub envelope_bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::JsonSerialize,
+    norito::derive::JsonDeserialize,
+)]
 pub struct SccpProofManifestV1 {
     pub version: u8,
     pub local_domain: u32,
@@ -4220,11 +4832,9 @@ pub struct SccpProofManifestV1 {
     pub manifest_seed: String,
     pub required_public_inputs: Vec<String>,
     pub message_payload_kinds: Vec<String>,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub destination_rollout: SccpDestinationRolloutV1,
     pub production_ready: bool,
-    #[cfg_attr(feature = "serde", serde(default))]
     #[norito(default)]
     pub disabled_reason: Option<String>,
     pub submission_template: SccpCounterpartySubmissionTemplateV1,
@@ -34549,14 +35159,20 @@ fn signer_indices_from_bitmap(bitmap: &[u8], roster_len: usize) -> Option<Vec<us
 #[cfg_attr(feature = "test-fixtures", allow(dead_code))]
 mod tests {
     use super::*;
-    use norito::to_bytes;
+    use norito::{decode_from_bytes, to_bytes};
 
     const TEST_TON_CODE_BOC_HEX: &str = "0xb5ee9c720101020100070001020101000202";
     const TEST_TON_CODE_BOC_ROOT_HASH: &str =
         "0x49725ad44ef5ed5feaa27f88679cabae427209a6bea318cb9b66030131aae6fe";
 
-    fn norito_enum_discriminant<T: norito::NoritoSerialize>(value: &T) -> u32 {
-        let bytes = to_bytes(value).expect("encode Norito enum");
+    fn assert_norito_enum_tag_roundtrips<T>(value: T, expected_tag: u32)
+    where
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + PartialEq
+            + core::fmt::Debug,
+    {
+        let bytes = to_bytes(&value).expect("encode Norito enum");
         let view = norito::core::from_bytes_view(&bytes).expect("read Norito payload");
         let tag = view
             .as_bytes()
@@ -34564,7 +35180,32 @@ mod tests {
             .expect("enum payload starts with a u32 tag")
             .try_into()
             .expect("tag slice is four bytes");
-        u32::from_le_bytes(tag)
+        assert_eq!(u32::from_le_bytes(tag), expected_tag);
+
+        let decoded: T = decode_from_bytes(&bytes).expect("decode Norito enum");
+        assert_eq!(decoded, value);
+    }
+
+    fn assert_norito_enum_tag_is_rejected<T>(seed: T, rejected_tag: u32)
+    where
+        T: norito::NoritoSerialize
+            + for<'de> norito::NoritoDeserialize<'de>
+            + PartialEq
+            + core::fmt::Debug,
+    {
+        let mut bytes = to_bytes(&seed).expect("encode Norito enum");
+        let view = norito::core::from_bytes_view(&bytes).expect("read Norito payload");
+        let payload = view.as_bytes();
+        let payload_offset = bytes
+            .windows(payload.len())
+            .position(|window| window == payload)
+            .expect("encoded enum payload is present in Norito bytes");
+        bytes[payload_offset..payload_offset + 4].copy_from_slice(&rejected_tag.to_le_bytes());
+
+        assert!(
+            decode_from_bytes::<T>(&bytes).is_err(),
+            "retired SCCP V1 Norito enum tag {rejected_tag} must stay undecodable",
+        );
     }
 
     fn sample_test_destination_binding() -> SccpDestinationBindingV1 {
@@ -34573,6 +35214,47 @@ mod tests {
             key: String::from("sccp:test:destination-binding"),
             binding_hash: [0x11; 32],
         }
+    }
+
+    #[test]
+    fn sccp_payload_json_roundtrips_external_tagged_transfer() {
+        let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_ETH,
+            nonce: 12,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"alice".to_vec(),
+            recipient_codec: SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+
+        let json = norito::json::to_string(&payload).expect("serialize payload JSON");
+        assert!(json.contains(r#""Transfer""#));
+        assert!(json.contains(r#""amount":"77""#));
+        assert!(json.contains(r#""asset_id":"0x786f7223756e6976657273616c""#));
+
+        let decoded = norito::json::from_str::<SccpPayloadV1>(&json).expect("decode payload JSON");
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn sccp_normalized_codec_value_json_roundtrips_hex_variant() {
+        let value = SccpNormalizedCodecValueV1::EvmHex { bytes: [0x11; 20] };
+
+        let json = norito::json::to_string(&value).expect("serialize normalized codec JSON");
+        assert!(json.contains(r#""EvmHex""#));
+        assert!(json.contains(r#""bytes":"0x1111111111111111111111111111111111111111""#));
+
+        let decoded = norito::json::from_str::<SccpNormalizedCodecValueV1>(&json)
+            .expect("decode normalized codec JSON");
+        assert_eq!(decoded, value);
     }
 
     fn sample_test_evm_word_public_inputs() -> SccpEvmWordPublicInputsV1 {
@@ -34689,96 +35371,78 @@ mod tests {
     }
 
     #[test]
-    fn sccp_v1_norito_enum_indices_preserve_reserved_legacy_slots() {
-        assert_eq!(
-            norito_enum_discriminant(&SccpVerifierBackendFamilyV1::EvmSecp256k1Keccak),
-            0
+    fn sccp_v1_norito_enum_indices_preserve_reserved_retired_slots() {
+        assert_norito_enum_tag_roundtrips(SccpVerifierBackendFamilyV1::EvmSecp256k1Keccak, 0);
+        assert_norito_enum_tag_roundtrips(SccpVerifierBackendFamilyV1::SolanaProgram, 1);
+        assert_norito_enum_tag_roundtrips(SccpVerifierBackendFamilyV1::TonContract, 2);
+        assert_norito_enum_tag_roundtrips(SccpVerifierBackendFamilyV1::TronStarkFri, 3);
+        assert_norito_enum_tag_is_rejected(SccpVerifierBackendFamilyV1::EvmGroth16Bn254, 4);
+        assert_norito_enum_tag_roundtrips(SccpVerifierBackendFamilyV1::EvmGroth16Bn254, 5);
+        assert_norito_enum_tag_roundtrips(SccpVerifierBackendFamilyV1::TronGroth16Bn254, 6);
+        assert_norito_enum_tag_roundtrips(SccpVerifierBackendFamilyV1::Unknown, 7);
+
+        assert_norito_enum_tag_roundtrips(SccpDestinationVerifierPlanV1::Unknown, 0);
+        assert_norito_enum_tag_roundtrips(SccpDestinationVerifierPlanV1::EvmGroth16Bn254Adapter, 1);
+        assert_norito_enum_tag_roundtrips(
+            SccpDestinationVerifierPlanV1::SolanaProgramNativeRecursive,
+            2,
         );
-        assert_eq!(
-            norito_enum_discriminant(&SccpVerifierBackendFamilyV1::SolanaProgram),
-            1
+        assert_norito_enum_tag_roundtrips(
+            SccpDestinationVerifierPlanV1::TonContractNativeRecursive,
+            3,
         );
-        assert_eq!(
-            norito_enum_discriminant(&SccpVerifierBackendFamilyV1::TonContract),
-            2
+        assert_norito_enum_tag_roundtrips(
+            SccpDestinationVerifierPlanV1::TronContractNativeRecursive,
+            4,
         );
-        assert_eq!(
-            norito_enum_discriminant(&SccpVerifierBackendFamilyV1::TronStarkFri),
-            3
+        assert_norito_enum_tag_is_rejected(
+            SccpDestinationVerifierPlanV1::TronContractGroth16Bn254,
+            5,
         );
-        assert_eq!(
-            norito_enum_discriminant(&SccpVerifierBackendFamilyV1::EvmGroth16Bn254),
-            5
-        );
-        assert_eq!(
-            norito_enum_discriminant(&SccpVerifierBackendFamilyV1::TronGroth16Bn254),
-            6
-        );
-        assert_eq!(
-            norito_enum_discriminant(&SccpVerifierBackendFamilyV1::Unknown),
-            7
+        assert_norito_enum_tag_roundtrips(
+            SccpDestinationVerifierPlanV1::TronContractGroth16Bn254,
+            6,
         );
 
-        assert_eq!(
-            norito_enum_discriminant(&SccpDestinationVerifierPlanV1::Unknown),
-            0
-        );
-        assert_eq!(
-            norito_enum_discriminant(&SccpDestinationVerifierPlanV1::EvmGroth16Bn254Adapter),
-            1
-        );
-        assert_eq!(
-            norito_enum_discriminant(&SccpDestinationVerifierPlanV1::SolanaProgramNativeRecursive),
-            2
-        );
-        assert_eq!(
-            norito_enum_discriminant(&SccpDestinationVerifierPlanV1::TonContractNativeRecursive),
-            3
-        );
-        assert_eq!(
-            norito_enum_discriminant(&SccpDestinationVerifierPlanV1::TronContractNativeRecursive),
-            4
-        );
-        assert_eq!(
-            norito_enum_discriminant(&SccpDestinationVerifierPlanV1::TronContractGroth16Bn254),
-            6
-        );
-
-        assert_eq!(
-            norito_enum_discriminant(&SccpPlatformSubmissionPayloadV1::EvmContractCall(
+        assert_norito_enum_tag_roundtrips(
+            SccpPlatformSubmissionPayloadV1::EvmContractCall(
                 sample_test_evm_contract_submission_payload(),
-            )),
-            0
+            ),
+            0,
         );
-        assert_eq!(
-            norito_enum_discriminant(&SccpPlatformSubmissionPayloadV1::EvmGroth16ContractCall(
+        assert_norito_enum_tag_roundtrips(
+            SccpPlatformSubmissionPayloadV1::EvmGroth16ContractCall(
                 sample_test_evm_groth16_submission_payload(),
-            )),
-            1
+            ),
+            1,
         );
-        assert_eq!(
-            norito_enum_discriminant(&SccpPlatformSubmissionPayloadV1::SolanaProgramInstruction(
+        assert_norito_enum_tag_roundtrips(
+            SccpPlatformSubmissionPayloadV1::SolanaProgramInstruction(
                 sample_test_solana_submission_payload(),
-            )),
-            2
+            ),
+            2,
         );
-        assert_eq!(
-            norito_enum_discriminant(&SccpPlatformSubmissionPayloadV1::TonInternalMessage(
+        assert_norito_enum_tag_roundtrips(
+            SccpPlatformSubmissionPayloadV1::TonInternalMessage(
                 sample_test_ton_submission_payload(),
-            )),
-            3
+            ),
+            3,
         );
-        assert_eq!(
-            norito_enum_discriminant(&SccpPlatformSubmissionPayloadV1::TronContractCall(
-                sample_test_tron_submission_payload(),
-            )),
-            4
+        assert_norito_enum_tag_roundtrips(
+            SccpPlatformSubmissionPayloadV1::TronContractCall(sample_test_tron_submission_payload()),
+            4,
         );
-        assert_eq!(
-            norito_enum_discriminant(&SccpPlatformSubmissionPayloadV1::LocalAdmission(
+        assert_norito_enum_tag_is_rejected(
+            SccpPlatformSubmissionPayloadV1::LocalAdmission(
                 sample_test_local_admission_submission_payload(),
-            )),
-            6
+            ),
+            5,
+        );
+        assert_norito_enum_tag_roundtrips(
+            SccpPlatformSubmissionPayloadV1::LocalAdmission(
+                sample_test_local_admission_submission_payload(),
+            ),
+            6,
         );
     }
 
@@ -55152,27 +55816,20 @@ mod tests {
         );
         assert_eq!(
             request.request_hash,
-            sccp_ton_proof_request_hash(
-                &request.public_inputs_bytes,
-                &bundle_bytes,
-                &[0x51, 0x52, 0x53],
-                SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1,
-                [0x42; 32],
-                [0x55; 32],
-                [0x66; 32],
-                request.source_adapter_deployment_binding_hash,
+            decode_fixed_hex_bytes::<32>(
+                "0x428bc0419be6281f8c4738677b433b293efbefcbe554420effb91d3c87e12438",
             )
+            .expect("cross-SDK TON proof request hash vector")
         );
 
         let proof_result = wrap_sccp_ton_proof_result(&[0x91, 0x92, 0x93, 0x94, 0x95], &request)
             .expect("wrapped TON proof result");
         assert_eq!(
             proof_result.envelope_hash,
-            sccp_ton_proof_result_envelope_hash(
-                request.request_hash,
-                request.source_adapter_deployment_binding_hash,
-                &[0x91, 0x92, 0x93, 0x94, 0x95],
+            decode_fixed_hex_bytes::<32>(
+                "0xd2618b4c6a9b9e9adaf2bf5b5f1b89e1b35181d0cf46148abf403ea9e3c5d00b",
             )
+            .expect("cross-SDK TON proof result envelope hash vector")
         );
     }
 

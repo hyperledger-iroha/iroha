@@ -287,15 +287,45 @@ TypeInvariant ==
        /\ ActualTelemetryR(c) \in 0..MismatchedR
        /\ ActualResultOk(c) \in BOOLEAN
 
-IngressMatchesSpec ==
+ExpectedCollectorParamsMatch(c) ==
+  /\ ActualExpectedK(c) = SpecExpectedK(c)
+  /\ ActualExpectedR(c) = SpecExpectedR(c)
+
+WarningFieldsMatch(c) ==
+  /\ ActualKWarn(c) = SpecKWarn(c)
+  /\ ActualRWarn(c) = SpecRWarn(c)
+
+TelemetryFieldsMatch(c) ==
+  /\ ActualTelemetrySet(c) = SpecTelemetrySet(c)
+  /\ ActualTelemetryK(c) = SpecTelemetryK(c)
+  /\ ActualTelemetryR(c) = SpecTelemetryR(c)
+
+ResultFieldsMatch(c) ==
+  ActualResultOk(c) = SpecResultOk(c)
+
+ConsensusParamsExpectedCollectorExact ==
   \A c \in Cases:
-    /\ ActualExpectedK(c) = SpecExpectedK(c)
-    /\ ActualExpectedR(c) = SpecExpectedR(c)
-    /\ ActualKWarn(c) = SpecKWarn(c)
-    /\ ActualRWarn(c) = SpecRWarn(c)
-    /\ ActualTelemetrySet(c) = SpecTelemetrySet(c)
-    /\ ActualTelemetryK(c) = SpecTelemetryK(c)
-    /\ ActualTelemetryR(c) = SpecTelemetryR(c)
-    /\ ActualResultOk(c) = SpecResultOk(c)
+    ExpectedCollectorParamsMatch(c)
+
+ConsensusParamsWarningsExact ==
+  \A c \in Cases:
+    WarningFieldsMatch(c)
+
+ConsensusParamsTelemetryExact ==
+  \A c \in Cases:
+    TelemetryFieldsMatch(c)
+
+ConsensusParamsResultExact ==
+  \A c \in Cases:
+    ResultFieldsMatch(c)
+
+ConsensusParamsIngressExactness ==
+  /\ ConsensusParamsExpectedCollectorExact
+  /\ ConsensusParamsWarningsExact
+  /\ ConsensusParamsTelemetryExact
+  /\ ConsensusParamsResultExact
+
+IngressMatchesSpec ==
+  ConsensusParamsIngressExactness
 
 ====

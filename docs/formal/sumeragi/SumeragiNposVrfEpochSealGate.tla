@@ -357,12 +357,41 @@ EffectValidationFailsClosed ==
     candidate \in EffectValidationCases =>
       ImplementationEffectAccepts(candidate) = SpecEffectAccepts(candidate)
 
-Safety ==
+NposVrfEpochSealGroupedCases ==
+  MergeCases \cup
+  StageCases \cup
+  CommittedEffectCases \cup
+  ActivationCases \cup
+  EffectValidationCases
+
+NposVrfEpochSealCaseGroupsComplete ==
+  NposVrfEpochSealGroupedCases = Candidates
+
+NposVrfEpochSealMergeExactness ==
   /\ MergeAdmissionMatchesSpec
   /\ MergePreservesMonotonicFields
+
+NposVrfEpochSealStageExactness ==
   /\ StageMatchesSpec
+
+NposVrfEpochSealCommittedEffectExactness ==
   /\ CommittedEffectsMatchSpec
+
+NposVrfEpochSealActivationExactness ==
   /\ ActivationMatchesSpec
+
+NposVrfEpochSealEffectValidationExactness ==
   /\ EffectValidationFailsClosed
+
+NposVrfEpochSealExactness ==
+  /\ NposVrfEpochSealCaseGroupsComplete
+  /\ NposVrfEpochSealMergeExactness
+  /\ NposVrfEpochSealStageExactness
+  /\ NposVrfEpochSealCommittedEffectExactness
+  /\ NposVrfEpochSealActivationExactness
+  /\ NposVrfEpochSealEffectValidationExactness
+
+Safety ==
+  NposVrfEpochSealExactness
 
 ====

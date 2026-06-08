@@ -21,7 +21,7 @@ Déterminez les erreurs, analysez les blobs, utilisez DA-2. Dans ce document
 зафиксированы канонические структуры данных, хуки блокового пайплайна,
 Les clients et les fournisseurs de services Torii/RPC, dont les documents sont disponibles
 donc, les validateurs doivent se renseigner sur les comités DA pour l'admission ou
-проверках управления. Il s'agit de la charge utile Norito-кодированы ; sans SCALE et JSON ad hoc.
+проверках управления. Il s'agit de la charge utile Norito-кодированы ; sans retired codec et JSON ad hoc.
 
 ## Celi- Des commentaires sur le blob (racine de morceau + hachage manifeste + KZG optionnel
   engagement) dans le bloc Nexus, qui peut être reconstruit

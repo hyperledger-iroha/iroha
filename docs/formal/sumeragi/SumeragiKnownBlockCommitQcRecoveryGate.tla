@@ -244,6 +244,20 @@ SafetyFast ==
   /\ \A c \in ExtendsCases: ActualExtendsOutput(c) = SpecExtendsOutput(c)
   /\ \A c \in FetchCases: ActualFetchOutput(c) = SpecFetchOutput(c)
 
+RecoveryRequestPlanExact ==
+  \A c \in PlanCases: ActualPlanOutput(c) = SpecPlanOutput(c)
+
+PendingTipExtensionExact ==
+  \A c \in ExtendsCases: ActualExtendsOutput(c) = SpecExtendsOutput(c)
+
+StaleViewCommitQcFetchAdmissionExact ==
+  \A c \in FetchCases: ActualFetchOutput(c) = SpecFetchOutput(c)
+
+KnownBlockCommitQcRecoveryExactness ==
+  /\ RecoveryRequestPlanExact
+  /\ PendingTipExtensionExact
+  /\ StaleViewCommitQcFetchAdmissionExact
+
 BugPlanLocalRequestsBody ==
   ActualPlanOutput("plan_local_payload") = SpecPlanOutput("plan_local_payload")
 

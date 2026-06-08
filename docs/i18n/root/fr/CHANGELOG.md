@@ -17,11 +17,11 @@ translator: machine-google-reviewed
 
 Tous les changements notables apportés à ce projet seront documentés dans ce dossier.
 
-## [Inédit]- Lâchez la cale SCALE ; `norito::codec` est désormais implémenté avec la sérialisation native Norito.
-- Remplacez les utilisations `parity_scale_codec` par `norito::codec` dans toutes les caisses.
+## [Inédit]- Lâchez la cale retired codec ; `norito::codec` est désormais implémenté avec la sérialisation native Norito.
+- Remplacez les utilisations `retired_codec` par `norito::codec` dans toutes les caisses.
 - Commencer la migration des outils vers la sérialisation native Norito.
-- Supprimez la dépendance `parity-scale-codec` restante de l'espace de travail en faveur de la sérialisation Norito native.
-- Remplacez les dérivations de traits SCALE résiduelles par des implémentations natives Norito et renommez le module de codec versionné.
+- Supprimez la dépendance `retired codec` restante de l'espace de travail en faveur de la sérialisation Norito native.
+- Remplacez les dérivations de traits retired codec résiduelles par des implémentations natives Norito et renommez le module de codec versionné.
 - Fusionnez `iroha_config_base_derive` et `iroha_futures_derive` dans `iroha_derive` avec des macros contrôlées par les fonctionnalités.
 - *(multisig)* Rejetez les signatures directes des autorités multisig avec un code/raison d'erreur stable, appliquez les plafonds TTL multisig sur les relais imbriqués et faites apparaître les plafonds TTL dans la CLI avant la soumission (parité SDK en attente).
 - Déplacez les macros procédurales FFI dans `iroha_ffi` et supprimez la caisse `iroha_ffi_derive`.
@@ -242,7 +242,7 @@ Tous les changements notables apportés à ce projet seront documentés dans ce 
 - renommer TransactionValue en CommitteTransaction (#4610)
 - authentifier les comptes personnels par ID (#4411)
 - utiliser le format multihash pour les clés privées (#4541)
- - renommer `parity_scale_decoder` en `norito_cli`
+ - renommer `legacy_codec_decoder` en `norito_cli`
 - envoyer des blocs aux validateurs de l'ensemble B
 - rendre `Role` transparent (#4886)
 - dériver le hachage de bloc de l'en-tête (#4890)
@@ -1153,7 +1153,7 @@ Tous les changements notables apportés à ce projet seront documentés dans ce 
 - hyperledger#2309 : réactivez les tests de documentation dans CI.
 - hyperledger#2165 Supprimer l'installation de codecov.
 - Déplacer vers un nouveau conteneur pour éviter les conflits avec les utilisateurs actuels.
- - hyperledger#2158 Mise à niveau `parity_scale_codec` et autres dépendances. (codec Norito)
+ - hyperledger#2158 Mise à niveau `retired_codec` et autres dépendances. (codec Norito)
 - Correction de la construction.
 - hyperledger#2461 Améliorer iroha2 CI.
 -Mise à jour `syn`.

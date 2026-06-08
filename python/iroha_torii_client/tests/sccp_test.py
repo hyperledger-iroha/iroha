@@ -1385,6 +1385,171 @@ def sample_solana_full_light_client_audit_proof_input(**overrides: Any) -> Dict[
 
 
 def sample_ton_public_inputs(**overrides: Any) -> Dict[str, Any]:
+    public_inputs = sample_ton_bundle_fixture()["public_inputs"]
+    public_inputs.update(overrides)
+    return public_inputs
+
+
+def sample_ton_bundle_fixture(
+    *,
+    source_domain: int = SCCP_DOMAIN_SORA,
+    sender_codec: int = sccp_module.SCCP_CODEC_TEXT_UTF8,
+    sender: Any = "alice@sora",
+    nonce: int = 327,
+    amount: int = 42,
+    route_id: str = "sccp-ton-proof-request",
+    merkle_proof_steps: tuple[tuple[bytes, int], ...] = (),
+    finality_proof: bytes = b"\x71\x72",
+) -> Dict[str, Any]:
+    def codec_value(codec: int, value: Any) -> bytes:
+        if codec == sccp_module.SCCP_CODEC_SORA_ASSET_ID:
+            raw = value if isinstance(value, bytes) else bytes(value)
+            if len(raw) != 32:
+                raise AssertionError("test SORA asset id must be 32 bytes")
+            return raw
+        if isinstance(value, bytes):
+            return value
+        return str(value).encode("utf-8")
+
+    asset_id = codec_value(sccp_module.SCCP_CODEC_TEXT_UTF8, "xor#ton")
+    sender_value = codec_value(sender_codec, sender)
+    recipient = codec_value(sccp_module.SCCP_CODEC_TON_RAW, "0:" + "12" * 32)
+    route = codec_value(sccp_module.SCCP_CODEC_TEXT_UTF8, route_id)
+    payload_body = b"".join(
+        (
+            sccp_module._write_u8(1),
+            sccp_module._write_u32_le(source_domain),
+            sccp_module._write_u32_le(SCCP_DOMAIN_TON),
+            sccp_module._write_u64_le(nonce),
+            sccp_module._write_u32_le(SCCP_DOMAIN_SORA),
+            sccp_module._write_u8(sccp_module.SCCP_CODEC_TEXT_UTF8),
+            sccp_module._write_bytes(asset_id),
+            int(amount).to_bytes(16, "little"),
+            sccp_module._write_u8(sender_codec),
+            sccp_module._write_bytes(sender_value),
+            sccp_module._write_u8(sccp_module.SCCP_CODEC_TON_RAW),
+            sccp_module._write_bytes(recipient),
+            sccp_module._write_u8(sccp_module.SCCP_CODEC_TEXT_UTF8),
+            sccp_module._write_bytes(route),
+        )
+    )
+    payload_bytes = b"\x02" + payload_body
+    message_id = "0x" + sccp_module._prefixed_keccak(
+        sccp_module._SCCP_MSG_PREFIX_TRANSFER_V1,
+        payload_body,
+    ).hex()
+    payload_hash = "0x" + sccp_module._prefixed_blake2b(
+        sccp_module._SCCP_PAYLOAD_HASH_PREFIX_V1,
+        payload_bytes,
+    ).hex()
+    commitment = b"".join(
+        (
+            sccp_module._write_u8(1),
+            sccp_module._write_u8(6),
+            sccp_module._write_u32_le(SCCP_DOMAIN_TON),
+            bytes.fromhex(message_id.removeprefix("0x")),
+            bytes.fromhex(payload_hash.removeprefix("0x")),
+        )
+    )
+    current_root = sccp_module._prefixed_blake2b(
+        sccp_module._SCCP_HUB_LEAF_PREFIX_V1,
+        commitment,
+    )
+    merkle_proof = bytearray(sccp_module._write_u32_le(len(merkle_proof_steps)))
+    for sibling, sibling_is_left in merkle_proof_steps:
+        if len(sibling) != 32:
+            raise AssertionError("test Merkle sibling must be 32 bytes")
+        merkle_proof.extend(sibling)
+        merkle_proof.extend(sccp_module._write_u8(sibling_is_left))
+        current_root = sccp_module._prefixed_blake2b(
+            sccp_module._SCCP_HUB_NODE_PREFIX_V1,
+            sibling + current_root if sibling_is_left == 1 else current_root + sibling,
+        )
+    commitment_root = "0x" + current_root.hex()
+    bundle_bytes = b"".join(
+        (
+            sccp_module._write_u8(1),
+            bytes.fromhex(commitment_root.removeprefix("0x")),
+            sccp_module._write_bytes(commitment),
+            sccp_module._write_bytes(bytes(merkle_proof)),
+            sccp_module._write_bytes(payload_bytes),
+            sccp_module._write_bytes(finality_proof),
+        )
+    )
+    return {
+        "public_inputs": {
+            "version": 1,
+            "message_id": message_id,
+            "payload_hash": payload_hash,
+            "target_domain": SCCP_DOMAIN_TON,
+            "commitment_root": commitment_root,
+            "finality_height": 19,
+            "finality_block_hash": HEX32_A,
+        },
+        "bundle_bytes": bundle_bytes,
+    }
+
+
+def sample_ton_bundle_bytes(**overrides: Any) -> bytes:
+    return sample_ton_bundle_fixture(**overrides)["bundle_bytes"]
+
+
+def read_test_u32_le(raw: bytes, offset: int, label: str) -> int:
+    if offset + 4 > len(raw):
+        raise AssertionError(f"{label} is too short")
+    return int.from_bytes(raw[offset : offset + 4], "little")
+
+
+def read_test_canonical_vec_range(raw: bytes, offset: int, label: str) -> Dict[str, Any]:
+    length = read_test_u32_le(raw, offset, label)
+    start = offset + 4
+    end = start + length
+    if end > len(raw):
+        raise AssertionError(f"{label} exceeds bundle length")
+    return {
+        "length_offset": offset,
+        "bytes_start": start,
+        "bytes_end": end,
+        "bytes": raw[start:end],
+        "next_offset": end,
+    }
+
+
+def split_test_sccp_message_proof_bundle_bytes(bundle_bytes: bytes) -> Dict[str, Dict[str, Any]]:
+    offset = 33
+    commitment = read_test_canonical_vec_range(bundle_bytes, offset, "commitment")
+    offset = commitment["next_offset"]
+    merkle_proof = read_test_canonical_vec_range(bundle_bytes, offset, "merkle_proof")
+    offset = merkle_proof["next_offset"]
+    payload = read_test_canonical_vec_range(bundle_bytes, offset, "payload")
+    offset = payload["next_offset"]
+    finality_proof = read_test_canonical_vec_range(bundle_bytes, offset, "finality_proof")
+    return {
+        "commitment": commitment,
+        "merkle_proof": merkle_proof,
+        "payload": payload,
+        "finality_proof": finality_proof,
+    }
+
+
+def replace_test_sccp_message_proof_bundle_vec(
+    bundle_bytes: bytes,
+    vec_range: Mapping[str, Any],
+    replacement: bytes,
+) -> bytes:
+    length_offset = int(vec_range["length_offset"])
+    bytes_end = int(vec_range["bytes_end"])
+    return b"".join(
+        (
+            bundle_bytes[:length_offset],
+            sccp_module._write_u32_le(len(replacement)),
+            replacement,
+            bundle_bytes[bytes_end:],
+        )
+    )
+
+
+def sample_ton_legacy_public_inputs(**overrides: Any) -> Dict[str, Any]:
     public_inputs = {
         "version": 1,
         "message_id": HEX32_D,
@@ -1401,7 +1566,7 @@ def sample_ton_public_inputs(**overrides: Any) -> Dict[str, Any]:
 def sample_ton_request_input(**overrides: Any) -> Dict[str, Any]:
     request = {
         "public_inputs": sample_ton_public_inputs(),
-        "bundle_bytes": bytes([5, 6, 7]),
+        "bundle_bytes": sample_ton_bundle_bytes(),
         "source_proof_bytes": bytes([9, 10]),
         "statement_hash": HEX32_G,
         "destination_binding_hash": HEX32_H,
@@ -1415,7 +1580,7 @@ def sample_ton_message_body_input(**overrides: Any) -> Dict[str, Any]:
     value = {
         "public_inputs": sample_ton_public_inputs(),
         "proof_bytes": bytes([1, 2, 3, 4]),
-        "bundle_bytes": bytes([5, 6, 7]),
+        "bundle_bytes": sample_ton_bundle_bytes(),
         "statement_hash": HEX32_B,
         "destination_binding_hash": HEX32_G,
         "metadata_bytes": bytes([8, 9]),
@@ -8498,7 +8663,10 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
     assert len(body) > len(
         canonical_sccp_message_transparent_public_inputs_bytes(sample_ton_public_inputs())
     )
-    assert ton_sccp_submission_query_id(sample_ton_public_inputs()) == int("dd" * 8, 16)
+    assert ton_sccp_submission_query_id(sample_ton_public_inputs()) == int(
+        sample_ton_public_inputs()["message_id"][2:18],
+        16,
+    )
     assert len(ton_boc_single_root_hash(body)) == 66
 
     submission = build_ton_sccp_submission(sample_ton_message_body_input_with_result())
@@ -8773,26 +8941,26 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
         build_ton_sccp_submission(
             {
                 "proof_result": oversized_ton_message_result,
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
                 "metadata_bytes": bytes([8, 9]),
             }
         )
     proof_result_submission = build_ton_sccp_submission(
         {
             "proof_result": proof_result,
-            "bundle_bytes": bytes([5, 6, 7]),
+            "bundle_bytes": sample_ton_bundle_bytes(),
             "metadata_bytes": bytes([8, 9]),
         }
     )
     assert proof_result_submission["envelope_hex"] == submission["envelope_hex"]
-    assert proof_result["bundle_bytes"] == bytes([5, 6, 7])
+    assert proof_result["bundle_bytes"] == sample_ton_bundle_bytes()
     assert proof_result["source_proof_bytes"] == bytes([9, 10])
     with pytest.raises(TypeError, match="proofResult must not use multiple aliases"):
         build_ton_sccp_submission(
             {
                 "proof_result": proof_result,
                 "proofResult": proof_result,
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match=r"proofResult\.proofBytes must not use multiple aliases"):
@@ -8802,7 +8970,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
                     **proof_result,
                     "proofBytes": proof_result["proof_bytes"],
                 },
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match=r"proofResult\.requestHash must not use multiple aliases"):
@@ -8812,7 +8980,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
                     **proof_result,
                     "requestHash": proof_result["request_hash"],
                 },
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match=r"proofResult\.proofContext must not use multiple aliases"):
@@ -8822,15 +8990,15 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
                     **proof_result,
                     "proofContext": proof_result["proof_context"],
                 },
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match="bundleBytes must not use multiple aliases"):
         build_ton_sccp_submission(
             {
                 "proof_result": proof_result,
-                "bundle_bytes": bytes([5, 6, 7]),
-                "bundleBytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
+                "bundleBytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match="publicInputs must be an object"):
@@ -8838,7 +9006,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
             {
                 "proof_result": proof_result,
                 "public_inputs": None,
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match="proofBytes must be bytes"):
@@ -8846,7 +9014,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
             {
                 "proof_result": proof_result,
                 "proof_bytes": None,
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match="statementHash"):
@@ -8854,7 +9022,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
             {
                 "proof_result": proof_result,
                 "statement_hash": None,
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match="destinationBindingHash"):
@@ -8862,7 +9030,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
             {
                 "proof_result": proof_result,
                 "destination_binding_hash": None,
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     omitted_source_proof_result = wrap_ton_sccp_proof_result(
@@ -8880,7 +9048,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
     omitted_source_proof_submission = build_ton_sccp_submission(
         {
             "proof_result": omitted_source_proof_result,
-            "bundle_bytes": bytes([5, 6, 7]),
+            "bundle_bytes": sample_ton_bundle_bytes(),
             "metadata_bytes": bytes([8, 9]),
         }
     )
@@ -8893,6 +9061,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
                 "bundle_bytes": bytes([5, 6, 8]),
             }
         )
+    shifted_bundle_bytes = sample_ton_bundle_bytes(finality_proof=b"\x71\x73")
     with pytest.raises(
         TypeError,
         match=r"proofResult\.requestHash must match bundleBytes and sourceProofBytes",
@@ -8901,9 +9070,9 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
             {
                 "proof_result": {
                     **proof_result,
-                    "bundle_bytes": bytes([5, 6, 8]),
+                    "bundle_bytes": shifted_bundle_bytes,
                 },
-                "bundle_bytes": bytes([5, 6, 8]),
+                "bundle_bytes": shifted_bundle_bytes,
             }
         )
     with pytest.raises(TypeError, match=r"proofBytes must match proofResult\.proofBytes"):
@@ -8911,7 +9080,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
             {
                 "proof_result": proof_result,
                 "proof_bytes": bytes([4, 3, 2, 1]),
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match=r"publicInputs must match proofResult\.publicInputs"):
@@ -8919,7 +9088,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
             {
                 "proof_result": proof_result,
                 "public_inputs": sample_ton_public_inputs(message_id=HEX32_A),
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(
@@ -8929,7 +9098,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
         build_ton_sccp_submission(
             {
                 "proof_result": {**proof_result, "envelope_hash": HEX32_A},
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(
@@ -8942,7 +9111,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
                     **proof_result,
                     "source_state_verifier_hash": SCCP_ZERO_HASH_V1,
                 },
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(
@@ -8958,7 +9127,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
                         "target_domain": SCCP_DOMAIN_TON,
                     },
                 },
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match=r"publicInputs\.targetDomain must be TON"):
@@ -8978,7 +9147,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
                 build_ton_sccp_submission(
                     {
                         "proof_result": tampered_result,
-                        "bundle_bytes": bytes([5, 6, 7]),
+                        "bundle_bytes": sample_ton_bundle_bytes(),
                     }
                 )
     tampered_context = dict(proof_result)
@@ -8987,7 +9156,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
         build_ton_sccp_submission(
             {
                 "proof_result": tampered_context,
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     tampered_context = dict(proof_result)
@@ -8996,7 +9165,7 @@ def test_builds_ton_sccp_message_body_submission_boc() -> None:
         build_ton_sccp_submission(
             {
                 "proof_result": tampered_context,
-                "bundle_bytes": bytes([5, 6, 7]),
+                "bundle_bytes": sample_ton_bundle_bytes(),
             }
         )
     with pytest.raises(TypeError, match=r"cells\[0\]\.data must be bytes"):
@@ -9021,16 +9190,10 @@ def test_builds_ton_sccp_proof_request_with_relay_and_deployment_binding() -> No
     assert request["target_domain"] == SCCP_DOMAIN_TON
     assert request["source_state_verifier_id"] == SCCP_TON_MAINNET_SHARD_STATE_VERIFIER_ID_V1
     assert request["source_state_verifier_hash"] == HEX32_C
-    assert request["public_inputs"] == {
-        "version": 1,
-        "message_id": HEX32_D,
-        "payload_hash": HEX32_E,
-        "target_domain": SCCP_DOMAIN_TON,
-        "commitment_root": HEX32_F,
-        "finality_height": "19",
-        "finality_block_hash": HEX32_A,
-    }
-    assert request["bundle_bytes"] == bytes([5, 6, 7])
+    expected_public_inputs = sample_ton_public_inputs()
+    expected_public_inputs["finality_height"] = "19"
+    assert request["public_inputs"] == expected_public_inputs
+    assert request["bundle_bytes"] == sample_ton_bundle_bytes()
     assert request["source_proof_bytes"] == bytes([9, 10])
     assert request["proof_context"] == {
         "version": 1,
@@ -9143,7 +9306,7 @@ def test_builds_ton_sccp_proof_request_with_relay_and_deployment_binding() -> No
     assert changed_source_state["request_hash"] != request["request_hash"]
     shifted_split = build_ton_sccp_proof_request(
         sample_ton_request_input(
-            bundle_bytes=bytes([5, 6, 7, 9]),
+            bundle_bytes=sample_ton_bundle_bytes(finality_proof=b"\x71\x73"),
             source_proof_bytes=bytes([10]),
             source_adapter_deployment_hash=HEX32_A,
             source_adapter_deployment_receipt_hash=HEX32_B,
@@ -9288,19 +9451,11 @@ def test_builds_ton_sccp_proof_request_with_relay_and_deployment_binding() -> No
 
 
 def test_ton_sccp_proof_request_hash_matches_cross_sdk_vector() -> None:
-    public_inputs = {
-        "version": 1,
-        "message_id": "0x" + "11" * 32,
-        "payload_hash": "0x" + "22" * 32,
-        "target_domain": SCCP_DOMAIN_TON,
-        "commitment_root": "0x" + "33" * 32,
-        "finality_height": 123456789,
-        "finality_block_hash": "0x" + "44" * 32,
-    }
+    public_inputs = sample_ton_public_inputs()
     request = build_ton_sccp_proof_request(
         {
             "public_inputs": public_inputs,
-            "bundle_bytes": bytes([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+            "bundle_bytes": sample_ton_bundle_bytes(),
             "source_proof_bytes": bytes([0x51, 0x52, 0x53]),
             "statement_hash": "0x" + "55" * 32,
             "destination_binding_hash": "0x" + "66" * 32,
@@ -9316,7 +9471,7 @@ def test_ton_sccp_proof_request_hash_matches_cross_sdk_vector() -> None:
 
     assert (
         "0x" + canonical_sccp_message_transparent_public_inputs_bytes(public_inputs).hex()
-        == "0x011111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222204000000333333333333333333333333333333333333333333333333333333333333333315cd5b07000000004444444444444444444444444444444444444444444444444444444444444444"
+        == "0x01806384e356636c10ee3bbbb90674a80410a86be034616abb811586b21ac81fc4367a4f9061f46a282eeeda95bc68c727888bde665bd89d0ebbc6dae266e3a26404000000377eb92928595d90759d66529f96acf34afd4ef64cd2327ab6f65876fb3cf93e1300000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     )
     assert (
         request["source_adapter_deployment_binding_hash"]
@@ -9324,7 +9479,7 @@ def test_ton_sccp_proof_request_hash_matches_cross_sdk_vector() -> None:
     )
     assert (
         request["request_hash"]
-        == "0xb3a61f09923efd639a0263de6b45eec6ddd5de679bfaab1b6ec1c591fd1b1d1b"
+        == "0x2a292741b8e8d8454699eda954592904e8260e6b8a41cc840f5d9c48732c3bbe"
     )
 
     proof_result = wrap_ton_sccp_proof_result(
@@ -9333,8 +9488,156 @@ def test_ton_sccp_proof_request_hash_matches_cross_sdk_vector() -> None:
     )
     assert (
         proof_result["envelope_hash"]
-        == "0xa2bc6697b237fd4b2dd3f60f187a184793104a99372dcdf60c7ec585ef32f5ab"
+        == "0x9ed8e54d81c13a61939dedffb36c487f33d32a128ba95a0d29b33c5d25be6489"
     )
+
+
+def test_ton_sccp_proof_request_rejects_noncanonical_or_mismatched_bundle_bytes() -> None:
+    base = sample_ton_request_input(
+        source_adapter_deployment_hash=HEX32_A,
+        source_adapter_deployment_receipt_hash=HEX32_B,
+    )
+    with pytest.raises(TypeError, match=r"bundleBytes\.version must be 1"):
+        build_ton_sccp_proof_request({**base, "bundle_bytes": bytes([5, 6, 7])})
+
+    swapped = sample_ton_bundle_fixture(amount=43)
+    with pytest.raises(TypeError, match="bundleBytes must match publicInputs"):
+        build_ton_sccp_proof_request(
+            {
+                **base,
+                "bundle_bytes": swapped["bundle_bytes"],
+            }
+        )
+
+    tampered_commitment = bytearray(sample_ton_bundle_bytes())
+    tampered_commitment[37 + 69] ^= 0x01
+    with pytest.raises(TypeError, match=r"bundleBytes\.commitment must match payload"):
+        build_ton_sccp_proof_request(
+            {
+                **base,
+                "bundle_bytes": bytes(tampered_commitment),
+            }
+        )
+
+    tampered_root = bytearray(sample_ton_bundle_bytes())
+    tampered_root[1] ^= 0x01
+    with pytest.raises(
+        TypeError,
+        match=r"bundleBytes\.commitment_root must match merkle proof",
+    ):
+        build_ton_sccp_proof_request(
+            {
+                **base,
+                "bundle_bytes": bytes(tampered_root),
+            }
+        )
+
+    ranges = split_test_sccp_message_proof_bundle_bytes(sample_ton_bundle_bytes())
+    payload_with_trailing_byte = ranges["payload"]["bytes"] + b"\x00"
+    with pytest.raises(
+        TypeError,
+        match=r"bundleBytes\.payload must not contain trailing bytes",
+    ):
+        build_ton_sccp_proof_request(
+            {
+                **base,
+                "bundle_bytes": replace_test_sccp_message_proof_bundle_vec(
+                    sample_ton_bundle_bytes(),
+                    ranges["payload"],
+                    payload_with_trailing_byte,
+                ),
+            }
+        )
+
+    unsupported_payload_kind = bytes([0xFF]) + ranges["payload"]["bytes"][1:]
+    with pytest.raises(
+        TypeError,
+        match=r"bundleBytes\.payload contains unsupported SCCP payload kind",
+    ):
+        build_ton_sccp_proof_request(
+            {
+                **base,
+                "bundle_bytes": replace_test_sccp_message_proof_bundle_vec(
+                    sample_ton_bundle_bytes(),
+                    ranges["payload"],
+                    unsupported_payload_kind,
+                ),
+            }
+        )
+
+    merkle_proof_with_trailing_byte = ranges["merkle_proof"]["bytes"] + b"\x00"
+    with pytest.raises(
+        TypeError,
+        match=r"bundleBytes\.merkle_proof must not contain trailing bytes",
+    ):
+        build_ton_sccp_proof_request(
+            {
+                **base,
+                "bundle_bytes": replace_test_sccp_message_proof_bundle_vec(
+                    sample_ton_bundle_bytes(),
+                    ranges["merkle_proof"],
+                    merkle_proof_with_trailing_byte,
+                ),
+            }
+        )
+
+    one_step = sample_ton_bundle_fixture(
+        merkle_proof_steps=((bytes.fromhex(HEX32_C.removeprefix("0x")), 1),)
+    )
+    one_step_ranges = split_test_sccp_message_proof_bundle_bytes(
+        one_step["bundle_bytes"]
+    )
+    merkle_proof_with_invalid_direction = bytearray(
+        one_step_ranges["merkle_proof"]["bytes"]
+    )
+    merkle_proof_with_invalid_direction[4 + 32] = 2
+    with pytest.raises(
+        TypeError,
+        match=r"bundleBytes\.merkle_proof\.steps\[0\]\.sibling_is_left must be 0 or 1",
+    ):
+        build_ton_sccp_proof_request(
+            {
+                **base,
+                "public_inputs": one_step["public_inputs"],
+                "bundle_bytes": replace_test_sccp_message_proof_bundle_vec(
+                    one_step["bundle_bytes"],
+                    one_step_ranges["merkle_proof"],
+                    bytes(merkle_proof_with_invalid_direction),
+                ),
+            }
+        )
+
+    non_sora_fixture = sample_ton_bundle_fixture(
+        source_domain=SCCP_DOMAIN_SOL,
+        sender_codec=sccp_module.SCCP_CODEC_SOLANA_BASE58,
+        sender=SOLANA_PROGRAM_42,
+    )
+    non_sora_request = {
+        **base,
+        "public_inputs": non_sora_fixture["public_inputs"],
+        "bundle_bytes": non_sora_fixture["bundle_bytes"],
+    }
+    with pytest.raises(
+        TypeError,
+        match="sourceProofBytes required for non-SORA source bundle",
+    ):
+        build_ton_sccp_proof_request({**non_sora_request, "source_proof_bytes": b""})
+
+    non_sora_built = build_ton_sccp_proof_request(non_sora_request)
+    non_sora_result = wrap_ton_sccp_proof_result(bytes([1, 2, 3, 4]), non_sora_built)
+    with pytest.raises(
+        TypeError,
+        match="sourceProofBytes required for non-SORA source bundle",
+    ):
+        build_ton_sccp_submission(
+            {
+                "proof_result": {
+                    **non_sora_result,
+                    "source_proof_bytes": b"",
+                },
+                "bundle_bytes": non_sora_fixture["bundle_bytes"],
+            }
+        )
 
 
 def test_builds_tron_sccp_groth16_proof_request_with_public_signals() -> None:
@@ -10730,7 +11033,7 @@ def test_ton_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
         assert request["backend"] == SCCP_TON_CONTRACT_PROOF_BACKEND_V1
         assert isinstance(request["bundle_bytes"], bytes)
         assert isinstance(request["source_proof_bytes"], bytes)
-        assert request["bundle_bytes"] == bytes([5, 6, 7])
+        assert request["bundle_bytes"] == sample_ton_bundle_bytes()
         assert request["source_proof_bytes"] == bytes([9, 10])
         assert request["proof_context"]["statement_hash"] == HEX32_G
         assert request["source_adapter_deployment_binding"]["source_domain"] == SCCP_DOMAIN_TON
@@ -10740,7 +11043,7 @@ def test_ton_sccp_prover_wraps_externally_generated_proof_bytes() -> None:
             request["source_proof_bytes"] = b"\x00"
         return {"proof_bytes": GROTH16_PROOF_BYTES}
 
-    bundle_bytes = bytearray([5, 6, 7])
+    bundle_bytes = bytearray(sample_ton_bundle_bytes())
     source_proof_bytes = bytearray([9, 10])
     input_value = sample_ton_request_input(
         bundle_bytes=bundle_bytes,

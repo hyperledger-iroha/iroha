@@ -173,8 +173,8 @@ pub use derive::*;
 
 pub mod sequential;
 
-/// Compatibility wrapper providing `Encode` and `Decode` traits analogous to the
-/// `parity-scale-codec` ones, but powered by Norito serialization.
+/// Bare Norito `Encode` and `Decode` traits used for compact payloads without a
+/// Norito header.
 pub mod codec {
     use std::{
         io::{Read, Write},

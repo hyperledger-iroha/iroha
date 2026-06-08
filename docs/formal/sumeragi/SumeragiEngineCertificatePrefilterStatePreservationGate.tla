@@ -74,6 +74,34 @@ Accepted(candidate) ==
 Rejected(candidate) ==
   ~Accepted(candidate)
 
+AcceptedPreservationCases == {
+  "current_prepare_clean",
+  "current_prepare_with_all_state",
+  "current_commit_with_all_state",
+  "new_view_lower_view_with_all_state",
+  "new_view_same_view_with_all_state",
+  "new_view_future_view_with_all_state"
+}
+
+RejectedPreservationCases == {
+  "stale_prepare_with_all_state",
+  "stale_commit_with_all_state",
+  "committed_prepare_with_all_state",
+  "committed_new_view_with_all_state",
+  "wrong_height_prepare_clean",
+  "wrong_height_commit_with_all_state",
+  "wrong_epoch_new_view_with_all_state",
+  "wrong_validator_set_commit_with_all_state",
+  "wrong_quorum_new_view_with_all_state"
+}
+
+PrefilterPreservationGroupedCases ==
+  AcceptedPreservationCases \cup RejectedPreservationCases
+
+PrefilterPreservationCaseGroupsPartition ==
+  /\ PrefilterPreservationGroupedCases = Cases
+  /\ AcceptedPreservationCases \intersect RejectedPreservationCases = {}
+
 CommittedValues == {"none", "committed_a", "committed_b"}
 PrepareVoteValues == {"none", "prepare_vote_a", "prepare_vote_b"}
 PendingMapValues == {"none", "pending_cert_a", "pending_cert_b"}
@@ -266,19 +294,29 @@ ValuesStayInDomain ==
     /\ InitialReconfiguration(candidate) \in ReconfigurationValues
     /\ ImplementationReconfiguration(candidate) \in ReconfigurationValues
 
-Safety ==
+AcceptedPrefilterPreservationExact ==
   /\ AcceptedPreservesCommitted
   /\ AcceptedPreservesPrepareVoteCache
   /\ AcceptedPreservesPendingMap
   /\ AcceptedPreservesAvailablePayloads
   /\ AcceptedPreservesReconfiguration
+
+RejectedPrefilterPreservationExact ==
   /\ RejectedPreservesCommitted
   /\ RejectedPreservesPrepareVoteCache
   /\ RejectedPreservesPendingMap
   /\ RejectedPreservesAvailablePayloads
   /\ RejectedPreservesReconfiguration
+
+PrefilterStatePreservationExactness ==
+  /\ PrefilterPreservationCaseGroupsPartition
+  /\ AcceptedPrefilterPreservationExact
+  /\ RejectedPrefilterPreservationExact
   /\ AllModeledStatePreserved
   /\ ValuesStayInDomain
+
+Safety ==
+  PrefilterStatePreservationExactness
 
 =============================================================================
 ====

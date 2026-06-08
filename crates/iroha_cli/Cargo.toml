@@ -97,7 +97,6 @@ zeroize = { version = "1.8.2", default-features = false, features = ["std"] }
 blake3 = { workspace = true }
 reqwest = { workspace = true, features = ["blocking", "rustls-tls"] }
 toml = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
 tiny-keccak = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["std"] }
 scrypt = { workspace = true }

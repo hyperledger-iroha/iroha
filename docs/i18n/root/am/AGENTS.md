@@ -66,7 +66,7 @@ translator: machine-google-reviewed
   - ለIVM/I18NT0000005X v1 ጥብቅ የጠቋሚ-ABI አይነት ፖሊሲ ሁል ጊዜ ተፈጻሚ ይሆናል። የ ABI-ፖሊሲ መቀያየር የለም; ኮንትራቶች እና አስተናጋጆች የ ABI ፖሊሲን ያለ ምንም ቅድመ ሁኔታ ማክበር አለባቸው።
 - በ IVM syscalls ወይም opcodes ውስጥ ጥቅም ላይ የዋለ ማንኛውንም ነገር በሮች አትስጡ; እያንዳንዱ የIroha ግንባታ በመስቀለኛ መንገዱ ላይ የመወሰን ባህሪን ለመጠበቅ እነዚያን የኮድ መንገዶች መላክ አለበት።
 - ተከታታይነት፡ ከሰርዴ ይልቅ በየቦታው I18NT0000008X ይጠቀሙ። ለሁለትዮሽ ኮዴኮች `norito::{Encode, Decode}` ይጠቀሙ; ለ JSON የ `norito::json` አጋዥዎችን/ማክሮዎችን (`norito::json::from_*`፣ `to_*`፣ I18NI0000087X፣ `Value`) ይጠቀሙ እና ወደ I18NI000000089X በጭራሽ አይመለሱም። በቀጥታ I18NI0000090X/I18NI0000091X ጥገኞችን በሳጥኖች ውስጥ አታክል; ሰርዴ ከውስጥ የሚፈለግ ከሆነ፣ በNorito's መጠቅለያዎች ይተማመኑ።
-- CI ጠባቂ፡ I18NI0000092X SCALE (`parity-scale-codec`) በNorito የቤንችማርክ ማሰሪያ ውስጥ ብቻ እንደሚታይ ያረጋግጣል። የተከታታይ ኮድ ከነካህ በአካባቢው አሂድ።
+- CI guard: `scripts/check_no_legacy_codec.sh` ensures retired non-Norito codec dependencies do not re-enter workspace manifests. Run it locally if you touch serialization code.
 - Norito የሚጫኑ ጭነቶች አቀማመጣቸውን ማሳወቅ አለባቸው፡ ወይ የስሪት ቁጥር ካርታዎች ወደ ቋሚ ባንዲራ ስብስብ፣ ወይም የNorito አርዕስት ባንዲራዎቹን መፍታት ያውጃል። የታሸጉ ቅደም ተከተሎችን ከሂዩሪስቲክስ አይገምቱ; የጄኔሲስ መረጃ ተመሳሳይ ህግን ይከተላል.- ብሎኮች ጸንተው መሰራጨት አለባቸው ቀኖናዊውን I18NI0000094X ቅርጸት (I18NI0000095X/I18NI0000096X) በመጠቀም የስሪት ባይት ቅድመ ቅጥያ ከ Norito አርእስት ጋር። ባዶ ጭነት አይደገፍም።
 - ማንኛውንም ጊዜያዊ ወይም ያልተሟላ አተገባበር የሚያብራራ የ`TODO:` አስተያየት ያክሉ።
 - ሁሉንም የዝገት ምንጮችን በ I18NI0000098X (እትም 2024) ይቅረጹ።

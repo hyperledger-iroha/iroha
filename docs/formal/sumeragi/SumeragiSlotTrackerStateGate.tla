@@ -580,35 +580,56 @@ ProposalHorizonAnchors ==
   /\ SpecActions(ProposalHorizonKeepsOtherHeightHighView) =
        {KeepOtherHeightHighView}
 
-Safety ==
-  /\ SlotTrackerStateMatchesSpec
+SlotTrackerClearExact ==
   /\ ClearMatchesSpec
+  /\ ClearAnchors
+
+SlotTrackerAuthoritativeExact ==
   /\ OwnerReadMatchesSpec
   /\ OwnerRecordingMatchesSpec
   /\ FrontierInfoMatchesSpec
-  /\ RetainedBranchMatchesSpec
-  /\ RetainedSeedMatchesSpec
-  /\ HeightRemovalMatchesSpec
-  /\ HeightPruneMatchesSpec
-  /\ ProposalSeenMatchesSpec
-  /\ ViewChangeProposalPruneMatchesSpec
-  /\ ProposalHorizonMatchesSpec
-  /\ SeedRequiresPayloadAndHeightMatch
-  /\ CommittedPruneKeepsOnlyAbove
-  /\ ProposalSeenReadIsExact
-  /\ ViewPruneNeverDropsOtherHeights
-  /\ HorizonViewCapOnlyAppliesToActiveHeight
-  /\ ClearAnchors
   /\ OwnerReadAnchors
   /\ OwnerRecordingAnchors
   /\ FrontierInfoAnchors
+
+SlotTrackerRetainedBranchExact ==
+  /\ RetainedBranchMatchesSpec
+  /\ RetainedSeedMatchesSpec
+  /\ SeedRequiresPayloadAndHeightMatch
   /\ RetainedBranchAnchors
   /\ RetainedSeedAnchors
+
+SlotTrackerHeightLifecycleExact ==
+  /\ HeightRemovalMatchesSpec
+  /\ HeightPruneMatchesSpec
+  /\ CommittedPruneKeepsOnlyAbove
   /\ HeightRemovalAnchors
   /\ HeightPruneAnchors
+
+SlotTrackerProposalSeenExact ==
+  /\ ProposalSeenMatchesSpec
+  /\ ViewChangeProposalPruneMatchesSpec
+  /\ ProposalSeenReadIsExact
+  /\ ViewPruneNeverDropsOtherHeights
   /\ ProposalSeenAnchors
   /\ ViewChangeProposalPruneAnchors
+
+SlotTrackerProposalHorizonExact ==
+  /\ ProposalHorizonMatchesSpec
+  /\ HorizonViewCapOnlyAppliesToActiveHeight
   /\ ProposalHorizonAnchors
+
+SlotTrackerStateExactness ==
+  /\ SlotTrackerStateMatchesSpec
+  /\ SlotTrackerClearExact
+  /\ SlotTrackerAuthoritativeExact
+  /\ SlotTrackerRetainedBranchExact
+  /\ SlotTrackerHeightLifecycleExact
+  /\ SlotTrackerProposalSeenExact
+  /\ SlotTrackerProposalHorizonExact
+
+Safety ==
+  SlotTrackerStateExactness
 
 =============================================================================
 ====

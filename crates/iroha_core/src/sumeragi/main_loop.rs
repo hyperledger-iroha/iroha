@@ -183,15 +183,15 @@ pub(crate) mod test_time {
         time::Duration,
     };
 
-    static SCALE: AtomicU64 = AtomicU64::new(1);
+    static TEST_TIME_SCALE: AtomicU64 = AtomicU64::new(1);
 
     /// Set a time scale factor for tests (>=1). When >1, timeouts are divided by this scale.
     pub fn set_time_scale(scale: u64) {
-        SCALE.store(scale.max(1), Ordering::Relaxed);
+        TEST_TIME_SCALE.store(scale.max(1), Ordering::Relaxed);
     }
 
     pub fn scale(d: Duration) -> Duration {
-        let s = SCALE.load(Ordering::Relaxed);
+        let s = TEST_TIME_SCALE.load(Ordering::Relaxed);
         if s > 1 { d / s } else { d }
     }
 }

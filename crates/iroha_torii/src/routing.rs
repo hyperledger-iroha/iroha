@@ -5749,33 +5749,35 @@ fn parse_sccp_message_id_hex(value: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 
-#[derive(Clone, Debug, Default, serde::Deserialize)]
+#[derive(
+    Clone, Debug, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
 /// Optional deployment destination fields for SCCP artifact and job requests.
 pub struct SccpEvmDestinationQuery {
     /// Hex-encoded 32-byte destination network id.
-    #[serde(default)]
+    #[norito(default)]
     pub network_id_hex: Option<String>,
     /// Hex-encoded 20-byte verifier contract address.
-    #[serde(default)]
+    #[norito(default)]
     pub verifier_address_hex: Option<String>,
     /// Hex-encoded 20-byte bridge contract address.
-    #[serde(default)]
+    #[norito(default)]
     pub bridge_address_hex: Option<String>,
     /// Hex-encoded 32-byte verifier contract bytecode hash.
-    #[serde(default)]
+    #[norito(default)]
     pub verifier_code_hash_hex: Option<String>,
     /// Hex-encoded 32-byte Groth16 verifier key hash.
-    #[serde(default)]
+    #[norito(default)]
     pub verifier_key_hash_hex: Option<String>,
     /// Hex-encoded expected canonical destination binding hash, required when
     /// EVM/TRON deployment destination fields are supplied.
-    #[serde(default)]
+    #[norito(default)]
     pub expected_destination_binding_hash_hex: Option<String>,
     /// Base58Check TRON verifier contract address.
-    #[serde(default)]
+    #[norito(default)]
     pub tron_verifier_address: Option<String>,
     /// Hex-encoded externally generated 384-byte Groth16 ABI proof tuple.
-    #[serde(default)]
+    #[norito(default)]
     pub proof_bytes_hex: Option<String>,
 }
 
@@ -6147,7 +6149,7 @@ fn bridge_message_destination_query_from_dto(
 
 fn sccp_bundle_response<T>(bundle: &T, accept: Option<&axum::http::HeaderValue>) -> Result<Response>
 where
-    T: norito::core::NoritoSerialize + serde::Serialize,
+    T: norito::core::NoritoSerialize + json::JsonSerialize,
 {
     let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(format) => format,
@@ -6168,7 +6170,7 @@ where
         return Ok(resp);
     }
 
-    let body = serde_json::to_vec_pretty(bundle).map_err(|err| {
+    let body = json::to_vec_pretty(bundle).map_err(|err| {
         sccp_internal_error(format!("failed to serialize SCCP bundle JSON: {err}"))
     })?;
     let mut resp = Response::new(Body::from(body));
@@ -6179,8 +6181,8 @@ where
     Ok(resp)
 }
 
-fn sccp_json_value_response(value: &serde_json::Value) -> Result<Response> {
-    let body = serde_json::to_vec_pretty(value).map_err(|err| {
+fn sccp_json_value_response(value: &Value) -> Result<Response> {
+    let body = json::to_vec_pretty(value).map_err(|err| {
         sccp_internal_error(format!("failed to serialize SCCP bundle JSON: {err}"))
     })?;
     let mut resp = Response::new(Body::from(body));
@@ -6193,11 +6195,11 @@ fn sccp_json_value_response(value: &serde_json::Value) -> Result<Response> {
 
 fn sccp_bundle_response_with_json_value<T>(
     bundle: &T,
-    json_value: serde_json::Value,
+    json_value: Value,
     accept: Option<&axum::http::HeaderValue>,
 ) -> Result<Response>
 where
-    T: norito::core::NoritoSerialize + serde::Serialize,
+    T: norito::core::NoritoSerialize + json::JsonSerialize,
 {
     let format = match crate::utils::negotiate_json_preferred_response_format(accept) {
         Ok(format) => format,
@@ -6259,27 +6261,9 @@ fn sccp_open_verify_summary_to_json(
     ]))
 }
 
-fn sccp_open_verify_summary_to_serde_json(
-    summary: &SccpOpenVerifyEnvelopeSummaryV1,
-) -> serde_json::Value {
-    serde_json::json!({
-        "version": summary.version,
-        "backend": summary.backend,
-        "circuit_id": summary.circuit_id,
-        "vk_hash": hex::encode(summary.vk_hash),
-        "public_inputs_schema_hash": hex::encode(summary.public_inputs_schema_hash),
-        "public_inputs_schema_len_bytes": summary.public_inputs_schema_len_bytes,
-        "public_input_column_count": summary.public_input_column_count,
-        "public_input_word_count": summary.public_input_word_count,
-        "open_proof_len_bytes": summary.open_proof_len_bytes,
-        "backend_proof_len_bytes": summary.backend_proof_len_bytes,
-        "aux_len_bytes": summary.aux_len_bytes,
-    })
-}
-
-fn sccp_groth16_summary_to_serde_json(
+fn sccp_groth16_summary_to_json(
     platform_payload: &iroha_sccp::SccpPlatformSubmissionPayloadV1,
-) -> Option<serde_json::Value> {
+) -> Option<Value> {
     let (platform, proof_bytes, destination_binding) = match platform_payload {
         iroha_sccp::SccpPlatformSubmissionPayloadV1::EvmGroth16ContractCall(payload) => (
             "evm_groth16_contract_call",
@@ -6294,24 +6278,22 @@ fn sccp_groth16_summary_to_serde_json(
         _ => return None,
     };
     let proof = iroha_sccp::decode_sccp_evm_groth16_bn254_proof_bytes(proof_bytes)?;
-    Some(serde_json::json!({
+    Some(norito::json!({
         "platform_payload": platform,
-        "version": proof.version,
-        "proof_len_bytes": proof_bytes.len(),
+        "version": (proof.version),
+        "proof_len_bytes": (proof_bytes.len()),
         "public_input_word_count": 6,
         "groth16_public_signal_count": 9,
-        "message_id": hex::encode(proof.message_id),
-        "source_domain": proof.source_domain,
-        "commitment_root": hex::encode(proof.commitment_root),
-        "destination_binding_key": destination_binding.key.as_str(),
-        "destination_binding_hash": hex::encode(destination_binding.binding_hash),
+        "message_id": (hex::encode(proof.message_id)),
+        "source_domain": (proof.source_domain),
+        "commitment_root": (hex::encode(proof.commitment_root)),
+        "destination_binding_key": (destination_binding.key.as_str()),
+        "destination_binding_hash": (hex::encode(destination_binding.binding_hash)),
     }))
 }
 
-fn sccp_artifact_json_value(
-    artifact: &NexusSccpMessageTransparentProofV1,
-) -> Result<serde_json::Value> {
-    let mut value = serde_json::to_value(artifact).map_err(|err| {
+fn sccp_artifact_json_value(artifact: &NexusSccpMessageTransparentProofV1) -> Result<Value> {
+    let mut value = json::to_value(artifact).map_err(|err| {
         sccp_internal_error(format!(
             "failed to serialize SCCP proof artifact JSON value: {err}"
         ))
@@ -6322,7 +6304,7 @@ fn sccp_artifact_json_value(
         ));
     };
     if let Some(summary) =
-        sccp_groth16_summary_to_serde_json(&artifact.submission_package.platform_payload)
+        sccp_groth16_summary_to_json(&artifact.submission_package.platform_payload)
     {
         map.insert("groth16_proof_summary".into(), summary);
     } else if let Some(summary) =
@@ -6330,14 +6312,14 @@ fn sccp_artifact_json_value(
     {
         map.insert(
             "proof_envelope_summary".into(),
-            sccp_open_verify_summary_to_serde_json(&summary),
+            sccp_open_verify_summary_to_json(&summary),
         );
     }
     Ok(value)
 }
 
-fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<serde_json::Value> {
-    let mut value = serde_json::to_value(job).map_err(|err| {
+fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<Value> {
+    let mut value = json::to_value(job).map_err(|err| {
         sccp_internal_error(format!(
             "failed to serialize SCCP proof job JSON value: {err}"
         ))
@@ -6347,16 +6329,14 @@ fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<serde_json::V
             "SCCP proof job JSON serialization must produce an object",
         ));
     };
-    if let Some(summary) =
-        sccp_groth16_summary_to_serde_json(&job.submission_package.platform_payload)
-    {
+    if let Some(summary) = sccp_groth16_summary_to_json(&job.submission_package.platform_payload) {
         map.insert("groth16_proof_summary".into(), summary);
     } else if let Some(summary) =
         build_sccp_message_transparent_open_verify_summary_from_bundle(&job.bundle)
     {
         map.insert(
             "proof_envelope_summary".into(),
-            sccp_open_verify_summary_to_serde_json(&summary),
+            sccp_open_verify_summary_to_json(&summary),
         );
     }
     Ok(value)
@@ -6365,8 +6345,6 @@ fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<serde_json::V
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
@@ -6385,8 +6363,6 @@ pub struct SccpCodecCapabilityDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
@@ -6409,7 +6385,6 @@ pub struct SccpCounterpartyCapabilityDto {
     /// Stable logical key for `counterparty_account_codec`.
     pub counterparty_account_codec_key: String,
     /// Per-family destination verifier rollout state for this lane family.
-    #[serde(default)]
     #[norito(default)]
     pub destination_rollout: iroha_sccp::SccpDestinationRolloutV1,
     /// Whether the current lane is safe to use for production proof generation and consumption.
@@ -6418,7 +6393,6 @@ pub struct SccpCounterpartyCapabilityDto {
     #[norito(default)]
     pub disabled_reason: Option<String>,
     /// Full production-readiness checklist for this lane.
-    #[serde(default)]
     #[norito(default)]
     pub production_readiness: iroha_sccp::SccpLaneProductionReadinessV1,
 }
@@ -6426,8 +6400,6 @@ pub struct SccpCounterpartyCapabilityDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
@@ -6462,11 +6434,9 @@ pub struct SccpCapabilitiesDto {
     #[norito(default)]
     pub message_submit_path: Option<String>,
     /// SCCP production launch policy advertised to proof tooling.
-    #[serde(default)]
     #[norito(default)]
     pub production_policy: iroha_sccp::SccpProductionPolicyV1,
     /// Whether the currently configured SCCP production launch policy is satisfied.
-    #[serde(default)]
     #[norito(default)]
     pub launch_ready: bool,
     /// Generic SCCP payload kinds supported by `/v1/sccp/proofs/message/{message_id}`.
@@ -6477,7 +6447,7 @@ pub struct SccpCapabilitiesDto {
     pub counterparties: Vec<SccpCounterpartyCapabilityDto>,
 }
 
-#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Existing bundle/artifact/job lookup paths for a recent SCCP message item.
 pub struct SccpRecentMessageLinksDto {
     /// Canonical SCCP bundle lookup path.
@@ -6488,7 +6458,7 @@ pub struct SccpRecentMessageLinksDto {
     pub job_path: String,
 }
 
-#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Compact newest-first SCCP message discovery record.
 pub struct SccpRecentMessageDto {
     /// Height of the finalized block that anchored the message.
@@ -6527,7 +6497,7 @@ pub struct SccpRecentMessageDto {
     pub links: SccpRecentMessageLinksDto,
 }
 
-#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Newest-first SCCP recent-message discovery response.
 pub struct SccpRecentMessagesDto {
     /// Newest-first committed SCCP messages within the requested history window.
@@ -6537,8 +6507,8 @@ pub struct SccpRecentMessagesDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6553,8 +6523,8 @@ pub struct SccpRouteManifestVkRefDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6577,8 +6547,8 @@ pub struct SccpRouteManifestBurnRecordDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6627,8 +6597,8 @@ pub struct SccpRouteManifestDestinationRolloutDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6651,8 +6621,8 @@ pub struct SccpRouteManifestDestinationBindingDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6679,8 +6649,8 @@ pub struct SccpRouteManifestSettlementDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6713,8 +6683,8 @@ pub struct SccpRouteManifestPostDeployEvidenceDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -6797,8 +6767,8 @@ pub struct SccpRouteManifestDto {
 #[derive(
     Clone,
     Debug,
-    serde::Deserialize,
-    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
@@ -8743,6 +8713,36 @@ mod sccp_message_backend_tests {
             )) => Some(message.as_str()),
             _ => None,
         }
+    }
+
+    #[test]
+    fn sccp_evm_destination_query_decodes_norito_json_defaults() {
+        let mut value = Map::new();
+        value.insert(
+            "network_id_hex".to_string(),
+            Value::from(test_sccp_hex32_string(1)),
+        );
+        value.insert(
+            "verifier_address_hex".to_string(),
+            Value::from(test_sccp_evm_address(2)),
+        );
+        let query: SccpEvmDestinationQuery =
+            norito::json::from_value(Value::Object(value)).expect("query should decode");
+        assert_eq!(
+            query.network_id_hex.as_deref(),
+            Some(test_sccp_hex32_string(1).as_str())
+        );
+        assert_eq!(
+            query.verifier_address_hex.as_deref(),
+            Some(test_sccp_evm_address(2).as_str())
+        );
+        assert_eq!(query.bridge_address_hex, None);
+        assert_eq!(query.proof_bytes_hex, None);
+
+        let empty: SccpEvmDestinationQuery =
+            norito::json::from_value(Value::Object(Map::new())).expect("empty query should decode");
+        assert_eq!(empty.network_id_hex, None);
+        assert_eq!(empty.tron_verifier_address, None);
     }
 
     #[test]
@@ -11828,28 +11828,26 @@ mod sccp_message_backend_tests {
         let object = json.as_object().expect("artifact json object");
         let summary = object
             .get("proof_envelope_summary")
-            .and_then(serde_json::Value::as_object)
+            .and_then(Value::as_object)
             .expect("proof envelope summary");
         let expected_vk_hash = hex::encode(expected_summary.vk_hash);
 
         assert_eq!(
-            summary.get("backend").and_then(serde_json::Value::as_str),
+            summary.get("backend").and_then(Value::as_str),
             Some("stark")
         );
         assert_eq!(
-            summary
-                .get("circuit_id")
-                .and_then(serde_json::Value::as_str),
+            summary.get("circuit_id").and_then(Value::as_str),
             Some("sccp-message-transparent-v1")
         );
         assert_eq!(
-            summary.get("vk_hash").and_then(serde_json::Value::as_str),
+            summary.get("vk_hash").and_then(Value::as_str),
             Some(expected_vk_hash.as_str())
         );
         assert_eq!(
             summary
                 .get("public_input_column_count")
-                .and_then(serde_json::Value::as_u64),
+                .and_then(Value::as_u64),
             Some(u64::from(expected_summary.public_input_column_count))
         );
     }
@@ -11875,17 +11873,15 @@ mod sccp_message_backend_tests {
         let object = json.as_object().expect("job json object");
         let summary = object
             .get("proof_envelope_summary")
-            .and_then(serde_json::Value::as_object)
+            .and_then(Value::as_object)
             .expect("proof envelope summary");
 
         assert_eq!(
-            summary.get("backend").and_then(serde_json::Value::as_str),
+            summary.get("backend").and_then(Value::as_str),
             Some("stark")
         );
         assert_eq!(
-            summary
-                .get("circuit_id")
-                .and_then(serde_json::Value::as_str),
+            summary.get("circuit_id").and_then(Value::as_str),
             Some("sccp-message-transparent-v1")
         );
     }
@@ -11903,36 +11899,27 @@ mod sccp_message_backend_tests {
         let object = json.as_object().expect("job json object");
         let summary = object
             .get("groth16_proof_summary")
-            .and_then(serde_json::Value::as_object)
+            .and_then(Value::as_object)
             .expect("groth16 proof summary");
 
         assert_eq!(object.get("proof_envelope_summary"), None);
+        assert_eq!(summary.get("version").and_then(Value::as_u64), Some(1));
         assert_eq!(
-            summary.get("version").and_then(serde_json::Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            summary
-                .get("proof_len_bytes")
-                .and_then(serde_json::Value::as_u64),
+            summary.get("proof_len_bytes").and_then(Value::as_u64),
             Some(384)
         );
         assert_eq!(
             summary
                 .get("groth16_public_signal_count")
-                .and_then(serde_json::Value::as_u64),
+                .and_then(Value::as_u64),
             Some(9)
         );
         assert_eq!(
-            summary
-                .get("message_id")
-                .and_then(serde_json::Value::as_str),
+            summary.get("message_id").and_then(Value::as_str),
             Some(expected_message_id.as_str())
         );
         assert_eq!(
-            summary
-                .get("commitment_root")
-                .and_then(serde_json::Value::as_str),
+            summary.get("commitment_root").and_then(Value::as_str),
             Some(expected_commitment_root.as_str())
         );
     }
@@ -19253,17 +19240,13 @@ pub async fn handle_post_bridge_proof_submit(
 
     let burn_bundle = burn_bundle
         .map(|value| {
-            let raw = json::to_string(&value)
-                .map_err(|err| conversion_error(format!("invalid burn_bundle: {err}")))?;
-            serde_json::from_str::<NexusSccpBurnProofV1>(&raw)
+            json::from_value::<NexusSccpBurnProofV1>(value)
                 .map_err(|err| conversion_error(format!("invalid burn_bundle: {err}")))
         })
         .transpose()?;
     let message_bundle = message_bundle
         .map(|value| {
-            let raw = json::to_string(&value)
-                .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))?;
-            serde_json::from_str::<NexusSccpMessageProofV1>(&raw)
+            json::from_value::<NexusSccpMessageProofV1>(value)
                 .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))
         })
         .transpose()?;
@@ -19519,9 +19502,7 @@ pub async fn handle_post_bridge_message_submit(
         ..
     } = req;
 
-    let raw = json::to_string(&message_bundle)
-        .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))?;
-    let message_bundle = serde_json::from_str::<NexusSccpMessageProofV1>(&raw)
+    let message_bundle = json::from_value::<NexusSccpMessageProofV1>(message_bundle)
         .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))?;
     let target_domain = sccp_message_target_domain(&message_bundle.payload);
     if target_domain != iroha_sccp::SCCP_DOMAIN_SORA {
@@ -24165,11 +24146,11 @@ mod multisig_selector_tests {
             _active_hash,
         ) = multisig_test_world();
         let asset_definition_id = test_asset_definition_id().to_string();
-        let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({
+        let pacs009_marker_payload = norito::json::to_string_pretty(&norito::json!({
             "instruction_id": "pacs-1",
-            "asset_id": asset_definition_id,
+            "asset_id": (asset_definition_id),
             "amount": "25",
-            "to_account_id": multisig_account_id.to_string(),
+            "to_account_id": (multisig_account_id.to_string()),
             "mint_intent": "pacs009",
         }))
         .expect("pacs009 marker payload");
@@ -24262,11 +24243,11 @@ mod multisig_selector_tests {
             _alias_literal,
             _active_hash,
         ) = multisig_test_world();
-        let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({
+        let pacs009_marker_payload = norito::json::to_string_pretty(&norito::json!({
             "instruction_id": "pacs-non-mint",
-            "asset_id": test_asset_definition_id().to_string(),
+            "asset_id": (test_asset_definition_id().to_string()),
             "amount": "25",
-            "to_account_id": signer_two_id.to_string(),
+            "to_account_id": (signer_two_id.to_string()),
             "mint_intent": "pacs009",
         }))
         .expect("pacs009 marker payload");
@@ -24681,11 +24662,11 @@ mod multisig_selector_tests {
             _alias_literal,
             onchain_hash,
         ) = multisig_test_world();
-        let pacs009_marker_payload = serde_json::to_string_pretty(&serde_json::json!({
+        let pacs009_marker_payload = norito::json::to_string_pretty(&norito::json!({
             "instruction_id": "pacs-1",
-            "asset_id": test_asset_definition_id().to_string(),
+            "asset_id": (test_asset_definition_id().to_string()),
             "amount": "25",
-            "to_account_id": multisig_account_id.to_string(),
+            "to_account_id": (multisig_account_id.to_string()),
             "mint_intent": "pacs009",
         }))
         .expect("pacs009 marker payload");
@@ -28501,10 +28482,13 @@ pub struct SetContractAliasResponseDto {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+)]
 /// Query parameters for bundle deployment.
 pub struct DeployBundleQuery {
     /// Whether to validate and simulate the bundle without submitting transactions.
+    #[norito(default)]
     pub dry_run: Option<bool>,
 }
 

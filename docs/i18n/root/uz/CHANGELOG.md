@@ -19,11 +19,11 @@ Ushbu loyihaga kiritilgan barcha muhim o'zgarishlar ushbu faylda hujjatlashtiril
 
 ## [Nashr qilinmagan]
 
-- SCALE shimini tushiring; `norito::codec` endi mahalliy Norito serializatsiyasi bilan amalga oshirilmoqda.
-- `parity_scale_codec` foydalanishni qutilar bo'ylab `norito::codec` bilan almashtiring.
+- retired codec shimini tushiring; `norito::codec` endi mahalliy Norito serializatsiyasi bilan amalga oshirilmoqda.
+- `retired_codec` foydalanishni qutilar bo'ylab `norito::codec` bilan almashtiring.
 - Asboblarni mahalliy Norito serializatsiyasiga ko'chirishni boshlang.
-- Qolgan `parity-scale-codec` bog'liqligini ish maydonidan mahalliy Norito seriyalash foydasiga olib tashlang.
-- SCALE belgilarining qoldiq hosilalarini mahalliy Norito ilovalari bilan almashtiring va versiyali kodek modulining nomini o'zgartiring.
+- Qolgan `retired codec` bog'liqligini ish maydonidan mahalliy Norito seriyalash foydasiga olib tashlang.
+- retired codec belgilarining qoldiq hosilalarini mahalliy Norito ilovalari bilan almashtiring va versiyali kodek modulining nomini o'zgartiring.
 - `iroha_config_base_derive` va `iroha_futures_derive`ni xususiyatli makroslar bilan `iroha_derive` ga birlashtiring.
 - *(multisig)* Barqaror xato kodi/sabablari bilan multisig organlarining toʻgʻridan-toʻgʻri imzolarini rad eting, oʻrnatilgan relayerlar boʻylab multisig TTL chegaralarini kiriting va yuborishdan oldin CLIda TTL chegaralarini kiriting (SDK pariteti kutilmoqda).
 - FFI protsessual makroslarini `iroha_ffi` ichiga ko'chiring va `iroha_ffi_derive` kassasini olib tashlang.
@@ -247,7 +247,7 @@ Ushbu loyihaga kiritilgan barcha muhim o'zgarishlar ushbu faylda hujjatlashtiril
 - TransactionValue nomini CommittedTransaction (#4610) ga o'zgartiring
 - shaxsiy hisoblarni ID (#4411) bo'yicha autentifikatsiya qilish
 - shaxsiy kalitlar uchun multihash formatidan foydalaning (#4541)
- - `parity_scale_decoder` nomini `norito_cli` ga o'zgartiring
+ - `legacy_codec_decoder` nomini `norito_cli` ga o'zgartiring
 - Set B validatorlariga bloklarni yuborish
 - `Role` ni shaffof qilish (#4886)
 - sarlavhadan blok xeshini olish (#4890)
@@ -1171,7 +1171,7 @@ Ushbu loyihaga kiritilgan barcha muhim o'zgarishlar ushbu faylda hujjatlashtiril
 - hyperledger # 2309: CI da hujjat testlarini qayta yoqing.
 - hyperledger # 2165 Codecov o'rnatilishini olib tashlang.
 - Joriy foydalanuvchilar bilan ziddiyatlarni oldini olish uchun yangi konteynerga o'ting.
- - hyperledger # 2158 `parity_scale_codec` va boshqa bog'liqliklarni yangilang. (Norito kodek)
+ - hyperledger # 2158 `retired_codec` va boshqa bog'liqliklarni yangilang. (Norito kodek)
 - Qurilishni tuzatish.
 - hyperledger # 2461 Iroha2 CI ni yaxshilash.
 - `syn` yangilanishi.

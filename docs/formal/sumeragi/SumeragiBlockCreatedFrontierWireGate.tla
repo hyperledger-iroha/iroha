@@ -317,6 +317,30 @@ BlockCreatedFrontierWireSafetyAnchors ==
   /\ WireRebuildAnchors
   /\ RebroadcastAnchors
 
-Safety == BlockCreatedFrontierWireSafetyAnchors
+BlockCreatedConstructorExactness ==
+  /\ ConstructorSafety
+  /\ ConstructorAnchors
+
+BlockCreatedFrontierInfoCopyExactness ==
+  /\ FrontierInfoCopySafety
+  /\ FrontierInfoCopyAnchors
+
+BlockCreatedWireRebuildExactness ==
+  /\ WireRebuildSafety
+  /\ WireRebuildAnchors
+
+BlockCreatedRebroadcastExactness ==
+  /\ RebroadcastSafety
+  /\ RebroadcastAnchors
+
+BlockCreatedFrontierWireExactness ==
+  /\ SafetyFast
+  /\ BlockCreatedConstructorExactness
+  /\ BlockCreatedFrontierInfoCopyExactness
+  /\ BlockCreatedWireRebuildExactness
+  /\ BlockCreatedRebroadcastExactness
+  /\ BlockCreatedFrontierWireSafetyAnchors
+
+Safety == BlockCreatedFrontierWireExactness
 
 ====

@@ -902,6 +902,30 @@ class EvmSccpProverTest {
         }
         assertFailsWith<IllegalArgumentException> {
             SccpEvm.EthereumMainnetNativeEvmProverBundle.fromJson(
+                sampleEthereumNativeEvmProverBundleJson(
+                    binding.hash,
+                    proofArtifact = "ipfs:proof-artifact.bin",
+                ),
+                expectedDestinationBindingHash = binding.hash,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("proofArtifact") == true)
+            assertTrue(error.message?.contains("URI schemes") == true)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEvm.EthereumMainnetNativeEvmProverBundle.fromJson(
+                sampleEthereumNativeEvmProverBundleJson(
+                    binding.hash,
+                    proofArtifact = "artifacts/eth-mainnet/proof.wasm",
+                ),
+                expectedDestinationBindingHash = binding.hash,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("proofArtifact") == true)
+            assertTrue(error.message?.contains("forbidden prover dependency marker: wasm") == true)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEvm.EthereumMainnetNativeEvmProverBundle.fromJson(
                 sampleEthereumNativeEvmProverBundleJson(binding.hash)
                     .replace(
                         "\"audit_hashes\":",

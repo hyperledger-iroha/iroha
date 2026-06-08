@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   عدد مرات الإنتاج `serde`/`serde_json` بالنسبة إلى `AGENTS_BASE_REF`. تعيين
   `SERDE_GUARD_ALLOW=1` فقط لتجارب CI بعد تقديم خطة الترحيل.
 - `make guards` يفرض سياسة التسلسل Norito: فهو يرفض الجديد
-  استخدام `serde`/`serde_json` ومساعدي AoS المخصصين وتبعيات SCALE بالخارج
+  استخدام `serde`/`serde_json` ومساعدي AoS المخصصين وتبعيات retired codec بالخارج
   مقاعد Norito (`scripts/deny_serde_json.sh`،
   `scripts/check_no_direct_serde.sh`، `scripts/deny_handrolled_aos.sh`،
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **سياسة واجهة مستخدم Proc-macro:** يجب على كل صندوق proc-macro شحن `trybuild`
   الحزام (`tests/ui.rs` مع تمرير/فشل الكرة) خلف `trybuild-tests`
   ميزة. ضع عينات المسار السعيد ضمن `tests/ui/pass`، وحالات الرفض ضمن

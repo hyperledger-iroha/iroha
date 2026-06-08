@@ -19,7 +19,7 @@ deterministicos que descrevem os blobs aceitos pelo DA-2. Esta nota captura as
 estruturas de dados canonicas, os hooks do pipeline de blocos, as provas de
 cliente leve e as superficies Torii/RPC que precisam chegar antes que
 validadores possam confiar nos compromissos DA durante admissao ou checks de
-governanca. Todos os payloads sao codificados em Norito; sem SCALE ou JSON ad
+governanca. Todos os payloads sao codificados em Norito; sem retired codec ou JSON ad
 hoc.
 
 ## Objetivos

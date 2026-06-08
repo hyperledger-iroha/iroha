@@ -53,7 +53,7 @@ translator: manual
 
 ## Norito (קודק סריאליזציה)
 
-Norito הוא קודק הסריאליזציה של סביבת העבודה. איננו משתמשים ב־`parity-scale-codec`‏ (SCALE). השוואות ל־SCALE בתיעוד או במדידות נועדו להקשר בלבד; בכל השבילים בייצור משתמשים ב־Norito. ה־APIs של `norito::codec::{Encode, Decode}` מספקים מטען Norito ללא כותרת ("bare") לצורכי גיבוב ויעילות על הקו – זה Norito, לא SCALE.
+Norito הוא קודק הסריאליזציה של סביבת העבודה. איננו משתמשים ב־`retired codec`‏ (retired codec). השוואות ל־retired codec בתיעוד או במדידות נועדו להקשר בלבד; בכל השבילים בייצור משתמשים ב־Norito. ה־APIs של `norito::codec::{Encode, Decode}` מספקים מטען Norito ללא כותרת ("bare") לצורכי גיבוב ויעילות על הקו – זה Norito, לא retired codec.
 
 המצב העדכני:
 
@@ -74,6 +74,6 @@ Norito הוא קודק הסריאליזציה של סביבת העבודה. אי
 הערות על קידוד נקודת הסטטוס:
 - גוף Torii `/status` משתמש ב־Norito כברירת המחדל עם מטען bare קומפקטי. מומלץ לנסות לפענח Norito תחילה.
 - השרתים יכולים להחזיר JSON לפי בקשה; לקוחות עוברים ל־JSON אם `content-type` הוא ‎`application/json`.
-- הפורמט על הקו הוא Norito, לא SCALE. נעשה שימוש ב־`norito::codec::{Encode,Decode}` גם בגרסה ה־bare.
+- הפורמט על הקו הוא Norito, לא retired codec. נעשה שימוש ב־`norito::codec::{Encode,Decode}` גם בגרסה ה־bare.
 
 </div>

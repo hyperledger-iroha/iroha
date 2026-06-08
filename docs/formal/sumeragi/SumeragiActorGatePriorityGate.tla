@@ -444,23 +444,54 @@ NonUrgentDropResetsUrgentStreak ==
   candidate = "drop_non_urgent_resets_urgent_streak" =>
     urgentStreakEffect = "Reset"
 
-Safety ==
+ActorGateGroupedCases ==
+  EntryCases \cup BlockCases \cup DropCases
+
+ActorGateCaseGroupsComplete ==
+  ActorGateGroupedCases = Cases
+
+ActorGateSpecProjectionExactness ==
   /\ MatchesSpec
+
+ActorGateInFlightExactness ==
   /\ InFlightBlocksAll
+
+ActorGateAvailabilityExactness ==
   /\ AvailabilityBodyYieldsToCriticalAfterBodyCap
   /\ AvailabilityCriticalHonorsBodyBurst
   /\ AvailabilityBurstYieldsToUrgentAndDa
+
+ActorGateUrgentDaRegularExactness ==
   /\ UrgentHonorsAvailabilityAndDaCaps
   /\ DaCriticalHonorsAvailabilityAndUrgentCaps
   /\ RegularHonorsAvailabilityDaAndUrgentCaps
+
+ActorGateEntrySideEffectExactness ==
   /\ EntrySetsOwnershipAndConsumesWaiter
   /\ BlockedEntriesHaveNoSideEffects
+
+ActorGateEntryStreakExactness ==
   /\ AvailabilityEntryStreakEffects
   /\ UrgentEntryStreakEffects
   /\ DaCriticalAndRegularEntryResetStreaks
+
+ActorGateDropExactness ==
   /\ DropClearsAndNotifies
   /\ UrgentDropPreservesUrgentStreak
   /\ NonUrgentDropResetsUrgentStreak
+
+ActorGatePriorityExactness ==
+  /\ ActorGateCaseGroupsComplete
+  /\ ActorGateSpecProjectionExactness
+  /\ ActorGateInFlightExactness
+  /\ ActorGateAvailabilityExactness
+  /\ ActorGateUrgentDaRegularExactness
+  /\ ActorGateEntrySideEffectExactness
+  /\ ActorGateEntryStreakExactness
+  /\ ActorGateDropExactness
+
+Safety ==
+  ActorGatePriorityExactness
 
 =============================================================================
 ====

@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   生产 `serde`/`serde_json` 相对于 `AGENTS_BASE_REF` 命中。套装
   `SERDE_GUARD_ALLOW=1` 仅适用于提交迁移计划后的 CI 实验。
 - `make guards` 强制执行 Norito 序列化策略：它拒绝新的
-  `serde`/`serde_json` 用法、临时 AoS 帮助程序和外部 SCALE 依赖项
+  `serde`/`serde_json` 用法、临时 AoS 帮助程序和外部 retired codec 依赖项
   Norito 长凳 (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`、`scripts/deny_handrolled_aos.sh`、
-  `scripts/check_no_scale.sh`）。
+  `scripts/check_no_legacy_codec.sh`）。
 - **Proc-macro UI 政策：** 每个 proc-macro 箱都必须运送 `trybuild`
   `trybuild-tests` 后面的线束（带有通过/失败球的 `tests/ui.rs`）
   功能。将快乐路径样本放在 `tests/ui/pass` 下，将拒绝案例放在

@@ -9594,8 +9594,8 @@ mod offline_note_tests {
         }
     }
 
-    fn append_zk1_tlv(bytes: &mut Vec<u8>, tag: &[u8; 4], payload: &[u8]) {
-        bytes.extend_from_slice(tag);
+    fn append_zk1_tlv(bytes: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
+        bytes.extend_from_slice(&tag);
         bytes.extend_from_slice(
             &u32::try_from(payload.len())
                 .expect("test TLV payload length fits u32")
@@ -9606,9 +9606,9 @@ mod offline_note_tests {
 
     fn kagemusha_lineage_key_artifact_vk(circuit_id: &str, payload_seed: u8) -> VerifyingKeyBox {
         let mut bytes = b"ZK1\0".to_vec();
-        append_zk1_tlv(&mut bytes, b"IPAK", &8u32.to_le_bytes());
-        append_zk1_tlv(&mut bytes, b"CID1", circuit_id.as_bytes());
-        append_zk1_tlv(&mut bytes, b"H2VK", &[payload_seed; 32]);
+        append_zk1_tlv(&mut bytes, *b"IPAK", &8u32.to_le_bytes());
+        append_zk1_tlv(&mut bytes, *b"CID1", circuit_id.as_bytes());
+        append_zk1_tlv(&mut bytes, *b"H2VK", &[payload_seed; 32]);
         VerifyingKeyBox::new("halo2/ipa".into(), bytes)
     }
 
@@ -9640,43 +9640,43 @@ mod offline_note_tests {
 
     #[test]
     fn kagemusha_lineage_key_artifact_packages_reject_profile_splices() {
-        let init_vk = kagemusha_lineage_key_artifact_vk(
+        let init_verifier_key = kagemusha_lineage_key_artifact_vk(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
             0xE7,
         );
-        let init_pk = kagemusha_lineage_key_artifact_pk_archive(
+        let init_proving_key_archive = kagemusha_lineage_key_artifact_pk_archive(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
-            &init_vk,
+            &init_verifier_key,
             0xE8,
         );
         KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
             2,
-            init_vk.clone(),
-            init_pk.clone(),
+            init_verifier_key.clone(),
+            init_proving_key_archive.clone(),
         )
         .expect("canonical init lineage artifact package validates");
 
-        let append_vk = kagemusha_lineage_key_artifact_vk(
+        let append_verifier_key = kagemusha_lineage_key_artifact_vk(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
             0xA7,
         );
-        let append_pk = kagemusha_lineage_key_artifact_pk_archive(
+        let append_proving_key_archive = kagemusha_lineage_key_artifact_pk_archive(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
-            &append_vk,
+            &append_verifier_key,
             0xA8,
         );
         KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_append(
             2,
-            append_vk.clone(),
-            append_pk.clone(),
+            append_verifier_key.clone(),
+            append_proving_key_archive.clone(),
         )
         .expect("canonical append lineage artifact package validates");
 
         assert!(matches!(
             KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
                 2,
-                append_vk.clone(),
-                init_pk.clone(),
+                append_verifier_key.clone(),
+                init_proving_key_archive.clone(),
             ),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "lineage_verifier_key"
@@ -9685,8 +9685,8 @@ mod offline_note_tests {
         assert!(matches!(
             KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_append(
                 2,
-                init_vk.clone(),
-                append_pk.clone(),
+                init_verifier_key.clone(),
+                append_proving_key_archive.clone(),
             ),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "lineage_verifier_key"
@@ -9695,8 +9695,8 @@ mod offline_note_tests {
         assert!(matches!(
             KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
                 2,
-                init_vk.clone(),
-                append_pk,
+                init_verifier_key.clone(),
+                append_proving_key_archive,
             ),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "lineage_proving_key_archive"
@@ -9708,24 +9708,24 @@ mod offline_note_tests {
             KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
                 2,
                 malformed_vk,
-                init_pk.clone(),
+                init_proving_key_archive.clone(),
             ),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "lineage_verifier_key"
             })
         ));
 
-        let mut duplicate_cid_vk = init_vk.clone();
+        let mut duplicate_cid_vk = init_verifier_key.clone();
         append_zk1_tlv(
             &mut duplicate_cid_vk.bytes,
-            b"CID1",
+            *b"CID1",
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1.as_bytes(),
         );
         assert!(matches!(
             KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
                 2,
                 duplicate_cid_vk,
-                init_pk.clone(),
+                init_proving_key_archive.clone(),
             ),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
                 field: "lineage_verifier_key"
@@ -9740,7 +9740,7 @@ mod offline_note_tests {
         assert!(matches!(
             KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
                 2,
-                init_vk.clone(),
+                init_verifier_key.clone(),
                 wrong_commitment_pk,
             ),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -9752,14 +9752,14 @@ mod offline_note_tests {
             version: KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_VERSION_V1 + 1,
             circuit_family: KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1
                 .to_owned(),
-            vk_commitment: kagemusha_verifying_key_commitment(&init_vk),
+            vk_commitment: kagemusha_verifying_key_commitment(&init_verifier_key),
             proving_key: vec![0xE8; 64],
         })
         .expect("encode bad-version archive");
         assert!(matches!(
             KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
                 2,
-                init_vk.clone(),
+                init_verifier_key.clone(),
                 bad_version_pk,
             ),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -9769,13 +9769,13 @@ mod offline_note_tests {
 
         let empty_payload_pk = kagemusha_lineage_key_artifact_pk_archive_with_commitment(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
-            kagemusha_verifying_key_commitment(&init_vk),
+            kagemusha_verifying_key_commitment(&init_verifier_key),
             Vec::new(),
         );
         assert!(matches!(
             KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
                 2,
-                init_vk,
+                init_verifier_key,
                 empty_payload_pk,
             ),
             Err(KagemushaFoldError::InvalidRecursiveSpendProof {
@@ -18030,28 +18030,28 @@ mod offline_note_tests {
                 field: "lineage_proving_key_archive"
             })
         ));
-        let init_lineage_vk = kagemusha_lineage_key_artifact_vk(
+        let init_lineage_verifier_key = kagemusha_lineage_key_artifact_vk(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
             0xE7,
         );
-        let init_lineage_pk = kagemusha_lineage_key_artifact_pk_archive(
+        let init_lineage_proving_key_archive = kagemusha_lineage_key_artifact_pk_archive(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_ONE_HOP_PROOF_CIRCUIT_ID_V1,
-            &init_lineage_vk,
+            &init_lineage_verifier_key,
             0xE8,
         );
-        let append_lineage_vk = kagemusha_lineage_key_artifact_vk(
+        let append_lineage_verifier_key = kagemusha_lineage_key_artifact_vk(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
             0xA7,
         );
-        let append_lineage_pk = kagemusha_lineage_key_artifact_pk_archive(
+        let append_lineage_proving_key_archive = kagemusha_lineage_key_artifact_pk_archive(
             KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
-            &append_lineage_vk,
+            &append_lineage_verifier_key,
             0xA8,
         );
         let init_artifacts = KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
             2,
-            init_lineage_vk.clone(),
-            init_lineage_pk.clone(),
+            init_lineage_verifier_key.clone(),
+            init_lineage_proving_key_archive.clone(),
         )
         .expect("init Reserved-lineage key artifact package validates");
         assert!(init_artifacts.is_init_artifact());
@@ -18076,8 +18076,8 @@ mod offline_note_tests {
                 .with_lineage_key_artifact_package(
                     KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_append(
                         2,
-                        append_lineage_vk.clone(),
-                        append_lineage_pk.clone(),
+                        append_lineage_verifier_key.clone(),
+                        append_lineage_proving_key_archive.clone(),
                     )
                     .expect("append artifact package validates"),
                 ),
@@ -18086,7 +18086,10 @@ mod offline_note_tests {
             })
         ));
         let init = init_without_key_artifacts
-            .with_lineage_key_artifacts(init_lineage_vk.clone(), init_lineage_pk.clone())
+            .with_lineage_key_artifacts(
+                init_lineage_verifier_key.clone(),
+                init_lineage_proving_key_archive.clone(),
+            )
             .expect("ABI init request builder accepts Reserved-lineage key material");
         assert_eq!(init_from_artifact_package, init);
         let init_from_production_builder =
@@ -18094,8 +18097,8 @@ mod offline_note_tests {
                 init_record_bundle.clone(),
                 init_pallas_open_envelopes_archive.clone(),
                 note0.clone(),
-                init_lineage_vk.clone(),
-                init_lineage_pk.clone(),
+                init_lineage_verifier_key.clone(),
+                init_lineage_proving_key_archive.clone(),
             )
             .expect("ABI init production builder accepts Reserved-lineage key material");
         assert_eq!(init_from_production_builder, init);
@@ -18272,8 +18275,8 @@ mod offline_note_tests {
         ));
         let append_artifacts = KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_append(
             2,
-            append_lineage_vk.clone(),
-            append_lineage_pk.clone(),
+            append_lineage_verifier_key.clone(),
+            append_lineage_proving_key_archive.clone(),
         )
         .expect("append Reserved-lineage key artifact package validates");
         assert!(append_artifacts.is_append_artifact());
@@ -18331,7 +18334,10 @@ mod offline_note_tests {
             })
         ));
         let append = append_without_key_artifacts
-            .with_lineage_key_artifacts(append_lineage_vk.clone(), append_lineage_pk.clone())
+            .with_lineage_key_artifacts(
+                append_lineage_verifier_key.clone(),
+                append_lineage_proving_key_archive.clone(),
+            )
             .expect("ABI append request builder accepts Reserved-lineage key material");
         assert_eq!(append_from_artifact_package, append);
         let append_from_production_builder =
@@ -18342,8 +18348,8 @@ mod offline_note_tests {
                 append_record_bundle.clone(),
                 append_pallas_open_envelopes_archive.clone(),
                 note1.clone(),
-                append_lineage_vk.clone(),
-                append_lineage_pk.clone(),
+                append_lineage_verifier_key.clone(),
+                append_lineage_proving_key_archive.clone(),
             )
             .expect("ABI append production builder accepts Reserved-lineage key material");
         assert_eq!(append_from_production_builder, append);

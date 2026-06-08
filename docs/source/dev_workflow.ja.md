@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   実動 `serde`/`serde_json` は、`AGENTS_BASE_REF` と比較してヒットします。セット
   `SERDE_GUARD_ALLOW=1` は、移行計画を提出した後の CI 実験のみです。
 - `make guards` は、Norito シリアル化ポリシーを強制します。新しいシリアル化を拒否します。
-  `serde`/`serde_json` の使用法、アドホック AoS ヘルパー、および外部の SCALE 依存関係
+  `serde`/`serde_json` の使用法、アドホック AoS ヘルパー、および外部の retired codec 依存関係
   Norito ベンチ (`scripts/deny_serde_json.sh`、
   `scripts/check_no_direct_serde.sh`、`scripts/deny_handrolled_aos.sh`、
-  `scripts/check_no_scale.sh`)。
+  `scripts/check_no_legacy_codec.sh`)。
 - **Proc-macro UI ポリシー:** すべての proc-macro クレートは `trybuild` を出荷する必要があります
   `trybuild-tests` の背後にあるハーネス (`tests/ui.rs`、合格/失敗グロブ付き)
   特徴。ハッピーパス サンプルは `tests/ui/pass` の下に、拒否ケースは以下に配置します。

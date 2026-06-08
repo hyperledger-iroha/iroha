@@ -14,7 +14,7 @@ DA-3 extends the Nexus block format so every lane embeds deterministic records
 describing the blobs accepted by DA-2. This note captures the canonical data
 structures, block pipeline hooks, light-client proofs, and Torii/RPC surfaces
 that must land before validators can rely on DA commitments during admission or
-governance checks. All payloads are Norito-encoded; no SCALE or ad-hoc JSON.
+governance checks. All payloads are Norito-encoded; no alternate binary codec or ad-hoc JSON.
 
 ## Objectives
 

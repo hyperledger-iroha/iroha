@@ -323,15 +323,38 @@ TypeInvariant ==
   /\ status_recorded \in BOOLEAN
   /\ status_reason \in Reasons
 
-ResultMatchesSpec ==
+MismatchStateFieldsMatch(c) ==
+  /\ count = SpecCount(c)
+  /\ active = SpecActive(c)
+
+MismatchTelemetryFieldsMatch(c) ==
+  /\ warn = SpecWarn(c)
+  /\ telemetry_mismatch = SpecTelemetryMismatch(c)
+  /\ telemetry_clear = SpecTelemetryClear(c)
+
+MismatchFailClosedFieldsMatch(c) ==
+  /\ dropped = SpecDropped(c)
+  /\ status_recorded = SpecStatusRecorded(c)
+  /\ status_reason = SpecStatusReason(c)
+
+MembershipMismatchIngressStateExact ==
   \/ candidate = "none"
-  \/ /\ count = SpecCount(candidate)
-     /\ active = SpecActive(candidate)
-     /\ warn = SpecWarn(candidate)
-     /\ telemetry_mismatch = SpecTelemetryMismatch(candidate)
-     /\ telemetry_clear = SpecTelemetryClear(candidate)
-     /\ dropped = SpecDropped(candidate)
-     /\ status_recorded = SpecStatusRecorded(candidate)
-     /\ status_reason = SpecStatusReason(candidate)
+  \/ MismatchStateFieldsMatch(candidate)
+
+MembershipMismatchIngressTelemetryExact ==
+  \/ candidate = "none"
+  \/ MismatchTelemetryFieldsMatch(candidate)
+
+MembershipMismatchIngressFailClosedExact ==
+  \/ candidate = "none"
+  \/ MismatchFailClosedFieldsMatch(candidate)
+
+MembershipMismatchIngressExactness ==
+  /\ MembershipMismatchIngressStateExact
+  /\ MembershipMismatchIngressTelemetryExact
+  /\ MembershipMismatchIngressFailClosedExact
+
+ResultMatchesSpec ==
+  MembershipMismatchIngressExactness
 
 ====

@@ -7635,6 +7635,31 @@ private func evmNormalizeNativeEvmProverArtifactPath(_ value: String, field: Str
     guard !value.hasPrefix("/"), !value.contains("\\") else {
         throw EvmSccpProverError.invalidPublicInputs(field)
     }
+    guard !value.contains(":") else {
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
+    let lowercasedValue = value.lowercased()
+    func forbiddenPathMarker(_ parts: String...) -> String {
+        parts.joined()
+    }
+    let forbiddenPathMarkers = [
+        forbiddenPathMarker("web", "assem", "bly"),
+        forbiddenPathMarker("wa", "sm"),
+        forbiddenPathMarker("sn", "ark", "js"),
+        forbiddenPathMarker("remote", "pro", "ver"),
+        forbiddenPathMarker("remote", "-", "pro", "ver"),
+        forbiddenPathMarker("remote", "_", "pro", "ver"),
+        forbiddenPathMarker("remote", " ", "pro", "ver"),
+        forbiddenPathMarker("pro", "ver", "-", "url"),
+        forbiddenPathMarker("pro", "ver", "_", "url"),
+        forbiddenPathMarker("pro", "ver", "end", "point"),
+        forbiddenPathMarker("pro", "ver", "-", "end", "point"),
+        forbiddenPathMarker("pro", "ver", "_", "end", "point"),
+        forbiddenPathMarker("pro", "ver", " ", "end", "point")
+    ]
+    guard !forbiddenPathMarkers.contains(where: { lowercasedValue.contains($0) }) else {
+        throw EvmSccpProverError.invalidPublicInputs(field)
+    }
     let segments = value.split(separator: "/", omittingEmptySubsequences: false)
     guard !segments.isEmpty,
           segments.allSatisfy({ segment in

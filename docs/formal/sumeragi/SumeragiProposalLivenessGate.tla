@@ -287,14 +287,29 @@ MarkSlotAnchors ==
   /\ SpecMarked("mark_diff_replaces_then_recovery")
        = WithState(NewSlot, RecoveryAcquireDependencies)
 
-SafetyFast ==
+ProposalLivenessTransitionExact ==
   /\ StepTransitionsMatchSpec
-  /\ NewSlotMatchesSpec
-  /\ EnsureSlotMatchesSpec
-  /\ MarkSlotMatchesSpec
   /\ RecoveryStepAnchors
+
+ProposalLivenessNewSlotExact ==
+  /\ NewSlotMatchesSpec
   /\ NewSlotResetAnchors
+
+ProposalLivenessEnsureExact ==
+  /\ EnsureSlotMatchesSpec
   /\ EnsureSlotAnchors
+
+ProposalLivenessMarkExact ==
+  /\ MarkSlotMatchesSpec
   /\ MarkSlotAnchors
+
+ProposalLivenessExactness ==
+  /\ ProposalLivenessTransitionExact
+  /\ ProposalLivenessNewSlotExact
+  /\ ProposalLivenessEnsureExact
+  /\ ProposalLivenessMarkExact
+
+SafetyFast ==
+  ProposalLivenessExactness
 
 ====

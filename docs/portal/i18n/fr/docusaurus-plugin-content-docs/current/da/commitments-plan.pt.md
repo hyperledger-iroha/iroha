@@ -21,7 +21,7 @@ déterministes qui décrivent les blobs liés au DA-2. Cette note a été captur
 estruturas de dados canonicas, os hooks do pipeline de blocos, comme prouvé
 cliente leve e as superficies Torii/RPC que precisam chegar antes que
 Les validateurs peuvent confier nos compromissos DA lors de l'admission ou des contrôles de
-gouvernance. Toutes les charges utiles sont codifiées dans Norito ; sem SCALE ou JSON annonce
+gouvernance. Toutes les charges utiles sont codifiées dans Norito ; sem retired codec ou JSON annonce
 ponctuellement.
 
 ## Objets- Faire des compromis par blob (racine de morceau + hachage manifeste + engagement KZG

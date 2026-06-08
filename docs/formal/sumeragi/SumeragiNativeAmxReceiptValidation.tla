@@ -286,17 +286,113 @@ QcQuorumAndSignatureRequired ==
       InvalidAggregateSignature
     } => ~ImplementationAccepted(candidate)
 
-Safety ==
+ReceiptPositiveCases == {
+  ValidNativeReceipt,
+  ValidSingleNoReceipt
+}
+
+ReceiptContextCases == {
+  NativeMissingReceipt,
+  NativeUnsignedEntrypoint,
+  SingleUnexpectedReceipt
+}
+
+ReceiptHeaderCases == {
+  UnsupportedVersion,
+  SourceMismatch,
+  CoordinatorMismatch,
+  HeightMismatch,
+  PlanDigestMismatch
+}
+
+ReceiptParticipantCases == {
+  MissingParticipantLeg,
+  UnexpectedParticipantLeg,
+  DuplicateParticipantLeg
+}
+
+ReceiptQcBodyCases == {
+  QcSourceMismatch,
+  QcEntrypointMismatch,
+  QcPlanDigestMismatch,
+  QcWrongPhase,
+  QcCoordinatorMismatch,
+  QcParticipantMismatch,
+  QcHeightMismatch
+}
+
+ReceiptValidatorSetCases == {
+  ValidatorHashVersionMismatch,
+  ValidatorSetHashMismatch,
+  UnknownParticipantDataspace,
+  ValidatorSetTooSmall
+}
+
+ReceiptSignerBitmapCases == {
+  SignerBitmapLengthMismatch,
+  SignerIndexOutOfBounds,
+  SignerNotBls,
+  SignerMissingPop
+}
+
+ReceiptQuorumSignatureCases == {
+  QuorumNotMet,
+  MissingAggregateSignature,
+  InvalidAggregateSignature
+}
+
+NativeAmxReceiptGroupedCases ==
+  ReceiptPositiveCases \cup
+  ReceiptContextCases \cup
+  ReceiptHeaderCases \cup
+  ReceiptParticipantCases \cup
+  ReceiptQcBodyCases \cup
+  ReceiptValidatorSetCases \cup
+  ReceiptSignerBitmapCases \cup
+  ReceiptQuorumSignatureCases
+
+NativeAmxReceiptCaseGroupsComplete ==
+  NativeAmxReceiptGroupedCases = Candidates
+
+NativeAmxReceiptAcceptanceExact ==
   /\ ValidationMatchesSpec
   /\ ValidReceiptsAreAccepted
+
+NativeAmxReceiptContextExact ==
   /\ NativeContextRequiresReceipt
   /\ SingleContextForbidsReceipt
   /\ SignedTransactionRequired
+
+NativeAmxReceiptHeaderExact ==
   /\ ReceiptHeaderMatchesContext
+
+NativeAmxReceiptParticipantExact ==
   /\ ParticipantSetMatchesPlan
+
+NativeAmxReceiptQcBodyExact ==
   /\ QcBodyMatchesReceipt
+
+NativeAmxReceiptValidatorSetExact ==
   /\ QcValidatorSetAuthenticated
+
+NativeAmxReceiptSignerBitmapExact ==
   /\ QcSignerBitmapWellFormed
+
+NativeAmxReceiptQuorumSignatureExact ==
   /\ QcQuorumAndSignatureRequired
+
+NativeAmxReceiptValidationExactness ==
+  /\ NativeAmxReceiptCaseGroupsComplete
+  /\ NativeAmxReceiptAcceptanceExact
+  /\ NativeAmxReceiptContextExact
+  /\ NativeAmxReceiptHeaderExact
+  /\ NativeAmxReceiptParticipantExact
+  /\ NativeAmxReceiptQcBodyExact
+  /\ NativeAmxReceiptValidatorSetExact
+  /\ NativeAmxReceiptSignerBitmapExact
+  /\ NativeAmxReceiptQuorumSignatureExact
+
+Safety ==
+  NativeAmxReceiptValidationExactness
 
 ====

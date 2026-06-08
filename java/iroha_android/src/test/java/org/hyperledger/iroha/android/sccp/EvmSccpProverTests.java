@@ -1362,6 +1362,28 @@ public final class EvmSccpProverTests {
     threw = false;
     try {
       EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(
+              binding.hash, true, false, "ipfs:proof-artifact.bin"),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("proofArtifact") && ex.getMessage().contains("URI schemes");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject URI-style artifact paths";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(
+              binding.hash, true, false, "artifacts/eth-mainnet/proof.wasm"),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("proofArtifact")
+              && ex.getMessage().contains("forbidden prover dependency marker: wasm");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject WASM artifact paths";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
           sampleEthereumNativeEvmProverBundleJson(binding.hash)
               .replace("\"audit_hashes\":", "\"experimental_manifest_note\":true,\"audit_hashes\":"),
           binding.hash);

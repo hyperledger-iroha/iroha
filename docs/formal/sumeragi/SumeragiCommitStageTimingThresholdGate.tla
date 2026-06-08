@@ -264,7 +264,7 @@ ActualOutput ==
     ActualNonBlockingSum, ActualSlowStage, ActualStageBoundary,
     ActualValidationSubstage, ActualPrevalidatedOnly, ActualEmpty>>
 
-SafetyFast ==
+CommitStageTimingOutputExact ==
   ActualOutput = SpecOutput
 
 ZeroThresholdSuppressionAnchors ==
@@ -296,6 +296,30 @@ RecordedTimingGateAnchors ==
   /\ ActualPrevalidatedOnly = FALSE
   /\ SpecEmpty = FALSE
   /\ ActualEmpty = FALSE
+
+CommitStageTimingZeroThresholdExact ==
+  ZeroThresholdSuppressionAnchors
+
+CommitStageTimingBlockingExact ==
+  BlockingTotalThresholdAnchors
+
+CommitStageTimingStageExact ==
+  /\ NonBlockingStageIsolationAnchors
+  /\ StageMaximumThresholdAnchors
+  /\ ValidationSubstageThresholdAnchors
+
+CommitStageTimingRecordedGateExact ==
+  RecordedTimingGateAnchors
+
+CommitStageTimingThresholdExactness ==
+  /\ CommitStageTimingOutputExact
+  /\ CommitStageTimingZeroThresholdExact
+  /\ CommitStageTimingBlockingExact
+  /\ CommitStageTimingStageExact
+  /\ CommitStageTimingRecordedGateExact
+
+SafetyFast ==
+  CommitStageTimingThresholdExactness
 
 SafetyBreakdown ==
   /\ ZeroThresholdSuppressionAnchors

@@ -88,10 +88,10 @@ translator: machine-google-reviewed
   үйлдвэрлэл `serde`/`serde_json` `AGENTS_BASE_REF`-тай харьцуулахад хит. Тохируулах
   `SERDE_GUARD_ALLOW=1` нь зөвхөн шилжих төлөвлөгөөг бөглөсний дараа CI туршилтуудад зориулагдсан.
 - `make guards` нь Norito цуваачлалын бодлогыг хэрэгжүүлдэг: энэ нь шинийг үгүйсгэдэг
-  `serde`/`serde_json` хэрэглээ, түр зуурын AoS туслахууд болон гаднах SCALE хамаарлууд
+  `serde`/`serde_json` хэрэглээ, түр зуурын AoS туслахууд болон гаднах retired codec хамаарлууд
   Norito вандан сандал (`scripts/deny_serde_json.sh`,
   `scripts/check_no_direct_serde.sh`, `scripts/deny_handrolled_aos.sh`,
-  `scripts/check_no_scale.sh`).
+  `scripts/check_no_legacy_codec.sh`).
 - **Proc-makro UI бодлого:** proc-makro хайрцаг бүр `trybuild`-г тээвэрлэх ёстой.
   `trybuild-tests`-ийн ард морины оосор (`tests/ui.rs` дамжуулалт/бүтэлгүйтсэн бөмбөлөгтэй)
   онцлог. Аз жаргалтай замын дээжийг `tests/ui/pass` доор, татгалзсан тохиолдлыг доор байрлуул

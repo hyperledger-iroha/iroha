@@ -59,11 +59,11 @@ Kotodama 工具鏈，因此合約和字節碼在部署目標之間保持可移�
 
 ## Norito（序列化編解碼器）
 
-Norito 是工作區序列化編解碼器。我們不使用 `parity-scale-codec`
-（規模）。文檔或基準與 SCALE 相比，僅適用於
+Norito 是工作區序列化編解碼器。我們不使用 `retired codec`
+（規模）。文檔或基準與 retired codec 相比，僅適用於
 背景；所有生產路徑均使用 Norito。 `norito::codec::{Encode, Decode}`
 API 提供無標頭（“裸”）Norito 有效負載，用於散列和連線
-效率 — 它是 Norito，而不是 SCALE。
+效率 — 它是 Norito，而不是 retired codec。
 
 最新狀態：
 
@@ -87,4 +87,4 @@ API 提供無標頭（“裸”）Norito 有效負載，用於散列和連線
 狀態端點編碼註釋
 - Torii `/status` 主體默認使用 Norito 和無標頭（“裸”）有效負載以實現緊湊性。客戶端應首先嘗試 Norito 解碼。
 - 服務器可能會在請求時返回 JSON；如果 `content-type` 是 `application/json`，客戶端將回退到 JSON。
-- 有線格式為 Norito，而不是 SCALE。 `norito::codec::{Encode,Decode}` API 用於裸變體。
+- 有線格式為 Norito，而不是 retired codec。 `norito::codec::{Encode,Decode}` API 用於裸變體。

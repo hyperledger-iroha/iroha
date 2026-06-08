@@ -294,6 +294,27 @@ SafetyFast ==
   /\ CompactKindCollapsesToRbcChunk
   /\ KuraReplicaAdvertStatusOmitted
 
-Safety == BlockMessageKindSafetyAnchors
+BlockMessageLogProjectionExactness ==
+  /\ LogLabelsExact
+  /\ CertifiedFetchLogSubtypesPreserved
+  /\ NewViewBypassLabelsPreserved
+  /\ LogKindAnchors
+
+BlockMessageStatusProjectionExactness ==
+  /\ StatusProjectionExact
+  /\ KuraReplicaAdvertStatusOmitted
+  /\ StatusKindAnchors
+
+BlockMessageCompactRbcExactness ==
+  /\ CompactKindCollapsesToRbcChunk
+
+BlockMessageKindExactness ==
+  /\ SafetyFast
+  /\ BlockMessageLogProjectionExactness
+  /\ BlockMessageStatusProjectionExactness
+  /\ BlockMessageCompactRbcExactness
+  /\ BlockMessageKindSafetyAnchors
+
+Safety == BlockMessageKindExactness
 
 ====

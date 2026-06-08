@@ -202,6 +202,31 @@ SafetyFast ==
   /\ FramePrefixSafety
   /\ DecodeSafety
 
-Safety == BlockMessageWireSafetyAnchors
+WireCacheConstructionExactness ==
+  /\ CacheConstructionSafety
+  /\ CacheConstructionAnchors
+
+WireSerializationExactness ==
+  /\ SerializationSafety
+  /\ SerializationAnchors
+
+WireFrameValidationExactness ==
+  /\ FrameRejectionSafety
+  /\ FramePrefixSafety
+  /\ FrameValidationAnchors
+
+WireDecodeExactness ==
+  /\ DecodeSafety
+  /\ DecodeAnchors
+
+BlockMessageWireExactness ==
+  /\ SafetyFast
+  /\ WireCacheConstructionExactness
+  /\ WireSerializationExactness
+  /\ WireFrameValidationExactness
+  /\ WireDecodeExactness
+  /\ BlockMessageWireSafetyAnchors
+
+Safety == BlockMessageWireExactness
 
 ====

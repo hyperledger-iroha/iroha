@@ -13,6 +13,8 @@ import {
   SCCP_DOMAIN_SORA,
   SCCP_DOMAIN_TON,
   SCCP_DOMAIN_TRON,
+  SCCP_CODEC_TEXT_UTF8,
+  SCCP_CODEC_TON_RAW,
   SCCP_ETH_MAINNET_EVM_CHAIN_ID,
   SCCP_ETH_MAINNET_NETWORK_ID,
   SCCP_BSC_MAINNET_EVM_CHAIN_ID,
@@ -118,6 +120,8 @@ import {
   bscValidatorSetPayloadHash,
   bscValidatorSetStorageValueHash,
   bscValidatorSetTransitionMessageHash,
+  canonicalSccpMessageProofBundleBytes,
+  canonicalSccpPayloadEnvelopeBytes,
   buildEvmSccpProofRequest,
   buildEvmSccpSubmission,
   EthereumMainnetBeaconRestConsensusProvider,
@@ -158,6 +162,9 @@ import {
   wrapBscMainnetSccpDestinationProofResult,
   wrapBscTestnetSccpDestinationProofResult,
   wrapEvmSccpProofResult,
+  sccpMerkleRootFromCommitment,
+  sccpPayloadHash,
+  sccpTransferMessageId,
   buildSolanaSccpAccountsLtHashProofRequest,
   buildSolanaSccpFullLightClientAuditProofRequest,
   buildSolanaSccpTowerReplayProofRequest,
@@ -4673,6 +4680,25 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
     }).proofArtifactHash,
     proofArtifactHash,
   );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle(
+        { ...nativeProverBundle, proof_artifact: "ipfs:proof-artifact.bin" },
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifact must not contain URI schemes or drive prefixes/u,
+  );
+  assert.throws(
+    () =>
+      parseEthereumMainnetNativeEvmProverBundleManifest(
+        JSON.stringify({
+          ...nativeProverBundle,
+          proof_artifact: "artifacts/eth-mainnet/proof.wasm",
+        }),
+        { destinationBinding: ethereumMainnetBinding },
+      ),
+    /proofArtifact path contains forbidden prover dependency marker: wasm/u,
+  );
   assert.equal(
     validateEthereumMainnetNativeEvmProverParityFixture(
       parityFixture,
@@ -5181,19 +5207,62 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   );
 });
 
- test("package dist entrypoint exports SCCP TON proof wrapper", () => {
-  const publicInputs = {
+const buildSampleTonMessageProofBundleFixture = () => {
+  const merkleProof = { steps: [] };
+  const payload = {
     version: 1,
-    message_id: `0x${"11".repeat(32)}`,
-    payload_hash: `0x${"22".repeat(32)}`,
-    target_domain: SCCP_DOMAIN_TON,
-    commitment_root: `0x${"33".repeat(32)}`,
-    finality_height: "19",
-    finality_block_hash: `0x${"44".repeat(32)}`,
+    source_domain: SCCP_DOMAIN_SORA,
+    dest_domain: SCCP_DOMAIN_TON,
+    nonce: "7",
+    asset_home_domain: SCCP_DOMAIN_SORA,
+    asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+    asset_id: "xor#ton",
+    amount: "42",
+    sender_codec: SCCP_CODEC_TEXT_UTF8,
+    sender: "alice",
+    recipient_codec: SCCP_CODEC_TON_RAW,
+    recipient: `0:${"12".repeat(32)}`,
+    route_id_codec: SCCP_CODEC_TEXT_UTF8,
+    route_id: "sccp-ton-proof-request",
   };
+  const payloadEnvelope = { kind: "Transfer", value: payload };
+  const payloadBytes = canonicalSccpPayloadEnvelopeBytes(payloadEnvelope);
+  const messageId = sccpTransferMessageId(payload);
+  const payloadHash = sccpPayloadHash(payloadBytes);
+  const commitment = {
+    version: 1,
+    kind: "Transfer",
+    target_domain: SCCP_DOMAIN_TON,
+    message_id: messageId,
+    payload_hash: payloadHash,
+  };
+  const commitmentRoot = sccpMerkleRootFromCommitment(commitment, merkleProof);
+  return Object.freeze({
+    publicInputs: Object.freeze({
+      version: 1,
+      message_id: messageId,
+      payload_hash: payloadHash,
+      target_domain: SCCP_DOMAIN_TON,
+      commitment_root: commitmentRoot,
+      finality_height: "19",
+      finality_block_hash: `0x${"44".repeat(32)}`,
+    }),
+    bundleBytes: canonicalSccpMessageProofBundleBytes({
+      version: 1,
+      commitment_root: commitmentRoot,
+      commitment,
+      merkle_proof: merkleProof,
+      payload: payloadEnvelope,
+      finality_proof: [0x71, 0x72],
+    }),
+  });
+};
+
+test("package dist entrypoint exports SCCP TON proof wrapper", () => {
+  const { publicInputs, bundleBytes } = buildSampleTonMessageProofBundleFixture();
   const request = buildTonSccpProofRequest({
     public_inputs: publicInputs,
-    bundle_bytes: new Uint8Array([5, 6, 7]),
+    bundle_bytes: bundleBytes,
     source_proof_bytes: new Uint8Array([9, 10]),
     statement_hash: `0x${"55".repeat(32)}`,
     destination_binding_hash: `0x${"66".repeat(32)}`,
@@ -5204,7 +5273,7 @@ test("package dist entrypoint exports SCCP EVM-family Groth16 helpers", async ()
   const result = wrapTonSccpProofResult([1, 2, 3], request);
   const submission = buildTonSccpSubmission({
     proofResult: result,
-    bundleBytes: new Uint8Array([5, 6, 7]),
+    bundleBytes,
   });
 
   assert.equal(request.targetDomain, SCCP_DOMAIN_TON);

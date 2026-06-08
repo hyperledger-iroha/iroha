@@ -430,27 +430,45 @@ BodyAvailableAnchors ==
         SetLastProgressNow, SetLastUpdatedNow, ClearLagWindow,
         ClearQuorumRebroadcast}
 
-Safety ==
-  /\ FrontierSlotHelpersMatchSpec
+FrontierSlotBasicHelperExact ==
   /\ LagStartMatchesSpec
   /\ BodyStateMatchesSpec
   /\ LocalVoteMatchesSpec
   /\ TimeoutViewMatchesSpec
-  /\ ProgressAndLagMatchesSpec
-  /\ CatchupMarkerMatchesSpec
-  /\ NestedStateMatchesSpec
-  /\ BodyAvailableMatchesSpec
-  /\ CatchupMarkersClearRebroadcast
-  /\ CatchupMarkersRecordReason
-  /\ NestedStateCompleteness
   /\ LagStartAnchors
   /\ BodyStateAnchors
   /\ LocalVoteAnchors
   /\ TimeoutViewAnchors
+
+FrontierSlotProgressLagExact ==
+  /\ ProgressAndLagMatchesSpec
   /\ ProgressAndLagAnchors
+
+FrontierSlotCatchupMarkerExact ==
+  /\ CatchupMarkerMatchesSpec
+  /\ CatchupMarkersClearRebroadcast
+  /\ CatchupMarkersRecordReason
   /\ CatchupMarkerAnchors
+
+FrontierSlotNestedStateExact ==
+  /\ NestedStateMatchesSpec
+  /\ NestedStateCompleteness
   /\ NestedStateAnchors
+
+FrontierSlotBodyAvailableExact ==
+  /\ BodyAvailableMatchesSpec
   /\ BodyAvailableAnchors
+
+FrontierSlotHelpersExactness ==
+  /\ FrontierSlotHelpersMatchSpec
+  /\ FrontierSlotBasicHelperExact
+  /\ FrontierSlotProgressLagExact
+  /\ FrontierSlotCatchupMarkerExact
+  /\ FrontierSlotNestedStateExact
+  /\ FrontierSlotBodyAvailableExact
+
+Safety ==
+  FrontierSlotHelpersExactness
 
 =============================================================================
 ====

@@ -487,29 +487,47 @@ DecisionProjectionAnchors ==
        <<FALSE, 800, 1800, 2100, 1000, FALSE, 2, 4000, 4000,
          1500, 1500>>
 
-SafetyFast ==
-  /\ DecisionMatchesSpec
+StalledPendingFrontierBacklogExact ==
   /\ RecoverySignalsMatchesSpec
   /\ BacklogGraceMatchesSpec
   /\ ExtendedBacklogMatchesSpec
   /\ BacklogCapFloorMatchesSpec
   /\ BacklogCapMatchesSpec
   /\ BacklogTimeoutMatchesSpec
-  /\ ConsensusIngressMatchesSpec
-  /\ DeferredMultiplierMatchesSpec
-  /\ DeferredTimeoutMatchesSpec
-  /\ UncappedTimeoutMatchesSpec
-  /\ ActiveGapCeilingMatchesSpec
-  /\ FrontierTimeoutMatchesSpec
   /\ RecoverySignalAnchors
   /\ BacklogGraceAnchors
   /\ BacklogTimeoutAnchors
+
+StalledPendingFrontierDeferredExact ==
+  /\ ConsensusIngressMatchesSpec
+  /\ DeferredMultiplierMatchesSpec
+  /\ DeferredTimeoutMatchesSpec
   /\ ConsensusIngressAnchors
   /\ DeferredMultiplierAnchors
+
+StalledPendingFrontierTimeoutCapExact ==
+  /\ UncappedTimeoutMatchesSpec
+  /\ ActiveGapCeilingMatchesSpec
+  /\ FrontierTimeoutMatchesSpec
   /\ FrontierTimeoutAnchors
   /\ ActiveGapCeilingAnchors
+
+StalledPendingFrontierArithmeticExact ==
   /\ SaturatingArithmeticAnchors
+
+StalledPendingFrontierProjectionExact ==
+  /\ DecisionMatchesSpec
   /\ DecisionProjectionAnchors
+
+StalledPendingFrontierTimeoutExactness ==
+  /\ StalledPendingFrontierBacklogExact
+  /\ StalledPendingFrontierDeferredExact
+  /\ StalledPendingFrontierTimeoutCapExact
+  /\ StalledPendingFrontierArithmeticExact
+  /\ StalledPendingFrontierProjectionExact
+
+SafetyFast ==
+  StalledPendingFrontierTimeoutExactness
 
 BugRecoveryUsesConsensusQueue ==
   ActualDecision("consensus_queue_without_active") =

@@ -72,7 +72,7 @@ RUSTFLAGS='-C target-feature=+neon,+aes' \
 
 ## 4) קידוד/פענוח מקצה לקצה
 
-`crates/norito/benches/codec.rs` משווה Norito ל-SCALE ו-bincode (כולל גרסאות דחוסות).
+`crates/norito/benches/codec.rs` מכסה את נתיבי הקידוד/פענוח של Norito ואת הגרסאות הדחוסות (zstd).
 
 ```bash
 cargo bench -p norito -- benches::bench_codec -- --warm-up-time 1 --sample-size 30

@@ -2,8 +2,8 @@
 set -euo pipefail
 
 echo "Running Norito enum benches..."
-# Enable Norito's internal enum fixtures and parity comparison code.
-FEATURES="bench-internal parity-scale"
+# Enable Norito's internal enum fixtures.
+FEATURES="bench-internal"
 cargo bench -p norito --features "$FEATURES" --bench enum_packed_bench -- --quiet || true
 cargo bench -p norito --features "$FEATURES" --bench enum_ncb -- --quiet || true
 cargo bench -p norito --features "$FEATURES" --bench enum_indexed -- --quiet || true

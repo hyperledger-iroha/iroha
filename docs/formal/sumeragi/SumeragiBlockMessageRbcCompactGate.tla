@@ -125,7 +125,26 @@ BlockMessageRbcCompactSafetyAnchors ==
   /\ NormalizeSafety
   /\ PrioritySafety
 
-Safety == BlockMessageRbcCompactSafetyAnchors
+CompactBoundaryExactness ==
+  /\ CompactBoundarySafety
+
+CompactFieldPreservationExactness ==
+  /\ CompactFieldSafety
+
+CompactNormalizeAndWidenExactness ==
+  /\ NormalizeSafety
+
+CompactPriorityExactness ==
+  /\ PrioritySafety
+
+BlockMessageRbcCompactExactness ==
+  /\ CompactBoundaryExactness
+  /\ CompactFieldPreservationExactness
+  /\ CompactNormalizeAndWidenExactness
+  /\ CompactPriorityExactness
+  /\ BlockMessageRbcCompactSafetyAnchors
+
+Safety == BlockMessageRbcCompactExactness
 
 SafetyFast == Safety
 

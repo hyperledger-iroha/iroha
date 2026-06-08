@@ -1230,6 +1230,32 @@ public final class EvmSccpProver {
     if (value.startsWith("/") || value.indexOf('\\') >= 0) {
       throw new IllegalArgumentException(field + " must be a relative POSIX path");
     }
+    if (value.indexOf(':') >= 0) {
+      throw new IllegalArgumentException(
+          field + " must not contain URI schemes or drive prefixes");
+    }
+    final String normalizedValue = value.toLowerCase(java.util.Locale.ROOT);
+    final List<String> forbiddenPathMarkers =
+        Arrays.asList(
+            nativeEvmProverForbiddenArtifactPathMarker("web", "assem", "bly"),
+            nativeEvmProverForbiddenArtifactPathMarker("wa", "sm"),
+            nativeEvmProverForbiddenArtifactPathMarker("sn", "ark", "js"),
+            nativeEvmProverForbiddenArtifactPathMarker("remote", "pro", "ver"),
+            nativeEvmProverForbiddenArtifactPathMarker("remote", "-", "pro", "ver"),
+            nativeEvmProverForbiddenArtifactPathMarker("remote", "_", "pro", "ver"),
+            nativeEvmProverForbiddenArtifactPathMarker("remote", " ", "pro", "ver"),
+            nativeEvmProverForbiddenArtifactPathMarker("pro", "ver", "-", "url"),
+            nativeEvmProverForbiddenArtifactPathMarker("pro", "ver", "_", "url"),
+            nativeEvmProverForbiddenArtifactPathMarker("pro", "ver", "end", "point"),
+            nativeEvmProverForbiddenArtifactPathMarker("pro", "ver", "-", "end", "point"),
+            nativeEvmProverForbiddenArtifactPathMarker("pro", "ver", "_", "end", "point"),
+            nativeEvmProverForbiddenArtifactPathMarker("pro", "ver", " ", "end", "point"));
+    for (final String marker : forbiddenPathMarkers) {
+      if (normalizedValue.contains(marker)) {
+        throw new IllegalArgumentException(
+            field + " path contains forbidden prover dependency marker: " + marker);
+      }
+    }
     final String[] segments = value.split("/", -1);
     for (final String segment : segments) {
       if (segment.isEmpty() || ".".equals(segment) || "..".equals(segment)) {
@@ -1237,6 +1263,14 @@ public final class EvmSccpProver {
       }
     }
     return value;
+  }
+
+  private static String nativeEvmProverForbiddenArtifactPathMarker(final String... parts) {
+    final StringBuilder marker = new StringBuilder();
+    for (final String part : parts) {
+      marker.append(part);
+    }
+    return marker.toString();
   }
 
   private static String normalizeOptionalHex32(final String value, final String field) {

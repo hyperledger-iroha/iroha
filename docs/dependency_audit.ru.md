@@ -58,7 +58,7 @@ translation_last_reviewed: 2025-11-14
 - TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — современный каноничный TLS‑стек
   в Rust.
 - Noise: `snow` — каноничная реализация протокола Noise.
-- Сериализация: `parity-scale-codec` — каноничный codec для SCALE. Serde
+- Сериализация: `retired codec` — каноничный codec для retired codec. Serde
   удалён из production‑зависимостей по всему workspace; derive’ы и writer’ы
   Norito покрывают все runtime‑пути. Оставшиеся упоминания Serde есть только в
   исторической документации, защитных скриптах или test‑only‑allowlist’ах.

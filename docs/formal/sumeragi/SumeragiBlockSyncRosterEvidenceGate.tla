@@ -53,6 +53,48 @@ ApplyPreservesUnrelatedFields == 21
 
 Candidates == 1..21
 
+MissingProofCases == {
+  NoProofPermissioned,
+  NoProofNpos
+}
+
+PermissionedProofCases == {
+  QcOnlyPermissioned,
+  CheckpointOnlyPermissioned,
+  BothProofPermissioned
+}
+
+NposStakeCases == {
+  QcOnlyNposNoStake,
+  CheckpointOnlyNposNoStake,
+  BothProofNposNoStake,
+  QcOnlyNposWithStake,
+  CheckpointOnlyNposWithStake,
+  BothProofNposWithStake
+}
+
+HasRosterCases == {
+  HasRosterForVerifiable,
+  HasRosterForMissingCommitProof,
+  HasRosterForMissingStake
+}
+
+ApplyCopyCases == {
+  ApplyCopiesCommitQc,
+  ApplyCopiesCheckpoint,
+  ApplyCopiesStakeSnapshot
+}
+
+ApplyClearCases == {
+  ApplyClearsAbsentCommitQc,
+  ApplyClearsAbsentCheckpoint,
+  ApplyClearsAbsentStakeSnapshot
+}
+
+ApplyPreserveCases == {
+  ApplyPreservesUnrelatedFields
+}
+
 MissingCommitProof == 1
 MissingStakeSnapshot == 2
 Verifiable == 3
@@ -241,6 +283,43 @@ TypeInvariant ==
 Safety ==
   \A c \in Candidates:
     ImplementationActions(c) = SpecActions(c)
+
+BlockSyncRosterEvidenceMissingProofExact ==
+  \A c \in MissingProofCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncRosterEvidencePermissionedProofExact ==
+  \A c \in PermissionedProofCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncRosterEvidenceNposStakeExact ==
+  \A c \in NposStakeCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncRosterEvidenceHasRosterExact ==
+  \A c \in HasRosterCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncRosterEvidenceApplyCopyExact ==
+  \A c \in ApplyCopyCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncRosterEvidenceApplyClearExact ==
+  \A c \in ApplyClearCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncRosterEvidenceApplyPreserveExact ==
+  \A c \in ApplyPreserveCases:
+    ImplementationActions(c) = SpecActions(c)
+
+BlockSyncRosterEvidenceExactness ==
+  /\ BlockSyncRosterEvidenceMissingProofExact
+  /\ BlockSyncRosterEvidencePermissionedProofExact
+  /\ BlockSyncRosterEvidenceNposStakeExact
+  /\ BlockSyncRosterEvidenceHasRosterExact
+  /\ BlockSyncRosterEvidenceApplyCopyExact
+  /\ BlockSyncRosterEvidenceApplyClearExact
+  /\ BlockSyncRosterEvidenceApplyPreserveExact
 
 BugNoProofPermissionedVerifiable ==
   ImplementationActions(NoProofPermissioned) = SpecActions(NoProofPermissioned)

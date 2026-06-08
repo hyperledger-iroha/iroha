@@ -319,7 +319,7 @@ use iroha_torii_shared::{
 };
 use ivm::iso20022::{MsgError, parse_message};
 #[cfg(feature = "app_api")]
-use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey, Validation, decode};
+use jsonwebtoken::{Algorithm as JwtAlgorithm, DecodingKey};
 use mv::storage::StorageReadOnly;
 #[cfg(feature = "app_api")]
 use norito::json::Map;
@@ -1243,15 +1243,14 @@ struct TxHistoryViewerContext {
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, serde::Deserialize)]
-#[serde(untagged)]
+#[derive(Debug)]
 enum TxHistoryAudienceClaim {
     Single(String),
     Multiple(Vec<String>),
 }
 
 #[cfg(feature = "app_api")]
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug)]
 struct TxHistoryJwtClaims {
     sub: Option<String>,
     dataspace_id: Option<String>,
@@ -1277,6 +1276,24 @@ fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
         "ES384" => Some(JwtAlgorithm::ES384),
         "EDDSA" => Some(JwtAlgorithm::EdDSA),
         _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_history_jwt_algorithm_name(algorithm: JwtAlgorithm) -> &'static str {
+    match algorithm {
+        JwtAlgorithm::HS256 => "HS256",
+        JwtAlgorithm::HS384 => "HS384",
+        JwtAlgorithm::HS512 => "HS512",
+        JwtAlgorithm::ES256 => "ES256",
+        JwtAlgorithm::ES384 => "ES384",
+        JwtAlgorithm::RS256 => "RS256",
+        JwtAlgorithm::RS384 => "RS384",
+        JwtAlgorithm::RS512 => "RS512",
+        JwtAlgorithm::PS256 => "PS256",
+        JwtAlgorithm::PS384 => "PS384",
+        JwtAlgorithm::PS512 => "PS512",
+        JwtAlgorithm::EdDSA => "EdDSA",
     }
 }
 
@@ -26194,7 +26211,7 @@ async fn handler_sccp_message_proof(
 async fn handler_sccp_message_artifact(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
-    axum::extract::Query(evm_destination): axum::extract::Query<routing::SccpEvmDestinationQuery>,
+    crate::NoritoQuery(evm_destination): crate::NoritoQuery<routing::SccpEvmDestinationQuery>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
@@ -26243,7 +26260,7 @@ async fn handler_sccp_message_artifact(
 async fn handler_sccp_message_job(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
-    axum::extract::Query(evm_destination): axum::extract::Query<routing::SccpEvmDestinationQuery>,
+    crate::NoritoQuery(evm_destination): crate::NoritoQuery<routing::SccpEvmDestinationQuery>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
@@ -34418,6 +34435,63 @@ fn tx_history_alias_resolution_reject(err: Error) -> AxResponse {
 }
 
 #[cfg(feature = "app_api")]
+fn decode_tx_history_jwt_json_part(encoded: &str, error: &'static str) -> Result<Value, String> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded.as_bytes())
+        .map_err(|_| error.to_string())?;
+    norito::json::from_slice(&bytes).map_err(|_| error.to_string())
+}
+
+#[cfg(feature = "app_api")]
+fn tx_history_jwt_string_claim(
+    claims: &Map,
+    field: &'static str,
+) -> Result<Option<String>, String> {
+    match claims.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(ToString::to_string)
+            .ok_or_else(|| "invalid JWT payload".to_string())
+            .map(Some),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_history_jwt_u64_claim(claims: &Map, field: &'static str) -> Result<Option<u64>, String> {
+    match claims.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| "invalid JWT payload".to_string())
+            .map(Some),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_history_jwt_audience_claim(claims: &Map) -> Result<Option<TxHistoryAudienceClaim>, String> {
+    match claims.get("aud") {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => {
+            if let Some(audience) = value.as_str() {
+                return Ok(Some(TxHistoryAudienceClaim::Single(audience.to_string())));
+            }
+            let Some(values) = value.as_array() else {
+                return Err("invalid JWT payload".to_string());
+            };
+            let mut audiences = Vec::with_capacity(values.len());
+            for value in values {
+                let Some(audience) = value.as_str() else {
+                    return Err("invalid JWT payload".to_string());
+                };
+                audiences.push(audience.to_string());
+            }
+            Ok(Some(TxHistoryAudienceClaim::Multiple(audiences)))
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn decode_tx_history_jwt_claims(
     auth_header: &str,
     jwt: &TxHistoryJwtConfig,
@@ -34428,21 +34502,55 @@ fn decode_tx_history_jwt_claims(
         .or_else(|| auth_header.trim().strip_prefix("bearer "))
         .ok_or_else(|| "Authorization header must use Bearer token".to_string())?;
     let key = jwt.key.decoding_key(jwt.algorithm)?;
-    let mut validation = Validation::new(jwt.algorithm);
-    validation.required_spec_claims.clear();
-    validation.validate_exp = false;
-    validation.validate_nbf = false;
-    validation.validate_aud = false;
-    let claims = decode::<TxHistoryJwtClaims>(token, &key, &validation)
-        .map_err(|err| match err.kind() {
-            jsonwebtoken::errors::ErrorKind::InvalidAlgorithm => {
-                "JWT algorithm does not match Torii tx_history configuration".to_string()
-            }
-            jsonwebtoken::errors::ErrorKind::InvalidToken
-            | jsonwebtoken::errors::ErrorKind::InvalidSignature => "invalid JWT".to_string(),
-            _ => "invalid JWT payload".to_string(),
-        })?
-        .claims;
+    let mut parts = token.split('.');
+    let header_part = parts.next().filter(|part| !part.is_empty());
+    let claims_part = parts.next().filter(|part| !part.is_empty());
+    let signature_part = parts.next().filter(|part| !part.is_empty());
+    if header_part.is_none()
+        || claims_part.is_none()
+        || signature_part.is_none()
+        || parts.next().is_some()
+    {
+        return Err("invalid JWT".to_string());
+    }
+    let header_part = header_part.expect("checked above");
+    let claims_part = claims_part.expect("checked above");
+    let signature_part = signature_part.expect("checked above");
+    let header = decode_tx_history_jwt_json_part(header_part, "invalid JWT payload")?;
+    let header_object = header
+        .as_object()
+        .ok_or_else(|| "invalid JWT payload".to_string())?;
+    let header_algorithm = header_object
+        .get("alg")
+        .and_then(Value::as_str)
+        .and_then(parse_tx_history_jwt_algorithm)
+        .ok_or_else(|| "JWT algorithm does not match Torii tx_history configuration".to_string())?;
+    if header_algorithm != jwt.algorithm {
+        return Err("JWT algorithm does not match Torii tx_history configuration".to_string());
+    }
+    let signed_message = format!("{header_part}.{claims_part}");
+    let signature_valid = jsonwebtoken::crypto::verify(
+        signature_part,
+        signed_message.as_bytes(),
+        &key,
+        jwt.algorithm,
+    )
+    .map_err(|_| "invalid JWT".to_string())?;
+    if !signature_valid {
+        return Err("invalid JWT".to_string());
+    }
+    let claims_value = decode_tx_history_jwt_json_part(claims_part, "invalid JWT payload")?;
+    let claims_object = claims_value
+        .as_object()
+        .ok_or_else(|| "invalid JWT payload".to_string())?;
+    let claims = TxHistoryJwtClaims {
+        sub: tx_history_jwt_string_claim(claims_object, "sub")?,
+        dataspace_id: tx_history_jwt_string_claim(claims_object, "dataspace_id")?,
+        exp: tx_history_jwt_u64_claim(claims_object, "exp")?,
+        nbf: tx_history_jwt_u64_claim(claims_object, "nbf")?,
+        iss: tx_history_jwt_string_claim(claims_object, "iss")?,
+        aud: tx_history_jwt_audience_claim(claims_object)?,
+    };
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -49593,7 +49701,7 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("json body");
         let decoded: iroha_sccp::NexusSccpBurnProofV1 =
-            serde_json::from_slice(&bytes).expect("decode json bundle");
+            norito::json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded, bundle);
 
         let norito_response = routing::handle_v1_sccp_burn_bundle(
@@ -49660,7 +49768,7 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("json body");
         let decoded: iroha_sccp::NexusSccpMessageProofV1 =
-            serde_json::from_slice(&bytes).expect("decode json bundle");
+            norito::json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded, bundle);
 
         routing::clear_sccp_bundles_for_tests();
@@ -49733,7 +49841,7 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("json body");
         let decoded: iroha_sccp::NexusSccpMessageProofV1 =
-            serde_json::from_slice(&bytes).expect("decode json bundle");
+            norito::json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded.payload, payload);
         assert_eq!(decoded.commitment.message_id, message_id);
         assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
@@ -49947,7 +50055,7 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("json body");
         let decoded_json: routing::SccpCapabilitiesDto =
-            serde_json::from_slice(&json_bytes).expect("decode json capabilities");
+            norito::json::from_slice(&json_bytes).expect("decode json capabilities");
         assert_eq!(decoded_json.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
         assert_eq!(decoded_json.local_chain, "sora");
         assert_eq!(
@@ -50037,7 +50145,7 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("json body");
         let decoded_json: routing::SccpProofManifestSetDto =
-            serde_json::from_slice(&json_bytes).expect("decode json manifests");
+            norito::json::from_slice(&json_bytes).expect("decode json manifests");
         assert_eq!(decoded_json.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
         assert_eq!(decoded_json.local_chain, "sora");
         assert_eq!(
@@ -50110,7 +50218,7 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("json body");
         let decoded: routing::SccpProofManifestSetDto =
-            serde_json::from_slice(&bytes).expect("decode json manifests");
+            norito::json::from_slice(&bytes).expect("decode json manifests");
         assert_eq!(decoded.routes.len(), 1);
         let route = decoded.routes.first().expect("route manifest");
         assert_eq!(route.route_id, configured_route.route_id);
@@ -50318,7 +50426,7 @@ pub(crate) mod tests_runtime_handlers {
             routing::publish_sccp_burn_bundle(burn_app.state.as_ref(), 1, burn_payload)
                 .expect("publish burn bundle");
         let burn_bundle_value = norito::json::from_str::<norito::json::Value>(
-            &serde_json::to_string(&burn_bundle).expect("encode burn bundle json"),
+            &norito::json::to_string(&burn_bundle).expect("encode burn bundle json"),
         )
         .expect("burn bundle value");
 
@@ -59054,6 +59162,8 @@ mod tests {
         extract::State,
         http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
     };
+    #[cfg(feature = "app_api")]
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as JWT_BASE64};
     use futures::executor;
     use http_body_util::BodyExt as _;
     use iroha_config::parameters::actual;
@@ -59095,7 +59205,7 @@ mod tests {
     };
     use iroha_test_samples::ALICE_ID;
     #[cfg(feature = "app_api")]
-    use jsonwebtoken::{EncodingKey, Header, encode};
+    use jsonwebtoken::EncodingKey;
     use nonzero_ext::nonzero;
     use sorafs_manifest::repair::{
         REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
@@ -59722,36 +59832,48 @@ mod tests {
     }
 
     #[cfg(feature = "app_api")]
-    #[derive(serde::Serialize)]
-    struct TxHistoryJwtClaimsFixture {
-        sub: String,
-        dataspace_id: String,
-        roles: Vec<String>,
-        iat: u64,
-        nbf: u64,
-        exp: u64,
-        iss: String,
-        aud: String,
+    fn sample_tx_history_jwt_claims(subject: &str) -> Value {
+        let mut claims = Map::new();
+        claims.insert("sub".to_string(), Value::from(subject));
+        claims.insert("dataspace_id".to_string(), Value::from("banka"));
+        claims.insert(
+            "roles".to_string(),
+            Value::Array(vec![Value::from("FI_OPERATOR")]),
+        );
+        claims.insert("iat".to_string(), Value::from(1_700_000_000_u64));
+        claims.insert("nbf".to_string(), Value::from(1_700_000_000_u64));
+        claims.insert("exp".to_string(), Value::from(4_102_444_800_u64));
+        claims.insert("iss".to_string(), Value::from("pk-cbdc-dev"));
+        claims.insert("aud".to_string(), Value::from("pk-cbdc"));
+        Value::Object(claims)
+    }
+
+    #[cfg(feature = "app_api")]
+    fn sign_tx_history_jwt_claims(secret: &str, claims: Value) -> String {
+        let mut header = Map::new();
+        header.insert("typ".to_string(), Value::from("JWT"));
+        header.insert(
+            "alg".to_string(),
+            Value::from(tx_history_jwt_algorithm_name(JwtAlgorithm::HS256)),
+        );
+        let encoded_header = JWT_BASE64.encode(
+            norito::json::to_vec(&Value::Object(header)).expect("sample JWT header should encode"),
+        );
+        let encoded_claims = JWT_BASE64
+            .encode(norito::json::to_vec(&claims).expect("sample JWT claims should encode"));
+        let message = format!("{encoded_header}.{encoded_claims}");
+        let signature = jsonwebtoken::crypto::sign(
+            message.as_bytes(),
+            &EncodingKey::from_secret(secret.as_bytes()),
+            JwtAlgorithm::HS256,
+        )
+        .expect("sample tx-history jwt should sign");
+        format!("{message}.{signature}")
     }
 
     #[cfg(feature = "app_api")]
     fn sample_tx_history_jwt(secret: &str) -> String {
-        let claims = TxHistoryJwtClaimsFixture {
-            sub: "operator1@banka".to_string(),
-            dataspace_id: "banka".to_string(),
-            roles: vec!["FI_OPERATOR".to_string()],
-            iat: 1_700_000_000,
-            nbf: 1_700_000_000,
-            exp: 4_102_444_800,
-            iss: "pk-cbdc-dev".to_string(),
-            aud: "pk-cbdc".to_string(),
-        };
-        encode(
-            &Header::new(JwtAlgorithm::HS256),
-            &claims,
-            &EncodingKey::from_secret(secret.as_bytes()),
-        )
-        .expect("sample tx-history jwt should sign")
+        sign_tx_history_jwt_claims(secret, sample_tx_history_jwt_claims("operator1@banka"))
     }
 
     #[cfg(feature = "app_api")]
@@ -59892,22 +60014,7 @@ mod tests {
     async fn tx_history_viewer_from_headers_rejects_bare_subject_aliases() {
         let mut app = mk_app_state_for_tests();
         let secret = "shared-secret";
-        let claims = TxHistoryJwtClaimsFixture {
-            sub: "operator1".to_string(),
-            dataspace_id: "banka".to_string(),
-            roles: vec!["FI_OPERATOR".to_string()],
-            iat: 1_700_000_000,
-            nbf: 1_700_000_000,
-            exp: 4_102_444_800,
-            iss: "pk-cbdc-dev".to_string(),
-            aud: "pk-cbdc".to_string(),
-        };
-        let token = encode(
-            &Header::new(JwtAlgorithm::HS256),
-            &claims,
-            &EncodingKey::from_secret(secret.as_bytes()),
-        )
-        .expect("sample tx-history jwt should sign");
+        let token = sign_tx_history_jwt_claims(secret, sample_tx_history_jwt_claims("operator1"));
         let app_state = Arc::get_mut(&mut app).expect("unique app state");
         app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
             jwt: Some(TxHistoryJwtConfig {
