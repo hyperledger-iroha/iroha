@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import iroha_python
 from iroha_python import kagemusha
 
 RECURSIVE_AGGREGATION_METHOD = (
@@ -19,6 +20,15 @@ RECURSIVE_COMPACT_METHOD = (
     "_with_records_and_pallas_open_envelopes"
 )
 RECURSIVE_COMPACT_VERIFY_METHOD = "kagemusha_verify_recursive_compact_payment_token"
+RECURSIVE_SPEND_COMPACT_PROJECTION_METHOD = (
+    "kagemusha_recursive_spend_compact_payment_token_from_bundle"
+)
+RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_METHOD = (
+    "kagemusha_verify_recursive_spend_compact_payment_token_projection"
+)
+RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_AT_HEIGHT_METHOD = (
+    "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"
+)
 RECURSIVE_SPEND_METHODS = (
     "kagemusha_recursive_spend_init",
     "kagemusha_recursive_spend_append",
@@ -418,6 +428,30 @@ def test_kagemusha_native_prover_helpers_reject_empty_payload_norito_requests() 
         )
 
 
+def test_recursive_compact_unavailable_classifier_matches_reserved_fragments() -> None:
+    payment_token_message = (
+        kagemusha.KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT
+    )
+    multi_hop_message = (
+        kagemusha.KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT
+    )
+
+    assert kagemusha.is_kagemusha_recursive_compact_unavailable(
+        RuntimeError(payment_token_message)
+    )
+    assert kagemusha.is_kagemusha_recursive_compact_unavailable(
+        f"bridge: {multi_hop_message}"
+    )
+    assert not kagemusha.is_kagemusha_recursive_compact_unavailable(
+        RuntimeError("recursive compact proof composition unavailable")
+    )
+    assert not kagemusha.is_kagemusha_recursive_compact_unavailable(None)
+    assert (
+        iroha_python.is_kagemusha_recursive_compact_unavailable(multi_hop_message)
+        is True
+    )
+
+
 def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.MonkeyPatch) -> None:
     native = _Native()
     monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
@@ -643,6 +677,138 @@ def test_recursive_kagemusha_helpers_probe_and_delegate(monkeypatch: pytest.Monk
         ("verify", verify_request),
         ("redeem", redeem_request),
     ]
+
+
+def test_recursive_spend_compact_projection_probes_and_delegates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _Native()
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+    bundle_archive = _kagemusha_input_archive(0xE1)
+    projection = getattr(kagemusha, RECURSIVE_SPEND_COMPACT_PROJECTION_METHOD)
+
+    assert (
+        kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_available()
+        is False
+    )
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "recursive spend compact Kagemusha payment-token projection requires native bridge ABI 7"
+            ".*compact projection symbol"
+        ),
+    ):
+        projection(bundle_archive)
+
+    def project_bundle(bundle: bytes) -> bytes:
+        native._reject_probe("recursive spend compact projection", bundle)
+        native.calls.append(("recursive_spend_compact_projection", bundle))
+        return _kagemusha_norito_frame_with_payload(0x4F)
+
+    setattr(native, RECURSIVE_SPEND_COMPACT_PROJECTION_METHOD, project_bundle)
+    assert (
+        kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_available()
+        is True
+    )
+    assert projection(bundle_archive) == _kagemusha_norito_frame_with_payload(0x4F)
+    assert native.calls[-1] == ("recursive_spend_compact_projection", bundle_archive)
+
+    with pytest.raises(ValueError, match="bundle_archive must not be empty"):
+        projection(b"")
+    with pytest.raises(ValueError, match="bundle_archive must be a valid Norito archive"):
+        projection(b"\x01")
+    with pytest.raises(ValueError, match="bundle_archive must contain a non-empty Norito payload"):
+        projection(_kagemusha_norito_frame(0x4C))
+
+    def invalid_projection(bundle: bytes) -> bytes:
+        native._reject_probe("recursive spend compact projection", bundle)
+        return b"\x01"
+
+    setattr(native, RECURSIVE_SPEND_COMPACT_PROJECTION_METHOD, invalid_projection)
+    assert (
+        kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_available()
+        is True
+    )
+    with pytest.raises(RuntimeError, match="returned invalid Norito archive"):
+        projection(bundle_archive)
+
+
+def test_recursive_spend_compact_projection_verifier_probes_and_delegates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _Native()
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+    compact_token = _kagemusha_input_archive(0xE2)
+    verifier_record = _kagemusha_input_archive(0xE3)
+    verify_projection = getattr(kagemusha, RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_METHOD)
+
+    assert (
+        kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available()
+        is False
+    )
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "recursive spend compact Kagemusha payment-token projection verifier "
+            "requires native bridge ABI 7.*compact projection verifier symbols"
+        ),
+    ):
+        verify_projection(compact_token, verifier_record)
+
+    def verify_without_height(token: bytes, record: bytes) -> bool:
+        native._reject_probe("recursive spend compact projection verifier", token, record)
+        native.calls.append(("recursive_spend_compact_projection_verify", token + b"|" + record))
+        return False
+
+    def verify_at_height(token: bytes, record: bytes, block_height: int) -> bool:
+        native._reject_probe("recursive spend compact projection verifier", token, record)
+        native.calls.append(
+            (
+                "recursive_spend_compact_projection_verify_at_height",
+                token + b"|" + record + b"|" + str(block_height).encode("ascii"),
+            )
+        )
+        return True
+
+    setattr(native, RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_METHOD, verify_without_height)
+    setattr(
+        native,
+        RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_AT_HEIGHT_METHOD,
+        verify_at_height,
+    )
+    assert (
+        kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available()
+        is True
+    )
+    assert verify_projection(compact_token, verifier_record) is False
+    assert native.calls[-1] == (
+        "recursive_spend_compact_projection_verify",
+        compact_token + b"|" + verifier_record,
+    )
+    assert verify_projection(compact_token, verifier_record, block_height=2) is True
+    assert native.calls[-1] == (
+        "recursive_spend_compact_projection_verify_at_height",
+        compact_token + b"|" + verifier_record + b"|2",
+    )
+
+    with pytest.raises(ValueError, match="compact_token_archive must not be empty"):
+        verify_projection(b"", verifier_record)
+    with pytest.raises(ValueError, match="verifier_record_archive must be a valid Norito archive"):
+        verify_projection(compact_token, b"\x01")
+    with pytest.raises(ValueError, match="block_height must be non-negative"):
+        verify_projection(compact_token, verifier_record, block_height=-1)
+
+    def invalid_boolean(token: bytes, record: bytes) -> str:
+        native._reject_probe("recursive spend compact projection verifier", token, record)
+        return "false"
+
+    setattr(native, RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_METHOD, invalid_boolean)
+    assert (
+        kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available()
+        is True
+    )
+    with pytest.raises(RuntimeError, match="returned non-boolean result"):
+        verify_projection(compact_token, verifier_record)
 
 
 def test_recursive_kagemusha_lineage_helpers_copy_mutable_archives_before_native(
@@ -1115,8 +1281,16 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         as root_lineage_key_artifacts_for_append,
         kagemusha_recursive_spend_lineage_key_artifacts_for_init
         as root_lineage_key_artifacts_for_init,
+        kagemusha_recursive_spend_compact_payment_token_from_bundle
+        as root_recursive_spend_compact_projection,
+        kagemusha_verify_recursive_spend_compact_payment_token_projection
+        as root_recursive_spend_compact_projection_verify,
         is_kagemusha_recursive_compact_payment_token_verifier_available
         as root_is_recursive_compact_verifier_available,
+        is_kagemusha_recursive_spend_compact_payment_token_projection_available
+        as root_is_recursive_spend_compact_projection_available,
+        is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available
+        as root_is_recursive_spend_compact_projection_verifier_available,
         requires_kagemusha_recursive_spend_lineage_key_artifacts_for_append_output
         as root_requires_key_artifacts_for_append_output,
         requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init
@@ -1145,6 +1319,22 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         in iroha_python.__all__
     )
     assert (
+        "is_kagemusha_recursive_spend_compact_payment_token_projection_available"
+        in iroha_python.__all__
+    )
+    assert (
+        "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available"
+        in iroha_python.__all__
+    )
+    assert (
+        "kagemusha_recursive_spend_compact_payment_token_from_bundle"
+        in iroha_python.__all__
+    )
+    assert (
+        "kagemusha_verify_recursive_spend_compact_payment_token_projection"
+        in iroha_python.__all__
+    )
+    assert (
         root_requires_key_artifacts_for_init
         is kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init
     )
@@ -1167,6 +1357,22 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
     assert (
         root_is_recursive_compact_verifier_available
         is kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available
+    )
+    assert (
+        root_is_recursive_spend_compact_projection_available
+        is kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_available
+    )
+    assert (
+        root_is_recursive_spend_compact_projection_verifier_available
+        is kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available
+    )
+    assert (
+        root_recursive_spend_compact_projection
+        is kagemusha.kagemusha_recursive_spend_compact_payment_token_from_bundle
+    )
+    assert (
+        root_recursive_spend_compact_projection_verify
+        is kagemusha.kagemusha_verify_recursive_spend_compact_payment_token_projection
     )
 
 
@@ -2147,6 +2353,148 @@ def test_recursive_kagemusha_helpers_reject_oversized_native_outputs(
         kagemusha.kagemusha_recursive_spend_redeem(_kagemusha_input_archive(0x86))
 
 
+def test_recursive_kagemusha_helpers_reject_oversized_inputs_before_copy_and_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    valid_archive = _kagemusha_input_archive(0xB0)
+    oversized_archive = memoryview(valid_archive + b"\x00")
+    monkeypatch.setattr(
+        kagemusha,
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
+        len(valid_archive),
+    )
+    monkeypatch.setattr(
+        kagemusha,
+        "load_crypto_extension",
+        lambda: pytest.fail("oversized Kagemusha input reached native loading"),
+    )
+
+    def assert_oversized(call, field: str) -> None:
+        with pytest.raises(
+            ValueError,
+            match=rf"{field} must not exceed {len(valid_archive)} bytes",
+        ):
+            call()
+
+    for helper in (
+        kagemusha.kagemusha_recursive_spend_init,
+        kagemusha.kagemusha_recursive_spend_append,
+        kagemusha.kagemusha_recursive_spend_transition_profile_init,
+        kagemusha.kagemusha_recursive_spend_transition_profile_append,
+        kagemusha.kagemusha_recursive_spend_verify,
+        kagemusha.kagemusha_recursive_spend_redeem,
+    ):
+        assert_oversized(lambda helper=helper: helper(oversized_archive), "request_archive")
+
+    assert_oversized(
+        lambda: kagemusha.kagemusha_recursive_spend_lineage_append_boundary(
+            oversized_archive
+        ),
+        "profile_archive",
+    )
+    assert_oversized(
+        lambda: kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(
+            oversized_archive,
+            valid_archive,
+        ),
+        "request_archive",
+    )
+    assert_oversized(
+        lambda: kagemusha.kagemusha_recursive_spend_lineage_witness_from_init_result(
+            valid_archive,
+            oversized_archive,
+        ),
+        "bundle_archive",
+    )
+    assert_oversized(
+        lambda: kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
+            oversized_archive,
+            valid_archive,
+            valid_archive,
+        ),
+        "previous_witness_archive",
+    )
+    assert_oversized(
+        lambda: kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
+            valid_archive,
+            oversized_archive,
+            valid_archive,
+        ),
+        "request_archive",
+    )
+    assert_oversized(
+        lambda: kagemusha.kagemusha_recursive_spend_lineage_witness_append_result(
+            valid_archive,
+            valid_archive,
+            oversized_archive,
+        ),
+        "bundle_archive",
+    )
+    assert_oversized(
+        lambda: kagemusha.kagemusha_prove_verified_compact_payment_token_with_records(
+            oversized_archive
+        ),
+        "record_bundle_archive",
+    )
+    assert_oversized(
+        lambda: getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            oversized_archive,
+            valid_archive,
+        ),
+        "record_bundle_archive",
+    )
+    assert_oversized(
+        lambda: getattr(kagemusha, RECURSIVE_AGGREGATION_METHOD)(
+            valid_archive,
+            oversized_archive,
+        ),
+        "pallas_open_envelopes_archive",
+    )
+    assert_oversized(
+        lambda: getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            oversized_archive,
+            valid_archive,
+        ),
+        "record_bundle_archive",
+    )
+    assert_oversized(
+        lambda: getattr(kagemusha, RECURSIVE_COMPACT_METHOD)(
+            valid_archive,
+            oversized_archive,
+        ),
+        "pallas_open_envelopes_archive",
+    )
+    assert_oversized(
+        lambda: getattr(kagemusha, RECURSIVE_COMPACT_VERIFY_METHOD)(
+            oversized_archive
+        ),
+        "compact_token_archive",
+    )
+
+
+def test_recursive_kagemusha_helpers_reject_oversized_memoryview_native_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    native = _Native()
+    valid_archive = _kagemusha_input_archive(0xB1)
+    oversized_archive = memoryview(valid_archive + b"\x00")
+    monkeypatch.setattr(
+        kagemusha,
+        "KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES",
+        len(valid_archive),
+    )
+
+    def oversized_one(archive: bytes) -> memoryview:
+        native._reject_probe("oversized memoryview one", archive)
+        return oversized_archive
+
+    native.kagemusha_recursive_spend_redeem = oversized_one
+    monkeypatch.setattr(kagemusha, "load_crypto_extension", lambda: native)
+
+    with pytest.raises(RuntimeError, match="returned oversized output"):
+        kagemusha.kagemusha_recursive_spend_redeem(valid_archive)
+
+
 def test_recursive_kagemusha_helpers_reject_malformed_native_outputs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2427,6 +2775,12 @@ def test_recursive_kagemusha_availability_fails_closed(monkeypatch: pytest.Monke
 
     assert kagemusha.is_kagemusha_compact_payment_token_prover_available() is False
     assert kagemusha.is_kagemusha_recursive_aggregation_proof_bundle_prover_available() is False
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_prover_available() is False
+    assert kagemusha.is_kagemusha_recursive_compact_payment_token_verifier_available() is False
+    assert (
+        kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_available()
+        is False
+    )
     assert kagemusha.is_kagemusha_recursive_spend_available() is False
     assert (
         kagemusha.preferred_kagemusha_offline_spend_mode()

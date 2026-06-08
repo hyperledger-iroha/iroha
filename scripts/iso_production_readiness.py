@@ -46,16 +46,33 @@ XSD_SUMMARY_VERSION = 1
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
+MAX_RAIL_MESSAGE_ID_CHARS = 128
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_URL_CHARS = 2048
 MAX_SOURCE_REPOSITORY_CHARS = 2048
 MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.\d{3}\.\d{3}\.\d{2}$")
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
 MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.\d{3}$")
+RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
 SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SOURCE_REPOSITORY_RE = re.compile(
     r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
 )
+PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS = {
+    "dummy",
+    "example",
+    "example-org",
+    "example-owner",
+    "example-repo",
+    "fake",
+    "placeholder",
+    "replace-before-production",
+    "sample",
+    "template",
+    "test",
+    "operator-canary",
+    "operator-canary-bank",
+}
 PROFILE_DIRECTIONS = {"inbound", "outbound", "follow-up"}
 KNOWN_RAILS = {
     "generic-iso20022",
@@ -68,14 +85,41 @@ EXPECTED_CANARY_STAGE_ORDER = ("rail", "notary", "verify")
 REQUIRED_CANARY_STAGES = set(EXPECTED_CANARY_STAGE_ORDER)
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
 REQUIRE_VERIFIED = "require-verified"
+TRUST_SIGNATURE_POLICIES = {"record-only", "reject-unsupported", REQUIRE_VERIFIED}
 RECEIPT_PATH_SUFFIX = ".receipt.json"
 LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
+SUPPORTED_RAIL_MESSAGE_TYPES = {
+    "pacs.008",
+    "pacs.009",
+    "pacs.002",
+    "pacs.004",
+    "camt.056",
+    "sese.023",
+    "sese.024",
+    "sese.025",
+    "colr.007",
+    "colr.012",
+}
 ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
 SCHEMA_SOURCE_KEYS = {"repository", "commit", "path", "license", "sha256"}
 TRUST_SOURCE_KEYS = {"authority", "version", "url", "retrieved_at"}
 TRUST_DER_PROOF_KEYS = {"sha256", "byte_len"}
-PLACEHOLDER_TRUST_SOURCE_MARKERS = ("placeholder", "replace-before-production")
-PLACEHOLDER_TRUST_SOURCE_HOSTS = {"example.invalid"}
+PLACEHOLDER_TRUST_SOURCE_MARKERS = (
+    "dummy",
+    "fake",
+    "placeholder",
+    "replace-before-production",
+    "sample",
+    "template",
+)
+PLACEHOLDER_TRUST_SOURCE_HOSTS = {
+    "example",
+    "example.com",
+    "example.invalid",
+    "example.net",
+    "operator-canary.bank",
+    "example.org",
+}
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 NAT64_WELL_KNOWN_PREFIX = ipaddress.ip_network("64:ff9b::/96")
 IPV4_COMPATIBLE_IPV6_PREFIX = ipaddress.ip_network("::/96")
@@ -155,15 +199,24 @@ RECEIPT_ENTRY_KEYS = {
     "message_type",
     "payload_sha256",
     "profile",
+    "rail_message_id",
 }
 NOTARY_RECEIPT_METADATA_KEYS = {"anchor_sha256", "index_sha256", "record_count"}
-RAIL_RECEIPT_METADATA_KEYS = {"message_type", "payload_sha256", "profile"}
+RAIL_RECEIPT_METADATA_KEYS = {
+    "message_type",
+    "payload_sha256",
+    "profile",
+    "rail_message_id",
+}
 TRUST_SUMMARY_KEYS = {
     "version",
     "path",
     "verified_at",
     "verified_bundles",
     "max_source_age_days",
+    "allow_synthetic_der",
+    "allow_record_only",
+    "allow_insecure_source_url",
     "profile_json_emitted",
     "profile_json_emittable",
     "profile_json_sha256",
@@ -246,6 +299,9 @@ XSD_BLOCKED_SCHEMA_RESTRICTION_MARKERS = {
     "no-public-distribution-right",
     "exclusive-swift-property",
 }
+XSD_BLOCKED_SCHEMA_DISTRIBUTION_RESTRICTION_MARKERS = (
+    XSD_BLOCKED_SCHEMA_RESTRICTION_MARKERS - {"swift-copyright-header"}
+)
 XSD_STRICT_KEYS = {
     "require_schema_backed_fixtures",
     "require_fixture_for_schema",
@@ -1018,6 +1074,34 @@ def _require_message_type(value: dict[str, Any], key: str, label: str) -> str:
     return raw
 
 
+def _require_nullable_rail_message_id(
+    value: dict[str, Any],
+    key: str,
+    label: str,
+) -> str | None:
+    if key not in value:
+        raise ReadinessError(f"{label}.{key} must be recorded")
+    raw = value[key]
+    if raw is None:
+        return None
+    if not isinstance(raw, str) or not raw.strip():
+        raise ReadinessError(f"{label}.{key} must be null or a non-empty string")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise ReadinessError(f"{label}.{key} must not contain control characters")
+    if raw != raw.strip():
+        raise ReadinessError(f"{label}.{key} must not have surrounding whitespace")
+    if any(ch.isspace() for ch in raw):
+        raise ReadinessError(f"{label}.{key} must not contain whitespace")
+    if len(raw) > MAX_RAIL_MESSAGE_ID_CHARS:
+        raise ReadinessError(
+            f"{label}.{key} must be at most {MAX_RAIL_MESSAGE_ID_CHARS} characters"
+        )
+    if RAIL_MESSAGE_ID_RE.fullmatch(raw) is None:
+        raise ReadinessError(f"{label}.{key} must be a canonical ASCII rail message id")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
 def _require_receipt_kind(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
@@ -1124,12 +1208,12 @@ def _block_receipt_entry_metadata_errors(
         if (
             isinstance(record_count, bool)
             or not isinstance(record_count, int)
-            or record_count < 0
+            or record_count <= 0
         ):
             _block_receipt_metadata_error(
                 blockers,
                 metadata_code,
-                f"{entry_label}.record_count must be a non-negative integer",
+                f"{entry_label}.record_count must be a positive integer",
                 path,
             )
     elif receipt_kind == "iso-rail-gateway":
@@ -1147,7 +1231,14 @@ def _block_receipt_entry_metadata_errors(
         except ReadinessError as error:
             _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
         else:
-            if message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
+            if message_type not in SUPPORTED_RAIL_MESSAGE_TYPES:
+                _block_receipt_metadata_error(
+                    blockers,
+                    metadata_code,
+                    f"{entry_label}.message_type is unsupported: {message_type!r}",
+                    path,
+                )
+            elif message_type in LEGACY_RAIL_MESSAGE_TYPES and not allow_legacy_colr007:
                 _block_receipt_metadata_error(
                     blockers,
                     metadata_code,
@@ -1162,7 +1253,14 @@ def _block_receipt_entry_metadata_errors(
             path,
             blockers,
         )
-        if receipt.get("profile") is None:
+        if "profile" not in receipt:
+            _block_receipt_metadata_error(
+                blockers,
+                metadata_code,
+                f"{entry_label}.profile must be recorded",
+                path,
+            )
+        elif receipt["profile"] is None:
             if not allow_default_profile:
                 _block_receipt_metadata_error(
                     blockers,
@@ -1175,6 +1273,10 @@ def _block_receipt_entry_metadata_errors(
                 _require_profile_id(receipt, "profile", entry_label)
             except ReadinessError as error:
                 _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
+        try:
+            _require_nullable_rail_message_id(receipt, "rail_message_id", entry_label)
+        except ReadinessError as error:
+            _block_receipt_metadata_error(blockers, metadata_code, str(error), path)
 
 
 def _receipt_entry_content_metadata(receipt: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
@@ -1183,7 +1285,7 @@ def _receipt_entry_content_metadata(receipt: dict[str, Any]) -> tuple[tuple[str,
     if receipt_kind == "iso-audit-notary":
         keys = ("anchor_sha256", "index_sha256", "record_count")
     elif receipt_kind == "iso-rail-gateway":
-        keys = ("message_type", "payload_sha256", "profile")
+        keys = ("message_type", "payload_sha256", "profile", "rail_message_id")
     else:
         keys = ()
     return tuple((key, receipt.get(key)) for key in (*generic_keys, *keys))
@@ -1266,6 +1368,35 @@ def _validate_reviewed_gap_reason(raw: Any, label: str) -> str | None:
     return raw
 
 
+def _source_repository_component_is_placeholder(component: str) -> bool:
+    lowered = component.casefold()
+    if lowered in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        return True
+    if lowered.endswith(".example"):
+        return True
+    return any(
+        token in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS
+        for token in re.split(r"[-_.]+", lowered)
+        if token
+    )
+
+
+def _xsd_source_repository_is_invalid(repository: str) -> bool:
+    if len(repository) > MAX_SOURCE_REPOSITORY_CHARS:
+        return True
+    if SOURCE_REPOSITORY_RE.fullmatch(repository) is None or repository.endswith(".git"):
+        return True
+    repository_parts = urllib.parse.urlparse(repository).path.strip("/").split("/")
+    if len(repository_parts) != 2:
+        return True
+    return any(_source_repository_component_is_placeholder(part) for part in repository_parts)
+
+
+def _reject_xsd_source_repository_secret_material(repository: str, label: str) -> None:
+    if _contains_secret_material(repository) or _is_secret_looking_key(repository):
+        raise ReadinessError(f"{label} must not contain secret-looking material")
+
+
 def _verify_schema_source_summary(
     source_raw: Any,
     label: str,
@@ -1278,11 +1409,8 @@ def _verify_schema_source_summary(
     source = _require_object(source_raw, label)
     _reject_unknown_keys(source, SCHEMA_SOURCE_KEYS, label)
     repository = _require_string(source, "repository", label)
-    if (
-        len(repository) > MAX_SOURCE_REPOSITORY_CHARS
-        or SOURCE_REPOSITORY_RE.fullmatch(repository) is None
-        or repository.endswith(".git")
-    ):
+    _reject_xsd_source_repository_secret_material(repository, f"{label}.repository")
+    if _xsd_source_repository_is_invalid(repository):
         _blocker(
             blockers,
             "xsd.schema_source_repository_invalid",
@@ -1343,18 +1471,17 @@ def _verify_blocked_schema_source_summary(
     reason = _require_string(entry, "reason", label)
     if len(reason) > 1024:
         raise ReadinessError(f"{label}.reason must be no longer than 1024 characters")
-    source = _require_object(entry.get("source"), f"{label}.source")
+    if "source" not in entry:
+        raise ReadinessError(f"{label}.source must be recorded")
+    source = _require_object(entry["source"], f"{label}.source")
     _reject_unknown_keys(
         source,
         XSD_BLOCKED_SCHEMA_SOURCE_PROVENANCE_KEYS,
         f"{label}.source",
     )
     repository = _require_string(source, "repository", f"{label}.source")
-    if (
-        len(repository) > MAX_SOURCE_REPOSITORY_CHARS
-        or SOURCE_REPOSITORY_RE.fullmatch(repository) is None
-        or repository.endswith(".git")
-    ):
+    _reject_xsd_source_repository_secret_material(repository, f"{label}.source.repository")
+    if _xsd_source_repository_is_invalid(repository):
         _blocker(
             blockers,
             "xsd.blocked_source_repository_invalid",
@@ -1406,6 +1533,12 @@ def _verify_blocked_schema_source_summary(
             )
         seen_markers[marker_raw] = offset
         markers.append(marker_raw)
+    if not (
+        set(markers) & XSD_BLOCKED_SCHEMA_DISTRIBUTION_RESTRICTION_MARKERS
+    ):
+        raise ReadinessError(
+            f"{label}.restriction_markers must include a redistribution restriction marker"
+        )
     return {
         "message_def_id": message_def_id,
         "source": {
@@ -1688,15 +1821,22 @@ def _timestamp_is_stale_for_budget(timestamp: dt.datetime, *, max_age_days: int)
 
 def _computed_profile_json_emittable(
     *,
+    allow_synthetic_der: bool,
+    allow_record_only: bool,
+    allow_insecure_source_url: bool,
     max_source_age_days: int | None,
     profiles: list[dict[str, Any]],
 ) -> bool:
+    if allow_synthetic_der or allow_record_only or allow_insecure_source_url:
+        return False
     if max_source_age_days is None:
         return False
     if not profiles:
         return False
     for profile in profiles:
         source = profile["source"]
+        if source is None:
+            return False
         if (
             _trust_source_text_is_placeholder(source["authority"])
             or _trust_source_text_is_placeholder(source["version"])
@@ -1822,8 +1962,10 @@ def _verify_xsd_summary_entries(
                 f"{label} is not schema-only but still records a schema-only reason",
                 path,
             )
+        if "source" not in schema:
+            raise ReadinessError(f"{label}.source must be recorded")
         source = _verify_schema_source_summary(
-            schema.get("source"),
+            schema["source"],
             f"{label}.source",
             message_def_id=message_def_id,
             schema_sha256=schema_sha256,
@@ -2127,7 +2269,9 @@ def _verify_xsd_profile_catalog_entries(
     missing_profile_schema_versions: list[Any],
     blockers: list[dict[str, Any]],
 ) -> dict[str, str] | None:
-    profile_catalog_raw = summary.get("profile_catalog")
+    if "profile_catalog" not in summary:
+        raise ReadinessError(f"{path}.profile_catalog must be recorded")
+    profile_catalog_raw = summary["profile_catalog"]
     if profile_catalog_raw is None:
         if (
             profile_checked_versions
@@ -2609,6 +2753,8 @@ def verify_xsd_summary(
         path=path,
         blockers=blockers,
     )
+    manifest = _require_string(summary, "manifest", str(path))
+    _reject_path_smuggling(manifest, f"{path}.manifest")
     manifest_sha256 = _require_sha256(summary, "manifest_sha256", str(path))
     verified_schemas = _require_positive_int(summary, "verified_schemas", str(path))
     verified_fixtures = _require_positive_int(summary, "verified_fixtures", str(path))
@@ -2729,7 +2875,7 @@ def verify_xsd_summary(
         for entry in missing_profile_schema_versions
         if isinstance(entry, dict)
     }
-    for blocked in summary.get("_validated_blocked_schema_sources", []):
+    for blocked in summary["_validated_blocked_schema_sources"]:
         message_def_id = blocked["message_def_id"]
         if message_def_id not in blocked_gap_message_ids:
             _blocker(
@@ -2825,6 +2971,7 @@ def verify_xsd_summary(
         "version": version,
         "path": str(path),
         "verified_at": verified_at,
+        "manifest": manifest,
         "manifest_sha256": manifest_sha256,
         "verified_schemas": verified_schemas,
         "verified_fixtures": verified_fixtures,
@@ -2832,9 +2979,9 @@ def verify_xsd_summary(
         "schema_validated_fixtures": schema_validated_fixtures,
         "profile_checked_versions": profile_checked_versions,
         "profile_schema_backed_versions": profile_schema_backed_versions,
-        "schema_sources": summary.get("_validated_schema_sources", []),
+        "schema_sources": summary["_validated_schema_sources"],
         "blocked_schema_source_count": blocked_schema_source_count,
-        "blocked_schema_sources": summary.get("_validated_blocked_schema_sources", []),
+        "blocked_schema_sources": summary["_validated_blocked_schema_sources"],
         "missing_schema_fixture_count": len(missing_schema_fixtures),
         "schema_only_count": len(schema_only_entries),
         "missing_profile_schema_version_count": len(missing_profile_schema_versions),
@@ -2845,19 +2992,17 @@ def verify_xsd_summary(
             "require_profile_schema_backed_versions": require_profile_schema_backed,
             "validate_xml_schema": validate_xml_schema,
         },
-        "_schema_paths": summary.get("_validated_schema_paths", []),
-        "_schema_digests": summary.get("_validated_schema_digests", []),
-        "_schema_source_refs": summary.get("_validated_schema_source_refs", []),
-        "_validated_blocked_schema_source_refs": summary.get(
-            "_validated_blocked_schema_source_refs",
-            [],
-        ),
-        "_validated_blocked_schema_source_digests": summary.get(
-            "_validated_blocked_schema_source_digests",
-            [],
-        ),
-        "_fixture_paths": summary.get("_validated_fixture_paths", []),
-        "_fixture_digests": summary.get("_validated_fixture_digests", []),
+        "_schema_paths": summary["_validated_schema_paths"],
+        "_schema_digests": summary["_validated_schema_digests"],
+        "_schema_source_refs": summary["_validated_schema_source_refs"],
+        "_validated_blocked_schema_source_refs": summary[
+            "_validated_blocked_schema_source_refs"
+        ],
+        "_validated_blocked_schema_source_digests": summary[
+            "_validated_blocked_schema_source_digests"
+        ],
+        "_fixture_paths": summary["_validated_fixture_paths"],
+        "_fixture_digests": summary["_validated_fixture_digests"],
         "summary_sha256": digest,
     }
 
@@ -3022,45 +3167,49 @@ def _verify_canary(
         )
     stage_windows_raw = _require_list(canary.get("stage_windows"), f"{label}.stage_windows")
     stage_windows: list[dict[str, str]] = []
-    stage_window_names: list[str] = []
-    previous_window_finished: dt.datetime | None = None
-    for offset, raw_window in enumerate(stage_windows_raw):
-        window_label = f"{label}.stage_windows[{offset}]"
-        window = _require_object(raw_window, window_label)
-        _reject_unknown_keys(window, COMPACT_STAGE_WINDOW_KEYS, window_label)
-        stage_name = _require_stage_name(window, "name", window_label)
-        window_started_raw, window_started = _require_timestamp(
-            window,
-            "started_at",
-            window_label,
-        )
-        window_finished_raw, window_finished = _require_timestamp(
-            window,
-            "finished_at",
-            window_label,
-        )
-        if window_finished < window_started:
-            raise ReadinessError(f"{window_label}.finished_at must not be before started_at")
-        if window_started < started_at or window_finished > finished_at:
-            raise ReadinessError(f"{window_label} timestamp window must be inside canary window")
-        if (
-            previous_window_finished is not None
-            and window_started < previous_window_finished
-        ):
-            raise ReadinessError(
-                f"{window_label}.started_at must not be before previous stage finished_at"
+    if plan_only:
+        if stage_windows_raw:
+            raise ReadinessError(f"{label}.stage_windows must be empty for plan-only evidence")
+    else:
+        stage_window_names: list[str] = []
+        previous_window_finished: dt.datetime | None = None
+        for offset, raw_window in enumerate(stage_windows_raw):
+            window_label = f"{label}.stage_windows[{offset}]"
+            window = _require_object(raw_window, window_label)
+            _reject_unknown_keys(window, COMPACT_STAGE_WINDOW_KEYS, window_label)
+            stage_name = _require_stage_name(window, "name", window_label)
+            window_started_raw, window_started = _require_timestamp(
+                window,
+                "started_at",
+                window_label,
             )
-        stage_windows.append(
-            {
-                "name": stage_name,
-                "started_at": window_started_raw,
-                "finished_at": window_finished_raw,
-            }
-        )
-        stage_window_names.append(stage_name)
-        previous_window_finished = window_finished
-    if stage_window_names != stage_names_raw:
-        raise ReadinessError(f"{label}.stage_windows must match stage_names")
+            window_finished_raw, window_finished = _require_timestamp(
+                window,
+                "finished_at",
+                window_label,
+            )
+            if window_finished < window_started:
+                raise ReadinessError(f"{window_label}.finished_at must not be before started_at")
+            if window_started < started_at or window_finished > finished_at:
+                raise ReadinessError(f"{window_label} timestamp window must be inside canary window")
+            if (
+                previous_window_finished is not None
+                and window_started < previous_window_finished
+            ):
+                raise ReadinessError(
+                    f"{window_label}.started_at must not be before previous stage finished_at"
+                )
+            stage_windows.append(
+                {
+                    "name": stage_name,
+                    "started_at": window_started_raw,
+                    "finished_at": window_finished_raw,
+                }
+            )
+            stage_window_names.append(stage_name)
+            previous_window_finished = window_finished
+        if stage_window_names != stage_names_raw:
+            raise ReadinessError(f"{label}.stage_windows must match stage_names")
     missing_stages = sorted(REQUIRED_CANARY_STAGES - stage_names)
     if missing_stages:
         _blocker(
@@ -3069,27 +3218,35 @@ def _verify_canary(
             "canary summary is missing stages: " + ", ".join(missing_stages),
             path,
         )
-    receipt_summary = _verify_receipt_summary(
-        _require_object(canary.get("receipt_summary"), f"{label}.receipt_summary"),
-        f"{label}.receipt_summary",
-        path,
-        blockers,
-        missing_kinds_code="evidence.missing_receipt_kinds",
-        allow_failed_code="evidence.receipts_allow_failed",
-        allow_insecure_code="evidence.receipts_allow_insecure_http",
-        allow_legacy_code="evidence.receipts_allow_legacy_colr007",
-        allow_default_profile_code="evidence.receipts_allow_default_profile",
-        version_code="evidence.receipt_summary_version_unsupported",
-        source_files_code="evidence.receipts_source_files_not_required",
-        count_mismatch_code="evidence.receipt_count_mismatch",
-        digest_missing_code="evidence.receipt_digest_missing",
-        duplicate_path_code="evidence.receipt_path_duplicate",
-        duplicate_digest_code="evidence.receipt_digest_duplicate",
-        unsuccessful_receipt_code="evidence.receipt_not_successful",
-        status_mismatch_code="evidence.receipt_status_mismatch",
-        metadata_code="evidence.receipt_metadata_invalid",
-        kind_entry_mismatch_code="evidence.receipt_kind_entry_mismatch",
-    )
+    if "receipt_summary" not in canary:
+        raise ReadinessError(f"{label}.receipt_summary must be recorded")
+    receipt_summary_raw = canary["receipt_summary"]
+    if plan_only:
+        if receipt_summary_raw is not None:
+            raise ReadinessError(f"{label}.receipt_summary must be null for plan-only evidence")
+        receipt_summary = None
+    else:
+        receipt_summary = _verify_receipt_summary(
+            _require_object(receipt_summary_raw, f"{label}.receipt_summary"),
+            f"{label}.receipt_summary",
+            path,
+            blockers,
+            missing_kinds_code="evidence.missing_receipt_kinds",
+            allow_failed_code="evidence.receipts_allow_failed",
+            allow_insecure_code="evidence.receipts_allow_insecure_http",
+            allow_legacy_code="evidence.receipts_allow_legacy_colr007",
+            allow_default_profile_code="evidence.receipts_allow_default_profile",
+            version_code="evidence.receipt_summary_version_unsupported",
+            source_files_code="evidence.receipts_source_files_not_required",
+            count_mismatch_code="evidence.receipt_count_mismatch",
+            digest_missing_code="evidence.receipt_digest_missing",
+            duplicate_path_code="evidence.receipt_path_duplicate",
+            duplicate_digest_code="evidence.receipt_digest_duplicate",
+            unsuccessful_receipt_code="evidence.receipt_not_successful",
+            status_mismatch_code="evidence.receipt_status_mismatch",
+            metadata_code="evidence.receipt_metadata_invalid",
+            kind_entry_mismatch_code="evidence.receipt_kind_entry_mismatch",
+        )
     return {
         "version": version,
         "path": canary_path,
@@ -3102,8 +3259,8 @@ def _verify_canary(
         "require_explicit_policy": require_explicit_policy,
         "stage_names": list(stage_names_raw),
         "stage_windows": stage_windows,
-        "verified_receipts": receipt_summary["verified_receipts"],
-        "receipt_kind": receipt_summary["receipt_kind"],
+        "verified_receipts": receipt_summary["verified_receipts"] if receipt_summary else 0,
+        "receipt_kind": receipt_summary["receipt_kind"] if receipt_summary else [],
         "receipt_summary": receipt_summary,
         "summary_sha256": summary_sha256,
     }
@@ -3182,47 +3339,66 @@ def _verify_trust_profile(
         raise ReadinessError(
             f"{label}.x509_ocsp_response_der length does not match x509_ocsp_response_count"
         )
-    source = _require_object(profile.get("source"), f"{label}.source")
-    _reject_unknown_keys(source, TRUST_SOURCE_KEYS, f"{label}.source")
-    source_authority = _require_string(source, "authority", f"{label}.source")
-    source_version = _require_string(source, "version", f"{label}.source")
-    _reject_secret_looking_identifier(source_authority, f"{label}.source.authority")
-    _reject_secret_looking_identifier(source_version, f"{label}.source.version")
-    source_url = _validate_https_source_url(
-        _require_string(source, "url", f"{label}.source"),
-        f"{label}.source.url",
-    )
-    source_retrieved_at_raw, source_retrieved_at = _require_timestamp(
-        source,
-        "retrieved_at",
-        f"{label}.source",
-    )
-    _block_if_stale(
-        source_retrieved_at,
-        max_age_days=args.max_trust_source_age_days,
-        code="trust.source_stale",
-        label="trust source retrieved_at",
-        path=path,
-        blockers=blockers,
-    )
-    for source_field, source_value in (
-        ("authority", source_authority),
-        ("version", source_version),
-    ):
-        if _trust_source_text_is_placeholder(source_value):
+    if "source" not in profile:
+        raise ReadinessError(f"{label}.source must be a JSON object")
+    source_raw = profile["source"]
+    source_summary: dict[str, str] | None
+    if source_raw is None:
+        _blocker(
+            blockers,
+            "trust.source_missing",
+            f"trust profile {profile_id!r} has no source provenance",
+            path,
+        )
+        source_summary = None
+    else:
+        source = _require_object(source_raw, f"{label}.source")
+        _reject_unknown_keys(source, TRUST_SOURCE_KEYS, f"{label}.source")
+        source_authority = _require_string(source, "authority", f"{label}.source")
+        source_version = _require_string(source, "version", f"{label}.source")
+        _reject_secret_looking_identifier(source_authority, f"{label}.source.authority")
+        _reject_secret_looking_identifier(source_version, f"{label}.source.version")
+        source_url = _validate_https_source_url(
+            _require_string(source, "url", f"{label}.source"),
+            f"{label}.source.url",
+        )
+        source_retrieved_at_raw, source_retrieved_at = _require_timestamp(
+            source,
+            "retrieved_at",
+            f"{label}.source",
+        )
+        _block_if_stale(
+            source_retrieved_at,
+            max_age_days=args.max_trust_source_age_days,
+            code="trust.source_stale",
+            label="trust source retrieved_at",
+            path=path,
+            blockers=blockers,
+        )
+        for source_field, source_value in (
+            ("authority", source_authority),
+            ("version", source_version),
+        ):
+            if _trust_source_text_is_placeholder(source_value):
+                _blocker(
+                    blockers,
+                    "trust.source_placeholder",
+                    f"{label}.source.{source_field} still contains placeholder production metadata",
+                    path,
+                )
+        if _trust_source_url_uses_placeholder_host(source_url):
             _blocker(
                 blockers,
                 "trust.source_placeholder",
-                f"{label}.source.{source_field} still contains placeholder production metadata",
+                f"{label}.source.url still points at reserved placeholder provenance",
                 path,
             )
-    if _trust_source_url_uses_placeholder_host(source_url):
-        _blocker(
-            blockers,
-            "trust.source_placeholder",
-            f"{label}.source.url still points at example.invalid placeholder provenance",
-            path,
-        )
+        source_summary = {
+            "authority": source_authority,
+            "version": source_version,
+            "url": source_url,
+            "retrieved_at": source_retrieved_at_raw,
+        }
     if signature_pin_count + x509_pin_count <= 0:
         _blocker(
             blockers,
@@ -3237,7 +3413,14 @@ def _verify_trust_profile(
             f"trust profile {profile_id!r} environment is {environment!r}, expected {args.environment!r}",
             path,
         )
-    if policy != REQUIRE_VERIFIED:
+    if policy not in TRUST_SIGNATURE_POLICIES:
+        _blocker(
+            blockers,
+            "trust.policy_unsupported",
+            f"trust profile {profile_id!r} uses unsupported policy {policy!r}",
+            path,
+        )
+    elif policy != REQUIRE_VERIFIED:
         _blocker(
             blockers,
             "trust.policy_not_require_verified",
@@ -3277,12 +3460,7 @@ def _verify_trust_profile(
         "rail": rail,
         "environment": environment,
         "bundle_sha256": bundle_sha256,
-        "source": {
-            "authority": source_authority,
-            "version": source_version,
-            "url": source_url,
-            "retrieved_at": source_retrieved_at_raw,
-        },
+        "source": source_summary,
         "embedded_signature_policy": policy,
         "signature_public_key_pin_count": signature_pin_count,
         "x509_trust_anchor_pin_count": x509_pin_count,
@@ -3306,7 +3484,9 @@ def _verify_archive_receipts(
     args: argparse.Namespace,
     blockers: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    receipt_summary = summary.get("receipt_verification")
+    if "receipt_verification" not in summary:
+        raise ReadinessError(f"{path}.receipt_verification must be recorded")
+    receipt_summary = summary["receipt_verification"]
     if receipt_summary is None:
         if args.allow_canary_stage_receipts_only:
             return None
@@ -3358,7 +3538,10 @@ def _block_if_archive_receipts_do_not_cover_canaries(
     }
     canary_kinds_by_digest: dict[str, str] = {}
     for canary_offset, canary in enumerate(canaries):
-        for receipt_offset, receipt in enumerate(canary["receipt_summary"]["receipts"]):
+        receipt_summary = canary.get("receipt_summary")
+        if receipt_summary is None:
+            continue
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
             receipt_sha256 = receipt.get("receipt_sha256")
             if not _is_lower_sha256(receipt_sha256):
                 continue
@@ -3445,7 +3628,10 @@ def _block_cross_canary_receipt_reuse(
     seen_paths: dict[str, tuple[int, int]] = {}
     seen_digests: dict[str, tuple[int, int]] = {}
     for canary_offset, canary in enumerate(canaries):
-        for receipt_offset, receipt in enumerate(canary["receipt_summary"]["receipts"]):
+        receipt_summary = canary.get("receipt_summary")
+        if receipt_summary is None:
+            continue
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
             receipt_path = receipt.get("path")
             if isinstance(receipt_path, str):
                 if receipt_path in seen_paths:
@@ -3545,7 +3731,10 @@ def _block_canary_rail_receipts_without_trust(
     }
     for canary_offset, canary in enumerate(canaries):
         canary_environment = canary["environment"]
-        for receipt_offset, receipt in enumerate(canary["receipt_summary"]["receipts"]):
+        receipt_summary = canary.get("receipt_summary")
+        if receipt_summary is None:
+            continue
+        for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
             if receipt.get("receipt_kind") != "iso-rail-gateway":
                 continue
             profile_id = receipt.get("profile")
@@ -3603,7 +3792,7 @@ def _block_cross_xsd_summary_reuse(
     for field, label, code in checks:
         seen: dict[str, tuple[int, int]] = {}
         for summary_offset, summary in enumerate(xsd_summaries):
-            for item_offset, value in enumerate(summary.get(field, [])):
+            for item_offset, value in enumerate(summary[field]):
                 if value in seen:
                     first_summary, first_item = seen[value]
                     _blocker(
@@ -3693,12 +3882,13 @@ def _block_cross_evidence_summary_reuse(
             receipt_entries: list[tuple[int, int | None, dict[str, Any]]] = []
             if source == "canary":
                 for canary_offset, canary in enumerate(summary["canary_summaries"]):
-                    for receipt_offset, receipt in enumerate(
-                        canary["receipt_summary"]["receipts"]
-                    ):
+                    receipt_summary = canary.get("receipt_summary")
+                    if receipt_summary is None:
+                        continue
+                    for receipt_offset, receipt in enumerate(receipt_summary["receipts"]):
                         receipt_entries.append((receipt_offset, canary_offset, receipt))
             else:
-                archive_summary = summary.get("receipt_verification")
+                archive_summary = summary["receipt_verification"]
                 if isinstance(archive_summary, dict):
                     for receipt_offset, receipt in enumerate(archive_summary["receipts"]):
                         receipt_entries.append((receipt_offset, None, receipt))
@@ -3895,6 +4085,34 @@ def verify_evidence_summary(
                 "max_source_age_days",
                 label,
             )
+        allow_synthetic_der = _require_bool(trust_obj, "allow_synthetic_der", label)
+        allow_record_only = _require_bool(trust_obj, "allow_record_only", label)
+        allow_insecure_source_url = _require_bool(
+            trust_obj,
+            "allow_insecure_source_url",
+            label,
+        )
+        if allow_synthetic_der:
+            _blocker(
+                blockers,
+                "trust.allow_synthetic_der",
+                "trust summary was verified with --allow-synthetic-der",
+                path,
+            )
+        if allow_record_only:
+            _blocker(
+                blockers,
+                "trust.allow_record_only",
+                "trust summary was verified with --allow-record-only",
+                path,
+            )
+        if allow_insecure_source_url:
+            _blocker(
+                blockers,
+                "trust.allow_insecure_source_url",
+                "trust summary was verified with --allow-insecure-source-url",
+                path,
+            )
         profile_json_emitted = _require_bool(trust_obj, "profile_json_emitted", label)
         profile_json_emittable = _require_bool(trust_obj, "profile_json_emittable", label)
         if profile_json_emitted:
@@ -3961,6 +4179,9 @@ def verify_evidence_summary(
             for profile_offset, profile in enumerate(profiles_raw)
         ]
         computed_profile_json_emittable = _computed_profile_json_emittable(
+            allow_synthetic_der=allow_synthetic_der,
+            allow_record_only=allow_record_only,
+            allow_insecure_source_url=allow_insecure_source_url,
             max_source_age_days=max_source_age_days,
             profiles=profiles,
         )
@@ -4016,6 +4237,9 @@ def verify_evidence_summary(
                 "verified_at": verified_at_raw,
                 "verified_bundles": verified_bundles,
                 "max_source_age_days": max_source_age_days,
+                "allow_synthetic_der": allow_synthetic_der,
+                "allow_record_only": allow_record_only,
+                "allow_insecure_source_url": allow_insecure_source_url,
                 "profile_json_emitted": profile_json_emitted,
                 "profile_json_emittable": profile_json_emittable,
                 "profile_json_sha256": profile_json_sha256,

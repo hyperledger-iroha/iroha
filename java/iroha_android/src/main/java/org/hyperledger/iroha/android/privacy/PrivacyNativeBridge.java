@@ -147,22 +147,26 @@ public final class PrivacyNativeBridge {
     if (output == null) {
       throw new IllegalStateException(label + " returned no output");
     }
-    if (output.length == 0) {
-      throw new IllegalStateException(label + " returned empty output");
+    try {
+      if (output.length == 0) {
+        throw new IllegalStateException(label + " returned empty output");
+      }
+      if (output.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
+        throw new IllegalStateException(label + " returned oversized output");
+      }
+      if (!isValidPrivacyNoritoArchive(output)) {
+        throw new IllegalStateException(label + " returned invalid Norito V1 archive");
+      }
+      if (!hasNonEmptyPrivacyNoritoPayload(output)) {
+        throw new IllegalStateException(label + " returned empty privacy result payload");
+      }
+      if (!hasPrivacyNoritoSchema(output, expectedSchemaByte)) {
+        throw new IllegalStateException(label + " returned unexpected privacy result schema");
+      }
+      return Arrays.copyOf(output, output.length);
+    } finally {
+      Arrays.fill(output, (byte) 0);
     }
-    if (output.length > PRIVACY_NATIVE_ARCHIVE_MAX_BYTES) {
-      throw new IllegalStateException(label + " returned oversized output");
-    }
-    if (!isValidPrivacyNoritoArchive(output)) {
-      throw new IllegalStateException(label + " returned invalid Norito V1 archive");
-    }
-    if (!hasNonEmptyPrivacyNoritoPayload(output)) {
-      throw new IllegalStateException(label + " returned empty privacy result payload");
-    }
-    if (!hasPrivacyNoritoSchema(output, expectedSchemaByte)) {
-      throw new IllegalStateException(label + " returned unexpected privacy result schema");
-    }
-    return Arrays.copyOf(output, output.length);
   }
 
   private static void requireNative() {
@@ -206,12 +210,18 @@ public final class PrivacyNativeBridge {
       final int expectedSchemaByte, final NativeByteArrayProbe probe) {
     try {
       final byte[] output = probe.run();
-      return output != null
-          && output.length > 0
-          && output.length <= PRIVACY_NATIVE_ARCHIVE_MAX_BYTES
-          && isValidPrivacyNoritoArchive(output)
-          && hasNonEmptyPrivacyNoritoPayload(output)
-          && hasPrivacyNoritoSchema(output, expectedSchemaByte);
+      if (output == null) {
+        return false;
+      }
+      try {
+        return output.length > 0
+            && output.length <= PRIVACY_NATIVE_ARCHIVE_MAX_BYTES
+            && isValidPrivacyNoritoArchive(output)
+            && hasNonEmptyPrivacyNoritoPayload(output)
+            && hasPrivacyNoritoSchema(output, expectedSchemaByte);
+      } finally {
+        Arrays.fill(output, (byte) 0);
+      }
     } catch (final RuntimeException error) {
       return false;
     } catch (final LinkageError error) {

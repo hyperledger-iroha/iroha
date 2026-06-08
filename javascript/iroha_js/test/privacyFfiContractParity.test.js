@@ -254,7 +254,13 @@ const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_ROWS = Object.freeze([
   Object.freeze(["zk-ace-pq-authorization-v0", "stark-fri"]),
 ]);
 const EXPECTED_REQUIRED_PRIVACY_PRODUCTION_ALLOWLIST_RUST_BACKEND_LABELS = Object.freeze([
-  Object.freeze(["stark-fri", "stark/fri", "stark/fri/sha256-goldilocks"]),
+  Object.freeze([
+    "stark-fri",
+    "stark/fri",
+    "stark/fri/sha256-goldilocks",
+    "stark/fri/poseidon2-goldilocks",
+    "stark/fri/sha256_goldilocks.v1",
+  ]),
 ]);
 const EXPECTED_ADVERSARIAL_PENDING_PRIVACY_BACKEND_LABELS = Object.freeze([
   "halo2/ipa/orchard/dev-fixture",
@@ -1562,9 +1568,19 @@ test("native privacy FFI hosts remain Norito-only and JSON-free", () => {
     assert.match(text, /norito::to_bytes/, `${label} must encode Norito result archives`);
     assert.match(text, byteBoundaryPattern, `${label} must expose byte-oriented native boundaries`);
     assert.doesNotMatch(text, disallowedJson, `${label} must not parse or render JSON payloads`);
+    assert.match(
+      text,
+      /fn\s+privacy_clear_request_byte_fields\([^)]*&mut PrivacyProofRequestV1[^)]*\)[\s\S]*public_inputs\.fill\(0\)[\s\S]*witness\.fill\(0\)[\s\S]*proof\.fill\(0\)/,
+      `${label} must clear decoded privacy request byte fields before dropping request values`,
+    );
+    assert.match(
+      text,
+      /fn\s+privacy_result_for_request\(\s*mut request:\s*PrivacyProofRequestV1[\s\S]*let\s+result\s*=\s*\(\|\|\s*->\s*PrivacyProofResultV1[\s\S]*privacy_clear_request_byte_fields\(&mut request\)[\s\S]*result/,
+      `${label} must scrub decoded privacy request bytes on every result path`,
+    );
   }
 
-  for (const [label, text] of [
+  for (const [label, text, scrubPattern] of [
     [
       "C bridge privacy FFI",
       sliceBetween(
@@ -1573,6 +1589,7 @@ test("native privacy FFI hosts remain Norito-only and JSON-free", () => {
         "unsafe fn read_privacy_request",
         "C bridge privacy output encoder",
       ),
+      /let\s+result\s*=[\s\S]*write_bytes\(out_ptr,\s*out_len,\s*&bytes\)[\s\S]*bytes\.fill\(0\)[\s\S]*result/,
     ],
     [
       "JS NAPI privacy FFI",
@@ -1582,6 +1599,7 @@ test("native privacy FFI hosts remain Norito-only and JSON-free", () => {
         "#[napi]\n/// Return Norito V1 privacy capability records",
         "JS NAPI privacy output encoder",
       ),
+      /if\s+!privacy_patch_archive_repeated_schema_byte[\s\S]*bytes\.fill\(0\)[\s\S]*if\s+bytes\.len\(\)\s*>\s*PRIVACY_NATIVE_ARCHIVE_MAX_BYTES[\s\S]*bytes\.fill\(0\)[\s\S]*Ok\(Buffer::from\(bytes\)\)/,
     ],
     [
       "Python PyO3 privacy FFI",
@@ -1591,6 +1609,7 @@ test("native privacy FFI hosts remain Norito-only and JSON-free", () => {
         "#[pyfunction]\n#[pyo3(name = \"privacy_capabilities_v1\")]",
         "Python PyO3 privacy output encoder",
       ),
+      /if\s+!privacy_patch_archive_repeated_schema_byte[\s\S]*bytes\.fill\(0\)[\s\S]*if\s+bytes\.len\(\)\s*>\s*PRIVACY_NATIVE_ARCHIVE_MAX_BYTES[\s\S]*bytes\.fill\(0\)[\s\S]*let\s+output\s*=\s*Py::from\(PyBytes::new\(py,\s*&bytes\)\)[\s\S]*bytes\.fill\(0\)[\s\S]*Ok\(output\)/,
     ],
   ]) {
     assert.match(
@@ -1598,16 +1617,56 @@ test("native privacy FFI hosts remain Norito-only and JSON-free", () => {
       /bytes\.len\(\)\s*>\s*PRIVACY_NATIVE_ARCHIVE_MAX_BYTES/,
       `${label} must reject oversized encoded Norito output archives`,
     );
+    assert.match(
+      text,
+      scrubPattern,
+      `${label} must scrub temporary encoded privacy output archives after copy or before errors`,
+    );
   }
 
   const javaPrivacyAdapter = sliceBetween(
     connectBridge,
-    "fn java_privacy_capabilities_archive",
+    "fn java_privacy_public_archive",
     "pub unsafe extern \"system\" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCompactPaymentTokenProver",
     "C bridge Java privacy JNI adapter",
   );
   assert.match(javaPrivacyAdapter, /norito::to_bytes/, "Java privacy JNI must encode Norito archives");
+  assert.match(
+    javaPrivacyAdapter,
+    /privacy_patch_archive_repeated_schema_byte\(&mut archive,\s*schema_byte\)/,
+    "Java privacy JNI must patch encoded archives to public schema bytes",
+  );
+  assert.match(
+    javaPrivacyAdapter,
+    /java_privacy_public_archive\([\s\S]*PRIVACY_CAPABILITIES_RESULT_SCHEMA_BYTE/,
+    "Java privacy JNI capabilities must use the public capabilities schema byte",
+  );
+  assert.match(
+    javaPrivacyAdapter,
+    /java_privacy_public_archive\([\s\S]*privacy_result_schema_byte\(operation\)/,
+    "Java privacy JNI proof results must use operation-specific public schema bytes",
+  );
+  assert.match(
+    javaPrivacyAdapter,
+    /privacy_patch_archive_repeated_schema_byte\(&mut archive,\s*schema_byte\)[\s\S]*archive\.fill\(0\)[\s\S]*return Err[\s\S]*archive\.len\(\)\s*>\s*PRIVACY_NATIVE_ARCHIVE_MAX_BYTES[\s\S]*archive\.fill\(0\)[\s\S]*return Err/,
+    "Java privacy JNI must scrub temporary public archives on encode error paths",
+  );
+  assert.match(
+    javaPrivacyAdapter,
+    /let\s+mut\s+archive\s*=\s*java_privacy_capabilities_archive\(\)\?[\s\S]*byte_array_from_slice\(&archive\)[\s\S]*archive\.fill\(0\)[\s\S]*array_result\?/,
+    "Java privacy JNI capabilities must scrub temporary encoded archives after Java byte-array copy",
+  );
+  assert.match(
+    javaPrivacyAdapter,
+    /let\s+mut\s+archive\s*=\s*archive_result\?[\s\S]*byte_array_from_slice\(&archive\)[\s\S]*archive\.fill\(0\)[\s\S]*array_result\?/,
+    "Java privacy JNI proof results must scrub temporary encoded archives after Java byte-array copy",
+  );
   assert.match(javaPrivacyAdapter, /read_java_byte_array/, "Java privacy JNI must read byte-array requests");
+  assert.match(
+    javaPrivacyAdapter,
+    /let\s+mut\s+request_bytes[\s\S]*java_privacy_result_archive\(&request_bytes,\s*operation\)[\s\S]*request_bytes\.fill\(0\)[\s\S]*archive_result\?/,
+    "Java privacy JNI must scrub copied request bytes after native dispatch",
+  );
   assert.match(javaPrivacyAdapter, /byte_array_from_slice/, "Java privacy JNI must return byte-array archives");
   assert.match(javaPrivacyAdapter, /PrivacyProofOperationV1::Build/);
   assert.match(javaPrivacyAdapter, /PrivacyProofOperationV1::Verify/);
@@ -2178,7 +2237,7 @@ test("native privacy FFI capabilities keep production gates fail-closed", () => 
     );
     assert.match(
       text,
-      /const\s+PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS:\s*&\[&str\][\s\S]*productionready[\s\S]*productionclaim[\s\S]*claimedproduction[\s\S]*mainnetready[\s\S]*mainnetclaim[\s\S]*auditedproduction[\s\S]*auditsignoff[\s\S]*claimedaudit[\s\S]*securityreviewpassed/,
+      /const\s+PRIVACY_EXPOSED_PRODUCTION_CLAIM_FRAGMENTS:\s*&\[&str\][\s\S]*productionready[\s\S]*productionclaim[\s\S]*claimedproduction[\s\S]*mainnetready[\s\S]*mainnetclaim[\s\S]*claimedmainnet[\s\S]*mainnetcertified[\s\S]*auditedproduction[\s\S]*thirdpartyaudited[\s\S]*boiaudited[\s\S]*auditsignoff[\s\S]*claimedaudit[\s\S]*securityreviewpassed[\s\S]*securityauditpassed[\s\S]*externalsecurityreview[\s\S]*releaseready/,
       `${label} must define native exposed-label production-claim fragments`,
     );
     assert.match(
@@ -3055,6 +3114,16 @@ test("native privacy FFI archives use public operation schema bytes", () => {
     );
     assert.match(
       text,
+      /let\s+mut\s+normalized\s*=\s*request_(?:bytes|archive)\.to_vec\(\)[\s\S]*if\s+!privacy_patch_archive_schema_hash\([\s\S]*<PrivacyProofRequestV1\s+as\s+norito::NoritoSerialize>::schema_hash\(\)[\s\S]*\)\s*\{[\s\S]*normalized\.fill\(0\)[\s\S]*return\s+Err\(\(\)\)[\s\S]*\}/,
+      `${label} must scrub normalized privacy request archives when schema normalization fails`,
+    );
+    assert.match(
+      text,
+      /let\s+mut\s+normalized\s*=\s*request_(?:bytes|archive)\.to_vec\(\)[\s\S]*let\s+decoded\s*=\s*norito::decode_from_bytes\(&normalized\)\.map_err\(\|_\|\s*\(\)\)[\s\S]*normalized\.fill\(0\)[\s\S]*decoded/,
+      `${label} must scrub normalized privacy request archives after decode attempts`,
+    );
+    assert.match(
+      text,
       /<PrivacyProofRequestV1\s+as\s+norito::NoritoSerialize>::schema_hash\(\)/,
       `${label} must normalize only privacy request archives to the native Rust schema before decode`,
     );
@@ -3355,6 +3424,26 @@ test("native chain proof admission uses explicit production verifier backend all
       );
     }
   }
+  const rustPreverifyEnvelopeTest = sliceBetween(
+    coreZk,
+    "fn preverify_binds_open_verify_metadata_for_all_production_labels",
+    "fn preverify_rejects_trusted_setup_backends_before_dedup",
+    "Rust preverify production metadata-binding test",
+  );
+  assert.ok(
+    rustPreverifyEnvelopeTest.includes("ZK_BACKEND_STARK_FRI_V1"),
+    "Rust preverify metadata-binding test must cover the canonical STARK/FRI backend label",
+  );
+  for (const rustBackendLabel of requiredAllowlistRustBackends.get("stark-fri") ?? []) {
+    if (rustBackendLabel === "stark/fri") {
+      continue;
+    }
+    assert.match(
+      rustPreverifyEnvelopeTest,
+      new RegExp(`"${escapeRegExp(rustBackendLabel)}"[\\s\\S]*BackendTag::Stark`, "u"),
+      `Rust preverify metadata-binding test must cover production STARK/FRI backend ${rustBackendLabel}`,
+    );
+  }
   assert.match(
     worldIsi,
     /fn ensure_production_verifying_key_backend_id\([^)]*\)[\s\S]*!crate::zk::is_production_verify_backend_label\(backend\)[\s\S]*unsupported verifying key backends/,
@@ -3432,15 +3521,15 @@ test("native chain proof admission uses explicit production verifier backend all
       /function normalizePrivacyBackendTag\([^)]*\)[\s\S]*isPortableVerifierBackendLabel\(raw\)/,
       `${label} must reject non-portable privacy proof-envelope backend labels before tag alias compaction`,
     );
-    assert.ok(
-      text.includes(
-        'backend.includes("+") && !PLUS_PRIVACY_BACKEND_ALIASES.has(backend)',
-      ),
-      `${label} must reject non-FCMP++ plus signs in verifier backend labels before alias compaction`,
+    assert.match(
+      text,
+      /if \(backend\.includes\("\+"\)\) {\s*return PLUS_PRIVACY_BACKEND_ALIASES\.has\(backend\);\s*}/,
+      `${label} must admit only explicit FCMP++ plus aliases before tag alias compaction`,
     );
     assert.ok(
-      text.includes("return /^[A-Za-z0-9/_.:+-]+$/u.test(backend);"),
-      `${label} must keep verifier backend labels portable while admitting explicit FCMP++ aliases`,
+      text.includes("!/^[a-z0-9/_.:-]+$/u.test(backend)") &&
+        text.includes('["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]'),
+      `${label} must keep verifier backend labels lowercase, path-safe, and portable while admitting explicit FCMP++ aliases`,
     );
   }
   for (const [label, text] of [
@@ -3472,8 +3561,9 @@ test("native chain proof admission uses explicit production verifier backend all
       `${label} must reject unsupported updateVerifyingKey backends before fetch`,
     );
     assert.ok(
-      text.includes("return /^[A-Za-z0-9/_.:+-]+$/u.test(backend);"),
-      `${label} must reject spaces in verifier backend labels before request dispatch while preserving portable plus aliases`,
+      text.includes("!/^[a-z0-9/_.:-]+$/u.test(backend)") &&
+        text.includes('["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"]'),
+      `${label} must reject spaces and unsafe separators in verifier backend labels before request dispatch while preserving portable plus aliases`,
     );
   }
   assert.match(
@@ -3636,9 +3726,15 @@ test("native chain proof admission uses explicit production verifier backend all
       "productionready",
       "claimedproduction",
       "mainnetready",
+      "mainnetcertified",
       "auditsignoff",
       "externallyaudited",
+      "thirdpartyaudited",
+      "boiaudited",
       "securityreviewpassed",
+      "securityauditpassed",
+      "externalsecurityreview",
+      "releaseready",
     ]) {
       assert.ok(text.includes(marker), `${label} must reject compact production-claim marker ${marker}`);
     }
@@ -3657,8 +3753,14 @@ test("native chain proof admission uses explicit production verifier backend all
     for (const marker of [
       "halo2/ipa:production-ready",
       "halo2/ipa:mainnet-ready",
+      "halo2/ipa:release-ready",
+      "halo2/ipa:certified-mainnet",
+      "halo2/ipa:third-party-audited",
       "stark/fri/audit-signoff",
+      "stark/fri/boi-audited",
+      "stark/fri/external-security-review",
       "stark/fri/S.e.c.u.r.i.t.yReviewPassed",
+      "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
       "stark/fri/a-u-d-i-t-c-l-a-i-m",
     ]) {
       assert.ok(text.includes(marker), `${label} must reject production-claim backend ${marker}`);
@@ -5504,6 +5606,7 @@ test("SDK privacy native tests defensively copy native output archives", () => {
       "func testReadPrivacyNativeOutputRejectsInvalidArchiveAndFreesPointer",
       [
         /update\(repeating:\s*0x7F,\s*count:\s*bytes\.count\)/,
+        /assertPrivacyNativePointerZeroed\(freedPointer,\s*count:\s*bytes\.count\)/,
         /XCTAssertEqual\(archive,\s*Data\(bytes\)\)/,
         /XCTAssertTrue\(freed\)/,
       ],
@@ -5515,8 +5618,9 @@ test("SDK privacy native tests defensively copy native output archives", () => {
       "private static void nativeExceptionsAreSanitizedBeforeExposingRequestBytes",
       [
         /assert archive != nativeOutput/,
-        /nativeOutput\[6\]\s*=\s*0x7f[\s\S]*assert Arrays\.equals\(archive,\s*expectedOutput\)/,
-        /archive\[0\]\s*=\s*0x7f[\s\S]*assert nativeOutput\[0\]\s*==\s*'N'/,
+        /assert Arrays\.equals\(archive,\s*expectedOutput\)/,
+        /assertAllZero\(nativeOutput\)/,
+        /archive\[0\]\s*=\s*0x7f[\s\S]*assert expectedOutput\[0\]\s*==\s*'N'/,
       ],
     ],
     [
@@ -5526,8 +5630,9 @@ test("SDK privacy native tests defensively copy native output archives", () => {
       "fun nativeExceptionsAreSanitizedBeforeExposingRequestBytes",
       [
         /assertTrue\(archive !== nativeOutput\)/,
-        /nativeOutput\[6\]\s*=\s*0x7f[\s\S]*assertTrue\(archive\.contentEquals\(expectedOutput\)\)/,
-        /archive\[0\]\s*=\s*0x7f[\s\S]*assertEquals\('N'\.code\.toByte\(\),\s*nativeOutput\[0\]\)/,
+        /assertTrue\(archive\.contentEquals\(expectedOutput\)\)/,
+        /assertAllZero\(nativeOutput\)/,
+        /archive\[0\]\s*=\s*0x7f[\s\S]*assertEquals\('N'\.code\.toByte\(\),\s*expectedOutput\[0\]\)/,
       ],
     ],
     [
@@ -5537,6 +5642,7 @@ test("SDK privacy native tests defensively copy native output archives", () => {
       "public void PrivacyNativeReadOutputRejectsInvalidNoritoArchiveAndFreesPointer",
       [
         /Marshal\.Copy\(FilledBytes\(0x7f,\s*bytes\.Length\),\s*0,\s*ptr,\s*bytes\.Length\)/,
+        /AssertPointerZeroed\(ptr,\s*bytes\.Length\)/,
         /Assert\.Equal\(bytes,\s*archive\)/,
         /Assert\.True\(freed\)/,
       ],
@@ -6187,7 +6293,7 @@ test("privacy native availability proof probes use shared Norito request archive
       "private func probeKagemushaNativeAvailability",
       "Swift privacy native probe result",
     ),
-    /let\s+archive\s*=\s*Data\(bytes:\s*outPtr,\s*count:\s*Int\(outLen\)\)[\s\S]*Self\.isValidPrivacyNoritoArchive\(archive\)[\s\S]*Self\.hasNonEmptyPrivacyNoritoPayload\(archive\)[\s\S]*Self\.hasPrivacyNoritoSchema\(archive,\s*expectedSchemaByte:\s*expectedSchemaByte\)/,
+    /(?:let|var)\s+archive\s*=\s*Data\(bytes:\s*outPtr,\s*count:\s*Int\(outLen\)\)[\s\S]*Self\.isValidPrivacyNoritoArchive\(archive\)[\s\S]*Self\.hasNonEmptyPrivacyNoritoPayload\(archive\)[\s\S]*Self\.hasPrivacyNoritoSchema\(archive,\s*expectedSchemaByte:\s*expectedSchemaByte\)/,
     "Swift privacy availability probes must validate non-empty Norito result frames",
   );
   assert.match(
@@ -6244,6 +6350,36 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /Self\.hasNonEmptyPrivacyNoritoPayload\(archive\)/,
     "Swift privacy native output decoder must reject empty result payloads",
+  );
+  assert.match(
+    sliceBetween(
+      swiftNativeBridge,
+      "static func readPrivacyNativeOutput",
+      "var canUseConnectCrypto",
+      "Swift privacy native output decoder",
+    ),
+    /defer\s*\{[\s\S]*Self\.clearPrivacyNativeBuffer\(pointer,\s*length:\s*length\)[\s\S]*free\(pointer\)[\s\S]*\}/,
+    "Swift privacy native output decoder must zero native output before free",
+  );
+  assert.match(
+    sliceBetween(
+      swiftNativeBridge,
+      "static func isValidPrivacyNativeProbeResult",
+      "private func probeKagemushaNativeAvailability",
+      "Swift privacy native probe result",
+    ),
+    /var\s+archive\s*=\s*Data\(bytes:\s*outPtr,\s*count:\s*Int\(outLen\)\)[\s\S]*defer\s*\{[\s\S]*archive\.resetBytes\(in:\s*0\.\.<archive\.count\)/,
+    "Swift privacy availability probes must clear local native-output archive copies",
+  );
+  assert.match(
+    sliceBetween(
+      swiftNativeBridge,
+      "private func consumePrivacyNativeProbeResult",
+      "#endif",
+      "Swift privacy native probe consumer",
+    ),
+    /if\s+let\s+outPtr\s*\{[\s\S]*Self\.clearPrivacyNativeBuffer\(outPtr,\s*length:\s*outLen\)[\s\S]*free\(outPtr\)/,
+    "Swift privacy availability probes must zero native output before free",
   );
   assert.match(
     sliceBetween(
@@ -6428,6 +6564,16 @@ test("privacy native availability proof probes use shared Norito request archive
       "static boolean detectNativeAvailability",
       "Java privacy native probe result",
     ),
+    /finally\s*\{[\s\S]*Arrays\.fill\(output,\s*\(byte\)\s*0\);[\s\S]*\}/,
+    "Java privacy availability probes must zero native output buffers after inspection",
+  );
+  assert.match(
+    sliceBetween(
+      javaBridge,
+      "static boolean returnsOutputProbe",
+      "static boolean detectNativeAvailability",
+      "Java privacy native probe result",
+    ),
     /static\s+boolean\s+returnsOutputProbe\(\s*final\s+int\s+expectedSchemaByte/,
     "Java privacy availability probes must require an explicit expected schema",
   );
@@ -6440,6 +6586,11 @@ test("privacy native availability proof probes use shared Norito request archive
     javaBridgeTests,
     /assert\s+!PrivacyNativeBridge\.returnsOutputProbe\(0x50,\s*\(\)\s*->\s*privacyNoritoFrameWithPayload\(0x51\)\);/,
     "Java privacy tests must reject a valid probe archive under the wrong explicit schema",
+  );
+  assert.match(
+    javaBridgeTests,
+    /validProbeOutput[\s\S]*returnsOutputProbe\(0x42,\s*\(\)\s*->\s*validProbeOutput\)[\s\S]*assertAllZero\(validProbeOutput\)[\s\S]*invalidProbeOutput[\s\S]*assertAllZero\(invalidProbeOutput\)/,
+    "Java privacy tests must prove availability probe outputs are zeroed after success and rejection",
   );
   assert.match(
     sliceBetween(
@@ -6569,6 +6720,16 @@ test("privacy native availability proof probes use shared Norito request archive
       "internal fun detectNativeAvailability",
       "Kotlin privacy native probe result",
     ),
+    /finally\s*\{[\s\S]*output\.fill\(0\)[\s\S]*\}/,
+    "Kotlin privacy availability probes must zero native output buffers after inspection",
+  );
+  assert.match(
+    sliceBetween(
+      kotlinBridge,
+      "internal fun returnsOutputProbe",
+      "internal fun detectNativeAvailability",
+      "Kotlin privacy native probe result",
+    ),
     /expectedSchemaByte:\s*Int/,
     "Kotlin privacy availability probes must require expectedSchemaByte: Int",
   );
@@ -6581,6 +6742,11 @@ test("privacy native availability proof probes use shared Norito request archive
     kotlinBridgeTests,
     /assertFalse\(PrivacyNativeBridge\.returnsOutputProbe\(0x50\)\s*\{\s*privacyNoritoFrameWithPayload\(0x51\)\s*\}\)/,
     "Kotlin privacy tests must reject a valid probe archive under the wrong explicit schema",
+  );
+  assert.match(
+    kotlinBridgeTests,
+    /validProbeOutput[\s\S]*returnsOutputProbe\(0x42\)\s*\{\s*validProbeOutput\s*\}[\s\S]*assertAllZero\(validProbeOutput\)[\s\S]*invalidProbeOutput[\s\S]*assertAllZero\(invalidProbeOutput\)/,
+    "Kotlin privacy tests must prove availability probe outputs are zeroed after success and rejection",
   );
   assert.match(
     sliceBetween(
@@ -6657,6 +6823,16 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /RequireExplicitPrivacyResultSchemas\(symbol,\s*expectedSchemaBytes\)[\s\S]*HasNoritoSchema\(result,\s*schemas\)/,
     "C# privacy native output decoder must reject wrong-operation result schemas",
+  );
+  assert.match(
+    sliceBetween(
+      csharpBridge,
+      "internal static byte[] ReadPrivacyOutput",
+      "private static int CheckedArchiveLength",
+      "C# privacy native output decoder",
+    ),
+    /finally[\s\S]*ClearNativeBuffer\(outPtr,\s*outLen\)[\s\S]*free\(outPtr\)/,
+    "C# privacy native output decoder must zero native output before free",
   );
   assert.doesNotMatch(
     sliceBetween(
@@ -6744,9 +6920,34 @@ test("privacy native availability proof probes use shared Norito request archive
     "C# privacy availability probes must reject schema-less success output",
   );
   assert.match(
+    sliceBetween(
+      csharpBridge,
+      "internal static bool IsValidProbeResult",
+      "internal static byte[] PrivacyNativeAvailabilityProbeArchive",
+      "C# privacy native probe result",
+    ),
+    /finally[\s\S]*Array\.Clear\(output,\s*0,\s*output\.Length\)[\s\S]*ClearNativeBuffer\(outPtr,\s*outLen\)/,
+    "C# privacy availability probes must clear managed and native output buffers after validation",
+  );
+  assert.match(
+    sliceBetween(
+      csharpBridge,
+      "private static bool ConsumeProbeResult",
+      "private static bool TryGetAbiVersion",
+      "C# privacy native probe consumer",
+    ),
+    /finally[\s\S]*ClearNativeBuffer\(outPtr,\s*outLen\)[\s\S]*NativeFree\(outPtr\)/,
+    "C# privacy availability probe consumer must zero native output before free",
+  );
+  assert.match(
     csharpTests,
     /Assert\.False\(IsValidProbeOutput\(0,\s*PrivacyNoritoFrameWithPayload\(0x51\)\)\);/,
     "C# privacy tests must reject a valid probe archive when no expected schema is supplied",
+  );
+  assert.match(
+    csharpTests,
+    /IsValidProbeOutput[\s\S]*PrivacyNative\.IsValidProbeResult[\s\S]*AssertPointerZeroed\(pointer,\s*output\.Length\)/,
+    "C# privacy tests must prove availability probe output pointers are zeroed after validation",
   );
   assert.match(
     sliceBetween(
@@ -7077,6 +7278,36 @@ test("privacy native availability proof probes use shared Norito request archive
     ),
     /clear_privacy_output\(out_ptr,\s*out_len\)[\s\S]*out_ptr\.is_null\(\)\s*\|\|\s*out_len\.is_null\(\)[\s\S]*ERR_NULL_PTR/,
     "C bridge privacy payload writer must clear stale output slots before returning null-pointer errors",
+  );
+  assert.match(
+    sliceBetween(
+      connectBridge,
+      "unsafe fn write_privacy_bytes",
+      "unsafe fn privacy_buffer_header_from_payload",
+      "C bridge privacy output allocator",
+    ),
+    /malloc\(total\)[\s\S]*PrivacyBufferHeader[\s\S]*PRIVACY_BUFFER_HEADER_MAGIC[\s\S]*ptr::copy_nonoverlapping\(bytes\.as_ptr\(\),\s*payload,\s*len\)/,
+    "C bridge privacy outputs must use a length-recording private allocator",
+  );
+  assert.match(
+    sliceBetween(
+      connectBridge,
+      "unsafe fn clear_privacy_allocated_buffer",
+      "fn write_privacy_payload",
+      "C bridge privacy output zeroizer",
+    ),
+    /PRIVACY_BUFFER_HEADER_MAGIC[\s\S]*ptr::write_bytes\(ptr_,\s*0,\s*len\)[\s\S]*ptr::write_bytes\(header\.cast::<u8>\(\),\s*0,\s*PRIVACY_BUFFER_HEADER_BYTES\)/,
+    "C bridge privacy free path must zeroize payload and private allocation header",
+  );
+  assert.match(
+    connectBridge,
+    /pub\s+extern\s+"C"\s+fn\s+iroha_privacy_free_buffer\([^)]*\)\s*\{[\s\S]*clear_privacy_allocated_buffer\(ptr_\)[\s\S]*free\(base\s+as\s+\*mut\s+_\)/,
+    "C bridge privacy free function must release the zeroized private allocation base",
+  );
+  assert.match(
+    connectBridge,
+    /fn\s+privacy_allocated_buffers_zeroize_payload_and_header_before_free\(\)[\s\S]*clear_privacy_allocated_buffer\(out_ptr\)[\s\S]*zeroed_payload[\s\S]*zeroed_header/,
+    "C bridge privacy tests must prove payload and private header zeroization before free",
   );
   assert.match(
     sliceBetween(

@@ -96,10 +96,10 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
     def test_endpoint_urls_reject_secret_path_without_echo(self):
         cases = (
-            "https://torii.example.invalid/base/token=canary-url-secret",
-            "https://torii.example.invalid/base/token-canary-url-secret",
-            "https://torii.example.invalid/base/token%3Dcanary-url-secret",
-            "https://torii.example.invalid/base/token%253Dcanary-url-secret",
+            "https://torii.local-bank.bank/base/token=canary-url-secret",
+            "https://torii.local-bank.bank/base/token-canary-url-secret",
+            "https://torii.local-bank.bank/base/token%3Dcanary-url-secret",
+            "https://torii.local-bank.bank/base/token%253Dcanary-url-secret",
         )
         for url in cases:
             with self.subTest(url=url):
@@ -119,7 +119,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
     def test_endpoint_urls_reject_secret_host_and_parser_errors_without_echo(self):
         cases = (
             (
-                "https://token-canary-host-secret.torii.example.invalid/base",
+                "https://token-canary-host-secret.torii.local-bank.bank/base",
                 "secret-looking material",
             ),
             ("https://[token-canary-host-secret/base", "is not a valid URL"),
@@ -212,7 +212,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                         "environment": "ci",
                         "rail": {
                             "inbox_dir": "missing-inbox",
-                            "torii_base_url": "https://torii.example.invalid",
+                            "torii_base_url": "https://torii.local-bank.bank",
                         },
                     }
                     body[key] = secret_value
@@ -320,12 +320,12 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "preprod",
                     "rail": {
                         "inbox_dir": "missing-inbox",
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                         "bearer_token_file": "secrets/torii.bearer",
                     },
                     "notary": {
                         "export_dir": "missing-export",
-                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
                         "bearer_token_file": "secrets/notary.bearer",
                     },
                 },
@@ -445,7 +445,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "preprod",
                     "rail": {
                         "inbox_dir": "missing-inbox",
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                     },
                 },
             )
@@ -472,7 +472,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "preprod",
                     "rail": {
                         "inbox_dir": "missing-inbox",
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                     },
                 },
             )
@@ -523,7 +523,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "preprod",
                     "rail": {
                         "inbox_dir": "missing-inbox",
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                     },
                 },
             )
@@ -586,7 +586,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                             "environment": "preprod",
                             "rail": {
                                 "inbox_dir": "missing-inbox",
-                                "torii_base_url": "https://torii.example.invalid",
+                                "torii_base_url": "https://torii.local-bank.bank",
                             },
                         },
                     )
@@ -614,7 +614,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "preprod",
                     "rail": {
                         "inbox_dir": "missing-inbox",
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                     },
                 },
             )
@@ -644,7 +644,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "preprod",
                     "rail": {
                         "inbox_dir": "missing-inbox",
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                     },
                 },
             )
@@ -735,7 +735,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": str(inbox),
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                     },
                     "verify": {"enabled": False},
                 },
@@ -770,8 +770,18 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "stdout_preview contains secret-looking material",
             ),
             (
+                "stdout-identifier",
+                "sys.stdout.write('accepted token-canary-child-secret')",
+                "stdout_preview contains secret-looking material",
+            ),
+            (
                 "stderr",
                 "sys.stderr.write('Authorization: Bearer canary-child-secret')",
+                "stderr_preview contains secret-looking material",
+            ),
+            (
+                "stderr-identifier",
+                "sys.stderr.write('rejected cookie-canary-child-secret')",
                 "stderr_preview contains secret-looking material",
             ),
         ]
@@ -802,7 +812,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                             "environment": "ci",
                             "rail": {
                                 "inbox_dir": str(inbox),
-                                "torii_base_url": "https://torii.example.invalid",
+                                "torii_base_url": "https://torii.local-bank.bank",
                             },
                             "verify": {"enabled": False},
                         },
@@ -852,7 +862,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": str(inbox),
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                     },
                     "verify": {"enabled": False},
                 },
@@ -893,7 +903,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": str(inbox),
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                     },
                     "verify": {"enabled": False},
                 },
@@ -922,14 +932,14 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "environment": "ci",
                 "rail": {
                     "inbox_dir": "inbox",
-                    "torii_base_url": "https://torii.example.invalid",
+                    "torii_base_url": "https://torii.local-bank.bank",
                     "dry_run": False,
                     "allow_default_profile": False,
                     "allow_insecure_http": False,
                 },
                 "notary": {
                     "export_dir": "audit-export",
-                    "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                    "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
                     "all": False,
                     "dry_run": False,
                     "allow_insecure_http": False,
@@ -937,6 +947,8 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "verify": {
                     "enabled": True,
                     "include_stage_receipts": True,
+                    "receipt_dirs": [],
+                    "receipts": [],
                     "skip_on_stage_failure": True,
                     "allow_failed": False,
                     "allow_insecure_http": False,
@@ -972,6 +984,56 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(f"{section}.{key}", stderr)
 
+    def test_require_explicit_policy_rejects_omitted_lists(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            base = {
+                "provider": "local-bank",
+                "environment": "ci",
+                "rail": {
+                    "inbox_dir": "inbox",
+                    "torii_base_url": "https://torii.local-bank.bank",
+                    "dry_run": False,
+                    "allow_default_profile": False,
+                    "allow_insecure_http": False,
+                },
+                "notary": {
+                    "export_dir": "audit-export",
+                    "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
+                    "all": False,
+                    "dry_run": False,
+                    "allow_insecure_http": False,
+                },
+                "verify": {
+                    "enabled": True,
+                    "include_stage_receipts": True,
+                    "receipt_dirs": [],
+                    "receipts": [],
+                    "skip_on_stage_failure": True,
+                    "allow_failed": False,
+                    "allow_insecure_http": False,
+                    "allow_default_profile": False,
+                    "require_source_files": True,
+                },
+            }
+            cases = (
+                ("notary", "endpoints"),
+                ("verify", "receipt_dirs"),
+                ("verify", "receipts"),
+            )
+            for section, key in cases:
+                with self.subTest(section=section, key=key):
+                    body = json.loads(json.dumps(base))
+                    body[section].pop(key)
+                    config = write_config(root, body)
+
+                    rc, _stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only", "--require-explicit-policy"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(f"{section}.{key} must be explicitly recorded as an array", stderr)
+
     def test_unknown_config_key_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -1000,7 +1062,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     '"token=canary-duplicate-key-secret":2,'
                     '"environment":"ci",'
                     '"rail":{"inbox_dir":"inbox",'
-                    '"torii_base_url":"https://torii.example.invalid"}}\n'
+                    '"torii_base_url":"https://torii.local-bank.bank"}}\n'
                 ),
                 encoding="utf-8",
             )
@@ -1019,7 +1081,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 (
                     '{"provider":"local-bank","environment":"ci",'
                     '"rail":{"inbox_dir":"inbox",'
-                    '"torii_base_url":"https://torii.example.invalid",'
+                    '"torii_base_url":"https://torii.local-bank.bank",'
                     '"timeout_secs":Infinity}}\n'
                 ),
                 encoding="utf-8",
@@ -1038,7 +1100,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 (
                     '{"provider":"\\ud800","environment":"ci",'
                     '"rail":{"inbox_dir":"inbox",'
-                    '"torii_base_url":"https://torii.example.invalid"}}\n'
+                    '"torii_base_url":"https://torii.local-bank.bank"}}\n'
                 ),
                 encoding="utf-8",
             )
@@ -1059,7 +1121,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://user:pass@torii.example.invalid",
+                        "torii_base_url": "https://user:pass@torii.local-bank.bank",
                     },
                 },
                 "credentials",
@@ -1070,7 +1132,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid?token=abc",
+                        "torii_base_url": "https://torii.local-bank.bank?token=abc",
                     },
                 },
                 "params, query, or fragment",
@@ -1081,7 +1143,62 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/iso bridge",
+                        "torii_base_url": "https://torii.example",
+                    },
+                },
+                "reserved placeholder hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.com/base",
+                    },
+                },
+                "reserved placeholder hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.net/base",
+                    },
+                },
+                "reserved placeholder hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.org/base",
+                    },
+                },
+                "reserved placeholder hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.example.invalid/base",
+                    },
+                },
+                "reserved placeholder hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.local-bank.bank/iso bridge",
                     },
                 },
                 "must not contain whitespace",
@@ -1103,7 +1220,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid:abc",
+                        "torii_base_url": "https://torii.local-bank.bank:abc",
                     },
                 },
                 "invalid port",
@@ -1114,7 +1231,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid:",
+                        "torii_base_url": "https://torii.local-bank.bank:",
                     },
                 },
                 "empty port",
@@ -1125,7 +1242,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid:0",
+                        "torii_base_url": "https://torii.local-bank.bank:0",
                     },
                 },
                 "port must be positive",
@@ -1136,7 +1253,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid:08443",
+                        "torii_base_url": "https://torii.local-bank.bank:08443",
                     },
                 },
                 "port must not contain leading zeros",
@@ -1158,7 +1275,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid:443",
+                        "torii_base_url": "https://torii.local-bank.bank:443",
                     },
                 },
                 "default port",
@@ -1180,7 +1297,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid.",
+                        "torii_base_url": "https://torii.local-bank.bank.",
                     },
                 },
                 "host must not end with a dot",
@@ -1257,7 +1374,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://-torii.example.invalid",
+                        "torii_base_url": "https://-torii.local-bank.bank",
                     },
                 },
                 "host labels must not start or end with hyphen",
@@ -1301,7 +1418,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/../base",
+                        "torii_base_url": "https://torii.local-bank.bank/../base",
                     },
                 },
                 "path must not contain dot segments",
@@ -1312,7 +1429,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/base//v1",
+                        "torii_base_url": "https://torii.local-bank.bank/base//v1",
                     },
                 },
                 "path must not contain empty segments",
@@ -1323,7 +1440,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/base%2fv1",
+                        "torii_base_url": "https://torii.local-bank.bank/base%2fv1",
                     },
                 },
                 "path must not contain encoded dot or separator characters",
@@ -1334,7 +1451,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/base%252fv1",
+                        "torii_base_url": "https://torii.local-bank.bank/base%252fv1",
                     },
                 },
                 "path must not contain encoded percent characters",
@@ -1345,7 +1462,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/base%20v1",
+                        "torii_base_url": "https://torii.local-bank.bank/base%20v1",
                     },
                 },
                 "percent-encoded control or space characters",
@@ -1356,7 +1473,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/base%00v1",
+                        "torii_base_url": "https://torii.local-bank.bank/base%00v1",
                     },
                 },
                 "percent-encoded control or space characters",
@@ -1367,7 +1484,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/base%zzv1",
+                        "torii_base_url": "https://torii.local-bank.bank/base%zzv1",
                     },
                 },
                 "malformed percent escapes",
@@ -1378,7 +1495,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/base;debug/v1",
+                        "torii_base_url": "https://torii.local-bank.bank/base;debug/v1",
                     },
                 },
                 "path must not contain semicolon parameters",
@@ -1389,7 +1506,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/base%3bdebug/v1",
+                        "torii_base_url": "https://torii.local-bank.bank/base%3bdebug/v1",
                     },
                 },
                 "path must not contain encoded semicolon parameters",
@@ -1400,7 +1517,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid/base%3Fdebug/v1",
+                        "torii_base_url": "https://torii.local-bank.bank/base%3Fdebug/v1",
                     },
                 },
                 "path must not contain encoded URL delimiter characters",
@@ -1411,7 +1528,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso-anchor#frag"],
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor#frag"],
                     },
                 },
                 "params, query, or fragment",
@@ -1422,7 +1539,62 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso anchor"],
+                        "endpoints": ["https://notary.example/iso-anchor"],
+                    },
+                },
+                "reserved placeholder hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.com/iso-anchor"],
+                    },
+                },
+                "reserved placeholder hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.net/iso-anchor"],
+                    },
+                },
+                "reserved placeholder hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.org/iso-anchor"],
+                    },
+                },
+                "reserved placeholder hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                    },
+                },
+                "reserved placeholder hostnames",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": ["https://notary.local-bank.bank/iso anchor"],
                     },
                 },
                 "must not contain whitespace",
@@ -1444,7 +1616,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid:99999/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank:99999/iso-anchor"],
                     },
                 },
                 "invalid port",
@@ -1455,7 +1627,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid:/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank:/iso-anchor"],
                     },
                 },
                 "empty port",
@@ -1466,7 +1638,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid:0/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank:0/iso-anchor"],
                     },
                 },
                 "port must be positive",
@@ -1477,7 +1649,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid:08443/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank:08443/iso-anchor"],
                     },
                 },
                 "port must not contain leading zeros",
@@ -1499,7 +1671,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid:443/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank:443/iso-anchor"],
                     },
                 },
                 "default port",
@@ -1521,7 +1693,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid./iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank./iso-anchor"],
                     },
                 },
                 "host must not end with a dot",
@@ -1609,7 +1781,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/../iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/../iso-anchor"],
                     },
                 },
                 "path must not contain dot segments",
@@ -1620,7 +1792,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso//anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso//anchor"],
                     },
                 },
                 "path must not contain empty segments",
@@ -1631,7 +1803,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso%2fanchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso%2fanchor"],
                     },
                 },
                 "path must not contain encoded dot or separator characters",
@@ -1642,7 +1814,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso%252fanchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso%252fanchor"],
                     },
                 },
                 "path must not contain encoded percent characters",
@@ -1653,7 +1825,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso%3bdebug/anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso%3bdebug/anchor"],
                     },
                 },
                 "path must not contain encoded semicolon parameters",
@@ -1664,7 +1836,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso%40debug/anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso%40debug/anchor"],
                     },
                 },
                 "path must not contain encoded URL delimiter characters",
@@ -1675,7 +1847,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso%20anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso%20anchor"],
                     },
                 },
                 "percent-encoded control or space characters",
@@ -1686,7 +1858,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso%zzanchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso%zzanchor"],
                     },
                 },
                 "malformed percent escapes",
@@ -1697,7 +1869,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "notary": {
                         "export_dir": "export",
-                        "endpoints": [r"https://notary.example.invalid/iso\anchor"],
+                        "endpoints": [r"https://notary.local-bank.bank/iso\anchor"],
                     },
                 },
                 "path must use forward slashes",
@@ -1708,7 +1880,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "http://torii.example.invalid",
+                        "torii_base_url": "http://torii.local-bank.bank",
                     },
                 },
                 "must use HTTPS",
@@ -1725,10 +1897,56 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_template_endpoint_hosts_are_plan_only(self):
+        cases = (
+            (
+                "rail",
+                "https://torii.swift-cbpr-plus.operator-canary.bank/base",
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.swift-cbpr-plus.operator-canary.bank/base",
+                    },
+                },
+            ),
+            (
+                "notary",
+                "https://notary.swift-cbpr-plus.operator-canary.bank/anchor",
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "endpoints": [
+                            "https://notary.swift-cbpr-plus.operator-canary.bank/anchor"
+                        ],
+                    },
+                },
+            ),
+        )
+        for label, endpoint, body in cases:
+            with self.subTest(label=label):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    config = write_config(root, body)
+
+                    rc, stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+                    self.assertEqual(rc, 0, stderr)
+                    self.assertIn("planned_stages", stdout)
+
+                    rc, _stdout, stderr = run_canary(["--config", str(config)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("template canary hostnames", stderr)
+                    self.assertNotIn(endpoint, stderr)
+
     def test_rejected_runbook_url_does_not_echo_secret_query(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
-            secret_url = "https://torii.example.invalid?token=canary-url-secret"
+            secret_url = "https://torii.local-bank.bank?token=canary-url-secret"
             config = write_config(
                 root,
                 {
@@ -1758,8 +1976,8 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "notary": {
                         "export_dir": "export",
                         "endpoints": [
-                            "https://notary.example.invalid/iso-anchor",
-                            "https://notary.example.invalid/iso-anchor",
+                            "https://notary.local-bank.bank/iso-anchor",
+                            "https://notary.local-bank.bank/iso-anchor",
                         ],
                     },
                 },
@@ -1801,7 +2019,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                         "receipt_dir": "shared-receipts",
                     },
                     "notary": {
@@ -1824,10 +2042,10 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
-    def test_duplicate_runbook_paths_do_not_echo_secret_segments(self):
+    def test_duplicate_runbook_paths_do_not_echo_raw_segments(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
-            secret_receipt = "receipts/token=canary-duplicate-secret.receipt.json"
+            repeated_receipt = "receipts/private-corridor.receipt.json"
             config = write_config(
                 root,
                 {
@@ -1839,7 +2057,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     },
                     "verify": {
                         "include_stage_receipts": False,
-                        "receipts": [secret_receipt, secret_receipt],
+                        "receipts": [repeated_receipt, repeated_receipt],
                     },
                 },
             )
@@ -1848,8 +2066,84 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("verify.receipts[1] duplicates verify.receipts[0]", stderr)
-            self.assertNotIn("token=", stderr)
-            self.assertNotIn("canary-duplicate-secret", stderr)
+            self.assertNotIn(repeated_receipt, stderr)
+
+    def test_runbook_artifact_paths_reject_secret_material_without_echo(self):
+        base = {
+            "provider": "local-bank",
+            "environment": "ci",
+            "rail": {
+                "inbox_dir": "inbox",
+                "torii_base_url": "https://torii.local-bank.bank",
+            },
+        }
+        cases = (
+            (
+                "rail inbox",
+                lambda body: body["rail"].__setitem__(
+                    "inbox_dir",
+                    "token=canary-runbook-path-secret/inbox",
+                ),
+                "rail.inbox_dir must not contain secret-looking material",
+            ),
+            (
+                "rail message",
+                lambda body: body["rail"].__setitem__(
+                    "message",
+                    "messages/token-canary-runbook-path-secret.xml",
+                ),
+                "rail.message must not contain secret-looking material",
+            ),
+            (
+                "rail receipt dir",
+                lambda body: body["rail"].__setitem__(
+                    "receipt_dir",
+                    "receipts/token-canary-runbook-path-secret",
+                ),
+                "rail.receipt_dir must not contain secret-looking material",
+            ),
+            (
+                "notary export",
+                lambda body: body.__setitem__(
+                    "notary",
+                    {
+                        "export_dir": "token-canary-runbook-path-secret/export",
+                        "dry_run": True,
+                    },
+                ),
+                "notary.export_dir must not contain secret-looking material",
+            ),
+            (
+                "verify receipt dir",
+                lambda body: body.__setitem__(
+                    "verify",
+                    {"receipt_dirs": ["receipts/token-canary-runbook-path-secret"]},
+                ),
+                "verify.receipt_dirs[0] must not contain secret-looking material",
+            ),
+            (
+                "verify receipt",
+                lambda body: body.__setitem__(
+                    "verify",
+                    {"receipts": ["receipts/token-canary-runbook-path-secret.receipt.json"]},
+                ),
+                "verify.receipts[0] must not contain secret-looking material",
+            ),
+        )
+        for name, mutate, expected in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    body = copy.deepcopy(base)
+                    mutate(body)
+                    config = write_config(root, body)
+
+                    rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(expected, stderr)
+                    self.assertNotIn("token=", stderr)
+                    self.assertNotIn("canary-runbook-path-secret", stderr)
 
     def test_relative_paths_cannot_escape_runbook_directory(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1861,7 +2155,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "../outside",
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                     },
                 },
             )
@@ -1877,7 +2171,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             "environment": "ci",
             "rail": {
                 "inbox_dir": "inbox",
-                "torii_base_url": "https://torii.example.invalid",
+                "torii_base_url": "https://torii.local-bank.bank",
             },
         }
         cases = [
@@ -1915,7 +2209,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "notary",
                     {
                         "export_dir": "./export",
-                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
                     },
                 ),
                 "notary.export_dir must not contain dot or parent segments",
@@ -1926,7 +2220,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "notary",
                     {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
                         "receipt_dir": "export/../receipts",
                     },
                 ),
@@ -1972,7 +2266,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
-                        "torii_base_url": "https://torii.example.invalid",
+                        "torii_base_url": "https://torii.local-bank.bank",
                     },
                 },
             )
@@ -1988,7 +2282,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             "environment": "ci",
             "rail": {
                 "inbox_dir": "inbox",
-                "torii_base_url": "https://torii.example.invalid",
+                "torii_base_url": "https://torii.local-bank.bank",
             },
         }
         cases = [
@@ -2011,7 +2305,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "rail URL",
                 lambda body: body["rail"].__setitem__(
                     "torii_base_url",
-                    "https://torii.example.invalid ",
+                    "https://torii.local-bank.bank ",
                 ),
                 "rail.torii_base_url must not have surrounding whitespace",
             ),
@@ -2029,7 +2323,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "notary",
                     {
                         "export_dir": "export",
-                        "endpoints": [" https://notary.example.invalid/iso-anchor"],
+                        "endpoints": [" https://notary.local-bank.bank/iso-anchor"],
                     },
                 ),
                 "notary.endpoints[0] must not have surrounding whitespace",
@@ -2070,7 +2364,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             "environment": "ci",
             "rail": {
                 "inbox_dir": "inbox",
-                "torii_base_url": "https://torii.example.invalid",
+                "torii_base_url": "https://torii.local-bank.bank",
             },
         }
         cases = [
@@ -2110,7 +2404,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "notary",
                     {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
                         "receipt_dir": None,
                     },
                 ),
@@ -2122,7 +2416,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "notary",
                     {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
                         "bearer_token_file": None,
                     },
                 ),
@@ -2134,7 +2428,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "notary",
                     {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
                         "timeout_secs": None,
                     },
                 ),
@@ -2146,7 +2440,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     "notary",
                     {
                         "export_dir": "export",
-                        "endpoints": ["https://notary.example.invalid/iso-anchor"],
+                        "endpoints": ["https://notary.local-bank.bank/iso-anchor"],
                         "response_limit_bytes": None,
                     },
                 ),

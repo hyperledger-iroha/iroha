@@ -151,6 +151,12 @@ public final class PrivacyNativeBridgeTest {
     assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrame(0x50));
     assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrameWithPayload(0x51));
     assert PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrameWithPadding(0x50, 64));
+    final byte[] validProbeOutput = privacyNoritoFrameWithPayload(0x42);
+    assert PrivacyNativeBridge.returnsOutputProbe(0x42, () -> validProbeOutput);
+    assertAllZero(validProbeOutput);
+    final byte[] invalidProbeOutput = invalidPrivacyNoritoPayloadTamper();
+    assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> invalidProbeOutput);
+    assertAllZero(invalidProbeOutput);
     assert !PrivacyNativeBridge.returnsOutputProbe(0x50, () -> privacyNoritoFrame(0x50));
     assert PrivacyNativeBridge.returnsOutputProbe(0x42, () -> privacyNoritoFrameWithPayload(0x42));
     assert PrivacyNativeBridge.returnsOutputProbe(0x56, () -> privacyNoritoFrameWithPayload(0x56));
@@ -313,11 +319,13 @@ public final class PrivacyNativeBridgeTest {
                 "privacy capabilities"),
         "returned oversized output");
     final byte[] output = privacyNoritoFrameWithPayload(0x50);
+    final byte[] expectedOutput = privacyNoritoFrameWithPayload(0x50);
     final byte[] archive = PrivacyNativeBridge.requireNativeOutput(output, "privacy capabilities");
     assert archive != output;
-    assert Arrays.equals(output, archive);
+    assert Arrays.equals(expectedOutput, archive);
+    assertAllZero(output);
     archive[0] = 9;
-    assert output[0] == 'N';
+    assert expectedOutput[0] == 'N';
   }
 
   private static void rejectsInvalidNoritoNativeOutputs() {
@@ -493,17 +501,16 @@ public final class PrivacyNativeBridgeTest {
 
     assert archive != nativeOutput;
     assert Arrays.equals(archive, expectedOutput);
-
-    nativeOutput[6] = 0x7f;
-    assert Arrays.equals(archive, expectedOutput);
+    assertAllZero(nativeOutput);
 
     archive[0] = 0x7f;
-    assert nativeOutput[0] == 'N';
+    assert expectedOutput[0] == 'N';
   }
 
   private static void acceptsCompleteFieldBitsetNoritoFlags() {
     final byte[] requestArchive = privacyNoritoFrameWithFlags(0x52, 0x26);
     final byte[] nativeOutput = privacyNoritoFrameWithFlags(0x42, 0x26);
+    final byte[] expectedOutput = privacyNoritoFrameWithFlags(0x42, 0x26);
 
     final byte[] archive =
         PrivacyNativeBridge.call(
@@ -515,7 +522,8 @@ public final class PrivacyNativeBridgeTest {
             },
             true);
 
-    assert Arrays.equals(archive, nativeOutput);
+    assert Arrays.equals(archive, expectedOutput);
+    assertAllZero(nativeOutput);
   }
 
   private static void nativeExceptionsAreSanitizedBeforeExposingRequestBytes() {

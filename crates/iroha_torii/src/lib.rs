@@ -10083,15 +10083,7 @@ fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
 }
 
 fn is_stark_fri_v1_backend(backend: &str) -> bool {
-    if iroha_core::zk::is_trusted_setup_backend_label(backend)
-        || iroha_core::zk::is_developer_only_backend_label(backend)
-    {
-        return false;
-    }
-    backend == iroha_core::zk::ZK_BACKEND_STARK_FRI_V1
-        || backend
-            .strip_prefix("stark/fri/")
-            .is_some_and(|profile| !profile.is_empty())
+    iroha_data_model::zk::is_stark_fri_v1_backend_label(backend)
 }
 
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
@@ -59174,7 +59166,12 @@ mod tests {
     fn stark_fri_backend_labels_require_non_empty_profile() {
         assert!(is_stark_fri_v1_backend("stark/fri"));
         assert!(is_stark_fri_v1_backend("stark/fri/sha256-goldilocks"));
+        assert!(is_stark_fri_v1_backend("stark/fri/poseidon2-goldilocks"));
+        assert!(is_stark_fri_v1_backend("stark/fri/sha256_goldilocks.v1"));
         assert!(!is_stark_fri_v1_backend("stark/fri/"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/latest"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/random-profile"));
+        assert!(!is_stark_fri_v1_backend("stark/fri/sha512-goldilocks"));
         assert!(!is_stark_fri_v1_backend("stark/fri/kzg"));
         assert!(!is_stark_fri_v1_backend("stark/fri/bn254"));
         assert!(!is_stark_fri_v1_backend("stark/fri/debug"));

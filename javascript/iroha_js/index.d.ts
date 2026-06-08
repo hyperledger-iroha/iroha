@@ -7923,6 +7923,8 @@ export type PrivacyBackendTag =
   | "stark"
   | "stark/fri"
   | "stark/fri/sha256-goldilocks"
+  | "stark/fri/poseidon2-goldilocks"
+  | "stark/fri/sha256_goldilocks.v1"
   | "unsupported"
   | "halo2-ipa-orchard"
   | "groth16-bls12-377"
@@ -17447,6 +17449,8 @@ export const KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1: "checked_prefold_v
 export const KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION: 6;
 export const KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION: 7;
 export const KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1: "kagemusha-recursive-compact-v1";
+export const KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha payment-token multi-hop proving requires the append verifier batch";
+export const KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_UNAVAILABLE_FRAGMENT: "recursive compact Kagemusha multi-hop payment-token proving requires the append verifier batch";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND: "halo2/ipa";
 export const KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-aggregation-v1";
 export const KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1: "kagemusha-recursive-spend-lineage-v1";
@@ -17586,6 +17590,9 @@ export function isKagemushaCompactPaymentTokenNativeAvailable(): boolean;
 export function isKagemushaRecursiveAggregationProofBundleNativeAvailable(): boolean;
 export function isKagemushaRecursiveCompactPaymentTokenNativeAvailable(): boolean;
 export function isKagemushaRecursiveCompactPaymentTokenVerifierNativeAvailable(): boolean;
+export function isKagemushaRecursiveCompactUnavailable(error: unknown): boolean;
+export function isKagemushaRecursiveSpendCompactPaymentTokenProjectionNativeAvailable(): boolean;
+export function isKagemushaRecursiveSpendCompactPaymentTokenProjectionVerifierNativeAvailable(): boolean;
 export function kagemushaProveVerifiedCompactPaymentTokenWithRecords(
   recordBundleArchive: BinaryLike,
 ): Buffer;
@@ -17599,6 +17606,14 @@ export function kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAnd
 ): Buffer;
 export function kagemushaVerifyRecursiveCompactPaymentToken(
   compactTokenArchive: BinaryLike,
+): boolean;
+export function kagemushaRecursiveSpendCompactPaymentTokenFromBundle(
+  bundleArchive: BinaryLike,
+): Buffer;
+export function kagemushaVerifyRecursiveSpendCompactPaymentTokenProjection(
+  compactTokenArchive: BinaryLike,
+  verifierRecordArchive: BinaryLike,
+  blockHeight?: number | bigint | null,
 ): boolean;
 export function kagemushaRecursiveSpendInit(requestArchive: BinaryLike): Buffer;
 export function kagemushaRecursiveSpendAppend(

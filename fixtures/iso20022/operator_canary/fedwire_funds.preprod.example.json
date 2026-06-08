@@ -3,7 +3,7 @@
   "environment": "preprod",
   "rail": {
     "inbox_dir": "fedwire-funds/inbox",
-    "torii_base_url": "https://torii.fedwire-funds.example.invalid",
+    "torii_base_url": "https://torii.fedwire-funds.operator-canary.bank",
     "receipt_dir": "fedwire-funds/receipts/rail",
     "dry_run": false,
     "allow_default_profile": false,
@@ -15,7 +15,7 @@
   "notary": {
     "export_dir": "fedwire-funds/audit-export",
     "endpoints": [
-      "https://notary.fedwire-funds.example.invalid/iso-anchor"
+      "https://notary.fedwire-funds.operator-canary.bank/iso-anchor"
     ],
     "receipt_dir": "fedwire-funds/receipts/notary",
     "all": false,
@@ -27,6 +27,8 @@
   "verify": {
     "enabled": true,
     "include_stage_receipts": true,
+    "receipt_dirs": [],
+    "receipts": [],
     "skip_on_stage_failure": true,
     "allow_failed": false,
     "allow_insecure_http": false,

@@ -60,6 +60,21 @@ SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SOURCE_REPOSITORY_RE = re.compile(
     r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
 )
+PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS = {
+    "dummy",
+    "example",
+    "example-org",
+    "example-owner",
+    "example-repo",
+    "fake",
+    "placeholder",
+    "replace-before-production",
+    "sample",
+    "template",
+    "test",
+    "operator-canary",
+    "operator-canary-bank",
+}
 PROFILE_DIRECTIONS = {"inbound", "outbound", "follow-up"}
 PROFILE_RAILS = {
     "generic-iso20022",
@@ -186,6 +201,9 @@ BLOCKED_SCHEMA_RESTRICTION_MARKERS = {
     "no-public-distribution-right",
     "exclusive-swift-property",
 }
+BLOCKED_SCHEMA_DISTRIBUTION_RESTRICTION_MARKERS = (
+    BLOCKED_SCHEMA_RESTRICTION_MARKERS - {"swift-copyright-header"}
+)
 FIXTURE_KEYS = {
     "path",
     "message_def_id",
@@ -830,6 +848,11 @@ def _reject_secret_looking_material(value: str, label: str) -> None:
         raise FixtureManifestError(f"{label} must not contain secret-looking material")
 
 
+def _reject_secret_looking_path_material(value: str, label: str) -> None:
+    if _contains_secret_material(value) or _contains_secret_identifier_material(value):
+        raise FixtureManifestError(f"{label} must not contain secret-looking material")
+
+
 def _require_object(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise FixtureManifestError(f"{label} must be a JSON object")
@@ -1250,7 +1273,40 @@ def _validate_source_path(raw: str, label: str) -> str:
         raise FixtureManifestError(f"{label} must point to an .xsd file")
     if any(part in {"", ".", ".."} for part in path.parts):
         raise FixtureManifestError(f"{label} must not contain empty, dot, or parent segments")
-    _reject_secret_looking_material(raw, label)
+    _reject_secret_looking_path_material(raw, label)
+    return raw
+
+
+def _source_repository_component_is_placeholder(component: str) -> bool:
+    lowered = component.casefold()
+    if lowered in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS:
+        return True
+    if lowered.endswith(".example"):
+        return True
+    return any(
+        token in PLACEHOLDER_SOURCE_REPOSITORY_COMPONENTS
+        for token in re.split(r"[-_.]+", lowered)
+        if token
+    )
+
+
+def _validate_source_repository(raw: str, label: str) -> str:
+    if len(raw) > MAX_SOURCE_REPOSITORY_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_SOURCE_REPOSITORY_CHARS} characters"
+        )
+    if SOURCE_REPOSITORY_RE.fullmatch(raw) is None or raw.endswith(".git"):
+        raise FixtureManifestError(
+            f"{label} must be a canonical https://github.com/<org>/<repo> URL"
+        )
+    _reject_secret_looking_identifier(raw, label)
+    repository_parts = urllib.parse.urlparse(raw).path.strip("/").split("/")
+    if len(repository_parts) != 2:
+        raise FixtureManifestError(
+            f"{label} must be a canonical https://github.com/<org>/<repo> URL"
+        )
+    if any(_source_repository_component_is_placeholder(part) for part in repository_parts):
+        raise FixtureManifestError(f"{label} must not use placeholder repository coordinates")
     return raw
 
 
@@ -1263,16 +1319,10 @@ def _verify_schema_source(
 ) -> dict[str, str]:
     source = _require_object(value, label)
     _reject_unknown_keys(source, SCHEMA_SOURCE_KEYS, label)
-    repository = _required_string(source, "repository", label)
-    if len(repository) > MAX_SOURCE_REPOSITORY_CHARS:
-        raise FixtureManifestError(
-            f"{label}.repository must be no longer than "
-            f"{MAX_SOURCE_REPOSITORY_CHARS} characters"
-        )
-    if SOURCE_REPOSITORY_RE.fullmatch(repository) is None or repository.endswith(".git"):
-        raise FixtureManifestError(
-            f"{label}.repository must be a canonical https://github.com/<org>/<repo> URL"
-        )
+    repository = _validate_source_repository(
+        _required_string(source, "repository", label),
+        f"{label}.repository",
+    )
     commit = _required_string(source, "commit", label)
     if SOURCE_COMMIT_RE.fullmatch(commit) is None:
         raise FixtureManifestError(f"{label}.commit must be a lowercase 40-hex Git commit")
@@ -1312,22 +1362,16 @@ def _verify_blocked_schema_source(value: Any, label: str) -> dict[str, Any]:
     if len(reason) > 1024:
         raise FixtureManifestError(f"{label}.reason must be no longer than 1024 characters")
     _reject_secret_looking_material(reason, f"{label}.reason")
-    source = _require_object(entry.get("source"), f"{label}.source")
+    if "source" not in entry:
+        raise FixtureManifestError(f"{label}.source must be recorded")
+    source = _require_object(entry["source"], f"{label}.source")
     _reject_unknown_keys(
         source,
         BLOCKED_SCHEMA_SOURCE_PROVENANCE_KEYS,
         f"{label}.source",
     )
     repository = _required_string(source, "repository", f"{label}.source")
-    if len(repository) > MAX_SOURCE_REPOSITORY_CHARS:
-        raise FixtureManifestError(
-            f"{label}.source.repository must be no longer than "
-            f"{MAX_SOURCE_REPOSITORY_CHARS} characters"
-        )
-    if SOURCE_REPOSITORY_RE.fullmatch(repository) is None or repository.endswith(".git"):
-        raise FixtureManifestError(
-            f"{label}.source.repository must be a canonical https://github.com/<org>/<repo> URL"
-        )
+    repository = _validate_source_repository(repository, f"{label}.source.repository")
     commit = _required_string(source, "commit", f"{label}.source")
     if SOURCE_COMMIT_RE.fullmatch(commit) is None:
         raise FixtureManifestError(f"{label}.source.commit must be a lowercase 40-hex Git commit")
@@ -1366,6 +1410,12 @@ def _verify_blocked_schema_source(value: Any, label: str) -> dict[str, Any]:
             )
         seen_markers[raw_marker] = offset
         markers.append(raw_marker)
+    if not (
+        set(markers) & BLOCKED_SCHEMA_DISTRIBUTION_RESTRICTION_MARKERS
+    ):
+        raise FixtureManifestError(
+            f"{label}.restriction_markers must include a redistribution restriction marker"
+        )
 
     return {
         "message_def_id": message_def_id,
@@ -1596,7 +1646,7 @@ def _validate_relative_path(
     root = containment_root.resolve()
     if not resolved_parent.is_relative_to(root):
         raise FixtureManifestError(f"{label} must stay under {root}")
-    _reject_secret_looking_material(raw, label)
+    _reject_secret_looking_path_material(raw, label)
     return candidate
 
 
@@ -1632,8 +1682,10 @@ def verify_schema_entry(
     schema_bytes = _read_regular_file(path, max_bytes=MAX_SCHEMA_BYTES)
     _reject_restricted_schema_terms(schema_bytes, path)
     schema_sha256 = sha256_hex(schema_bytes)
+    if "source" not in entry:
+        raise FixtureManifestError(f"{label}.source must be recorded")
     source = _verify_schema_source(
-        entry.get("source"),
+        entry["source"],
         f"{label}.source",
         message_def_id=message_def_id,
         schema_sha256=schema_sha256,
@@ -1726,7 +1778,9 @@ def _validate_fixture_xml_schema(
     if returncode != 0:
         detail = (stderr or stdout).strip()
         if detail:
-            if _contains_secret_material(detail):
+            if _contains_secret_material(detail) or _contains_secret_identifier_material(
+                detail
+            ):
                 detail = ": [xmllint output redacted: secret-looking material]"
             else:
                 detail = ": " + detail[:4096]
@@ -2013,8 +2067,12 @@ def verify_manifest(path: Path, args: argparse.Namespace) -> dict[str, Any]:
 
     raw_schemas = _require_array(manifest.get("schemas"), f"{path}.schemas")
     raw_fixtures = _require_array(manifest.get("fixtures"), f"{path}.fixtures")
+    if "blocked_schema_sources" not in manifest:
+        raise FixtureManifestError(
+            f"{path}.blocked_schema_sources must be recorded as an array"
+        )
     raw_blocked_schema_sources = _require_array(
-        manifest.get("blocked_schema_sources", []),
+        manifest["blocked_schema_sources"],
         f"{path}.blocked_schema_sources",
     )
     schemas = [

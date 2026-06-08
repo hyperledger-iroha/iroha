@@ -151,6 +151,13 @@ impl BackendTag {
         )
     }
 
+    /// Return true for legacy supported tags that are preserved for decoding
+    /// compatibility, but are not admitted by production `OpenVerify` flows.
+    #[must_use]
+    pub const fn is_legacy_non_production_backend(self) -> bool {
+        matches!(self, BackendTag::Halo2Bn254 | BackendTag::Groth16)
+    }
+
     /// Parse a backend label from catalog, SDK, CLI, or Torii input into the
     /// closest explicit backend tag.
     ///
@@ -170,6 +177,18 @@ impl BackendTag {
             .collect::<String>();
 
         if label == "unsupported" || compact == "unsupported" {
+            return BackendTag::Unsupported;
+        }
+
+        if has_catalog_production_claim_fragment(&compact)
+            || has_catalog_developer_only_fragment(&label)
+        {
+            return BackendTag::Unsupported;
+        }
+        if has_catalog_trusted_setup_fragment(&label, &compact)
+            && !catalog_label_is_exact_trusted_setup_pending_family(&label, &compact)
+            && !catalog_label_is_exact_legacy_trusted_setup_family(&label)
+        {
             return BackendTag::Unsupported;
         }
 
@@ -226,6 +245,16 @@ impl BackendTag {
             return BackendTag::AztecPlonkishPrivateKernel;
         }
 
+        match label.as_str() {
+            "halo2-bn254" | "halo2/bn254" => return BackendTag::Halo2Bn254,
+            "groth16" | "groth16/bn254" => return BackendTag::Groth16,
+            _ => {}
+        }
+
+        if catalog_label_is_risky_supported_family_alias(&label, &compact) {
+            return BackendTag::Unsupported;
+        }
+
         if compact.contains("halo2") && compact.contains("bn254") {
             return BackendTag::Halo2Bn254;
         }
@@ -252,6 +281,145 @@ impl BackendTag {
     pub fn is_pending_production_backend_label(raw: &str) -> bool {
         Self::from_catalog_label(raw).is_pending_production_backend()
     }
+}
+
+fn catalog_label_is_risky_supported_family_alias(label: &str, compact: &str) -> bool {
+    has_catalog_production_claim_fragment(compact)
+        || has_catalog_trusted_setup_fragment(label, compact)
+        || has_catalog_developer_only_fragment(label)
+}
+
+fn catalog_label_is_exact_trusted_setup_pending_family(label: &str, compact: &str) -> bool {
+    matches!(
+        label,
+        "groth16-bls12-377"
+            | "groth16/bls12-377"
+            | "groth16-bls12-377-decaf377"
+            | "groth16/bls12-377/decaf377"
+            | "bls12-377"
+    ) || matches!(
+        compact,
+        "groth16bls12377" | "groth16bls12377decaf377" | "bls12377" | "decaf377"
+    )
+}
+
+fn catalog_label_is_exact_legacy_trusted_setup_family(label: &str) -> bool {
+    matches!(
+        label,
+        "halo2-bn254" | "halo2/bn254" | "groth16" | "groth16/bn254"
+    )
+}
+
+fn has_catalog_production_claim_fragment(compact: &str) -> bool {
+    [
+        "productionready",
+        "productionhardened",
+        "productionenabled",
+        "productionapproved",
+        "productioncertified",
+        "productionclaim",
+        "claimedproduction",
+        "mainnetready",
+        "mainnetcomplete",
+        "mainnetclaim",
+        "claimedmainnet",
+        "mainnetcertified",
+        "mainnetapproved",
+        "mainnetrelease",
+        "auditedproduction",
+        "externallyaudited",
+        "thirdpartyaudited",
+        "boiaudited",
+        "auditedmainnet",
+        "externalaudit",
+        "auditpassed",
+        "auditapproved",
+        "auditsignoff",
+        "auditclaim",
+        "claimedaudit",
+        "securityreviewpassed",
+        "securityauditpassed",
+        "securityaudited",
+        "externalsecurityreview",
+        "certifiedproduction",
+        "certifiedmainnet",
+        "releaseready",
+        "releaseapproved",
+        "releasecertified",
+    ]
+    .iter()
+    .any(|fragment| compact.contains(fragment))
+}
+
+fn has_catalog_trusted_setup_fragment(label: &str, compact: &str) -> bool {
+    label
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .any(|segment| {
+            matches!(
+                segment,
+                "groth16"
+                    | "kzg"
+                    | "bn254"
+                    | "bn256"
+                    | "bls12"
+                    | "srs"
+                    | "crs"
+                    | "ptau"
+                    | "ceremony"
+                    | "powersoftau"
+            )
+        })
+        || [
+            "groth16",
+            "kzg",
+            "bn254",
+            "bn256",
+            "bls12381",
+            "bls12",
+            "srs",
+            "crs",
+            "ptau",
+            "ceremony",
+            "trustedsetup",
+            "structuredreferencestring",
+            "universalsrs",
+            "powersoftau",
+        ]
+        .iter()
+        .any(|fragment| compact.contains(fragment))
+}
+
+fn has_catalog_developer_only_fragment(label: &str) -> bool {
+    let mut letter_run = String::new();
+    for token in label
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+    {
+        if ["debug", "mock", "fixture", "dev"]
+            .iter()
+            .any(|marker| token.contains(marker))
+            || ["test", "dummy", "fake", "stub", "sample", "placeholder"].contains(&token)
+        {
+            return true;
+        }
+        if token.len() == 1 {
+            letter_run.push_str(token);
+        } else {
+            if ["debug", "mock", "fixture", "dev"]
+                .iter()
+                .any(|marker| letter_run.contains(marker))
+                || ["test", "dummy", "fake", "stub", "sample", "placeholder"]
+                    .contains(&letter_run.as_str())
+            {
+                return true;
+            }
+            letter_run.clear();
+        }
+    }
+    ["debug", "mock", "fixture", "dev"]
+        .iter()
+        .any(|marker| letter_run.contains(marker))
+        || ["test", "dummy", "fake", "stub", "sample", "placeholder"].contains(&letter_run.as_str())
 }
 
 #[cfg(feature = "json")]
@@ -288,6 +456,9 @@ pub struct OpenVerifyEnvelopeBounds {
     /// Whether exact protocol-family backends that are cataloged but pending
     /// production engine/audit gates may pass this generic shape validation.
     pub allow_pending_production_backends: bool,
+    /// Whether legacy supported tags preserved for decode/catalog compatibility
+    /// may pass this generic shape validation.
+    pub allow_legacy_non_production_backends: bool,
 }
 
 impl Default for OpenVerifyEnvelopeBounds {
@@ -300,6 +471,7 @@ impl Default for OpenVerifyEnvelopeBounds {
             allow_aux: false,
             require_nonzero_vk_hash: true,
             allow_pending_production_backends: false,
+            allow_legacy_non_production_backends: false,
         }
     }
 }
@@ -307,7 +479,8 @@ impl Default for OpenVerifyEnvelopeBounds {
 /// Validation failure for a generic [`OpenVerifyEnvelope`] admission check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenVerifyEnvelopeValidationError {
-    /// The envelope uses the explicit unsupported backend marker.
+    /// The envelope uses the explicit unsupported backend marker or a backend
+    /// tag preserved only for non-production compatibility.
     UnsupportedBackend,
     /// The envelope uses a cataloged production backend whose engine/audit gate
     /// is not enabled for generic chain admission.
@@ -484,6 +657,11 @@ impl OpenVerifyEnvelope {
         bounds: OpenVerifyEnvelopeBounds,
     ) -> Result<(), OpenVerifyEnvelopeValidationError> {
         if self.backend == BackendTag::Unsupported {
+            return Err(OpenVerifyEnvelopeValidationError::UnsupportedBackend);
+        }
+        if self.backend.is_legacy_non_production_backend()
+            && !bounds.allow_legacy_non_production_backends
+        {
             return Err(OpenVerifyEnvelopeValidationError::UnsupportedBackend);
         }
         if self.backend.is_pending_production_backend() && !bounds.allow_pending_production_backends
@@ -1040,10 +1218,14 @@ mod tests {
             ("lattice-anonymous-credentials", BackendTag::SisWithHints),
             ("groth16-bls12-377", BackendTag::Groth16Bls12377),
             ("groth16/bls12-377", BackendTag::Groth16Bls12377),
+            ("groth16-bls12-377-decaf377", BackendTag::Groth16Bls12377),
+            ("bls12-377", BackendTag::Groth16Bls12377),
+            ("decaf377", BackendTag::Groth16Bls12377),
             ("penumbra-masp", BackendTag::Groth16Bls12377),
             ("halo2/ipa/penumbra", BackendTag::Groth16Bls12377),
             ("halo2/ipa/masp", BackendTag::Groth16Bls12377),
             ("monero-fcmp++", BackendTag::FcmpPlusPlusCurveTree),
+            ("fcmp++", BackendTag::FcmpPlusPlusCurveTree),
             (
                 "fcmp-plus-plus-curve-tree",
                 BackendTag::FcmpPlusPlusCurveTree,
@@ -1083,7 +1265,10 @@ mod tests {
             ("groth16", BackendTag::Groth16),
             ("groth16/bn254", BackendTag::Groth16),
             ("stark", BackendTag::Stark),
+            ("stark/fri", BackendTag::Stark),
             ("stark/fri/sha256-goldilocks", BackendTag::Stark),
+            ("stark/fri/poseidon2-goldilocks", BackendTag::Stark),
+            ("stark/fri/sha256_goldilocks.v1", BackendTag::Stark),
         ] {
             assert_eq!(
                 BackendTag::from_catalog_label(label),
@@ -1095,6 +1280,73 @@ mod tests {
             BackendTag::from_catalog_label("unknown/privacy/backend"),
             BackendTag::Unsupported
         );
+    }
+
+    #[test]
+    fn backend_tag_catalog_label_parser_rejects_adversarial_supported_family_aliases() {
+        for label in [
+            "halo2/ipa:kzg",
+            "halo2/ipa:KZG",
+            "halo2/ipa:bn254",
+            "halo2/ipa:groth16",
+            "halo2/ipa:trusted-setup",
+            "halo2/ipa:universal-srs",
+            "halo2/ipa:debug-proof",
+            "halo2/ipa:d-e-b-u-g-proof",
+            "halo2/ipa:mock-proof",
+            "halo2/ipa:m-o-c-k-proof",
+            "halo2/ipa:dev-fixture",
+            "halo2/ipa:d-e-v-f-i-x-t-u-r-e",
+            "halo2/ipa:placeholder",
+            "halo2/ipa:p-l-a-c-e-h-o-l-d-e-r",
+            "halo2/ipa:production-ready",
+            "halo2/ipa:release-ready",
+            "halo2/ipa:certified-mainnet",
+            "halo2/ipa:third-party-audited",
+            "halo2/ipa/orchard:production-ready",
+            "orchard:mainnet-ready",
+            "penumbra-masp:external-security-review",
+            "monero-fcmp++:third-party-audited",
+            "jindo-lattice-pcs-zk:release-ready",
+            "miden-stark:dev-fixture",
+            "aztec-private-kernel:mock-proof",
+            "anonymous-pgc:placeholder",
+            "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+            "halo2/ipa/orchard:kzg",
+            "orchard:universal-srs",
+            "penumbra-masp:kzg",
+            "monero-fcmp++:bn254",
+            "jindo-lattice-pcs-zk:trusted-setup",
+            "miden-stark:ptau",
+            "aztec-private-kernel:ceremony",
+            "anonymous-pgc:bls12-381",
+            "sis-with-hints:groth16",
+            "pq-masp-stark-fri:kzg",
+            "stark/fri/prod-kzg",
+            "stark/fri/prod-bn-254",
+            "stark/fri/prod-groth-16",
+            "stark/fri/prod-srs",
+            "stark/fri/prod-powers-of-tau",
+            "stark/fri/dev-fixture",
+            "stark/fri/d-e-v-f-i-x-t-u-r-e",
+            "stark/fri/placeholder",
+            "stark/fri/p-l-a-c-e-h-o-l-d-e-r",
+            "stark/fri/production-ready",
+            "stark/fri/release-approved",
+            "stark/fri/boi-audited",
+            "stark/fri/external-security-review",
+            "stark/fri/s-e-c-u-r-i-t-y-a-u-d-i-t-e-d",
+        ] {
+            assert_eq!(
+                BackendTag::from_catalog_label(label),
+                BackendTag::Unsupported,
+                "{label} must not collapse into a supported backend tag",
+            );
+            assert!(
+                !BackendTag::is_pending_production_backend_label(label),
+                "{label} is an unsupported alias, not an exact pending-production protocol tag",
+            );
+        }
     }
 
     #[test]
@@ -1238,6 +1490,66 @@ mod tests {
                 })
                 .unwrap_err();
             assert_eq!(err, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn open_verify_envelope_admission_rejects_adversarial_backend_aliases_after_parsing() {
+        use OpenVerifyEnvelopeValidationError::UnsupportedBackend;
+
+        for label in [
+            "halo2/ipa:kzg",
+            "halo2/ipa:mock-proof",
+            "halo2/ipa:release-ready",
+            "stark/fri/prod-groth-16",
+            "stark/fri/boi-audited",
+            "stark/fri/dev-fixture",
+        ] {
+            let mut envelope = valid_open_verify_admission_envelope();
+            envelope.backend = BackendTag::from_catalog_label(label);
+
+            assert_eq!(
+                envelope.validate_for_admission().unwrap_err(),
+                UnsupportedBackend,
+                "{label} must remain fail-closed after label parsing",
+            );
+        }
+    }
+
+    #[test]
+    fn open_verify_envelope_admission_rejects_legacy_non_production_backends() {
+        use OpenVerifyEnvelopeValidationError::UnsupportedBackend;
+
+        for (label, backend) in [
+            ("halo2-bn254", BackendTag::Halo2Bn254),
+            ("halo2/bn254", BackendTag::Halo2Bn254),
+            ("groth16", BackendTag::Groth16),
+            ("groth16/bn254", BackendTag::Groth16),
+        ] {
+            assert!(
+                backend.is_legacy_non_production_backend(),
+                "{label} must be categorized as a non-production compatibility tag",
+            );
+
+            let mut envelope = valid_open_verify_admission_envelope();
+            envelope.backend = BackendTag::from_catalog_label(label);
+
+            assert_eq!(
+                envelope.backend, backend,
+                "{label} must still parse to the legacy compatibility tag",
+            );
+            assert_eq!(
+                envelope.validate_for_admission().unwrap_err(),
+                UnsupportedBackend,
+                "{label} must not pass default chain admission",
+            );
+
+            envelope
+                .validate_with_bounds(OpenVerifyEnvelopeBounds {
+                    allow_legacy_non_production_backends: true,
+                    ..OpenVerifyEnvelopeBounds::default()
+                })
+                .expect("explicit non-admission bounds can inspect legacy backend envelopes");
         }
     }
 

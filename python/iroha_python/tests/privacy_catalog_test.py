@@ -1453,11 +1453,21 @@ def test_privacy_catalog_loader_rejects_verifier_key_production_claims(
         privacy_catalog._load_descriptors()
 
 
+@pytest.mark.parametrize(
+    "backend_family",
+    [
+        "stark-fri-mainnet-ready",
+        "stark-fri-release-approved",
+        "halo2-ipa-certified-mainnet",
+        "stark-fri-boi-audited",
+        "stark-fri-external-security-review",
+    ],
+)
 def test_privacy_catalog_loader_rejects_backend_family_production_claims(
-    monkeypatch,
+    monkeypatch, backend_family
 ) -> None:
     patched_backend_families = dict(privacy_catalog.BACKEND_FAMILY_BY_ALGORITHM_ID)
-    patched_backend_families["shield"] = "stark-fri-mainnet-ready"
+    patched_backend_families["shield"] = backend_family
     monkeypatch.setattr(
         privacy_catalog,
         "BACKEND_FAMILY_BY_ALGORITHM_ID",

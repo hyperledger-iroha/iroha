@@ -2575,7 +2575,9 @@ fn apply_localnet_ivm_gas_limit_override(parameters: &mut Parameters) {
     let gas_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
     let gas_param = CustomParameter::new(gas_param_id, Json::new(LOCALNET_IVM_GAS_LIMIT_PER_BLOCK));
     parameters.set_parameter(Parameter::Custom(gas_param));
+}
 
+fn apply_localnet_ivm_gas_fee_overrides(parameters: &mut Parameters) {
     let fee_asset_id = localnet_fee_asset_literal();
     let accepted_assets = CustomParameter::new(
         localnet_custom_parameter_id("ivm_gas_accepted_assets"),
@@ -2670,12 +2672,26 @@ fn apply_parameter_overrides(
     let mut parameters = previous_parameters.clone();
     let fee_asset_id = localnet_fee_asset_literal();
     let gas_limit_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
-    let accepted_assets_param_id = localnet_custom_parameter_id("ivm_gas_accepted_assets");
-    let units_per_gas_param_id = localnet_custom_parameter_id("ivm_gas_units_per_gas");
-    let accepted_assets_payload = Json::new(vec![fee_asset_id.clone()]);
-    let units_per_gas_payload = localnet_ivm_gas_units_per_gas_payload(&fee_asset_id);
     let block_max_transactions =
         NonZeroU64::new(block_max_transactions).expect("block_max_transactions must be non-zero");
+    let gas_fee_params_need_update = if include_npos {
+        let accepted_assets_param_id = localnet_custom_parameter_id("ivm_gas_accepted_assets");
+        let units_per_gas_param_id = localnet_custom_parameter_id("ivm_gas_units_per_gas");
+        let accepted_assets_payload = Json::new(vec![fee_asset_id.clone()]);
+        let units_per_gas_payload = localnet_ivm_gas_units_per_gas_payload(&fee_asset_id);
+        parameters
+            .custom()
+            .get(&accepted_assets_param_id)
+            .map(CustomParameter::payload)
+            != Some(&accepted_assets_payload)
+            || parameters
+                .custom()
+                .get(&units_per_gas_param_id)
+                .map(CustomParameter::payload)
+                != Some(&units_per_gas_payload)
+    } else {
+        false
+    };
     let should_update = block_time_ms.is_some()
         || commit_time_ms.is_some()
         || redundant_send_r.is_some()
@@ -2686,16 +2702,7 @@ fn apply_parameter_overrides(
             .get(&gas_limit_param_id)
             .and_then(|custom| custom.payload().try_into_any_norito::<u64>().ok())
             != Some(LOCALNET_IVM_GAS_LIMIT_PER_BLOCK)
-        || parameters
-            .custom()
-            .get(&accepted_assets_param_id)
-            .map(CustomParameter::payload)
-            != Some(&accepted_assets_payload)
-        || parameters
-            .custom()
-            .get(&units_per_gas_param_id)
-            .map(CustomParameter::payload)
-            != Some(&units_per_gas_payload)
+        || gas_fee_params_need_update
         || parameters.block.max_transactions != block_max_transactions;
     if !should_update {
         return genesis;
@@ -2718,6 +2725,9 @@ fn apply_parameter_overrides(
         apply_localnet_npos_overrides(&mut parameters, redundant_send_r, collectors_k);
     }
     apply_localnet_ivm_gas_limit_override(&mut parameters);
+    if include_npos {
+        apply_localnet_ivm_gas_fee_overrides(&mut parameters);
+    }
 
     let mut builder = genesis.into_builder();
     let mut pending_parameters = ordered_localnet_parameters(&previous_parameters, &parameters);
@@ -5759,6 +5769,56 @@ mod tests {
                 .zk_policy_hash,
             Some(expected_zk_policy_hash),
             "signed genesis should embed the same ZK policy hash as peer configs",
+        );
+    }
+
+    #[test]
+    fn permissioned_localnet_pins_gas_limit_without_enabling_gas_fees() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(2).expect("non-zero"),
+            seed: Some("permissioned-gas-metering-only".to_owned()),
+            bind_host: DEFAULT_BIND_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 28080,
+            base_p2p_port: 28337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: Some(1_000),
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
+        let params = genesis_parameters(&manifest);
+        let gas_limit: u64 = params
+            .custom()
+            .get(&localnet_custom_parameter_id("ivm_gas_limit_per_block"))
+            .expect("permissioned localnet should pin the IVM gas limit")
+            .payload()
+            .try_into_any_norito()
+            .expect("gas limit payload should decode");
+        assert_eq!(gas_limit, LOCALNET_IVM_GAS_LIMIT_PER_BLOCK);
+        assert!(
+            !params
+                .custom()
+                .contains_key(&localnet_custom_parameter_id("ivm_gas_accepted_assets")),
+            "permissioned localnet must not enable gas fee assets without bootstrapping XOR"
+        );
+        assert!(
+            !params
+                .custom()
+                .contains_key(&localnet_custom_parameter_id("ivm_gas_units_per_gas")),
+            "permissioned localnet must not override peer gas rates to a charging value"
         );
     }
 

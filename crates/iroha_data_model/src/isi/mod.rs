@@ -857,6 +857,26 @@ impl From<crate::isi::escrow::ResolveEscrowDispute> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::escrow::OpenAssetLock> for InstructionBox {
+    fn from(i: crate::isi::escrow::OpenAssetLock) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::DrawdownAssetLock> for InstructionBox {
+    fn from(i: crate::isi::escrow::DrawdownAssetLock) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::CancelAssetLock> for InstructionBox {
+    fn from(i: crate::isi::escrow::CancelAssetLock) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::escrow::ExpireAssetLock> for InstructionBox {
+    fn from(i: crate::isi::escrow::ExpireAssetLock) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::escrow::OpenAnonymousAssetEscrow> for InstructionBox {
     fn from(i: crate::isi::escrow::OpenAnonymousAssetEscrow) -> Self {
         InstructionBox(Box::new(i))
@@ -3789,10 +3809,11 @@ pub mod prelude {
         },
         escrow::{
             AcceptAnonymousAssetEscrow, AcceptAssetEscrow, CancelAnonymousAssetEscrow,
-            CancelAssetEscrow, MarkAnonymousEscrowPaymentSent, MarkEscrowPaymentSent,
-            OpenAnonymousAssetEscrow, OpenAnonymousEscrowDispute, OpenAssetEscrow,
-            OpenEscrowDispute, ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow,
-            ResolveAnonymousEscrowDispute, ResolveEscrowDispute,
+            CancelAssetEscrow, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
+            MarkAnonymousEscrowPaymentSent, MarkEscrowPaymentSent, OpenAnonymousAssetEscrow,
+            OpenAnonymousEscrowDispute, OpenAssetEscrow, OpenAssetLock, OpenEscrowDispute,
+            ReleaseAnonymousAssetEscrow, ReleaseAssetEscrow, ResolveAnonymousEscrowDispute,
+            ResolveEscrowDispute,
         },
         identifier::{
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,

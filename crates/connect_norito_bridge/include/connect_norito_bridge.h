@@ -205,6 +205,37 @@ int32_t connect_norito_kagemusha_verify_recursive_compact_payment_token(
     unsigned long compact_token_norito_len,
     uint8_t* out_valid);
 
+// Verify a projected recursive spend compact Kagemusha token against a lineage verifier record.
+// Input 1: Norito-archive bytes of `KagemushaCompactPaymentToken`.
+// Input 2: Norito-archive bytes of `VerifyingKeyRecord`.
+// Malformed archives, non-lineage circuit ids, inactive/windowed records without
+// a height, and malformed token bindings return ERR_KAGEMUSHA_PROVE.
+// Output: `*out_valid = 1` only when the projected token verifies.
+int32_t connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection(
+    const uint8_t* compact_token_norito_ptr,
+    unsigned long compact_token_norito_len,
+    const uint8_t* verifier_record_norito_ptr,
+    unsigned long verifier_record_norito_len,
+    uint8_t* out_valid);
+
+// Verify a projected recursive spend compact Kagemusha token at `block_height`.
+int32_t connect_norito_kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height(
+    const uint8_t* compact_token_norito_ptr,
+    unsigned long compact_token_norito_len,
+    const uint8_t* verifier_record_norito_ptr,
+    unsigned long verifier_record_norito_len,
+    uint64_t block_height,
+    uint8_t* out_valid);
+
+// Project a recursive spend bundle into an ABI 7 recursive compact Kagemusha token.
+// Input: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
+// Output: Norito-archive bytes of `KagemushaCompactPaymentToken`.
+int32_t connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle(
+    const uint8_t* bundle_norito_ptr,
+    unsigned long bundle_norito_len,
+    uint8_t** out_compact_token_ptr,
+    unsigned long* out_compact_token_len);
+
 // Initialize production recursive Kagemusha spendable offline cash.
 // Input: Norito-archive bytes of `KagemushaRecursiveSpendInitRequestV1`.
 // Output: Norito-archive bytes of `KagemushaRecursiveSpendBundleV1`.
@@ -303,7 +334,8 @@ void connect_norito_free(uint8_t* ptr);
 
 // ---------------- Privacy proof native FFI ----------------
 // Output buffers are Norito V1 archives allocated by the bridge and must be
-// released with `iroha_privacy_free_buffer`.
+// released with `iroha_privacy_free_buffer`, which zeroizes privacy output
+// memory before release.
 int32_t iroha_privacy_capabilities_v1(
     uint8_t** out_ptr,
     unsigned long* out_len);
