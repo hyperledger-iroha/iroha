@@ -58,6 +58,8 @@ object OfflineNote {
         "iroha_data_model::offline::model::OfflineNoteIssuedClaim"
     private const val AUDIT_OUTPUT_CLAIM_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteAuditOutputClaim"
+    private const val RECURSIVE_PROOF_SCHEMA =
+        "iroha_data_model::offline::model::OfflineNoteRecursiveProof"
     private const val REDEEM_SCHEMA = "iroha_data_model::offline::model::OfflineNoteRedeem"
     private const val REDEEM_PUBLIC_INPUTS_SCHEMA =
         "iroha_data_model::offline::model::OfflineNoteRedeemPublicInputs"
@@ -137,6 +139,10 @@ object OfflineNote {
     @JvmStatic
     fun decodeIssuedClaim(bytes: ByteArray): IssuedClaim =
         decodeWithHeader(bytes, ISSUED_CLAIM_SCHEMA, IssuedClaimAdapter)
+
+    @JvmStatic
+    fun decodeRecursiveProof(bytes: ByteArray): RecursiveProof =
+        decodeWithHeader(bytes, RECURSIVE_PROOF_SCHEMA, RecursiveProofAdapter)
 
     @JvmStatic
     fun decodeRedeem(bytes: ByteArray): Redeem =

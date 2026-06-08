@@ -66,6 +66,8 @@ public final class OfflineNote {
       "iroha_data_model::offline::model::OfflineNoteIssue";
   private static final String ISSUED_CLAIM_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteIssuedClaim";
+  private static final String RECURSIVE_PROOF_SCHEMA =
+      "iroha_data_model::offline::model::OfflineNoteRecursiveProof";
   private static final String REDEEM_SCHEMA =
       "iroha_data_model::offline::model::OfflineNoteRedeem";
   private static final String REDEEM_PUBLIC_INPUTS_SCHEMA =
@@ -150,6 +152,10 @@ public final class OfflineNote {
 
   public static IssuedClaim decodeIssuedClaim(final byte[] bytes) {
     return decodeWithHeader(bytes, ISSUED_CLAIM_SCHEMA, ISSUED_CLAIM_ADAPTER);
+  }
+
+  public static RecursiveProof decodeRecursiveProof(final byte[] bytes) {
+    return decodeWithHeader(bytes, RECURSIVE_PROOF_SCHEMA, RECURSIVE_PROOF_ADAPTER);
   }
 
   public static Redeem decodeRedeem(final byte[] bytes) {
