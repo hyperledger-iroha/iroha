@@ -423,8 +423,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+FetchPendingResponsesBatchMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast ==
+  FetchPendingResponsesBatchMatchesSpec
 
 EmptyPeerMapReturns ==
   Matches("empty_peers")
@@ -472,7 +475,9 @@ HintlessBranchReturns ==
   Matches("hintless_allowed_peer")
 
 HintlessAllowArgForwarded ==
-  Matches("hintless_allowed_peer")
+  /\ Bug # "hintless_drops_allow_arg"
+  /\ ActualPayloadAllowHintlessArg("hintless_allowed_peer", "a")
+  /\ Matches("hintless_allowed_peer")
 
 RequesterRosterArgForwarded ==
   Matches("hintless_allowed_peer")
@@ -504,5 +509,4 @@ NonHintlessAllowArgForwarded ==
 ConsensusPriorityForwarded ==
   Matches("consensus_payload_companion")
 
-=============================================================================
 ====

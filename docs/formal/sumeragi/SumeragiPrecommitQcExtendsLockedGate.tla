@@ -211,11 +211,13 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+PrecommitQcExtendsLockedCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == PrecommitQcExtendsLockedCoreSafety
+
+SafetyFast == PrecommitQcExtendsLockedCoreSafety
 
 BugRejectNonCommitPhase == NoBugInvariant
 BugRejectNoLock == NoBugInvariant

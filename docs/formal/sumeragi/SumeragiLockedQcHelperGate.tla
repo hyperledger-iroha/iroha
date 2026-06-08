@@ -250,11 +250,13 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+LockedQcHelperCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == LockedQcHelperCoreSafety
+
+SafetyFast == LockedQcHelperCoreSafety
 
 BugEnsureAllowsNoLockRejected == NoBugInvariant
 BugEnsureMissesHeightRegression == NoBugInvariant

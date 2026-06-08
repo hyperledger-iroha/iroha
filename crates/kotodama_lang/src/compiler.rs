@@ -7580,14 +7580,14 @@ seiyaku Test {{
             Op::ReadCommittedState,
             Payload::ReadCommittedState(SoracloudReadCommittedStateRequestV1 {
                 binding_name: name("wallet"),
-                state_key: "accounts/alice".to_owned(),
+                state_key: "/accounts/alice".to_owned(),
             }),
         );
         let write_state = request_hex(
             Op::EmitStateMutation,
             Payload::EmitStateMutation(SoracloudEmitStateMutationRequestV1 {
                 binding_name: name("wallet"),
-                state_key: "accounts/alice".to_owned(),
+                state_key: "/accounts/alice".to_owned(),
                 operation: SoraStateMutationOperationV1::Upsert,
                 encryption: SoraStateEncryptionV1::Plaintext,
                 payload_bytes: Some(3),
@@ -7608,14 +7608,14 @@ seiyaku Test {{
         let journal = request_hex(
             Op::AppendJournal,
             Payload::AppendJournal(SoracloudAppendJournalRequestV1 {
-                artifact_path: "journals/run-7.json".to_owned(),
+                artifact_path: "/journals/run-7.json".to_owned(),
                 payload_bytes: vec![6],
             }),
         );
         let checkpoint = request_hex(
             Op::PublishCheckpoint,
             Payload::PublishCheckpoint(SoracloudPublishCheckpointRequestV1 {
-                artifact_path: "checkpoints/run-7.bin".to_owned(),
+                artifact_path: "/checkpoints/run-7.bin".to_owned(),
                 payload_bytes: vec![7],
             }),
         );
@@ -17571,14 +17571,16 @@ fn record_soracloud_request_access(
             ));
         }
         (Op::AppendJournal, Payload::AppendJournal(payload)) => {
-            access_set
-                .writes
-                .insert(format!("soracloud:journal:{}", payload.artifact_path));
+            access_set.writes.insert(format!(
+                "soracloud:journal:{}",
+                soracloud_host_path_key_segment(&payload.artifact_path)
+            ));
         }
         (Op::PublishCheckpoint, Payload::PublishCheckpoint(payload)) => {
-            access_set
-                .writes
-                .insert(format!("soracloud:checkpoint:{}", payload.artifact_path));
+            access_set.writes.insert(format!(
+                "soracloud:checkpoint:{}",
+                soracloud_host_path_key_segment(&payload.artifact_path)
+            ));
         }
         (Op::ReadConfig, Payload::ReadConfig(payload)) => {
             access_set
@@ -17609,6 +17611,10 @@ fn record_soracloud_request_access(
         _ => return None,
     }
     Some(())
+}
+
+fn soracloud_host_path_key_segment(path: &str) -> &str {
+    path.strip_prefix('/').unwrap_or(path)
 }
 
 fn soracloud_operation_for_syscall(
@@ -18898,12 +18904,17 @@ fn add_subscription_context_rw(set: &mut AccessSets, kind: &str) {
 }
 
 fn add_soracloud_state_r(set: &mut AccessSets, binding: &Name, state_key: &str) {
-    set.reads
-        .insert(format!("soracloud:state:{binding}:{state_key}"));
+    set.reads.insert(format!(
+        "soracloud:state:{binding}:{}",
+        soracloud_host_path_key_segment(state_key)
+    ));
 }
 
 fn add_soracloud_state_rw(set: &mut AccessSets, binding: &Name, state_key: &str) {
-    let key = format!("soracloud:state:{binding}:{state_key}");
+    let key = format!(
+        "soracloud:state:{binding}:{}",
+        soracloud_host_path_key_segment(state_key)
+    );
     set.reads.insert(key.clone());
     set.writes.insert(key);
 }

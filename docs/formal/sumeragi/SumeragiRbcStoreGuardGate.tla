@@ -384,7 +384,7 @@ TypeInvariant ==
      }
   /\ checked \in 0..58
 
-SafetyFast ==
+RbcStoreGuardMatchesSpec ==
   /\ \A c \in ManifestCases:
        ActualManifestMatches(c) = SpecManifestMatches(c)
   /\ \A c \in LoadCases:
@@ -401,6 +401,9 @@ SafetyFast ==
        ActualTempPath(c) = SpecTempPath(c)
   /\ \A c \in FileCases:
        ActualFileClass(c) = SpecFileClass(c)
+
+SafetyFast ==
+  RbcStoreGuardMatchesSpec
 
 AllManifestMatches ==
   \A c \in ManifestCases:

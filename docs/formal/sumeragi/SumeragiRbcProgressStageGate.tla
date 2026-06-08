@@ -369,7 +369,7 @@ TypeInvariant ==
        /\ ImplementationRosterStage(c) \in Stages
        /\ ImplementationRosterProgressed(c) \in BOOLEAN
 
-SafetyFast ==
+RbcProgressStageMatchesSpec ==
   /\ \A c \in AdvanceCases:
        /\ ImplementationAdvanceStage(c) = SpecAdvanceStage(c)
        /\ ImplementationAdvanceProgressed(c) = SpecAdvanceProgressed(c)
@@ -380,6 +380,9 @@ SafetyFast ==
        /\ ImplementationRosterQuorumComputed(c) = SpecRosterQuorumComputed(c)
        /\ ImplementationRosterStage(c) = SpecRosterStage(c)
        /\ ImplementationRosterProgressed(c) = SpecRosterProgressed(c)
+
+SafetyFast ==
+  RbcProgressStageMatchesSpec
 
 AllAdvanceCasesMatchSpec ==
   \A c \in AdvanceCases:

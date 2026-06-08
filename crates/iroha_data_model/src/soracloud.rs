@@ -104,6 +104,9 @@ pub const SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
     br#"{"schema":"soracloud_fhe_input_admission_v1","public_inputs":["statement_hash"],"statement_layout":"((service_name,binding_name,key,operation,value_size_bytes,payload_commitment,encryption,governance_tx_hash),(bfv_parameter_digest,bfv_rns_modulus_chain_digest,bfv_key_switch_decomposition_chain_digest),residual_multiple_bound,bound_mode)"}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV input-admission proofs.
 pub const SORACLOUD_FHE_INPUT_ADMISSION_CIRCUIT_ID_V1: &str = "soracloud_fhe_input_admission_v1";
+/// Canonical gas schedule id for Soracloud BFV input-admission proofs.
+pub const SORACLOUD_FHE_INPUT_ADMISSION_GAS_SCHEDULE_ID_V1: &str =
+    "stark_fri_soracloud_input_admission_v1";
 /// Public-input schema for Soracloud BFV bootstrap-key zero-refresh proofs.
 pub const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
     br#"{"schema":"soracloud_fhe_bootstrap_key_zero_refresh_v1","public_inputs":["statement_hash"],"statement_layout":"bootstrap_key_transcript_zero_refresh_proof_statement_digest"}"#;
@@ -128,7 +131,7 @@ pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1: &str =
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_execution_proof_statement_digest(params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound))"}"#;
+    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_execution_proof_statement_digest(params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound,execution_witness_digest))","execution_witness_layout":{"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_witness_digest.v1","material_version":1,"material_field_count":14,"trace_field_count":7,"trace_bounds_field_count":6,"binds_trace":true,"binds_trace_bounds":true}}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1: &str =
     BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
@@ -1377,6 +1380,8 @@ impl SoraContainerManifestV1 {
             });
         }
 
+        validate_soracloud_digest_hash("sora container manifest", "bundle_hash", self.bundle_hash)?;
+
         if self.bundle_path.trim().is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "sora container manifest",
@@ -2277,6 +2282,8 @@ impl SoraArtifactRefV1 {
     /// Returns [`SoracloudManifestError`] when path fields are empty or contain
     /// control characters.
     pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_digest_hash("sora artifact ref", "artifact_hash", self.artifact_hash)?;
+
         if self.artifact_path.trim().is_empty() {
             return Err(SoracloudManifestError::EmptyField {
                 manifest: "sora artifact ref",
@@ -2492,6 +2499,12 @@ impl SoraServiceManifestV1 {
                 field: "service_version",
             });
         }
+
+        validate_soracloud_digest_hash(
+            "sora service manifest",
+            "container.manifest_hash",
+            self.container.manifest_hash,
+        )?;
 
         if self.container.expected_schema_version != SORA_CONTAINER_MANIFEST_VERSION_V1 {
             return Err(SoracloudManifestError::InvalidField {
@@ -2761,6 +2774,12 @@ pub struct AgentApartmentManifestV1 {
 }
 
 impl AgentApartmentManifestV1 {
+    /// Compute the canonical hash of the apartment manifest.
+    #[must_use]
+    pub fn manifest_hash(&self) -> Hash {
+        Hash::new(Encode::encode(self))
+    }
+
     /// Validate schema version and deterministic policy constraints.
     ///
     /// # Errors
@@ -2775,6 +2794,12 @@ impl AgentApartmentManifestV1 {
                 found: self.schema_version,
             });
         }
+
+        validate_soracloud_digest_hash(
+            "agent apartment manifest",
+            "container.manifest_hash",
+            self.container.manifest_hash,
+        )?;
 
         if self.container.expected_schema_version != SORA_CONTAINER_MANIFEST_VERSION_V1 {
             return Err(SoracloudManifestError::InvalidField {
@@ -7773,6 +7798,7 @@ impl SoraTrainingJobRecordV1 {
         self.validate_identity_fields()?;
         self.validate_progress_fields()?;
         self.validate_storage_fields()?;
+        self.validate_digest_fields()?;
         self.validate_sequence_fields()
     }
 
@@ -7910,6 +7936,17 @@ impl SoraTrainingJobRecordV1 {
         }
         Ok(())
     }
+
+    fn validate_digest_fields(&self) -> Result<(), SoracloudManifestError> {
+        if let Some(latest_metrics_hash) = self.latest_metrics_hash {
+            validate_soracloud_digest_hash(
+                "sora training job record",
+                "latest_metrics_hash",
+                latest_metrics_hash,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Audit record for deterministic training-job lifecycle updates.
@@ -7996,6 +8033,13 @@ impl SoraTrainingJobAuditEventV1 {
                 manifest: "sora training job audit event",
                 field: "job_id",
             });
+        }
+        if let Some(latest_metrics_hash) = self.latest_metrics_hash {
+            validate_soracloud_digest_hash(
+                "sora training job audit event",
+                "latest_metrics_hash",
+                latest_metrics_hash,
+            )?;
         }
         Ok(())
     }
@@ -9850,6 +9894,14 @@ impl SoraHfPlacementRecordV1 {
                 found: self.schema_version,
             });
         }
+        for (field, digest) in [
+            ("placement_id", self.placement_id),
+            ("source_id", self.source_id),
+            ("pool_id", self.pool_id),
+            ("selection_seed_hash", self.selection_seed_hash),
+        ] {
+            validate_soracloud_digest_hash("sora hf placement record", field, digest)?;
+        }
         self.resource_profile.validate()?;
         if self.adaptive_target_host_count == 0 {
             return Err(SoracloudManifestError::InvalidField {
@@ -9994,6 +10046,25 @@ impl SoraModelHostViolationEvidenceRecordV1 {
                 expected: SORA_MODEL_HOST_VIOLATION_EVIDENCE_RECORD_VERSION_V1,
                 found: self.schema_version,
             });
+        }
+        validate_soracloud_digest_hash(
+            "sora model host violation evidence record",
+            "evidence_id",
+            self.evidence_id,
+        )?;
+        for (field, digest) in [
+            ("placement_id", self.placement_id),
+            ("pool_id", self.pool_id),
+            ("source_id", self.source_id),
+            ("slash_id", self.slash_id),
+        ] {
+            if let Some(digest) = digest {
+                validate_soracloud_digest_hash(
+                    "sora model host violation evidence record",
+                    field,
+                    digest,
+                )?;
+            }
         }
         if self.sequence == 0 {
             return Err(SoracloudManifestError::InvalidField {
@@ -10145,6 +10216,12 @@ impl SoraHfSourceRecordV1 {
                 found: self.schema_version,
             });
         }
+        validate_soracloud_digest_hash("sora hf source record", "source_id", self.source_id)?;
+        validate_soracloud_digest_hash(
+            "sora hf source record",
+            "normalized_runtime_hash",
+            self.normalized_runtime_hash,
+        )?;
         for (field, value) in [
             ("repo_id", self.repo_id.as_str()),
             ("resolved_revision", self.resolved_revision.as_str()),
@@ -10387,6 +10464,8 @@ impl SoraHfSharedLeasePoolV1 {
                 found: self.schema_version,
             });
         }
+        validate_soracloud_digest_hash("sora hf shared lease pool", "pool_id", self.pool_id)?;
+        validate_soracloud_digest_hash("sora hf shared lease pool", "source_id", self.source_id)?;
         if self.base_fee_nanos == 0 {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora hf shared lease pool",
@@ -10505,6 +10584,8 @@ impl SoraHfSharedLeaseMemberV1 {
                 found: self.schema_version,
             });
         }
+        validate_soracloud_digest_hash("sora hf shared lease member", "pool_id", self.pool_id)?;
+        validate_soracloud_digest_hash("sora hf shared lease member", "source_id", self.source_id)?;
         if self.joined_at_ms == 0 || self.updated_at_ms == 0 {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora hf shared lease member",
@@ -10592,6 +10673,16 @@ impl SoraHfSharedLeaseAuditEventV1 {
                 found: self.schema_version,
             });
         }
+        validate_soracloud_digest_hash(
+            "sora hf shared lease audit event",
+            "pool_id",
+            self.pool_id,
+        )?;
+        validate_soracloud_digest_hash(
+            "sora hf shared lease audit event",
+            "source_id",
+            self.source_id,
+        )?;
         if self.sequence == 0 {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora hf shared lease audit event",
@@ -10958,6 +11049,18 @@ impl SoraAgentApartmentRecordV1 {
             });
         }
         self.manifest.validate()?;
+        validate_soracloud_digest_hash(
+            "sora agent apartment record",
+            "manifest_hash",
+            self.manifest_hash,
+        )?;
+        if self.manifest_hash != self.manifest.manifest_hash() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora agent apartment record",
+                field: "manifest_hash",
+                reason: "must match the canonical apartment manifest hash".to_string(),
+            });
+        }
         for (field, value) in [
             ("process_generation", self.process_generation),
             ("deployed_sequence", self.deployed_sequence),
@@ -11107,6 +11210,18 @@ impl SoraAgentApartmentRecordV1 {
     fn validate_mailbox_message(
         message: &SoraAgentMailboxMessageV1,
     ) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_digest_hash(
+            "sora agent apartment record",
+            "mailbox_queue.payload_hash",
+            message.payload_hash,
+        )?;
+        if message.payload_hash != Hash::new(message.payload.as_bytes()) {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora agent apartment record",
+                field: "mailbox_queue.payload_hash",
+                reason: "must match the canonical mailbox payload hash".to_string(),
+            });
+        }
         if message.message_id.trim().is_empty()
             || message.from_apartment.trim().is_empty()
             || message.channel.trim().is_empty()
@@ -11147,6 +11262,11 @@ impl SoraAgentApartmentRecordV1 {
     fn validate_autonomy_run(
         run: &SoraAgentAutonomyRunRecordV1,
     ) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_digest_hash(
+            "sora agent apartment record",
+            "autonomy_run_history.request_commitment",
+            run.request_commitment,
+        )?;
         if run.run_id.trim().is_empty()
             || run.artifact_hash.trim().is_empty()
             || run.run_label.trim().is_empty()
@@ -11304,6 +11424,22 @@ impl SoraAgentApartmentAuditEventV1 {
                 field: "lease_expires_sequence",
                 reason: "must be greater than zero".to_string(),
             });
+        }
+        validate_soracloud_digest_hash(
+            "sora agent apartment audit event",
+            "manifest_hash",
+            self.manifest_hash,
+        )?;
+        for (field, digest) in [
+            ("payload_hash", self.payload_hash),
+            ("result_commitment", self.result_commitment),
+            ("runtime_receipt_id", self.runtime_receipt_id),
+            ("journal_artifact_hash", self.journal_artifact_hash),
+            ("checkpoint_artifact_hash", self.checkpoint_artifact_hash),
+        ] {
+            if let Some(digest) = digest {
+                validate_soracloud_digest_hash("sora agent apartment audit event", field, digest)?;
+            }
         }
         for (field, value) in [
             ("request_id", self.request_id.as_deref()),
@@ -12591,6 +12727,14 @@ impl SoracloudHostRequestEnvelopeV1 {
                 found: self.schema_version,
             });
         }
+        if self.operation != self.payload.operation() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud host request envelope",
+                field: "operation",
+                reason: "must match payload type".to_string(),
+            });
+        }
+        self.payload.validate()?;
         Ok(())
     }
 }
@@ -12625,6 +12769,45 @@ pub enum SoracloudHostRequestPayloadV1 {
     EgressFetch(SoracloudEgressFetchRequestV1),
 }
 
+impl SoracloudHostRequestPayloadV1 {
+    /// Return the operation represented by this request payload.
+    #[must_use]
+    pub fn operation(&self) -> SoracloudHostOperationV1 {
+        match self {
+            Self::ReadCommittedState(_) => SoracloudHostOperationV1::ReadCommittedState,
+            Self::EmitStateMutation(_) => SoracloudHostOperationV1::EmitStateMutation,
+            Self::EmitMailboxMessage(_) => SoracloudHostOperationV1::EmitMailboxMessage,
+            Self::AppendJournal(_) => SoracloudHostOperationV1::AppendJournal,
+            Self::PublishCheckpoint(_) => SoracloudHostOperationV1::PublishCheckpoint,
+            Self::ReadConfig(_) => SoracloudHostOperationV1::ReadConfig,
+            Self::ReadSecretEnvelope(_) => SoracloudHostOperationV1::ReadSecretEnvelope,
+            Self::ReadSecret(_) => SoracloudHostOperationV1::ReadSecret,
+            Self::ReadCredential(_) => SoracloudHostOperationV1::ReadCredential,
+            Self::EgressFetch(_) => SoracloudHostOperationV1::EgressFetch,
+        }
+    }
+
+    /// Validate operation-specific host request payload constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when request hashes, paths, or payload
+    /// lengths are malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        match self {
+            Self::ReadCommittedState(request) => request.validate(),
+            Self::EmitStateMutation(request) => request.validate(),
+            Self::EmitMailboxMessage(request) => request.validate(),
+            Self::AppendJournal(request) => request.validate(),
+            Self::PublishCheckpoint(request) => request.validate(),
+            Self::ReadConfig(request) => request.validate(),
+            Self::ReadSecretEnvelope(request) => request.validate(),
+            Self::ReadSecret(request) => request.validate(),
+            Self::ReadCredential(request) => request.validate(),
+            Self::EgressFetch(request) => request.validate(),
+        }
+    }
+}
+
 /// Response envelope encoded into the Soracloud response pointer-ABI payload.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12653,6 +12836,14 @@ impl SoracloudHostResponseEnvelopeV1 {
                 found: self.schema_version,
             });
         }
+        if self.operation != self.payload.operation() {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud host response envelope",
+                field: "operation",
+                reason: "must match payload type".to_string(),
+            });
+        }
+        self.payload.validate()?;
         Ok(())
     }
 }
@@ -12687,6 +12878,45 @@ pub enum SoracloudHostResponsePayloadV1 {
     EgressFetch(SoracloudEgressFetchResponseV1),
 }
 
+impl SoracloudHostResponsePayloadV1 {
+    /// Return the operation represented by this response payload.
+    #[must_use]
+    pub fn operation(&self) -> SoracloudHostOperationV1 {
+        match self {
+            Self::ReadCommittedState(_) => SoracloudHostOperationV1::ReadCommittedState,
+            Self::EmitStateMutation(_) => SoracloudHostOperationV1::EmitStateMutation,
+            Self::EmitMailboxMessage(_) => SoracloudHostOperationV1::EmitMailboxMessage,
+            Self::AppendJournal(_) => SoracloudHostOperationV1::AppendJournal,
+            Self::PublishCheckpoint(_) => SoracloudHostOperationV1::PublishCheckpoint,
+            Self::ReadConfig(_) => SoracloudHostOperationV1::ReadConfig,
+            Self::ReadSecretEnvelope(_) => SoracloudHostOperationV1::ReadSecretEnvelope,
+            Self::ReadSecret(_) => SoracloudHostOperationV1::ReadSecret,
+            Self::ReadCredential(_) => SoracloudHostOperationV1::ReadCredential,
+            Self::EgressFetch(_) => SoracloudHostOperationV1::EgressFetch,
+        }
+    }
+
+    /// Validate operation-specific host response payload constraints.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when response hashes or nested records
+    /// are malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        match self {
+            Self::ReadCommittedState(response) => response.validate(),
+            Self::EmitStateMutation(response) => response.validate(),
+            Self::EmitMailboxMessage(response) => response.validate(),
+            Self::AppendJournal(response) => response.validate(),
+            Self::PublishCheckpoint(response) => response.validate(),
+            Self::ReadConfig(response) => response.validate(),
+            Self::ReadSecretEnvelope(response) => response.validate(),
+            Self::ReadSecret(response) => response.validate(),
+            Self::ReadCredential(response) => response.validate(),
+            Self::EgressFetch(response) => response.validate(),
+        }
+    }
+}
+
 /// Read committed service-state metadata for one binding/key pair.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12700,6 +12930,16 @@ pub struct SoracloudReadCommittedStateRequestV1 {
     pub state_key: String,
 }
 
+impl SoracloudReadCommittedStateRequestV1 {
+    /// Validate committed-state request fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the state key is malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_state_key("soracloud read committed state request", &self.state_key)
+    }
+}
+
 /// Response to a committed service-state metadata lookup.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12710,6 +12950,19 @@ pub struct SoracloudReadCommittedStateResponseV1 {
     /// Matching entry when one exists.
     #[norito(default)]
     pub entry: Option<SoraServiceStateEntryV1>,
+}
+
+impl SoracloudReadCommittedStateResponseV1 {
+    /// Validate committed-state response fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the nested state entry is invalid.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if let Some(entry) = &self.entry {
+            entry.validate()?;
+        }
+        Ok(())
+    }
 }
 
 /// Stage a deterministic service-state mutation.
@@ -12738,6 +12991,59 @@ pub struct SoracloudEmitStateMutationRequestV1 {
     pub payload_commitment: Option<Hash>,
 }
 
+impl SoracloudEmitStateMutationRequestV1 {
+    /// Validate state mutation request fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when state keys, payload lengths, or
+    /// payload commitments are malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_state_key(
+            "soracloud emit state mutation request",
+            &self.state_key,
+        )?;
+        if let Some(payload_commitment) = self.payload_commitment {
+            validate_soracloud_digest_hash(
+                "soracloud emit state mutation request",
+                "payload_commitment",
+                payload_commitment,
+            )?;
+        }
+        if let Some(payload) = self.payload.as_ref() {
+            if let Some(payload_bytes) = self.payload_bytes
+                && payload_bytes != payload.len() as u64
+            {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "soracloud emit state mutation request",
+                    field: "payload_bytes",
+                    reason: "must match payload length".to_string(),
+                });
+            }
+            if let Some(payload_commitment) = self.payload_commitment
+                && payload_commitment != Hash::new(payload)
+            {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "soracloud emit state mutation request",
+                    field: "payload_commitment",
+                    reason: "must match the canonical payload hash".to_string(),
+                });
+            }
+        }
+        if self.operation == SoraStateMutationOperationV1::Delete
+            && (self.payload.is_some()
+                || self.payload_bytes.is_some()
+                || self.payload_commitment.is_some())
+        {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud emit state mutation request",
+                field: "payload",
+                reason: "delete mutations must not carry payload material".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Response to a staged service-state mutation.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12747,6 +13053,20 @@ pub struct SoracloudEmitStateMutationRequestV1 {
 pub struct SoracloudEmitStateMutationResponseV1 {
     /// Stable mutation digest returned by the host after staging the write-back.
     pub mutation_commitment: Hash,
+}
+
+impl SoracloudEmitStateMutationResponseV1 {
+    /// Validate state mutation response fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the mutation commitment is malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_digest_hash(
+            "soracloud emit state mutation response",
+            "mutation_commitment",
+            self.mutation_commitment,
+        )
+    }
 }
 
 /// Stage an outbound Soracloud mailbox message.
@@ -12770,6 +13090,33 @@ pub struct SoracloudEmitMailboxMessageRequestV1 {
     pub expires_at_sequence: Option<u64>,
 }
 
+impl SoracloudEmitMailboxMessageRequestV1 {
+    /// Validate outbound mailbox request fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when mailbox sequence bounds are malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if self.available_after_sequence == 0 {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud emit mailbox message request",
+                field: "available_after_sequence",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self
+            .expires_at_sequence
+            .is_some_and(|expires_at| expires_at <= self.available_after_sequence)
+        {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud emit mailbox message request",
+                field: "expires_at_sequence",
+                reason: "must be greater than available_after_sequence".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Response to a staged outbound mailbox message.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12781,6 +13128,26 @@ pub struct SoracloudEmitMailboxMessageResponseV1 {
     pub message_id: Hash,
     /// Commitment over the emitted mailbox payload.
     pub payload_commitment: Hash,
+}
+
+impl SoracloudEmitMailboxMessageResponseV1 {
+    /// Validate outbound mailbox response fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when mailbox identifiers or payload
+    /// commitments are malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_digest_hash(
+            "soracloud emit mailbox message response",
+            "message_id",
+            self.message_id,
+        )?;
+        validate_soracloud_digest_hash(
+            "soracloud emit mailbox message response",
+            "payload_commitment",
+            self.payload_commitment,
+        )
+    }
 }
 
 /// Append deterministic journal material for the active handler execution.
@@ -12797,6 +13164,19 @@ pub struct SoracloudAppendJournalRequestV1 {
     pub payload_bytes: Vec<u8>,
 }
 
+impl SoracloudAppendJournalRequestV1 {
+    /// Validate append-journal request fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the artifact path is empty.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_artifact_path(
+            "soracloud append journal request",
+            &self.artifact_path,
+        )
+    }
+}
+
 /// Response to appended journal material.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12806,6 +13186,20 @@ pub struct SoracloudAppendJournalRequestV1 {
 pub struct SoracloudAppendJournalResponseV1 {
     /// Content-addressed digest of the materialized journal payload.
     pub artifact_hash: Hash,
+}
+
+impl SoracloudAppendJournalResponseV1 {
+    /// Validate append-journal response fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the artifact hash is malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_digest_hash(
+            "soracloud append journal response",
+            "artifact_hash",
+            self.artifact_hash,
+        )
+    }
 }
 
 /// Publish deterministic checkpoint material for the active handler execution.
@@ -12822,6 +13216,19 @@ pub struct SoracloudPublishCheckpointRequestV1 {
     pub payload_bytes: Vec<u8>,
 }
 
+impl SoracloudPublishCheckpointRequestV1 {
+    /// Validate publish-checkpoint request fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the artifact path is empty.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_artifact_path(
+            "soracloud publish checkpoint request",
+            &self.artifact_path,
+        )
+    }
+}
+
 /// Response to published checkpoint material.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12833,6 +13240,20 @@ pub struct SoracloudPublishCheckpointResponseV1 {
     pub artifact_hash: Hash,
 }
 
+impl SoracloudPublishCheckpointResponseV1 {
+    /// Validate publish-checkpoint response fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the artifact hash is malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_digest_hash(
+            "soracloud publish checkpoint response",
+            "artifact_hash",
+            self.artifact_hash,
+        )
+    }
+}
+
 /// Read authoritative service config material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12842,6 +13263,20 @@ pub struct SoracloudPublishCheckpointResponseV1 {
 pub struct SoracloudReadConfigRequestV1 {
     /// Stable config identifier relative to the authoritative service-config set.
     pub config_name: String,
+}
+
+impl SoracloudReadConfigRequestV1 {
+    /// Validate config request fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the config name is empty.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_name(
+            "soracloud read config request",
+            "config_name",
+            &self.config_name,
+        )
+    }
 }
 
 /// Response to an authoritative service config lookup.
@@ -12858,6 +13293,20 @@ pub struct SoracloudReadConfigResponseV1 {
     pub payload_bytes: Vec<u8>,
 }
 
+impl SoracloudReadConfigResponseV1 {
+    /// Validate config response fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when found/payload flags are inconsistent.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_found_payload(
+            "soracloud read config response",
+            self.found,
+            &self.payload_bytes,
+        )
+    }
+}
+
 /// Read an authoritative service secret envelope for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12867,6 +13316,20 @@ pub struct SoracloudReadConfigResponseV1 {
 pub struct SoracloudReadSecretEnvelopeRequestV1 {
     /// Stable secret identifier relative to the authoritative service-secret set.
     pub secret_name: String,
+}
+
+impl SoracloudReadSecretEnvelopeRequestV1 {
+    /// Validate secret-envelope request fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the secret name is empty.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_name(
+            "soracloud read secret envelope request",
+            "secret_name",
+            &self.secret_name,
+        )
+    }
 }
 
 /// Response to an authoritative service secret-envelope lookup.
@@ -12881,6 +13344,19 @@ pub struct SoracloudReadSecretEnvelopeResponseV1 {
     pub envelope: Option<SecretEnvelopeV1>,
 }
 
+impl SoracloudReadSecretEnvelopeResponseV1 {
+    /// Validate secret-envelope response fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the nested envelope is invalid.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        if let Some(envelope) = &self.envelope {
+            envelope.validate()?;
+        }
+        Ok(())
+    }
+}
+
 /// Read node-local secret material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12890,6 +13366,20 @@ pub struct SoracloudReadSecretEnvelopeResponseV1 {
 pub struct SoracloudReadSecretRequestV1 {
     /// Stable secret identifier relative to the node-local secret root.
     pub secret_name: String,
+}
+
+impl SoracloudReadSecretRequestV1 {
+    /// Validate node-local secret request fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the secret name is empty.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_name(
+            "soracloud read secret request",
+            "secret_name",
+            &self.secret_name,
+        )
+    }
 }
 
 /// Response to a node-local secret lookup.
@@ -12906,6 +13396,20 @@ pub struct SoracloudReadSecretResponseV1 {
     pub payload_bytes: Vec<u8>,
 }
 
+impl SoracloudReadSecretResponseV1 {
+    /// Validate node-local secret response fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when found/payload flags are inconsistent.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_found_payload(
+            "soracloud read secret response",
+            self.found,
+            &self.payload_bytes,
+        )
+    }
+}
+
 /// Read node-local credential material for the active service revision.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12915,6 +13419,20 @@ pub struct SoracloudReadSecretResponseV1 {
 pub struct SoracloudReadCredentialRequestV1 {
     /// Stable credential identifier relative to the node-local credential root.
     pub credential_name: String,
+}
+
+impl SoracloudReadCredentialRequestV1 {
+    /// Validate node-local credential request fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when the credential name is empty.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_name(
+            "soracloud read credential request",
+            "credential_name",
+            &self.credential_name,
+        )
+    }
 }
 
 /// Response to a node-local credential lookup.
@@ -12931,6 +13449,20 @@ pub struct SoracloudReadCredentialResponseV1 {
     pub payload_bytes: Vec<u8>,
 }
 
+impl SoracloudReadCredentialResponseV1 {
+    /// Validate node-local credential response fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when found/payload flags are inconsistent.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_host_found_payload(
+            "soracloud read credential response",
+            self.found,
+            &self.payload_bytes,
+        )
+    }
+}
+
 /// Perform a bounded, policy-checked egress fetch from an allowlisted host.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -12945,6 +13477,32 @@ pub struct SoracloudEgressFetchRequestV1 {
     /// Optional expected digest for content-addressed verification.
     #[norito(default)]
     pub expected_hash: Option<Hash>,
+}
+
+impl SoracloudEgressFetchRequestV1 {
+    /// Validate egress fetch request fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when URL, byte cap, or expected hash
+    /// fields are malformed.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_public_url("soracloud egress fetch request", "url", &self.url)?;
+        if self.max_bytes == 0 {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud egress fetch request",
+                field: "max_bytes",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if let Some(expected_hash) = self.expected_hash {
+            validate_soracloud_digest_hash(
+                "soracloud egress fetch request",
+                "expected_hash",
+                expected_hash,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Response to a bounded egress fetch.
@@ -12964,6 +13522,112 @@ pub struct SoracloudEgressFetchResponseV1 {
     pub body: Vec<u8>,
     /// Content-addressed hash of `body`.
     pub body_hash: Hash,
+}
+
+impl SoracloudEgressFetchResponseV1 {
+    /// Validate egress fetch response fields.
+    ///
+    /// # Errors
+    /// Returns [`SoracloudManifestError`] when response metadata is malformed or
+    /// `body_hash` does not match `body`.
+    pub fn validate(&self) -> Result<(), SoracloudManifestError> {
+        validate_soracloud_digest_hash(
+            "soracloud egress fetch response",
+            "body_hash",
+            self.body_hash,
+        )?;
+        if self.body_hash != Hash::new(&self.body) {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud egress fetch response",
+                field: "body_hash",
+                reason: "must match the canonical response body hash".to_string(),
+            });
+        }
+        if self
+            .content_type
+            .as_ref()
+            .is_some_and(|content_type| content_type.trim().is_empty())
+        {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "soracloud egress fetch response",
+                field: "content_type",
+                reason: "must not be empty when provided".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn validate_soracloud_host_state_key(
+    manifest: &'static str,
+    state_key: &str,
+) -> Result<(), SoracloudManifestError> {
+    if state_key.trim().is_empty() {
+        return Err(SoracloudManifestError::EmptyField {
+            manifest,
+            field: "state_key",
+        });
+    }
+    if !state_key.starts_with('/') {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field: "state_key",
+            reason: "must start with '/'".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_soracloud_host_artifact_path(
+    manifest: &'static str,
+    artifact_path: &str,
+) -> Result<(), SoracloudManifestError> {
+    if artifact_path.trim().is_empty() {
+        return Err(SoracloudManifestError::EmptyField {
+            manifest,
+            field: "artifact_path",
+        });
+    }
+    if !artifact_path.starts_with('/') {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field: "artifact_path",
+            reason: "must start with '/'".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn validate_soracloud_host_name(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoracloudManifestError> {
+    if value.trim().is_empty() {
+        return Err(SoracloudManifestError::EmptyField { manifest, field });
+    }
+    Ok(())
+}
+
+fn validate_soracloud_host_found_payload(
+    manifest: &'static str,
+    found: bool,
+    payload_bytes: &[u8],
+) -> Result<(), SoracloudManifestError> {
+    if found && payload_bytes.is_empty() {
+        return Err(SoracloudManifestError::EmptyField {
+            manifest,
+            field: "payload_bytes",
+        });
+    }
+    if !found && !payload_bytes.is_empty() {
+        return Err(SoracloudManifestError::InvalidField {
+            manifest,
+            field: "payload_bytes",
+            reason: "must be empty when found is false".to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Encode the canonical provenance signature payload for deployment bundles.
@@ -14022,16 +14686,19 @@ mod tests {
     use iroha_crypto::{
         Algorithm, KeyPair,
         fhe_bfv::{
-            BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1,
-            BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1, BfvFullBootstrapAccumulatorV1,
-            BfvFullBootstrapCircuitArtifactRoleV1, BfvFullBootstrapLinearTransformDiagonalV1,
-            BfvFullBootstrapLinearTransformV1, BfvFullBootstrapProofKeyV1,
+            BfvFullBootstrapAccumulatorV1, BfvFullBootstrapCircuitArtifactRoleV1,
+            BfvFullBootstrapLinearTransformDiagonalV1, BfvFullBootstrapLinearTransformV1,
             BfvFullBootstrapSampleExtractionV1,
             bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1,
+            bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1,
+            bfv_full_bootstrap_proof_key_pair_commitment_from_artifacts_v1,
+            bfv_full_bootstrap_proof_key_pair_from_key_material_v1,
             bfv_full_bootstrap_proof_public_input_schema_v1,
             encode_bfv_full_bootstrap_accumulator_artifact_v1,
             encode_bfv_full_bootstrap_blind_rotation_artifact_v1,
             encode_bfv_full_bootstrap_linear_transform_artifact_v1,
+            encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1,
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1,
             encode_bfv_full_bootstrap_proof_key_artifact_v1,
             encode_bfv_full_bootstrap_proof_public_input_schema_artifact_v1,
             encode_bfv_full_bootstrap_sample_extraction_artifact_v1, encode_packed_plaintext_slots,
@@ -14976,18 +15643,38 @@ mod tests {
             )
             .expect("encode sample full-bootstrap proof public-input schema artifact");
         let proof_public_input_schema_digest = Hash::new(&proof_public_input_schema);
-        let proof_key_artifact = |role: BfvFullBootstrapCircuitArtifactRoleV1,
-                                  key_material: &[u8]| {
-            let key = BfvFullBootstrapProofKeyV1 {
-                backend: BFV_FULL_BOOTSTRAP_PROOF_BACKEND_V1.to_owned(),
-                key_format: BFV_FULL_BOOTSTRAP_PROOF_KEY_FORMAT_V1.to_owned(),
-                circuit_id: BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_owned(),
-                public_input_schema_digest: proof_public_input_schema_digest,
-                key_material: key_material.to_vec(),
-            };
-            encode_bfv_full_bootstrap_proof_key_artifact_v1(&params, 1, role, &key)
-                .expect("encode sample full-bootstrap proof key artifact")
-        };
+        let prover_key_material =
+            encode_bfv_full_bootstrap_native_stark_fri_prover_key_material_v1(
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            )
+            .expect("encode sample native full-bootstrap prover-key material");
+        let verifier_key_material =
+            encode_bfv_full_bootstrap_native_stark_fri_verifier_key_material_v1(
+                SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1,
+            )
+            .expect("encode sample native full-bootstrap verifier-key material");
+        let (prover_key, verifier_key) = bfv_full_bootstrap_proof_key_pair_from_key_material_v1(
+            &params,
+            1,
+            proof_public_input_schema_digest,
+            &prover_key_material,
+            &verifier_key_material,
+        )
+        .expect("build sample full-bootstrap proof-key pair");
+        let prover_key = encode_bfv_full_bootstrap_proof_key_artifact_v1(
+            &params,
+            1,
+            BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+            &prover_key,
+        )
+        .expect("encode sample full-bootstrap prover-key artifact");
+        let verifier_key = encode_bfv_full_bootstrap_proof_key_artifact_v1(
+            &params,
+            1,
+            BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+            &verifier_key,
+        )
+        .expect("encode sample full-bootstrap verifier-key artifact");
         BfvFullBootstrapCircuitArtifactBundleV1 {
             coefficient_to_slot_key: linear_transform_artifact(
                 BfvFullBootstrapCircuitArtifactRoleV1::CoefficientToSlotKey,
@@ -15009,14 +15696,8 @@ mod tests {
             .expect("encode sample full-bootstrap sample-extraction artifact"),
             accumulator: accumulator_artifact,
             proof_public_input_schema,
-            prover_key: proof_key_artifact(
-                BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
-                b"soracloud-full-bootstrap-prover-key",
-            ),
-            verifier_key: proof_key_artifact(
-                BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
-                b"soracloud-full-bootstrap-verifier-key",
-            ),
+            prover_key,
+            verifier_key,
         }
     }
 
@@ -15085,6 +15766,98 @@ mod tests {
         assert!(
             err.to_string().contains("zero prehash sentinel"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn soracloud_fhe_public_input_schema_hashes_are_stable() {
+        for (label, actual, direct) in [
+            (
+                "input admission",
+                soracloud_fhe_input_admission_public_inputs_schema_hash_v1(),
+                <[u8; 32]>::from(Hash::new(
+                    SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1,
+                )),
+            ),
+            (
+                "bootstrap-key proof",
+                soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1(),
+                <[u8; 32]>::from(Hash::new(
+                    SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                )),
+            ),
+            (
+                "full-bootstrap material proof",
+                soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1(),
+                <[u8; 32]>::from(Hash::new(
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                )),
+            ),
+            (
+                "full-bootstrap execution proof",
+                soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1(),
+                <[u8; 32]>::from(Hash::new(
+                    SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+                )),
+            ),
+        ] {
+            assert_eq!(actual, direct, "{label} schema hash helper drifted");
+        }
+
+        assert_eq!(
+            hex::encode(soracloud_fhe_input_admission_public_inputs_schema_hash_v1()),
+            "28fc86e055099456a553fb85563e2a893d9227aef685dee2a23707d83393eb0d",
+            "input admission public-input schema hash drifted"
+        );
+        assert_eq!(
+            hex::encode(soracloud_fhe_bootstrap_key_proof_public_inputs_schema_hash_v1()),
+            "0de09d4c7835c30848e2574e3c54b2079467881a39a715e3dc4edb7fda4ffc81",
+            "bootstrap-key proof public-input schema hash drifted"
+        );
+        assert_eq!(
+            hex::encode(soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1()),
+            "1ac4d2baa55297d601efb1a4330e58b80f17c76c63907bcb8de1e8b463290ae1",
+            "full-bootstrap material proof public-input schema hash drifted"
+        );
+        assert_eq!(
+            hex::encode(
+                soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1()
+            ),
+            "cc1dd151890f141509fb7074984bef74e0e563d4e703f80b5755b39c9315d89d",
+            "full-bootstrap execution proof public-input schema hash drifted"
+        );
+    }
+
+    #[test]
+    fn soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest() {
+        let schema = std::str::from_utf8(
+            SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        )
+        .expect("full-bootstrap execution schema is valid UTF-8");
+        assert!(
+            schema.contains("execution_witness_digest"),
+            "public schema must advertise the execution witness digest bound by the typed claim"
+        );
+        assert!(
+            schema.contains("full_bootstrap_execution_witness_digest.v1"),
+            "public schema must advertise the execution witness digest domain"
+        );
+        for required in [
+            "\"material_version\":1",
+            "\"material_field_count\":14",
+            "\"trace_field_count\":7",
+            "\"trace_bounds_field_count\":6",
+            "\"binds_trace\":true",
+            "\"binds_trace_bounds\":true",
+        ] {
+            assert!(
+                schema.contains(required),
+                "public schema must advertise witness layout term {required}"
+            );
+        }
+        assert!(
+            !schema.contains("output_bound))"),
+            "public schema must not advertise the pre-witness execution claim layout"
         );
     }
 
@@ -17598,6 +18371,46 @@ mod tests {
     }
 
     #[test]
+    fn hf_placement_record_validate_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+        macro_rules! assert_placement_digest_rejects {
+            ($field:literal, $assign:expr) => {{
+                let mut placement = sample_hf_placement_record();
+                $assign(&mut placement, zero_digest);
+                let error = placement
+                    .validate()
+                    .expect_err("placement placeholder digest must fail admission");
+                assert_zero_prehash_digest_error(error, $field);
+            }};
+        }
+
+        assert_placement_digest_rejects!(
+            "placement_id",
+            |record: &mut SoraHfPlacementRecordV1, value| {
+                record.placement_id = value;
+            }
+        );
+        assert_placement_digest_rejects!(
+            "source_id",
+            |record: &mut SoraHfPlacementRecordV1, value| {
+                record.source_id = value;
+            }
+        );
+        assert_placement_digest_rejects!(
+            "pool_id",
+            |record: &mut SoraHfPlacementRecordV1, value| {
+                record.pool_id = value;
+            }
+        );
+        assert_placement_digest_rejects!(
+            "selection_seed_hash",
+            |record: &mut SoraHfPlacementRecordV1, value| {
+                record.selection_seed_hash = value;
+            }
+        );
+    }
+
+    #[test]
     fn model_host_advertise_provenance_payload_encodes_canonical_layout() {
         let capability = sample_model_host_capability_record();
         let encoded =
@@ -18275,10 +19088,12 @@ mod tests {
     }
 
     fn sample_agent_apartment_record() -> SoraAgentApartmentRecordV1 {
+        let manifest = sample_agent_apartment_manifest();
+        let mailbox_payload = "{\"ping\":true}".to_string();
         SoraAgentApartmentRecordV1 {
             schema_version: SORA_AGENT_APARTMENT_RECORD_VERSION_V1,
-            manifest: sample_agent_apartment_manifest(),
-            manifest_hash: sample_hash(42),
+            manifest_hash: manifest.manifest_hash(),
+            manifest,
             status: SoraAgentRuntimeStatusV1::Running,
             deployed_sequence: 10,
             lease_started_sequence: 10,
@@ -18318,8 +19133,8 @@ mod tests {
                 message_id: "worker_agent:mail:36".to_string(),
                 from_apartment: "ops_agent".to_string(),
                 channel: "ops".to_string(),
-                payload: "{\"ping\":true}".to_string(),
-                payload_hash: sample_hash(43),
+                payload_hash: Hash::new(mailbox_payload.as_bytes()),
+                payload: mailbox_payload,
                 enqueued_sequence: 36,
             }],
             autonomy_budget_ceiling_units: 500,
@@ -18435,6 +19250,31 @@ mod tests {
         params: &iroha_crypto::fhe_bfv::BfvParameters,
     ) -> iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1 {
         let artifacts = sample_full_bootstrap_circuit_artifacts();
+        let max_bootstrap_depth = 1;
+        let prover_key_material_commitment =
+            bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1(
+                params,
+                max_bootstrap_depth,
+                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::ProverKey,
+                &artifacts.prover_key,
+            )
+            .expect("sample full-bootstrap prover-key material commitment");
+        let verifier_key_material_commitment =
+            bfv_full_bootstrap_proof_key_material_commitment_from_artifact_v1(
+                params,
+                max_bootstrap_depth,
+                iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitArtifactRoleV1::VerifierKey,
+                &artifacts.verifier_key,
+            )
+            .expect("sample full-bootstrap verifier-key material commitment");
+        let proof_key_pair_commitment =
+            bfv_full_bootstrap_proof_key_pair_commitment_from_artifacts_v1(
+                params,
+                max_bootstrap_depth,
+                &artifacts.prover_key,
+                &artifacts.verifier_key,
+            )
+            .expect("sample full-bootstrap proof-key pair commitment");
         iroha_crypto::fhe_bfv::BfvFullBootstrapCircuitMaterialV1 {
             circuit_id: iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1.to_string(),
             parameter_digest: iroha_crypto::fhe_bfv::registered_bfv_parameter_digest(params)
@@ -18451,9 +19291,12 @@ mod tests {
             sample_extraction_key_digest: Hash::new(&artifacts.sample_extraction_key),
             accumulator_digest: Hash::new(&artifacts.accumulator),
             proof_public_input_schema_digest: Hash::new(&artifacts.proof_public_input_schema),
+            proof_key_pair_commitment,
             prover_key_digest: Hash::new(&artifacts.prover_key),
+            prover_key_material_commitment,
             verifier_key_digest: Hash::new(&artifacts.verifier_key),
-            max_bootstrap_depth: 1,
+            verifier_key_material_commitment,
+            max_bootstrap_depth,
         }
     }
 
@@ -18765,6 +19608,60 @@ mod tests {
         }
     }
 
+    fn sample_host_state_mutation_request_envelope() -> SoracloudHostRequestEnvelopeV1 {
+        let payload = vec![1, 2, 3, 4];
+        SoracloudHostRequestEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: SoracloudHostOperationV1::EmitStateMutation,
+            payload: SoracloudHostRequestPayloadV1::EmitStateMutation(
+                SoracloudEmitStateMutationRequestV1 {
+                    binding_name: "private_state".parse().expect("valid name"),
+                    state_key: "/state/private/patient-1".to_string(),
+                    operation: SoraStateMutationOperationV1::Upsert,
+                    encryption: SoraStateEncryptionV1::FheCiphertext,
+                    payload_bytes: Some(payload.len() as u64),
+                    payload_commitment: Some(Hash::new(&payload)),
+                    payload: Some(payload),
+                },
+            ),
+        }
+    }
+
+    fn host_request_envelope(
+        operation: SoracloudHostOperationV1,
+        payload: SoracloudHostRequestPayloadV1,
+    ) -> SoracloudHostRequestEnvelopeV1 {
+        SoracloudHostRequestEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation,
+            payload,
+        }
+    }
+
+    fn host_response_envelope(
+        operation: SoracloudHostOperationV1,
+        payload: SoracloudHostResponsePayloadV1,
+    ) -> SoracloudHostResponseEnvelopeV1 {
+        SoracloudHostResponseEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_RESPONSE_VERSION_V1,
+            operation,
+            payload,
+        }
+    }
+
+    fn sample_host_egress_response_envelope() -> SoracloudHostResponseEnvelopeV1 {
+        let body = br#"{"ok":true}"#.to_vec();
+        host_response_envelope(
+            SoracloudHostOperationV1::EgressFetch,
+            SoracloudHostResponsePayloadV1::EgressFetch(SoracloudEgressFetchResponseV1 {
+                status_code: 200,
+                content_type: Some("application/json".to_string()),
+                body_hash: Hash::new(&body),
+                body,
+            }),
+        )
+    }
+
     #[test]
     fn state_binding_validate_rejects_plaintext_confidential_scope() {
         let mut binding = sample_binding("private_state");
@@ -18804,6 +19701,248 @@ mod tests {
     }
 
     #[test]
+    fn host_request_envelope_validation_accepts_consistent_payload() {
+        let envelope = sample_host_state_mutation_request_envelope();
+        assert!(
+            envelope.validate().is_ok(),
+            "valid host request envelope must pass"
+        );
+    }
+
+    #[test]
+    fn host_request_envelope_validation_rejects_payload_operation_mismatch() {
+        let mut envelope = sample_host_state_mutation_request_envelope();
+        envelope.operation = SoracloudHostOperationV1::ReadConfig;
+        let error = envelope
+            .validate()
+            .expect_err("host request operation must match payload variant");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "operation",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn host_request_envelope_validation_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut state_mutation = sample_host_state_mutation_request_envelope();
+        let SoracloudHostRequestPayloadV1::EmitStateMutation(request) = &mut state_mutation.payload
+        else {
+            panic!("sample request uses state mutation payload");
+        };
+        request.payload_commitment = Some(zero_digest);
+        let error = state_mutation
+            .validate()
+            .expect_err("state mutation payload placeholder commitment must fail admission");
+        assert_zero_prehash_digest_error(error, "payload_commitment");
+
+        let egress = host_request_envelope(
+            SoracloudHostOperationV1::EgressFetch,
+            SoracloudHostRequestPayloadV1::EgressFetch(SoracloudEgressFetchRequestV1 {
+                url: "https://oracle.example/data.json".to_string(),
+                max_bytes: 4096,
+                expected_hash: Some(zero_digest),
+            }),
+        );
+        let error = egress
+            .validate()
+            .expect_err("egress expected-hash placeholder must fail admission");
+        assert_zero_prehash_digest_error(error, "expected_hash");
+    }
+
+    #[test]
+    fn host_request_envelope_validation_rejects_adversarial_state_payload_metadata() {
+        let mut wrong_length = sample_host_state_mutation_request_envelope();
+        let SoracloudHostRequestPayloadV1::EmitStateMutation(request) = &mut wrong_length.payload
+        else {
+            panic!("sample request uses state mutation payload");
+        };
+        request.payload_bytes = Some(99);
+        let error = wrong_length
+            .validate()
+            .expect_err("payload length must bind to the actual payload");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "payload_bytes",
+                ..
+            }
+        ));
+
+        let mut wrong_commitment = sample_host_state_mutation_request_envelope();
+        let SoracloudHostRequestPayloadV1::EmitStateMutation(request) =
+            &mut wrong_commitment.payload
+        else {
+            panic!("sample request uses state mutation payload");
+        };
+        request.payload_commitment = Some(sample_hash(230));
+        let error = wrong_commitment
+            .validate()
+            .expect_err("payload commitment must bind to the actual payload");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "payload_commitment",
+                ..
+            }
+        ));
+
+        let mut delete_with_payload = sample_host_state_mutation_request_envelope();
+        let SoracloudHostRequestPayloadV1::EmitStateMutation(request) =
+            &mut delete_with_payload.payload
+        else {
+            panic!("sample request uses state mutation payload");
+        };
+        request.operation = SoraStateMutationOperationV1::Delete;
+        let error = delete_with_payload
+            .validate()
+            .expect_err("delete mutation must not smuggle payload material");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "payload",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn host_response_envelope_validation_accepts_consistent_payload() {
+        let envelope = sample_host_egress_response_envelope();
+        assert!(
+            envelope.validate().is_ok(),
+            "valid host response envelope must pass"
+        );
+    }
+
+    #[test]
+    fn host_response_envelope_validation_rejects_payload_operation_mismatch() {
+        let mut envelope = sample_host_egress_response_envelope();
+        envelope.operation = SoracloudHostOperationV1::ReadConfig;
+        let error = envelope
+            .validate()
+            .expect_err("host response operation must match payload variant");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "operation",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn host_response_envelope_validation_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+        macro_rules! assert_response_digest_rejects {
+            ($field:literal, $payload:expr, $operation:expr) => {{
+                let envelope = host_response_envelope($operation, $payload);
+                let error = envelope
+                    .validate()
+                    .expect_err("host response placeholder digest must fail admission");
+                assert_zero_prehash_digest_error(error, $field);
+            }};
+        }
+
+        assert_response_digest_rejects!(
+            "mutation_commitment",
+            SoracloudHostResponsePayloadV1::EmitStateMutation(
+                SoracloudEmitStateMutationResponseV1 {
+                    mutation_commitment: zero_digest,
+                },
+            ),
+            SoracloudHostOperationV1::EmitStateMutation
+        );
+        assert_response_digest_rejects!(
+            "message_id",
+            SoracloudHostResponsePayloadV1::EmitMailboxMessage(
+                SoracloudEmitMailboxMessageResponseV1 {
+                    message_id: zero_digest,
+                    payload_commitment: sample_hash(231),
+                },
+            ),
+            SoracloudHostOperationV1::EmitMailboxMessage
+        );
+        assert_response_digest_rejects!(
+            "payload_commitment",
+            SoracloudHostResponsePayloadV1::EmitMailboxMessage(
+                SoracloudEmitMailboxMessageResponseV1 {
+                    message_id: sample_hash(232),
+                    payload_commitment: zero_digest,
+                },
+            ),
+            SoracloudHostOperationV1::EmitMailboxMessage
+        );
+        assert_response_digest_rejects!(
+            "artifact_hash",
+            SoracloudHostResponsePayloadV1::AppendJournal(SoracloudAppendJournalResponseV1 {
+                artifact_hash: zero_digest,
+            }),
+            SoracloudHostOperationV1::AppendJournal
+        );
+        assert_response_digest_rejects!(
+            "artifact_hash",
+            SoracloudHostResponsePayloadV1::PublishCheckpoint(
+                SoracloudPublishCheckpointResponseV1 {
+                    artifact_hash: zero_digest,
+                },
+            ),
+            SoracloudHostOperationV1::PublishCheckpoint
+        );
+        assert_response_digest_rejects!(
+            "body_hash",
+            SoracloudHostResponsePayloadV1::EgressFetch(SoracloudEgressFetchResponseV1 {
+                status_code: 200,
+                content_type: None,
+                body: b"ok".to_vec(),
+                body_hash: zero_digest,
+            }),
+            SoracloudHostOperationV1::EgressFetch
+        );
+    }
+
+    #[test]
+    fn host_response_envelope_validation_rejects_adversarial_egress_metadata() {
+        let mut wrong_body_hash = sample_host_egress_response_envelope();
+        let SoracloudHostResponsePayloadV1::EgressFetch(response) = &mut wrong_body_hash.payload
+        else {
+            panic!("sample response uses egress payload");
+        };
+        response.body_hash = sample_hash(233);
+        let error = wrong_body_hash
+            .validate()
+            .expect_err("egress body hash must bind to the actual response body");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "body_hash",
+                ..
+            }
+        ));
+
+        let mut empty_content_type = sample_host_egress_response_envelope();
+        let SoracloudHostResponsePayloadV1::EgressFetch(response) = &mut empty_content_type.payload
+        else {
+            panic!("sample response uses egress payload");
+        };
+        response.content_type = Some(String::new());
+        let error = empty_content_type
+            .validate()
+            .expect_err("egress content type must not be empty");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "content_type",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn container_validate_rejects_invalid_healthcheck_path() {
         let mut container = sample_container();
         container.lifecycle.healthcheck_path = Some("healthz".to_string());
@@ -18817,6 +19956,16 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn container_validate_rejects_zero_prehash_bundle_hash_sentinel() {
+        let mut container = sample_container();
+        container.bundle_hash = zero_prehash_statement_hash();
+        let error = container
+            .validate()
+            .expect_err("container placeholder bundle hash must fail admission");
+        assert_zero_prehash_digest_error(error, "bundle_hash");
     }
 
     #[test]
@@ -18896,6 +20045,26 @@ mod tests {
             container.validate().is_ok(),
             "required config exports should validate"
         );
+    }
+
+    #[test]
+    fn service_validate_rejects_zero_prehash_container_ref_sentinel() {
+        let mut manifest = sample_service(vec![sample_binding("session")]);
+        manifest.container.manifest_hash = zero_prehash_statement_hash();
+        let error = manifest
+            .validate()
+            .expect_err("service container placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "container.manifest_hash");
+    }
+
+    #[test]
+    fn service_validate_rejects_zero_prehash_artifact_hash_sentinel() {
+        let mut manifest = sample_service(vec![sample_binding("session")]);
+        manifest.artifacts[0].artifact_hash = zero_prehash_statement_hash();
+        let error = manifest
+            .validate()
+            .expect_err("service artifact placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "artifact_hash");
     }
 
     #[test]
@@ -20550,6 +21719,16 @@ mod tests {
     }
 
     #[test]
+    fn agent_apartment_manifest_validate_rejects_zero_prehash_container_ref_sentinel() {
+        let mut manifest = sample_agent_apartment_manifest();
+        manifest.container.manifest_hash = zero_prehash_statement_hash();
+        let error = manifest
+            .validate()
+            .expect_err("agent apartment container placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "container.manifest_hash");
+    }
+
+    #[test]
     fn agent_apartment_manifest_validate_accepts_consistent_policy() {
         let manifest = sample_agent_apartment_manifest();
         assert!(
@@ -20559,11 +21738,86 @@ mod tests {
     }
 
     #[test]
+    fn agent_apartment_manifest_hash_uses_canonical_encoding() {
+        let manifest = sample_agent_apartment_manifest();
+        assert_eq!(
+            manifest.manifest_hash(),
+            Hash::new(Encode::encode(&manifest))
+        );
+    }
+
+    #[test]
     fn agent_apartment_record_validation_accepts_consistent_state() {
         let record = sample_agent_apartment_record();
         assert!(
             record.validate().is_ok(),
             "valid agent apartment record must pass"
+        );
+    }
+
+    #[test]
+    fn agent_apartment_record_validation_rejects_manifest_hash_mismatch() {
+        let mut record = sample_agent_apartment_record();
+        record.manifest_hash = sample_hash(42);
+        let error = record
+            .validate()
+            .expect_err("manifest hash must match embedded manifest");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "manifest_hash",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn agent_apartment_record_validation_rejects_mailbox_payload_hash_mismatch() {
+        let mut record = sample_agent_apartment_record();
+        record.mailbox_queue[0].payload.push_str("tampered");
+        let error = record
+            .validate()
+            .expect_err("mailbox payload hash must match payload bytes");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "mailbox_queue.payload_hash",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn agent_apartment_record_validation_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+        macro_rules! assert_record_digest_rejects {
+            ($field:literal, $assign:expr) => {{
+                let mut record = sample_agent_apartment_record();
+                $assign(&mut record, zero_digest);
+                let error = record
+                    .validate()
+                    .expect_err("agent apartment placeholder digest must fail admission");
+                assert_zero_prehash_digest_error(error, $field);
+            }};
+        }
+
+        assert_record_digest_rejects!(
+            "manifest_hash",
+            |record: &mut SoraAgentApartmentRecordV1, value| {
+                record.manifest_hash = value;
+            }
+        );
+        assert_record_digest_rejects!(
+            "mailbox_queue.payload_hash",
+            |record: &mut SoraAgentApartmentRecordV1, value| {
+                record.mailbox_queue[0].payload_hash = value;
+            }
+        );
+        assert_record_digest_rejects!(
+            "autonomy_run_history.request_commitment",
+            |record: &mut SoraAgentApartmentRecordV1, value| {
+                record.autonomy_run_history[0].request_commitment = value;
+            }
         );
     }
 
@@ -20597,6 +21851,58 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn agent_apartment_audit_event_validation_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+        macro_rules! assert_event_digest_rejects {
+            ($field:literal, $assign:expr) => {{
+                let mut event = sample_agent_apartment_audit_event();
+                $assign(&mut event, zero_digest);
+                let error = event
+                    .validate()
+                    .expect_err("agent audit placeholder digest must fail admission");
+                assert_zero_prehash_digest_error(error, $field);
+            }};
+        }
+
+        assert_event_digest_rejects!(
+            "manifest_hash",
+            |event: &mut SoraAgentApartmentAuditEventV1, value| {
+                event.manifest_hash = value;
+            }
+        );
+        assert_event_digest_rejects!(
+            "payload_hash",
+            |event: &mut SoraAgentApartmentAuditEventV1, value| {
+                event.payload_hash = Some(value);
+            }
+        );
+        assert_event_digest_rejects!(
+            "result_commitment",
+            |event: &mut SoraAgentApartmentAuditEventV1, value| {
+                event.result_commitment = Some(value);
+            }
+        );
+        assert_event_digest_rejects!(
+            "runtime_receipt_id",
+            |event: &mut SoraAgentApartmentAuditEventV1, value| {
+                event.runtime_receipt_id = Some(value);
+            }
+        );
+        assert_event_digest_rejects!(
+            "journal_artifact_hash",
+            |event: &mut SoraAgentApartmentAuditEventV1, value| {
+                event.journal_artifact_hash = Some(value);
+            }
+        );
+        assert_event_digest_rejects!(
+            "checkpoint_artifact_hash",
+            |event: &mut SoraAgentApartmentAuditEventV1, value| {
+                event.checkpoint_artifact_hash = Some(value);
+            }
+        );
     }
 
     #[test]
@@ -21319,6 +22625,28 @@ mod tests {
         assert_ne!(
             derived, drifted,
             "statement digest must bind the full-bootstrap material digest"
+        );
+
+        let mut drifted_proof_commitment_keys = evaluation_keys.clone();
+        drifted_proof_commitment_keys
+            .bootstrap_key
+            .as_mut()
+            .expect("bootstrap key")
+            .full_bootstrap_material
+            .as_mut()
+            .expect("full-bootstrap material")
+            .verifier_key_material_commitment =
+            Hash::new(b"soracloud-full-bootstrap-proof-drifted-verifier-commitment");
+        let drifted_proof_commitment = transcript
+            .full_bootstrap_material_proof_statement_digest_for_evaluation_keys(
+                &params,
+                &drifted_proof_commitment_keys,
+            )
+            .expect("derive drifted proof commitment full-bootstrap proof statement")
+            .expect("full-bootstrap statement is present");
+        assert_ne!(
+            derived, drifted_proof_commitment,
+            "statement digest must bind the full-bootstrap proof-key material commitments"
         );
 
         let mut missing_material_key = full_bootstrap_key;
@@ -22541,6 +23869,196 @@ mod tests {
     }
 
     #[test]
+    fn soracloud_host_request_envelope_validate_rejects_payload_operation_mismatch() {
+        let request = SoracloudHostRequestEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: SoracloudHostOperationV1::ReadConfig,
+            payload: SoracloudHostRequestPayloadV1::EgressFetch(SoracloudEgressFetchRequestV1 {
+                url: "https://example.invalid/data".to_string(),
+                max_bytes: 1024,
+                expected_hash: None,
+            }),
+        };
+        let error = request
+            .validate()
+            .expect_err("operation must match payload type");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                manifest: "soracloud host request envelope",
+                field: "operation",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn soracloud_host_request_envelope_validate_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let request = SoracloudHostRequestEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: SoracloudHostOperationV1::EgressFetch,
+            payload: SoracloudHostRequestPayloadV1::EgressFetch(SoracloudEgressFetchRequestV1 {
+                url: "https://example.invalid/data".to_string(),
+                max_bytes: 1024,
+                expected_hash: Some(zero_digest),
+            }),
+        };
+        let error = request
+            .validate()
+            .expect_err("egress expected hash placeholder must fail admission");
+        assert_zero_prehash_digest_error(error, "expected_hash");
+
+        let request = SoracloudHostRequestEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: SoracloudHostOperationV1::EmitStateMutation,
+            payload: SoracloudHostRequestPayloadV1::EmitStateMutation(
+                SoracloudEmitStateMutationRequestV1 {
+                    binding_name: sample_name("state"),
+                    state_key: "/state/key".to_string(),
+                    operation: SoraStateMutationOperationV1::Upsert,
+                    encryption: SoraStateEncryptionV1::Plaintext,
+                    payload_bytes: None,
+                    payload: None,
+                    payload_commitment: Some(zero_digest),
+                },
+            ),
+        };
+        let error = request
+            .validate()
+            .expect_err("state mutation placeholder commitment must fail admission");
+        assert_zero_prehash_digest_error(error, "payload_commitment");
+    }
+
+    #[test]
+    fn soracloud_host_request_envelope_validate_rejects_payload_commitment_mismatch() {
+        let request = SoracloudHostRequestEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: SoracloudHostOperationV1::EmitStateMutation,
+            payload: SoracloudHostRequestPayloadV1::EmitStateMutation(
+                SoracloudEmitStateMutationRequestV1 {
+                    binding_name: sample_name("state"),
+                    state_key: "/state/key".to_string(),
+                    operation: SoraStateMutationOperationV1::Upsert,
+                    encryption: SoraStateEncryptionV1::Plaintext,
+                    payload_bytes: Some(3),
+                    payload: Some(b"abc".to_vec()),
+                    payload_commitment: Some(sample_hash(44)),
+                },
+            ),
+        };
+        let error = request
+            .validate()
+            .expect_err("payload commitment must match payload bytes");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "payload_commitment",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn soracloud_host_response_envelope_validate_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+        macro_rules! assert_response_digest_rejects {
+            ($field:literal, $operation:expr, $payload:expr) => {{
+                let response = SoracloudHostResponseEnvelopeV1 {
+                    schema_version: SORACLOUD_HOST_RESPONSE_VERSION_V1,
+                    operation: $operation,
+                    payload: $payload,
+                };
+                let error = response
+                    .validate()
+                    .expect_err("host response placeholder digest must fail admission");
+                assert_zero_prehash_digest_error(error, $field);
+            }};
+        }
+
+        assert_response_digest_rejects!(
+            "mutation_commitment",
+            SoracloudHostOperationV1::EmitStateMutation,
+            SoracloudHostResponsePayloadV1::EmitStateMutation(
+                SoracloudEmitStateMutationResponseV1 {
+                    mutation_commitment: zero_digest,
+                },
+            )
+        );
+        assert_response_digest_rejects!(
+            "message_id",
+            SoracloudHostOperationV1::EmitMailboxMessage,
+            SoracloudHostResponsePayloadV1::EmitMailboxMessage(
+                SoracloudEmitMailboxMessageResponseV1 {
+                    message_id: zero_digest,
+                    payload_commitment: sample_hash(45),
+                },
+            )
+        );
+        assert_response_digest_rejects!(
+            "payload_commitment",
+            SoracloudHostOperationV1::EmitMailboxMessage,
+            SoracloudHostResponsePayloadV1::EmitMailboxMessage(
+                SoracloudEmitMailboxMessageResponseV1 {
+                    message_id: sample_hash(46),
+                    payload_commitment: zero_digest,
+                },
+            )
+        );
+        assert_response_digest_rejects!(
+            "artifact_hash",
+            SoracloudHostOperationV1::AppendJournal,
+            SoracloudHostResponsePayloadV1::AppendJournal(SoracloudAppendJournalResponseV1 {
+                artifact_hash: zero_digest,
+            })
+        );
+        assert_response_digest_rejects!(
+            "artifact_hash",
+            SoracloudHostOperationV1::PublishCheckpoint,
+            SoracloudHostResponsePayloadV1::PublishCheckpoint(
+                SoracloudPublishCheckpointResponseV1 {
+                    artifact_hash: zero_digest,
+                },
+            )
+        );
+        assert_response_digest_rejects!(
+            "body_hash",
+            SoracloudHostOperationV1::EgressFetch,
+            SoracloudHostResponsePayloadV1::EgressFetch(SoracloudEgressFetchResponseV1 {
+                status_code: 200,
+                content_type: Some("application/octet-stream".to_string()),
+                body: b"abc".to_vec(),
+                body_hash: zero_digest,
+            })
+        );
+    }
+
+    #[test]
+    fn soracloud_host_response_envelope_validate_rejects_body_hash_mismatch() {
+        let response = SoracloudHostResponseEnvelopeV1 {
+            schema_version: SORACLOUD_HOST_RESPONSE_VERSION_V1,
+            operation: SoracloudHostOperationV1::EgressFetch,
+            payload: SoracloudHostResponsePayloadV1::EgressFetch(SoracloudEgressFetchResponseV1 {
+                status_code: 200,
+                content_type: Some("application/octet-stream".to_string()),
+                body: b"abc".to_vec(),
+                body_hash: sample_hash(47),
+            }),
+        };
+        let error = response
+            .validate()
+            .expect_err("egress body hash must match response body");
+        assert!(matches!(
+            error,
+            SoracloudManifestError::InvalidField {
+                field: "body_hash",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn secret_envelope_validate_rejects_empty_ciphertext() {
         let mut envelope = sample_secret_envelope();
         envelope.ciphertext.clear();
@@ -22640,10 +24158,30 @@ mod tests {
     }
 
     #[test]
+    fn training_job_record_validation_rejects_zero_prehash_metrics_hash_sentinel() {
+        let mut record = sample_training_job_record();
+        record.latest_metrics_hash = Some(zero_prehash_statement_hash());
+        let error = record
+            .validate()
+            .expect_err("training metrics placeholder digest must fail admission");
+        assert_zero_prehash_digest_error(error, "latest_metrics_hash");
+    }
+
+    #[test]
     fn training_job_audit_event_validation_accepts_consistent_state() {
         sample_training_job_audit_event()
             .validate()
             .expect("valid audit event");
+    }
+
+    #[test]
+    fn training_job_audit_event_validation_rejects_zero_prehash_metrics_hash_sentinel() {
+        let mut event = sample_training_job_audit_event();
+        event.latest_metrics_hash = Some(zero_prehash_statement_hash());
+        let error = event
+            .validate()
+            .expect_err("training audit metrics placeholder digest must fail admission");
+        assert_zero_prehash_digest_error(error, "latest_metrics_hash");
     }
 
     #[test]
@@ -23184,10 +24722,48 @@ mod tests {
     }
 
     #[test]
+    fn hf_source_record_validation_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut source = sample_hf_source_record();
+        source.source_id = zero_digest;
+        let error = source
+            .validate()
+            .expect_err("source placeholder id must fail admission");
+        assert_zero_prehash_digest_error(error, "source_id");
+
+        let mut source = sample_hf_source_record();
+        source.normalized_runtime_hash = zero_digest;
+        let error = source
+            .validate()
+            .expect_err("normalized runtime placeholder hash must fail admission");
+        assert_zero_prehash_digest_error(error, "normalized_runtime_hash");
+    }
+
+    #[test]
     fn hf_shared_lease_pool_validation_accepts_consistent_state() {
         sample_hf_shared_lease_pool()
             .validate()
             .expect("valid shared lease pool");
+    }
+
+    #[test]
+    fn hf_shared_lease_pool_validation_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut pool = sample_hf_shared_lease_pool();
+        pool.pool_id = zero_digest;
+        let error = pool
+            .validate()
+            .expect_err("pool placeholder id must fail admission");
+        assert_zero_prehash_digest_error(error, "pool_id");
+
+        let mut pool = sample_hf_shared_lease_pool();
+        pool.source_id = zero_digest;
+        let error = pool
+            .validate()
+            .expect_err("source placeholder id must fail pool admission");
+        assert_zero_prehash_digest_error(error, "source_id");
     }
 
     #[test]
@@ -23232,6 +24808,25 @@ mod tests {
     }
 
     #[test]
+    fn hf_shared_lease_member_validation_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut member = sample_hf_shared_lease_member();
+        member.pool_id = zero_digest;
+        let error = member
+            .validate()
+            .expect_err("pool placeholder id must fail member admission");
+        assert_zero_prehash_digest_error(error, "pool_id");
+
+        let mut member = sample_hf_shared_lease_member();
+        member.source_id = zero_digest;
+        let error = member
+            .validate()
+            .expect_err("source placeholder id must fail member admission");
+        assert_zero_prehash_digest_error(error, "source_id");
+    }
+
+    #[test]
     fn hf_shared_lease_audit_event_validation_accepts_consistent_state() {
         sample_hf_shared_lease_audit_event()
             .validate()
@@ -23239,10 +24834,75 @@ mod tests {
     }
 
     #[test]
+    fn hf_shared_lease_audit_event_validation_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+
+        let mut event = sample_hf_shared_lease_audit_event();
+        event.pool_id = zero_digest;
+        let error = event
+            .validate()
+            .expect_err("pool placeholder id must fail audit admission");
+        assert_zero_prehash_digest_error(error, "pool_id");
+
+        let mut event = sample_hf_shared_lease_audit_event();
+        event.source_id = zero_digest;
+        let error = event
+            .validate()
+            .expect_err("source placeholder id must fail audit admission");
+        assert_zero_prehash_digest_error(error, "source_id");
+    }
+
+    #[test]
     fn model_host_violation_evidence_validation_accepts_consistent_state() {
         sample_model_host_violation_evidence_record()
             .validate()
             .expect("valid model host violation evidence");
+    }
+
+    #[test]
+    fn model_host_violation_evidence_validation_rejects_zero_prehash_digest_sentinels() {
+        let zero_digest = zero_prehash_statement_hash();
+        macro_rules! assert_violation_digest_rejects {
+            ($field:literal, $assign:expr) => {{
+                let mut record = sample_model_host_violation_evidence_record();
+                $assign(&mut record, zero_digest);
+                let error = record
+                    .validate()
+                    .expect_err("violation evidence placeholder digest must fail admission");
+                assert_zero_prehash_digest_error(error, $field);
+            }};
+        }
+
+        assert_violation_digest_rejects!(
+            "evidence_id",
+            |record: &mut SoraModelHostViolationEvidenceRecordV1, value| {
+                record.evidence_id = value;
+            }
+        );
+        assert_violation_digest_rejects!(
+            "placement_id",
+            |record: &mut SoraModelHostViolationEvidenceRecordV1, value| {
+                record.placement_id = Some(value);
+            }
+        );
+        assert_violation_digest_rejects!(
+            "pool_id",
+            |record: &mut SoraModelHostViolationEvidenceRecordV1, value| {
+                record.pool_id = Some(value);
+            }
+        );
+        assert_violation_digest_rejects!(
+            "source_id",
+            |record: &mut SoraModelHostViolationEvidenceRecordV1, value| {
+                record.source_id = Some(value);
+            }
+        );
+        assert_violation_digest_rejects!(
+            "slash_id",
+            |record: &mut SoraModelHostViolationEvidenceRecordV1, value| {
+                record.slash_id = Some(value);
+            }
+        );
     }
 
     #[test]

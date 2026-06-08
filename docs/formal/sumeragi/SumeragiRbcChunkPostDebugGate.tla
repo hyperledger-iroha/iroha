@@ -163,13 +163,16 @@ ForkReadySafety ==
   /\ ForkReadyMutatesNonemptySignature
   /\ ForkReadyAppendsEmptySignature
 
-SafetyFast ==
+RbcChunkPostDebugCoreSafety ==
   /\ MaskSafety
   /\ WithholdSafety
   /\ EquivocationPredicateSafety
   /\ ScheduleSkipSafety
   /\ SchedulePostSafety
   /\ ForkReadySafety
+
+SafetyFast ==
+  RbcChunkPostDebugCoreSafety
 
 MaskAnchors ==
   /\ MaskRejectsIndex64

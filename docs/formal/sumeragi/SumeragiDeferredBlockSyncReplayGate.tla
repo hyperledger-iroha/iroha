@@ -196,8 +196,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+DeferredReplayMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == DeferredReplayMatchesSpec
 
 EmptyQueueNoop ==
   Matches("empty_queue")
@@ -247,5 +249,4 @@ RemoveMissingReturnsFalse ==
 RemoveMissingNoHandle ==
   Matches("remove_missing")
 
-=============================================================================
 ====

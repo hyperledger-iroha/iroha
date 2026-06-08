@@ -346,7 +346,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+ManifestGateRescheduleCoreMatchesSpec ==
   /\ ActualOutput("plain_zero") = SpecOutput("plain_zero")
   /\ ActualOutput("manifest_no_votes") = SpecOutput("manifest_no_votes")
   /\ ActualOutput("manifest_payload") = SpecOutput("manifest_payload")
@@ -360,6 +360,9 @@ SafetyFast ==
   /\ ActualOutput("same_slot_evidence") = SpecOutput("same_slot_evidence")
   /\ ActualOutput("frontier_owner_vote_backed") =
        SpecOutput("frontier_owner_vote_backed")
+
+SafetyFast ==
+  ManifestGateRescheduleCoreMatchesSpec
 
 ManifestGateEffectExact ==
   \A c \in ManifestGateCases:
@@ -435,7 +438,7 @@ PassiveVoteBackedEvidenceExact ==
     /\ ActualOutput(c) = SpecOutput(c)
 
 ManifestGateRescheduleExactness ==
-  /\ SafetyFast
+  /\ ManifestGateRescheduleCoreMatchesSpec
   /\ ManifestGateEffectExact
   /\ ManifestGateActionExact
   /\ ManifestGateNoTargetExact

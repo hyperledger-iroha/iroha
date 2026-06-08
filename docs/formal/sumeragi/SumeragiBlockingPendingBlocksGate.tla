@@ -547,7 +547,7 @@ ProgressRescheduleAndAgeWindow ==
        \in ImplementationProgressActions(ProgressGraceClampedNoWindow)
   /\ ImplementationProgressBlocks(ProgressAuthoritativeOnly) = FALSE
 
-NoBugInvariant ==
+BlockingPendingBlocksCoreSafety ==
   /\ ClassicResultMatchesSpec
   /\ ProgressResultMatchesSpec
   /\ ClassicCountsMatchPredicate
@@ -560,6 +560,8 @@ NoBugInvariant ==
   /\ ProgressVoteAndQcEvidenceBlocks
   /\ ProgressRescheduleAndAgeWindow
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == BlockingPendingBlocksCoreSafety
+
+SafetyFast == BlockingPendingBlocksCoreSafety
 
 ====

@@ -313,7 +313,7 @@ TypeInvariant ==
        /\ ImplementationClearsHeightRecovery(c) \in BOOLEAN
        /\ ImplementationRequestsRangePull(c) \in BOOLEAN
 
-SafetyFast ==
+RbcMissingBlockRecoveryMatchesSpec ==
   /\ \A c \in NeedsCases:
        ImplementationNeedsRecovery(c) = SpecNeedsRecovery(c)
   /\ \A c \in ForceCases:
@@ -326,6 +326,9 @@ SafetyFast ==
             SpecClearsExistingRequest(c)
        /\ ImplementationClearsHeightRecovery(c) = SpecClearsHeightRecovery(c)
        /\ ImplementationRequestsRangePull(c) = SpecRequestsRangePull(c)
+
+SafetyFast ==
+  RbcMissingBlockRecoveryMatchesSpec
 
 AllNeedsRecoveryMatches ==
   \A c \in NeedsCases:

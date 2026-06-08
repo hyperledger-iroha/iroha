@@ -360,7 +360,9 @@ pub mod json_macros {
 pub(crate) mod utils;
 pub use utils::{
     JsonBody, NoritoBody, ResponseFormat,
-    extractors::{JsonOnly, Norito, NoritoJson, NoritoJsonWithBytes, NoritoQuery},
+    extractors::{
+        JsonOnly, Norito, NoritoJson, NoritoJsonWithBytes, NoritoQuery, NoritoStringQuery,
+    },
 };
 #[cfg(feature = "app_api")]
 mod account_literal;
@@ -26237,7 +26239,9 @@ async fn handler_sccp_message_proof(
 async fn handler_sccp_message_artifact(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
-    crate::NoritoQuery(evm_destination): crate::NoritoQuery<routing::SccpEvmDestinationQuery>,
+    crate::NoritoStringQuery(evm_destination): crate::NoritoStringQuery<
+        routing::SccpEvmDestinationQuery,
+    >,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {
@@ -26286,7 +26290,9 @@ async fn handler_sccp_message_artifact(
 async fn handler_sccp_message_job(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
-    crate::NoritoQuery(evm_destination): crate::NoritoQuery<routing::SccpEvmDestinationQuery>,
+    crate::NoritoStringQuery(evm_destination): crate::NoritoStringQuery<
+        routing::SccpEvmDestinationQuery,
+    >,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
 ) -> Result<AxResponse, Error> {

@@ -236,7 +236,10 @@ Next == checked' = 1 - checked
 
 TypeInvariant == checked \in 0..1 /\ Bug \in Bugs
 
-SafetyFast == \A c \in Cases: ActualOutput(c) = SpecOutput(c)
+PrfLeaderShuffleMatchesSpec ==
+  \A c \in Cases: ActualOutput(c) = SpecOutput(c)
+
+SafetyFast == PrfLeaderShuffleMatchesSpec
 
 PrfLeaderSelectionExact ==
   \A c \in LeaderSelectionCases:
@@ -255,7 +258,7 @@ PrfWrapperCanonicalShuffleExact ==
     ActualOutput(c) = SpecOutput(c)
 
 PrfLeaderShuffleExactness ==
-  /\ SafetyFast
+  /\ PrfLeaderShuffleMatchesSpec
   /\ PrfLeaderSelectionExact
   /\ PrfLeaderCycleExact
   /\ PrfShufflePermutationExact

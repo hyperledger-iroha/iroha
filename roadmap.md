@@ -29,19 +29,260 @@ and completed history lives in [`status.md`](./status.md).
   helpers, and production readiness surfaces must stay limited to those lanes.
   Retired runtime-network families outside that launch scope are explicitly
   unsupported for now.
-  Retired platform-family lanes are explicitly outside SCCP launch support for
-  now.
+  Retired platform-family lanes are explicitly outside SCCP launch support for now.
+  Retired platform-family networks are explicitly outside SCCP launch support for now.
   Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+  The retired-network surface guard must require that exact specific no-support
+  sentence in each launch-scope file rather than accepting only regex-shaped
+  specific no-support wording.
   Reintroducing any such family requires a new design pass, fresh fixtures, and
   explicit governance approval rather than reviving diagnostic code paths.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source
   and destination chain ids in readiness summaries are decimal-only (`1` for
   Ethereum mainnet, `56` for BSC mainnet), so JSON-RPC quantity spellings such
   as `0x1` and padded values such as `01` remain evidence blockers.
+- SCCP BSC TAIRA XOR route-config generation must reject contradictory
+  post-deploy readiness: production-ready route manifests cannot carry non-empty
+  `postDeployLiveEvidence` production blocker arrays, and malformed blocker
+  containers must fail closed before a governed Torii overlay can be rendered.
+- SCCP active-launch required-record metadata must stay exact: release notes
+  cannot report the active required-records item ready unless the normalized
+  lane summary is domain `1`, chain `eth`, production-ready, and each required
+  record flag is boolean `true` with no unknown record fields.
+- SCCP active-launch unresolved-blocker metadata must stay lane-local:
+  release notes cannot report the no-unresolved-blockers item ready if the
+  active lane carries lane-local blockers, malformed blocker containers, or
+  non-string/empty blocker entries even when the top-level aggregate blocker
+  list is missing those entries.
+- SCCP native EVM prover validation blockers must stay schema-aware in both
+  readiness generation and release-bundle verification: scalar blocker
+  containers, non-string entries, empty strings, and padded strings must become
+  explicit readiness blockers rather than being filtered, character-expanded, or
+  silently treated as ready.
+- SCCP readiness cryptographic-evidence rows must preserve raw boolean and
+  container values from the normalized lane summary. Truthy strings, numeric
+  gate hashes, or malformed source-gate audit containers must remain visible to
+  release-bundle schema checks instead of being coerced into ready-looking
+  values. Missing future-lane route-canary bindings must render as explicit
+  boolean `false`, while present malformed binding values remain preserved for
+  verifier rejection.
+- SCCP all-lanes release checklist source-adapter gates must use exact boolean
+  semantics: malformed `required` or `ready` fields must produce governed
+  deployment blockers rather than clearing through truthiness, and manifest
+  comparisons against recomputed active launch readiness must use exact values.
+  The standalone readiness report must also require the active launch checklist
+  `ready` value to be exactly boolean `true` before top-level
+  `production_ready` can become true. Malformed lane record, destination-binding,
+  route-allowlist, route-canary, or lane-local blocker containers must likewise
+  become explicit checklist blockers rather than tracebacks, hidden route-canary
+  gaps, or falsely ready no-unresolved-blockers state.
+- SCCP all-lanes governed evidence blockers must stay schema-aware: destination
+  rollout and route allowlist `blockers` fields must be empty lists of
+  non-empty canonical strings, and scalar, empty, padded, or non-string entries
+  must remain production blockers instead of being collapsed into generic
+  not-ready state.
+- SCCP active-launch governed-deployment readiness metadata must stay
+  canonical: release notes cannot report the governed deployment ready unless
+  the normalized source-material, source-deployment, destination-binding, and
+  recomputed expected destination-binding hashes are canonical non-zero bytes32
+  values, the supplied binding hash matches the expected value, and the active
+  EVM source-adapter gate summary remains explicitly not required with empty
+  gate metadata.
+- SCCP active-launch route-allowlist readiness metadata must stay canonical:
+  release notes cannot report the launch route binding ready unless the
+  normalized source-material, source-deployment, destination-binding,
+  route-allowlist, and recomputed expected route-allowlist hashes are canonical
+  non-zero bytes32 values and the route hash matches the expected binding tuple.
+- SCCP active-launch route-canary readiness metadata must stay canonical:
+  release notes cannot report the launch lane ready unless the EVM
+  `MessageProofAccepted` evidence source, non-zero transaction hash, finalized
+  receipt block number/hash, receipts root, and message id are present in the
+  normalized route-canary summary.
 - SCCP release readiness now treats Ethereum noncanonical chain-id coverage as
   a production gate: public SDK and evidence-script regressions must continue
   rejecting padded, uppercase, numeric, and whitespace-wrapped `eth_chainId`
   values before local source-proof evidence is accepted.
+- SCCP release readiness now treats Ethereum inbound adversarial coverage as a
+  production gate: public SDK regressions must continue rejecting failed
+  receipts, source-event drift, hash-only proof bypasses, mutable evidence
+  aliases, oversized proof bytes, finality mismatches, weak sync-committee
+  evidence, and wrong-domain receipt transcripts before inbound source proofs
+  are accepted.
+- SCCP release readiness now treats BSC inbound adversarial coverage as a
+  production gate: public SDK regressions must continue rejecting hash-only
+  proof bypasses, receipt-proof metadata drift, source-event digest drift,
+  malformed source logs, and missing source-event validation before BSC inbound
+  source proofs are accepted.
+- SCCP TRON TAIRA XOR route-config generation now rejects production-ready
+  route manifests that still carry `disabledReason` or `disabled_reason`, and
+  rejects contradictory disabled-reason aliases before a governed Torii overlay
+  can advertise a route as live.
+- SCCP TRON TAIRA XOR route-config generation now requires production-ready
+  manifests to carry post-deploy live evidence, `fullTomlReady: true`, and the
+  offline full-TOML SHA-256 before a governed Torii overlay can advertise a
+  route as live.
+- SCCP TRON TAIRA XOR route-config generation now rejects malformed or foreign
+  route manifests before overlay rendering: route id, asset key,
+  counterparty-domain, verifier target, TRON profile, chain id, and network id
+  must match the governed TAIRA XOR TRON lane, and production-ready overlays
+  remain mainnet-only.
+- SCCP TRON TAIRA XOR route-config generation now recomputes destination
+  binding keys and hashes from the declared network, verifier address,
+  verifier code hash, and verifier key hash, then rejects rollout or
+  `destinationBinding` drift before any governed Torii overlay is emitted.
+- SCCP TRON TAIRA XOR route-config generation now rejects stale manifest
+  payloads whose destination verifier backend/proof family, contract-address
+  uniqueness, TAIRA burn-record artifact digest, or settlement route/asset
+  metadata drift from the governed TAIRA XOR lane before overlay rendering.
+- SCCP TRON TAIRA XOR route-config generation now rejects destination-network,
+  verifier-identity, root destination-verifier alias, settlement submit path,
+  and settlement mode drift before a hand-edited manifest can produce a
+  governed Torii overlay.
+- SCCP TRON TAIRA XOR route-config generation now pins route, rollout, and
+  destination-binding schema versions to v1, requires canonical burn-record
+  code hashes, and rejects malformed burn-record VK references before overlay
+  rendering.
+- SCCP TRON TAIRA XOR route-config generation now requires production-ready
+  manifests to retain the post-deploy live-readback acknowledgement, and rejects
+  missing, false, or contradictory camel/snake readback markers before overlay
+  rendering.
+- SCCP TRON route manifests parsed from runtime configuration now normalize
+  core/post-deploy hash fields as non-zero bytes32 values and require
+  production-ready TRON routes to carry full post-deploy evidence anchors before
+  the route can enter the node config.
+- SCCP TRON route manifests parsed from runtime configuration now also reject
+  production-ready TAIRA XOR TRON metadata drift: route id, counterparty domain,
+  asset key, TRON network, chain key, chain id, and verifier target must remain
+  pinned to the governed mainnet lane before the route can enter the node config.
+- SCCP TRON route manifests parsed from runtime configuration now also recompute
+  the dynamic TRON destination-binding key from normalized mainnet network id,
+  destination verifier address, verifier code hash, and verifier key hash, and
+  reject TAIRA burn-record settlement asset, verifier-key backend/name, or gas
+  limit drift before a production-ready route can enter the node config.
+- SCCP TRON route manifests parsed from runtime configuration now also require
+  token, bridge, source bridge, and destination verifier literals to be
+  canonical non-zero TRON Base58Check mainnet addresses and reject duplicate
+  contract-role addresses before the route can enter the node config.
+- SCCP TRON route manifests parsed from runtime configuration must also reject
+  production-ready post-deploy blocker drift: scalar, empty, padded, or
+  non-string `postDeployLiveEvidence` blocker containers fail closed, and
+  non-empty blocker lists cannot coexist with `productionReady: true`.
+- SCCP TRON TAIRA XOR route-manifest generation must reject contradictory
+  source-event transaction readiness: production-ready live evidence cannot carry
+  non-empty `source_event_transaction_production_blockers`, and malformed blocker
+  containers must fail closed before a production-ready route manifest can be
+  rendered.
+- SCCP release readiness now treats corridor phase-evidence source handling as
+  a production gate: readiness-report and release-bundle CLI regressions must
+  continue rejecting duplicate phase evidence assignments and directory
+  override collisions before corridor evidence can satisfy production
+  readiness.
+- SCCP release readiness now treats release bundle source-copy preflights as a
+  production gate: bundle CLI regressions must continue rejecting symlinked or
+  control-character evidence inputs, phase evidence, native EVM prover
+  manifests, and native prover payload sources before bundle copy can run.
+- SCCP release readiness now treats release bundle output-path preflights as a
+  production gate: bundle CLI regressions must continue rejecting symlinked
+  output directories, symlinked output ancestors, and control-character output
+  directory paths before bundle generation can create or overwrite release
+  artifacts.
+- SCCP release readiness now treats release artifact path text preflights as a
+  production gate: bundle and readiness regressions must continue rejecting
+  Markdown-unsafe artifact paths, native prover payload paths, copied filenames,
+  and bundle filesystem entries before release notes can render artifact
+  tables.
+- SCCP release-bundle manifest readiness flags must preserve exact report
+  booleans: bundle generation must not truthy-coerce malformed
+  `production_ready`, `release_checklist.ready`, or corridor readiness values
+  into public manifest `true` claims. Release-note status rendering, bundle
+  preflight publication checks, verifier not-ready checks, and generated-bundle
+  self-verification should only treat report `production_ready is True` as
+  ready. Readiness Markdown row rendering must likewise use exact booleans for
+  checklist items, lane production status, lane record flags, route-canary
+  binding labels, and native-prover required labels, and must mark malformed
+  top-level readiness, release-note, release-bundle preflight, native-prover,
+	  source-inventory, and user-prover blocker containers as invalid cells/items
+	  instead of flattening strings or raising during verifier-owned Markdown
+	  generation. Embedded readiness evidence and standalone all-lanes root
+	  blocker summaries plus active-lane blocker containers must also be list-shaped
+	  before active-launch blocker collection runs, so malformed strings cannot
+	  become character-by-character blockers or disappear from verifier checks.
+	  Release-bundle generation must validate the structure of both the initial
+	  preflight report and the copied-evidence bundle-local report before Markdown
+	  rendering or manifest creation, so malformed report objects fail with explicit
+	  preflight diagnostics instead of uncaught indexing exceptions.
+	  Verifier-owned Markdown invariants must independently require
+	  checklist, lane, native-prover, source-inventory, user-prover, and top-level
+  blocker text or invalid-marker cells/items so a hand-edited attachment cannot
+  hide readiness blockers while preserving the surrounding table structure.
+  Release-notes attachment invariants must likewise require the canonical
+  title, exact readiness status line, manifest handoff, artifact table entries,
+  and blocker lines or invalid-marker bullets before the canonical attachment
+  comparison runs.
+  All-lanes evidence summaries must also use exact booleans for
+  checklist aggregation, record-presence gates, and CLI success exits, and
+  require canonical non-zero route-canary evidence hashes plus the expected
+  live evidence source for each lane before canary readiness can pass. Malformed
+  lane record, destination-binding, route-allowlist, route-canary, or lane-local
+  blocker containers must become explicit checklist blockers instead of raising
+  during summary rendering or letting no-unresolved-blockers pass. The
+  public release-bundle verifier's
+  recomputed active launch checklist must mirror the generator's exact required
+  record, governed-deployment, route-allowlist, and route-canary metadata
+  blockers before comparing manifest readiness against the all-lanes summary.
+- SCCP release readiness now treats Ethereum outbound pre-callback coverage as
+  a production gate: public SDK regressions must continue rejecting foreign-lane
+  outbound requests, forged destination bindings, missing or partial
+  proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof
+  material before outbound prover callbacks can run.
+- SCCP release readiness now treats Ethereum outbound provider validation as a
+  production gate: public SDK and facade regressions must continue validating
+  app-supplied Ethereum mainnet execution providers before outbound submitter
+  callbacks can run.
+- SCCP release readiness now treats Ethereum local-admission coverage as a
+  production gate: public SDK regressions must continue rejecting mutated proof
+  bytes, all-zero proof/public-input/bundle/envelope bytes, empty envelopes,
+  zero statement/source-material/source-adapter hashes, and stale proof-family
+  metadata before local admission payloads are submitted.
+- SCCP release readiness now treats Ethereum receipt-root zero rejection as a
+  production gate: public SDK regressions must continue rejecting all-zero typed
+  receipt roots before receipt-proof bytes can be built.
+- SCCP release readiness now treats Ethereum receipt RLP zero-topic handling as
+  a production gate: public SDK and evidence-helper regressions must continue
+  preserving zero log topics in generic receipt RLP before SCCP source-event
+  ABI filtering runs.
+- SCCP release readiness now treats Ethereum receipt RLP zero-address handling
+  as a production gate: public SDK and evidence-helper regressions must
+  continue preserving zero log addresses in generic receipt RLP before SCCP
+  source-event ABI filtering runs.
+- SCCP release readiness now treats Ethereum source-event context binding as a
+  production gate: receipt-proof evidence regressions must continue binding
+  source-event logs to receipt transaction hash, block hash, and block number
+  before source-event evidence is accepted.
+- SCCP release readiness now treats Ethereum source-event evidence mode as a
+  production gate: receipt-proof evidence regressions must continue requiring
+  source-bridge validation or an explicit receipt-only mode before receipt
+  proof summaries can be emitted.
+- SCCP release readiness now treats Ethereum source-event zero-digest rejection
+  as a production gate: receipt-proof evidence regressions must continue
+  rejecting all-zero source-event digests before source-event evidence is
+  accepted.
+- SCCP release readiness now treats Ethereum receipt RPC duplicate-JSON
+  rejection as a production gate: receipt-proof evidence regressions must
+  continue rejecting duplicate JSON-RPC result or receipt keys before receipt
+  proof evidence is parsed.
+- SCCP release readiness now treats Ethereum block receipt transaction-hash
+  uniqueness as a production gate: receipt-proof evidence regressions must
+  continue rejecting duplicate transaction hashes in block receipt lists before
+  receipt trie proofs can be built.
+- SCCP release readiness now treats Ethereum JavaScript receipt admission as a
+  production gate: browser proof regressions must continue rejecting receipt
+  metadata drift, missing beacon finality, typed receipts, and mutable prover
+  callback evidence before local proving can run.
+- SCCP release readiness now treats Ethereum SDK receipt metadata binding as a
+  production gate: public SDK regressions must continue rejecting
+  block-receipt metadata drift and typed receipts before receipt proof builders
+  can run.
 - Keep the direct-Serde migration closed: `scripts/serde_allowlist.txt` is
   empty, and `make guards` keeps new direct `serde_json` usage and retired
   non-Norito codec dependencies, including renamed retired-codec package
@@ -2799,7 +3040,8 @@ and completed history lives in [`status.md`](./status.md).
   cross-checks; the current local TLC slice covers the top-level commit-path
   fast model under the fairness-backed `Spec`, including finality and
   finality latch/phase equivalence, commit-certificate finality equivalence,
-  live commit-gate finality equivalence,
+  live commit-gate finality equivalence, NPoS stake-quorum fork-safety via
+  `fork-npos`,
   live commit-gate RBC evidence binding,
 	  RBC CHUNK gate header/digest matching,
 	  RBC READY gate full-chunk matching,
@@ -3071,13 +3313,13 @@ and completed history lives in [`status.md`](./status.md).
   frontier stale-recovery unlock owner cleanup expected-failure mutation,
   frontier view-bound drop retransmit evidence,
   frontier view-bound drop retransmit evidence expected-failure mutation,
-  validation redrive labels, raw QC signer-bitmap population counting, and
-  signer-index normalization, precommit vote-progress counting, precommit
+  direct validation redrive labels, direct raw QC signer-bitmap population counting, and
+  direct signer-index normalization, precommit vote-progress counting, precommit
   locked-payload vote gating, commit-QC
   signer quorum gating, commit-QC cache/history lookup, precommit signer record
-  admission, validation ownership cleanup, stable worker-loop stage helpers,
-  worker tick-gap scheduling, vNext performance config conversion,
-  pending-block validation worker config derivation, commit-worker channel
+  admission, validation ownership cleanup, direct stable worker-loop stage helpers,
+  direct worker tick-gap scheduling, direct vNext performance config conversion,
+  direct pending-block validation worker config derivation, commit-worker channel
   capacity normalization, slow commit-stage timing threshold detection,
   commit-inflight timeout reporting, commit-inflight timeout mark persistence
   expected-failure mutation, post-commit pacemaker kickstart gating,
@@ -3099,111 +3341,114 @@ and completed history lives in [`status.md`](./status.md).
   slot tracker state map semantics, proposal-seen horizon expected-failure
   mutations,
   timeout/cooldown derivation semantics, round/view helper semantics,
-  PhaseTracker mutable state semantics, failed-commit/block-sync helper
+  PhaseTracker mutable state semantics, direct failed-commit/block-sync helper
   semantics, missing-QC timing derivation, idle backlog signal derivation,
-  proposal-liveness state transitions, actionable vote-backed proposal
-  evidence admission, slot proposal evidence lookup and fall-through,
-  round-liveness evidence aggregation, roster-unavailability recovery FSM
-  transitions, consensus-recovery clear/prune retention semantics,
-  frontier live-owner work preservation semantics, frontier live-owner
-  conflict-adapter expected-failure mutations, keep-frontier pending-active
-  preservation semantics, stale-view pending prune cleanup semantics,
-  superseded frontier payload retention semantics, stale missing-block request
-  prune semantics, stale missing commit-QC request prune semantics,
-  stale RBC session prune semantics, highest-QC defer-marker prune semantics,
-  fast-finality inline validation semantics,
+  proposal-liveness state transitions, direct actionable vote-backed proposal
+  evidence admission, direct slot proposal evidence no-bug lookup/fall-through,
+  direct round-liveness no-bug evidence aggregation, direct
+  roster-unavailability recovery FSM no-bug transitions, consensus-recovery
+  clear/prune retention semantics,
+  direct frontier live-owner work preservation semantics, frontier live-owner
+  conflict-adapter expected-failure mutations, direct keep-frontier pending-active
+  preservation semantics, direct stale-view pending prune no-bug cleanup
+  semantics, direct superseded frontier payload retention semantics, direct stale
+  missing-block request prune no-bug semantics, direct stale missing commit-QC
+  request prune no-bug semantics, direct stale RBC session prune no-bug
+  semantics, direct highest-QC defer-marker prune semantics,
+  fast-finality inline validation component/anchor semantics,
   observer signature-mismatch recovery semantics,
-  validation failure finalization semantics,
-  validation reject reason-label classification semantics,
-  validation reject status accounting semantics,
-  peer-key policy status accounting semantics,
-  view-change cause status accounting semantics,
-  view-change proof status accounting semantics,
-  QC status projection semantics,
-  commit-quorum status projection semantics,
-  commit-inflight status projection semantics,
-  history status projection semantics,
-  RBC abort status accounting semantics,
-  RBC mismatch status accounting semantics,
-  RBC progress-stage synchronization semantics,
-  RBC hot-repair/backpressure semantics,
-  RBC repair request cooldown/targeting semantics,
-  RBC targeted READY/DELIVER repair semantics,
-  RBC outbound chunk flush semantics,
-  RBC chunk post scheduling/debug-mask semantics,
-  RBC READY/DELIVER deferral throttle semantics,
-  RBC missing-INIT broad rebroadcast semantics,
-  round-gap marker/snapshot/EMA status semantics,
-  RBC missing BlockCreated recovery semantics,
-  RBC unverified-roster escape-hatch semantics,
-  RBC signing-preimage binding semantics,
+  direct validation failure finalization semantics,
+  direct validation reject reason-label classification semantics,
+  validation reject status accounting component/anchor semantics,
+  peer-key policy status accounting component/anchor semantics,
+  view-change cause status accounting component/anchor semantics,
+  view-change proof status accounting component/anchor semantics,
+  QC status projection component/anchor semantics,
+  commit-quorum status projection component/anchor semantics,
+  commit-inflight status projection component/anchor semantics,
+  history status projection component/anchor semantics,
+  RBC abort status accounting component/anchor semantics,
+  RBC mismatch status accounting component/anchor semantics,
+  direct RBC progress-stage synchronization semantics,
+  direct RBC hot-repair/backpressure semantics,
+  direct RBC repair request cooldown/targeting semantics,
+  direct RBC targeted READY/DELIVER repair semantics,
+  direct RBC outbound chunk flush semantics,
+  direct RBC chunk post scheduling/debug-mask semantics,
+  direct RBC READY/DELIVER deferral throttle semantics,
+  direct RBC missing-INIT broad rebroadcast semantics,
+  round-gap marker/snapshot/EMA status component/anchor semantics,
+  direct RBC missing BlockCreated recovery semantics,
+  direct RBC unverified-roster escape-hatch semantics,
+  RBC signing-preimage component/anchor binding semantics,
   classic Vote/VRF signing-preimage aggregate exactness,
-  classic Vote/QC signature-verification semantics,
-  invalid-signature telemetry label semantics,
-  invalid-signature throttle/penalty semantics,
-  penalty offender-selection attribution semantics,
+  classic Vote/QC signature-verification component/anchor semantics,
+  direct invalid-signature telemetry label semantics,
+  invalid-signature throttle/penalty component/anchor semantics,
+  direct penalty offender-selection attribution semantics,
   consensus penalty-action derivation/application semantics,
-  penalty status projection semantics,
-  local peer removed flag semantics,
-  execution-witness root projection semantics,
-  RBC compact block-message aggregate exactness,
-  consensus block-message priority aggregate exactness,
-  block-message height/view aggregate exactness,
-  block-message log/status kind aggregate exactness,
-  consensus message projection semantics,
+  penalty status projection component/anchor semantics,
+  local peer removed flag component/anchor semantics,
+  direct execution-witness root projection component/anchor semantics,
+  direct RBC compact block-message exactness/component semantics,
+  direct consensus block-message priority exactness/component semantics,
+  direct block-message height/view exactness/component semantics,
+  direct block-message log/status kind exactness/component semantics,
+  direct consensus message projection semantics,
   pipeline event emission semantics,
-  cached block-message wire-frame aggregate exactness,
-  BlockCreated frontier metadata wire/rebuild aggregate exactness,
+  direct cached block-message wire-frame component/anchor semantics,
+  direct BlockCreated frontier metadata wire/rebuild component/anchor semantics,
   direct BlockCreated payload admission aggregate exactness,
-  cached proposal rebroadcast semantics,
-  exact-slot frontier recovery activity semantics, exact-slot aggregate
+  direct cached proposal rebroadcast component/anchor semantics,
+  direct exact-slot frontier recovery activity semantics, exact-slot aggregate
   activity-source exactness,
-  frontier reassembly activity semantics, frontier reassembly aggregate
+  direct frontier reassembly activity semantics, frontier reassembly aggregate
   activity-source exactness,
-  frontier quorum-owner cleanup preservation semantics, frontier quorum-owner
-  aggregate cleanup exactness,
-  contiguous-frontier sidecar retarget semantics, contiguous-frontier sidecar
-  retarget aggregate exactness,
-  contiguous-frontier sidecar expected-hash semantics, contiguous-frontier
-  sidecar expected-hash aggregate exactness,
-  contiguous-frontier payload-hint selection semantics, contiguous-frontier
-  payload-hint aggregate exactness,
-  contiguous-frontier parent-QC hint retarget semantics, contiguous-frontier
-  parent-QC hint retarget aggregate exactness,
-  vote-verification worker config derivation, vote-verification worker config
+  direct frontier quorum-owner cleanup preservation semantics, frontier
+  quorum-owner aggregate cleanup exactness,
+  direct contiguous-frontier sidecar retarget semantics, contiguous-frontier
+  sidecar retarget aggregate exactness,
+  direct contiguous-frontier sidecar expected-hash semantics,
+  contiguous-frontier sidecar expected-hash aggregate exactness,
+  direct contiguous-frontier payload-hint selection semantics,
+  contiguous-frontier payload-hint aggregate exactness,
+  direct contiguous-frontier parent-QC hint retarget semantics,
+  contiguous-frontier parent-QC hint retarget aggregate exactness,
+  direct vote-verification worker config derivation, direct vote-verification worker config
   aggregate exactness,
   QC aggregate-verification worker config derivation, QC aggregate-verification
   worker config aggregate exactness,
   voting-roster support counting, voting-roster support-count aggregate
   exactness, collector retry/gossip plans, collector retry/gossip plan
-  aggregate exactness, collector fanout/selection semantics, plus collector
-  fanout/selection aggregate exactness,
-  topology ordered-roster mutation semantics, topology ordered-roster aggregate
-  exactness, PRF leader/shuffle topology semantics, PRF leader/shuffle
-  aggregate exactness, topology fanout/redundant-send semantics,
-  topology fanout/redundant-send aggregate exactness, topology role-filter
+  aggregate exactness, direct collector fanout/selection semantics, plus
+  collector fanout/selection direct exactness,
+  direct topology ordered-roster mutation no-bug semantics, topology
+  ordered-roster aggregate exactness, PRF leader/shuffle topology semantics,
+  PRF leader/shuffle
+  aggregate exactness, direct topology fanout/redundant-send semantics,
+  direct topology fanout/redundant-send aggregate exactness, topology role-filter
   semantics, topology role-filter aggregate exactness, active topology-selection
   semantics, active topology-selection aggregate exactness, trusted-peer P2P
   topology semantics, trusted-peer P2P topology aggregate exactness, P2P
   topology refresh semantics, P2P topology refresh aggregate exactness, quorum
-  retransmit target semantics, quorum retransmit target aggregate exactness,
-  retransmit backpressure aggregate exactness, paced retransmit target
-  aggregate exactness, quorum reschedule backoff aggregate exactness,
-  RBC availability reschedule aggregate exactness, vote-backed reassembly stall
-  aggregate exactness, completed quorum view-advance aggregate exactness,
-  quorum rebroadcast dispatch aggregate exactness, isolated vote-backed handoff
-  aggregate exactness, preemptive vote-backed retransmit aggregate exactness,
-  near-quorum preemptive escalation aggregate exactness, manifest-gate
+  retransmit target semantics, direct quorum retransmit target aggregate exactness,
+  direct retransmit backpressure aggregate exactness, direct paced retransmit
+  target aggregate exactness, direct quorum reschedule backoff aggregate exactness,
+  direct RBC availability reschedule aggregate exactness, direct vote-backed reassembly stall
+  aggregate exactness, direct completed quorum view-advance component semantics,
+  direct quorum rebroadcast dispatch aggregate exactness, isolated vote-backed handoff
+  aggregate exactness, direct preemptive vote-backed retransmit aggregate
+  exactness, direct near-quorum preemptive escalation aggregate exactness, manifest-gate
   reschedule aggregate exactness, QC signer-bitmap admission aggregate
-  exactness, raw QC signer-count aggregate exactness, QC signer-bitmap
-  construction aggregate exactness, signer-index normalization aggregate
+  exactness, direct raw QC signer-count aggregate exactness, QC signer-bitmap
+  construction aggregate exactness, direct signer-index normalization aggregate
   exactness, commit-root consistency aggregate exactness, commit-pipeline
-  recovery aggregate exactness, known-block commit-QC recovery aggregate
-  exactness, stale-view commit-QC fetch aggregate exactness, commit-anchor QC
+  recovery aggregate exactness, direct known-block commit-QC recovery aggregate
+  exactness, stale-view commit-QC fetch aggregate exactness, direct commit-anchor QC
   promotion aggregate exactness, committed-height QC admission aggregate
-  exactness, empty-block QC drop aggregate exactness, pending-progress
-  accounting aggregate exactness, pending-block lifecycle aggregate exactness,
-  pending-block marker/cooldown aggregate exactness, pending-block Kura retry
+  exactness, direct empty-block QC drop component semantics, pending-progress
+  accounting aggregate exactness, direct pending-block lifecycle no-bug exactness,
+  direct pending-block marker/cooldown no-bug exactness, pending-block Kura retry
   aggregate exactness, commit-pipeline scheduling aggregate exactness,
   commit-QC cache/history lookup aggregate exactness, cached-QC precommit
   signer-record aggregate exactness, roster-validation memo cache aggregate
@@ -3212,8 +3457,8 @@ and completed history lives in [`status.md`](./status.md).
   exactness, block roster cache aggregate exactness, block-sync roster evidence
   aggregate exactness, block-sync history roster aggregate exactness,
   persisted block-sync roster selection aggregate exactness, BlockSyncUpdate
-  roster hydration aggregate exactness, roster index projection aggregate
-  exactness, membership-view hash aggregate exactness, membership mismatch
+  roster hydration aggregate exactness, direct roster index projection no-bug
+  exactness, direct membership-view hash no-bug exactness, membership mismatch
   status aggregate exactness, membership advert publication aggregate
   exactness, membership mismatch ingress/fail-closed aggregate exactness,
   consensus-params ingress aggregate exactness, prevalidated commit artifact
@@ -6924,13 +7169,17 @@ operator-provided rollout bundles.
   The all-lanes release summary now also publishes the supported launch-domain
   set and the unsupported diagnostic-domain set as separate verified fields, so
   release tooling can reject launch-scope tampering instead of inferring scope
-  only from lane blockers. The readiness source inventory now also includes
+  only from lane blockers. The direct all-lanes validator must also convert
+  malformed evidence roots or non-string section keys into structured blockers
+  instead of raising before lane blockers can be emitted. The readiness source
+  inventory now also includes
   `launch_scope_constant_gate`, `retired_network_surface_gate`, and
   `unready_transparent_proof_config_gate`, backed by the same strict source
   marker scans as public release-bundle verification, so the active launch-policy
   constants, supported launch-domain set, launch-scope no-support note,
-  active-tree scan, and config-owned diagnostic transparent-proof toggle must
-  remain present before production reports can pass. Public native EVM SDK
+  exact specific no-support sentence, active-tree scan, and config-owned
+  diagnostic transparent-proof toggle must remain present before production
+  reports can pass. Public native EVM SDK
   path-marker denylist strings are assembled from split literals so the
   no-WASM/no-remote source inventory can keep catching actual forbidden
   dependency tokens without flagging the guard implementation itself. The
@@ -8201,9 +8450,10 @@ or ABI behavior.
 	  versioned circuit/key-material commitments that bind the canonical circuit id,
 	  registered BFV parameter digest, RNS modulus-chain digest, key-switch
 	  decomposition-chain digest, bootstrap artifact digests, and proof
-	  public-input schema/prover-key/verifier-key digests. The material validator
-	  rejects zero commitments, duplicate artifact/proof commitments, and artifact
-	  or proof commitments that reuse registered profile digests, keeping each
+	  public-input schema/prover-key/verifier-key digests plus typed
+	  prover/verifier key-material commitments. The material validator rejects
+	  zero commitments, duplicate artifact/proof/key-material commitments, and
+	  artifact or proof commitments that reuse registered profile digests, keeping each
 	  governed digest role partitioned at admission. Bundle admission and
 	  digesting bind that material, while refresh/proof paths and direct
 	  no-artifact registered execution fail closed with an explicit governed
@@ -8241,14 +8491,16 @@ or ABI behavior.
 	  unverified fake full-material proofs, and
 	  `RegisterVerifyingKey`/`UpdateVerifyingKey` admission rejects canonical
 	  full-material verifier-profile drift before job execution. Job admission now
-	  also requires the material proof schema digest and verifier-key digest to
-	  match the canonical Soracloud proof schema and proof attachment verifier
-	  commitment through the BFV crypto proof-profile validator, and rejects
+	  also requires the material proof schema digest and verifier key-material
+	  commitment to match the canonical Soracloud proof schema and proof
+	  attachment verifier commitment through the BFV crypto proof-profile
+	  validator, and rejects
 	  supplied full-material proof attachments that omit `vk_commitment` at the
 	  material/profile gate before backend verifier lookup. The Rust, Swift,
 	  Kotlin/JVM, and Java Android shared Soracloud BFV operation-fixture validators
-	  now pin the full-bootstrap material/profile digest, verifier-key commitment,
-	  and statement vector so SDK/release validation can reject fixture drift before
+	  now pin the full-bootstrap material/profile digest, verifier-key material
+	  commitment, artifact-envelope digest, and statement vector so SDK/release
+	  validation can reject fixture drift before
 		  artifact-aware execution or proof verification. Full-mode exact
 		  and bounded runtime bootstrap paths now use dedicated crypto preflight
 		  helpers that validate governed material commitments, registered profile
@@ -8297,13 +8549,18 @@ or ABI behavior.
 							  wrong-slot-count, malformed, or all-zero accumulator payloads. The proof
 							  public-input schema and prover/verifier key artifacts now also carry typed
 							  proof-profile payloads that bind the canonical backend, key format,
-							  circuit id, statement-hash layout, and governed schema digest while
+							  circuit id, statement-hash layout, governed schema digest, and inner
+							  prover/verifier key role, with domain-separated key-material commitments
+							  over the backend-native key bytes, while
 							  rejecting opaque schema/key bytes, empty or all-zero key material, and
 							  duplicate prover/verifier key material. Crypto now also exposes a domain-separated
 							  full-bootstrap execution proof statement
 							  digest that validates and binds the public key, governed bootstrap
 							  key/material, concrete artifact bundle, input/output ciphertexts, exact or
-							  bounded proof mode, and input/output bound metadata for the verifier.
+							  bounded proof mode, input/output bound metadata, and execution-witness
+							  digest for the verifier. The Soracloud execution proof public-input
+							  schema and stable hash now advertise that witness digest, so verifier
+							  records cannot retain the pre-witness claim layout by metadata accident.
 							  `RunSoracloudFheJob` now carries optional full-bootstrap artifacts plus
 							  an ordered execution-proof vector; provenance signs both, and Core routes
 							  exact/bounded full-mode jobs through artifact-aware full-bootstrap execution
@@ -8316,20 +8573,51 @@ or ABI behavior.
 							  envelope bytes for Soracloud FHE input, bootstrap-key, full-bootstrap
 							  material, and full-bootstrap execution proofs, and data-model proof
 							  envelopes plus FHE parameter-set, execution-policy, Soracloud
-							  uploaded-model, and private-execution digest fields reject the zero
-							  prehash statement sentinel before verifier dispatch, parameter
-							  admission, policy admission, job input admission, ciphertext-state
-							  admission, or uploaded-model receipt admission.
+							  uploaded-model, private-execution, agent-apartment/autonomy,
+							  training metrics, HF source/shared-lease/violation evidence,
+							  model provenance, and host request/response envelope digest fields
+							  reject the zero prehash statement sentinel before verifier dispatch,
+							  parameter admission, policy admission, job input admission,
+							  ciphertext-state admission, uploaded-model receipt admission, or model
+							  artifact admission.
 							  A `zk-stark` positive fixture now installs the governed
 							  artifact-backed STARK verifier key, generates backend-verified
 							  `OpenVerifyEnvelope` proofs over each full-bootstrap execution
 							  statement, and proves the active-verifier gate accepts them when
 							  STARK verification is enabled at runtime.
-							  Matching `zk-stark` positive fixtures cover the bootstrap-key and
-							  full-bootstrap material proof gates with active verifier records and
-							  backend-verified `OpenVerifyEnvelope` proofs.
-							  A `zk-preverify` positive fixture now proves the active-verifier gate
-							  accepts a preverified proof batch for every production identifier slot.
+								  Matching `zk-stark` positive fixtures cover the bootstrap-key and
+								  full-bootstrap material proof gates with active verifier records and
+								  backend-verified `OpenVerifyEnvelope` proofs.
+								  Core now also exposes `zk-stark` full-bootstrap material and
+								  execution proof constructors that take the canonical statement hash,
+								  call the STARK/FRI envelope prover, derive `vk_commitment` and
+								  `envelope_hash` from the generated proof bytes, and reject
+								  cross-circuit proof boxes before returning production
+								  `ProofAttachment` values.
+								  Companion helpers now derive those statement hashes from the
+								  production BFV inputs before proving: material proofs use the
+								  refresh-transcript public key and governed evaluation-key bundle, and
+									  execution proofs build one slot-indexed input/output ciphertext claim
+									  per output slot with the signed bound mode and bound metadata while
+									  rejecting empty input slots and missing/surplus output slots before
+									  proof construction.
+								  Canonical Soracloud FHE STARK verifier-key admission now covers input
+								  admission, bootstrap-key, full-bootstrap material, and
+								  full-bootstrap execution records with a shared production-floor
+								  STARK/FRI payload validator, so below-floor inline verifier keys fail
+								  during `RegisterVerifyingKey`/`UpdateVerifyingKey` before runtime
+								  proof verification can depend on them.
+								  Governed full-bootstrap execution verifier-key artifacts also decode
+								  and validate the inner STARK/FRI verifier-key payload against that
+								  canonical execution circuit under `zk-stark`, so opaque or below-floor
+								  artifact bytes fail before a governed `VerifyingKeyBox` is derived.
+								  Core also decodes full-bootstrap execution native
+								  `StarkVerifyEnvelopeV1` payloads before backend verification and
+								  adversarially rejects transcript-label, domain-tag, missing-AIR,
+								  circuit-id, trace-width, opening-count, composition-root, and
+								  public-digest drift.
+								  A `zk-preverify` positive fixture now proves the active-verifier gate
+								  accepts a preverified proof batch for every production identifier slot.
 							  The confidential verifier-call defaults now admit one such Soracloud
 							  full-bootstrap execution batch without an operator override.
 							  Torii signed job-run preflight now resolves every signed parameter-set
@@ -8355,10 +8643,11 @@ or ABI behavior.
 							  Core regressions now also prove that correctly shaped full-bootstrap
 							  execution proof attachments fail closed before backend verification
 							  when the governed verifier record is missing or withdrawn.
-							  The Core proof helper now also reruns local job-shape validation and
-							  requires input-bound metadata to match the input envelope count before
-							  deriving proof statements, so stale bound sidecars and multi-input
-							  bootstrap drift cannot reach proof verification.
+							  The Core proof helper now also reruns local job-shape validation,
+							  requires input-bound metadata to match the input envelope count,
+							  and rejects missing/surplus output slots before deriving proof
+							  statements, so stale bound sidecars, stale output sidecars, and
+							  multi-input bootstrap drift cannot reach proof verification.
 							  It also rejects full-bootstrap execution circuit artifacts outside
 							  full-bootstrap proof context even when no execution-proof attachments are
 							  supplied, so artifact-only bypass attempts fail at the proof boundary.
@@ -8366,12 +8655,99 @@ or ABI behavior.
 							  metadata drift across namespace, backend, curve, public-input schema,
 							  circuit/version, gas schedule, active circuit mapping, proof byte caps,
 							  key presence/length, commitment, and governed verifier-key byte binding.
+							  Core now also forges governed verifier-key artifacts with empty and
+							  all-zero backend-native key bytes, proving inert key material fails
+							  before verifier-record lookup even when artifact digest/commitment
+							  metadata is recalculated.
+							  The typed proof-key artifact encoder now also rejects stale declared
+							  key-material commitments before emission, and crypto regressions pin
+							  artifact-derived commitment rejection for role swaps, depth drift,
+							  stale commitments, and inert backend-native key bytes.
+							  Material proof-statement regressions now also drift prover/verifier
+							  key-material commitments directly, proving those commitments change
+							  both the crypto statement digest and Soracloud's transcript-derived
+							  policy digest.
+							  Full-bootstrap execution proof statements now bind the zero-based output
+							  slot index, and Core rejects slot-position replay even when duplicate
+							  ciphertext slots would otherwise produce identical input/output claims.
+							  Full-bootstrap jobs now also require `bootstrap_count == 1` in Core
+							  execution, bound propagation, proof verification, and Torii
+							  signed-request preflight, so the one-proof-per-output-slot statement
+							  cannot be replayed as a multi-round full-bootstrap claim.
+							  Core now also preflights full-bootstrap execution-proof material after
+							  loading FHE inputs and before artifact-aware execution, rejecting proof
+							  vectors whose length does not match the actual input/output slot count
+							  before the heavier arithmetic path runs.
+							  Exact and bounded-noise Core runtime coverage now also rejects drifted
+							  signed artifact bundles, role-swapped artifact envelopes, and stale
+							  prover/verifier key-material commitments before Galois-key availability
+							  or final output execution.
+							  Full-bootstrap proof-key payloads now also bind the canonical execution
+							  public-input layout and a generated prover/verifier pair commitment;
+							  governed material stores that pair commitment and Core/Torii recompute
+							  it from decoded proof-key artifacts before accepting signed material.
+							  Torii signed-request preflight coverage now also rejects full-bootstrap
+							  artifact attachments outside full-bootstrap context and binds a matching
+							  signed material digest to a role-swapped artifact envelope before
+							  rejecting the wrong declared role or stale prover/verifier key-material
+							  commitments locally before instruction construction.
 							  The legacy no-artifact Core execution helpers are test-only, so production
-							  full-mode jobs must pass through the governed artifact-aware path.
-						  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-						  Remaining work is the audited full-bootstrap arithmetic proof-producing
-						  backend plus release-grade prover/verifier artifacts, not the Core verifier
-						  gate or statement-recomputation policy path.
+							  full-mode jobs must pass through the governed artifact-aware path; the
+							  no-artifact residual-bound wrapper is also test-only, keeping the
+							  non-test Core path on artifact-aware execution and bound propagation.
+							  Direct exact and bounded no-artifact crypto helpers now also reject drifted
+							  governed full-bootstrap material before artifact availability, so stale
+							  material cannot be masked by the expected artifact-required boundary.
+							  Full-bootstrap artifact-bundle digests now use typed digest material with
+							  version, artifact-digest count, and per-role artifact hashes, with valid
+							  alternate-artifact regressions pinning every mutable artifact role that
+							  can vary under the first-release profile.
+							  Full-bootstrap execution proof statement tests now also pin canonical
+							  exact and bounded proof-mode digest goldens for that typed artifact-bundle
+							  layout.
+							  Full-bootstrap proof-profile schema/key tests now flip every required
+							  statement/claim binding and proof-key commitment component, pinning the
+							  prover/verifier artifact contract plus canonical proof schema artifact,
+							  governed parameter/profile/depth-bound prover/verifier key-material
+								  commitments, and prover-key commitment digests before release-grade keys
+								  are admitted. Data-model
+								  tests also pin the Soracloud FHE public-input schema hashes that
+								  verifier records use for input admission, bootstrap-key proof,
+								  full-bootstrap material proof, and full-bootstrap execution proof gates.
+								  Full-bootstrap execution claims now also carry a deterministic witness
+								  digest derived from the governed artifact-aware arithmetic prefix trace
+								  and its exact/bounded bound trace. Core proof generation and verification
+								  recompute that digest before statement hashing, so output ciphertext,
+								  output-bound, or witness-digest drift fails before STARK envelope
+								  verification.
+								  The proof public-input schema and prover/verifier key profile now also
+								  advertise and commit to the witness digest domain, witness material
+								  version/count, ciphertext trace stage count, and bound trace stage count,
+								  so stale witness-layout metadata fails schema validation, key validation,
+								  and key-commitment checks before backend proof work.
+								  Proof-key `key_material` now carries a canonical Norito envelope that
+								  binds backend-native key bytes to the role, backend, key format, circuit,
+								  registered BFV profile, governed schema digest, statement/claim layout,
+								  witness layout, hash shape, and supported bound modes; opaque key blobs,
+								  all-zero native key bytes, envelope metadata drift, and duplicate native
+								  prover/verifier key material fail before governed artifact admission.
+								  Core now also requires the full-bootstrap material proof verifier record
+								  to carry the canonical material-proof gas schedule id and has
+								  adversarial verifier-record drift coverage matching the execution-proof
+								  gate. Input-admission and bootstrap-key proof verifier records now
+								  likewise require their canonical gas schedule ids rather than any
+								  non-empty schedule id.
+							  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
+									  Remaining work is the audited full-bootstrap arithmetic witness
+									  constraint/proof-producing backend plus release-grade native BFV
+									  prover/verifier key generation artifacts, not the Core verifier gate,
+									  deterministic witness digest binding, witness-layout proof-profile
+									  metadata, proof-key material envelope admission, STARK envelope
+									  construction, native AIR metadata admission, attachment finalization,
+									  statement-recomputation policy path,
+									  canonical Soracloud
+									  verifier-record/verifier-artifact admission-floor enforcement, or
+									  governed proof-key pair admission.
 	  Soracloud transcript digesting now preflights the advertised BFV public-key
 	  shape before evaluation-key bundle validation, so malformed transcript key
 	  material is reported at the public-key boundary instead of being masked by
@@ -8838,18 +9214,46 @@ or ABI behavior.
   Soracloud Bootstrap job-spec validation and runtime planner admission now
   also reject zero `bootstrap_count` metadata before non-single-input shape
   errors, and Add, Multiply, RotateLeft, and Bootstrap operation metadata is
-  rejected before secondary arity/input-shape errors across manifest
-  validation and runtime planner admission.
-  Soracloud FHE parameter sets and execution policies now also reject
-  advertised multiplication/bootstrap budgets above the exact evaluator budget
-  before governance admission. Soracloud decryption requests and ciphertext
-  query responses now also reject zero-prehash digest sentinels across
-  ciphertext commitments, optional consent evidence, governance linkage,
-  state-key digests, query hashes, and inclusion proof leaves/anchors before
-  private-state admission or query evidence can be trusted.
-  Bootstrap fixtures now pin both the zero refresh and each round-indexed
-  public refresh ciphertext. Full bootstrapping circuit/key-material
-  commitments now have a Rust admission/digest/proof-statement surface,
+	  rejected before secondary arity/input-shape errors across manifest
+	  validation and runtime planner admission.
+	  Soracloud FHE parameter sets and execution policies now also reject
+	  advertised multiplication/bootstrap budgets above the exact evaluator budget
+	  before governance admission. Soracloud decryption requests and ciphertext
+	  query responses now also reject zero-prehash digest sentinels across
+	  ciphertext commitments, optional consent evidence, governance linkage,
+	  state-key digests, query hashes, and inclusion proof leaves/anchors before
+	  private-state admission or query evidence can be trusted. Service
+	  deployment, app-infra service/audit, service audit, runtime/Inrou runtime
+		  state, service-state governance linkage, mailbox, and runtime-receipt
+		  records now reject zero-prehash digest sentinels across manifest,
+		  governance, mailbox, receipt, placement, and artifact hashes before those
+			  records can be trusted. Container bundle hashes, service/agent
+			  container-manifest references, service artifact references, and HF
+			  placement identifiers/seeds now reject zero-prehash digest sentinels
+			  before deployment, artifact, or placement evidence is admitted.
+			  Training job records/audit events, HF source records,
+			  shared-lease pool/member/audit records, and
+			  model-host violation evidence now reject zero-prehash digest
+			  sentinels across metric, source, normalized-runtime, pool,
+			  placement, evidence, and slash hashes before training, lease, or
+			  host-violation evidence is trusted. Agent apartment records and
+			  audit events now reject zero-prehash manifest, mailbox payload,
+			  autonomy request/result, runtime receipt, journal, and checkpoint
+			  hashes, and apartment records canonical-check embedded manifest and
+			  mailbox payload hashes against their preimages before accepting
+			  authoritative agent state.
+			  Agent apartment runtime records and audit events now reject
+			  zero-prehash digest sentinels across manifest, mailbox payload,
+			  autonomy request, execution result, runtime receipt, journal, and
+			  checkpoint hashes before agent runtime or audit evidence is trusted.
+			  Soracloud host request/response envelopes now validate nested
+			  operation-specific payloads, operation/payload pairing, host paths,
+			  found/payload consistency, delete mutation payload absence, and
+			  payload/body hash preimages, while Core host syscalls run that
+			  request validation before runtime fallback.
+			  Bootstrap fixtures now pin both the zero refresh and each round-indexed
+			  public refresh ciphertext. Full bootstrapping circuit/key-material
+	  commitments now have a Rust admission/digest/proof-statement surface,
   artifact-aware execution path, verifier-backed Core fixtures, and a
   data-model material proof envelope, while audited prover/verifier artifact
   vectors remain an open release item.
@@ -8960,7 +9364,8 @@ fixture corridor into broader release validation.
   containment, runner command shape, runner invocation proof-input binding, TLC
   constraint operator binding, zero-arity and
   nontrivial CFG/TLC runner constraints,
-  non-type-only CFG checks, nontrivial CFG-referenced semantic checks,
+  non-type-only CFG checks, generic `NoBugInvariant`/`Safety`/`SafetyFast`-free
+  fast CFG checks, nontrivial CFG-referenced semantic checks,
   top-level-only CFG behavior/check detection, indented CFG directive rejection,
   non-empty multi-line CFG check blocks,
   TLC module identifier and module-file reachability,
@@ -9000,288 +9405,289 @@ recovery soak coverage, peer-gap and DA/RBC tail-latency reductions under the
 broadened rotating-fault evidence, broader formal coverage beyond the current
 commit-path, frontier, TLC-cross-checked fork-safety, TLC-cross-checked
 quorum-policy, TLC-cross-checked RBC deliver-quorum,
-TLC-cross-checked RBC causality gate, TLC-cross-checked RBC DELIVER acceptance gate,
-TLC-cross-checked RBC commit-processing gate,
-TLC-cross-checked RBC local READY emission gate (`rbc-ready-emission`),
-TLC-cross-checked RBC local DELIVER emission gate (`rbc-deliver-emission`),
-TLC-cross-checked RBC delivered-session rebroadcast gate (`rbc-delivered-rebroadcast`),
-TLC-cross-checked RBC stalled-rebroadcast cursor gate (`rbc-rebroadcast-cursor`),
-TLC-cross-checked RBC stalled-rebroadcast action gate (`rbc-rebroadcast-action`),
-TLC-cross-checked RBC next-due scheduler gate (`rbc-next-due`),
-TLC-cross-checked RBC chunk target helper gate, TLC-cross-checked RBC chunk payload-cap helper gate
-(`rbc-chunk-payload-cap`), TLC-cross-checked RBC rebroadcaster selection helper gate,
-TLC-cross-checked RBC weighted chunk allocation helper gate, TLC-cross-checked RBC payload chunking helper gate,
-TLC-cross-checked RBC payload layout helper gate (`rbc-payload-layout`),
-TLC-cross-checked RBC session chunk-ingest helper gate
-(`rbc-session-chunk-ingest`), TLC-cross-checked RBC READY/DELIVER session
-recording helper gate (`rbc-session-ready-deliver`), TLC-cross-checked RBC
+TLC-cross-checked direct RBC causality component gate, TLC-cross-checked direct RBC DELIVER acceptance gate,
+TLC-cross-checked direct RBC commit-processing gate,
+TLC-cross-checked direct RBC local READY emission gate (`rbc-ready-emission`),
+TLC-cross-checked direct RBC local DELIVER emission gate (`rbc-deliver-emission`),
+TLC-cross-checked direct RBC delivered-session rebroadcast gate (`rbc-delivered-rebroadcast`),
+TLC-cross-checked direct RBC stalled-rebroadcast cursor gate (`rbc-rebroadcast-cursor`),
+TLC-cross-checked direct RBC stalled-rebroadcast action gate (`rbc-rebroadcast-action`),
+TLC-cross-checked direct RBC next-due scheduler gate (`rbc-next-due`),
+TLC-cross-checked direct RBC chunk target helper gate, TLC-cross-checked direct RBC chunk payload-cap helper gate
+(`rbc-chunk-payload-cap`), TLC-cross-checked direct RBC rebroadcaster selection helper gate,
+TLC-cross-checked direct RBC weighted chunk allocation helper gate, TLC-cross-checked direct RBC payload chunking helper gate,
+TLC-cross-checked direct RBC payload layout helper gate (`rbc-payload-layout`),
+TLC-cross-checked direct RBC session chunk-ingest helper gate
+(`rbc-session-chunk-ingest`), TLC-cross-checked direct RBC READY/DELIVER session
+recording helper gate (`rbc-session-ready-deliver`), TLC-cross-checked direct RBC
 delivered-payload byte telemetry helper gate (`rbc-delivered-payload-bytes`),
-TLC-cross-checked RBC RS16 initial fanout helper
-gate, TLC-cross-checked RBC chunk broadcast order helper gate,
-TLC-cross-checked pending-RBC stash gate, TLC-cross-checked pending-RBC status snapshot helper gate
-(`pending-rbc-status`), TLC-cross-checked ingress dedup cache helper gate
+TLC-cross-checked direct RBC RS16 initial fanout helper
+gate, TLC-cross-checked direct RBC chunk broadcast order helper gate,
+TLC-cross-checked direct pending-RBC stash component gate, TLC-cross-checked direct pending-RBC status snapshot helper gate
+(`pending-rbc-status`), TLC-cross-checked direct ingress dedup cache helper gate
 (`ingress-dedup-cache`), TLC-cross-checked inbound consensus status counter helper gate
 (`ingress-status-counters`), TLC-cross-checked consensus message
 kind/outcome/reason label helper gate (`consensus-message-labels`),
-TLC-cross-checked phase-latency status projection helper gate
-(`phase-latency-status`), TLC-cross-checked telemetry availability/QC/RBC/pipeline status
-projection helper gate (`telemetry-status`), TLC-cross-checked lane-detail status stripping and
-projection helper gate (`lane-detail-status`), TLC-cross-checked DvP/PvP settlement telemetry
-status helper gate (`settlement-status`), TLC-cross-checked Nexus fee/staking economics status
-helper gate (`nexus-economics-status`), TLC-cross-checked NPoS repair fanout coverage status
-helper gate (`npos-repair-coverage-status`), TLC-cross-checked mode/PRF/mode-flip status
-projection helper gate (`mode-status`), TLC-cross-checked consensus
+TLC-cross-checked direct phase-latency status projection helper gate
+(`phase-latency-status`), TLC-cross-checked direct telemetry availability/QC/RBC/pipeline status
+projection helper gate (`telemetry-status`), TLC-cross-checked direct lane-detail status stripping and
+projection helper gate (`lane-detail-status`), TLC-cross-checked direct DvP/PvP settlement telemetry
+status helper gate (`settlement-status`), TLC-cross-checked direct Nexus fee/staking economics status
+helper gate (`nexus-economics-status`), TLC-cross-checked direct NPoS repair fanout coverage status
+helper gate (`npos-repair-coverage-status`), TLC-cross-checked direct mode/PRF/mode-flip status
+projection helper gate (`mode-status`), TLC-cross-checked direct consensus
 capability status projection helper gate (`consensus-caps-status`),
-TLC-cross-checked effective timing status projection
-helper gate (`effective-timing-status`), TLC-cross-checked transaction queue backpressure status
+TLC-cross-checked direct effective timing status projection
+helper gate (`effective-timing-status`), TLC-cross-checked direct transaction queue backpressure status
 projection helper gate (`tx-queue-backpressure-status`), status history
 projection helper gate (`history-status`), commit-quorum status projection
 helper gate (`commit-quorum-status`), commit-inflight status projection helper gate
-(`commit-inflight-status`), TLC-cross-checked RBC status lookup helper gate,
-TLC-cross-checked RBC status retention/update-pruning helper gate (`rbc-status-retention`),
-TLC-cross-checked RBC status persistence/fallback helper gate (`rbc-status-persistence`),
-TLC-cross-checked RBC status handle lifecycle helper gate
-(`rbc-status-handle`), TLC-cross-checked RBC backlog/status snapshot
-helper gate (`rbc-backlog-status`), RBC abort status counter/latest-slot helper
-gate (`rbc-abort-status`), RBC mismatch status counter/label helper gate
-(`rbc-mismatch-status`), RBC progress-stage synchronization helper
-gate (`rbc-progress-stage`), RBC hot-repair/backpressure helper gate
-(`rbc-hot-repair`), RBC repair request helper gate (`rbc-repair-request`),
-RBC targeted READY/DELIVER repair helper gate (`rbc-targeted-repair`),
-RBC outbound chunk flush helper gate (`rbc-outbound-flush`),
-RBC chunk post scheduling/debug-mask helper gate (`rbc-chunk-post-debug`),
-RBC READY/DELIVER deferral throttle helper gate (`rbc-deferral-throttle`),
+(`commit-inflight-status`), TLC-cross-checked direct RBC status lookup helper gate,
+TLC-cross-checked direct RBC status retention/update-pruning helper gate (`rbc-status-retention`),
+TLC-cross-checked direct RBC status persistence/fallback helper gate (`rbc-status-persistence`),
+TLC-cross-checked direct RBC status handle lifecycle helper gate
+(`rbc-status-handle`), TLC-cross-checked direct RBC backlog/status snapshot
+helper gate (`rbc-backlog-status`), RBC abort status counter/latest-slot
+component/anchor gate (`rbc-abort-status`), RBC mismatch status counter/label
+component/anchor gate
+(`rbc-mismatch-status`), direct RBC progress-stage synchronization helper
+gate (`rbc-progress-stage`), direct RBC hot-repair/backpressure helper gate
+(`rbc-hot-repair`), TLC-cross-checked direct RBC repair request helper gate (`rbc-repair-request`),
+TLC-cross-checked direct RBC targeted READY/DELIVER repair helper gate (`rbc-targeted-repair`),
+direct RBC outbound chunk flush helper gate (`rbc-outbound-flush`),
+TLC-cross-checked direct RBC chunk post scheduling/debug-mask helper gate (`rbc-chunk-post-debug`),
+direct RBC READY/DELIVER deferral throttle helper gate (`rbc-deferral-throttle`),
 round-gap marker/snapshot/EMA status helper gate (`round-gap-status`),
-TLC-cross-checked contiguous-frontier repair view-change suppression helper gate
+TLC-cross-checked direct contiguous-frontier repair view-change suppression helper gate
 (`frontier-repair-view-change`),
-TLC-cross-checked contiguous-frontier recovery advance state-machine helper gate
+TLC-cross-checked direct contiguous-frontier recovery advance state-machine helper gate
 (`frontier-recovery-advance`),
-TLC-cross-checked same-height no-proposal storm recovery helper gate
+TLC-cross-checked direct same-height no-proposal storm recovery helper gate
 (`same-height-no-proposal-storm`),
-TLC-cross-checked VRF commit/reveal admission gate, TLC-cross-checked VRF
+TLC-cross-checked direct VRF commit/reveal admission gate, TLC-cross-checked direct VRF
 epoch-window arithmetic helper gate
-(`vrf-epoch-window`), TLC-cross-checked VRF epoch-boundary finalization helper gate
-(`vrf-epoch-boundary`), TLC-cross-checked VRF epoch restore/snapshot/observation-merge helper gate
-(`vrf-epoch-restore`), TLC-cross-checked local VRF material derivation helper gate
-(`vrf-material-derivation`), TLC-cross-checked local VRF emission state helper gate
+(`vrf-epoch-window`), TLC-cross-checked direct VRF epoch-boundary finalization helper gate
+(`vrf-epoch-boundary`), TLC-cross-checked direct VRF epoch restore/snapshot/observation-merge helper gate
+(`vrf-epoch-restore`), TLC-cross-checked direct local VRF material derivation helper gate
+(`vrf-material-derivation`), TLC-cross-checked direct local VRF emission state helper gate
 (`vrf-local-state`), TLC-cross-checked VRF penalties report store helper gate
-(`vrf-penalties-report`), TLC-cross-checked classic inbound vote-admission gate, vote
+(`vrf-penalties-report`), TLC-cross-checked direct classic inbound vote-admission gate, vote
 TLC-cross-checked duplicate-key helper gate (`vote-duplicate-key`),
 TLC-cross-checked evidence freshness horizon helper gate,
-TLC-cross-checked evidence canonicalization/deduplication helper
-gate (`evidence-canonicalization`), TLC-cross-checked evidence validation helper gate
-(`evidence-validation`), TLC-cross-checked double-vote detection/recording helper gate
-(`double-vote-recording`), TLC-cross-checked invalid-QC shape helper gate
-(`invalid-qc-shape`), TLC-cross-checked QC validation evidence helper gate
-(`qc-validation-evidence`), TLC-cross-checked QC validation reason/evidence label helper gate
-(`qc-validation-reason`), TLC-cross-checked block-sync QC retry/fallback helper gate
-(`block-sync-qc-fallback`), TLC-cross-checked block-sync QC status helper gate
-(`block-sync-qc-status`), TLC-cross-checked block-sync locked-QC helper gate
-(`block-sync-locked-qc`), TLC-cross-checked known-block QC work enqueue gate
-(`known-block-qc-enqueue`), TLC-cross-checked known-block QC work preparation gate
-(`known-block-qc-work`), TLC-cross-checked known-block QC work queue drain gate
-(`known-block-qc-drain`), TLC-cross-checked committed signed-quorum fetch fallback gate
-(`signed-quorum-fetch-fallback`), TLC-cross-checked commit-QC-only fetch response
+TLC-cross-checked direct evidence canonicalization/deduplication helper
+gate (`evidence-canonicalization`), TLC-cross-checked direct evidence validation helper gate
+(`evidence-validation`), TLC-cross-checked direct double-vote detection/recording helper gate
+(`double-vote-recording`), TLC-cross-checked direct invalid-QC shape helper gate
+(`invalid-qc-shape`), TLC-cross-checked direct QC validation evidence helper gate
+(`qc-validation-evidence`), TLC-cross-checked direct QC validation reason/evidence label helper gate
+(`qc-validation-reason`), TLC-cross-checked direct block-sync QC retry/fallback helper gate
+(`block-sync-qc-fallback`), TLC-cross-checked direct block-sync QC status helper gate
+(`block-sync-qc-status`), TLC-cross-checked direct block-sync locked-QC helper gate
+(`block-sync-locked-qc`), TLC-cross-checked direct known-block QC work enqueue gate
+(`known-block-qc-enqueue`), TLC-cross-checked direct known-block QC work preparation gate
+(`known-block-qc-work`), TLC-cross-checked direct known-block QC work queue drain gate
+(`known-block-qc-drain`), TLC-cross-checked direct committed signed-quorum fetch fallback gate
+(`signed-quorum-fetch-fallback`), TLC-cross-checked direct commit-QC-only fetch response
 dispatch gate (`commit-qc-only-fetch-response`), TLC-cross-checked
-BlockSyncUpdate gossip target-selection helper gate (`block-sync-update-targets`),
-TLC-cross-checked cached BlockSyncUpdate proof/vote attachment helper gate
-(`apply-cached-qcs`), TLC-cross-checked uncertified block-sync roster
-admission gate (`block-sync-roster`), TLC-cross-checked block-sync roster
+direct BlockSyncUpdate gossip target-selection helper gate (`block-sync-update-targets`),
+TLC-cross-checked direct cached BlockSyncUpdate proof/vote attachment helper gate
+(`apply-cached-qcs`), TLC-cross-checked direct uncertified block-sync roster
+admission gate (`block-sync-roster`), TLC-cross-checked direct block-sync roster
 source/drop status helper gate (`block-sync-roster-status`), TLC-cross-checked
-BlockSyncUpdate embedded-vote filtering and deferral handoff gate
-(`block-sync-vote-deferral`), TLC-cross-checked already-known hintless
+direct BlockSyncUpdate embedded-vote filtering and deferral handoff gate
+(`block-sync-vote-deferral`), TLC-cross-checked direct already-known hintless
 BlockSyncUpdate fast-path gate (`block-sync-known-hintless`),
-TLC-cross-checked DA implicit BlockSyncUpdate recovery gate
+TLC-cross-checked direct DA implicit BlockSyncUpdate recovery gate
 (`block-sync-implicit-recovery`),
-TLC-cross-checked frontier vote-placeholder gate (`block-sync-vote-placeholder`),
-TLC-cross-checked known-block snapshot-hint gate (`block-sync-snapshot-hint`),
-TLC-cross-checked known-block snapshot-roster gate (`block-sync-snapshot-roster`),
-TLC-cross-checked no-verifiable-roster BlockSyncUpdate gate
+TLC-cross-checked direct frontier vote-placeholder gate (`block-sync-vote-placeholder`),
+TLC-cross-checked direct known-block snapshot-hint gate (`block-sync-snapshot-hint`),
+TLC-cross-checked direct known-block snapshot-roster gate (`block-sync-snapshot-roster`),
+TLC-cross-checked direct no-verifiable-roster BlockSyncUpdate gate
 (`block-sync-no-roster`),
-TLC-cross-checked selected-roster known-block terminal replay gate
+TLC-cross-checked direct selected-roster known-block terminal replay gate
 (`block-sync-known-roster`),
-TLC-cross-checked selected-roster known-block BlockSyncUpdate gate
+TLC-cross-checked direct selected-roster known-block BlockSyncUpdate gate
 (`block-sync-known-selected-roster`),
-TLC-cross-checked selected-roster BlockSyncUpdate signature gate
+TLC-cross-checked direct selected-roster BlockSyncUpdate signature gate
 (`block-sync-selected-signatures`),
-TLC-cross-checked selected-roster BlockSyncUpdate QC candidate/evidence gate
+TLC-cross-checked direct selected-roster BlockSyncUpdate QC candidate/evidence gate
 (`block-sync-selected-qc`),
-TLC-cross-checked selected-roster BlockSyncUpdate quorum/missing-QC repair gate
+TLC-cross-checked direct selected-roster BlockSyncUpdate quorum/missing-QC repair gate
 (`block-sync-selected-quorum`),
-TLC-cross-checked stale BlockCreated/recovery-mode helper gate
+TLC-cross-checked direct stale BlockCreated/recovery-mode helper gate
 (`block-sync-recovery-mode`),
-TLC-cross-checked selected-roster BlockSyncUpdate apply/recovery-mode gate
+TLC-cross-checked direct selected-roster BlockSyncUpdate apply/recovery-mode gate
 (`block-sync-selected-apply`),
-TLC-cross-checked selected-roster BlockSyncUpdate post-apply QC prefilter gate
+TLC-cross-checked direct selected-roster BlockSyncUpdate post-apply QC prefilter gate
 (`block-sync-selected-qc-prefilter`),
 TLC-cross-checked selected-roster BlockSyncUpdate post-prefilter QC process gate
 (`block-sync-selected-qc-process`),
 TLC-cross-checked selected-roster BlockSyncUpdate unknown-block QC cache gate
 (`block-sync-selected-qc-cache`),
-TLC-cross-checked BlockSyncUpdate stale-view admission gate
+TLC-cross-checked direct BlockSyncUpdate stale-view admission gate
 (`block-sync-stale-view`),
-TLC-cross-checked committed-height BlockSyncUpdate conflict/evidence gate
+TLC-cross-checked direct committed-height BlockSyncUpdate conflict/evidence gate
 (`block-sync-commit-conflict`),
-TLC-cross-checked block-sync warning throttle helper gate
+TLC-cross-checked direct block-sync warning throttle helper gate
 (`block-sync-warning-throttle`),
 TLC-cross-checked QC-insufficient warning throttle helper gate
 (`qc-insufficient-warning`),
-TLC-cross-checked canonical committed fetch/body response deferral gate
+TLC-cross-checked direct canonical committed fetch/body response deferral gate
 (`fetch-response-deferral`),
-TLC-cross-checked exact body fetch handler gate
+TLC-cross-checked direct exact body fetch handler gate
 (`fetch-block-body-handle`),
-TLC-cross-checked background consensus frame-cap preparation gate
+TLC-cross-checked direct background consensus frame-cap preparation gate
 (`background-frame-cap`),
-TLC-cross-checked background request dispatch fallback gate
+TLC-cross-checked direct background request dispatch fallback gate
 (`background-dispatch`),
-TLC-cross-checked background scheduler bypass gate
+TLC-cross-checked direct background scheduler bypass gate
 (`background-bypass`),
-TLC-cross-checked background fallback network dispatch gate
+TLC-cross-checked direct background fallback network dispatch gate
 (`background-fallback`),
-TLC-cross-checked fetch-pending response send gate
+TLC-cross-checked direct fetch-pending response send gate
 (`fetch-pending-response-send`),
-TLC-cross-checked fetch-pending batch response fanout gate
+TLC-cross-checked direct fetch-pending batch response fanout gate
 (`fetch-pending-responses-batch`),
-TLC-cross-checked pending fetch/body readiness flush gate
+TLC-cross-checked direct pending fetch/body readiness flush gate
 (`pending-response-flush`),
-TLC-cross-checked deferred BlockSyncUpdate helper gate
+TLC-cross-checked direct deferred BlockSyncUpdate helper gate
 (`deferred-block-sync-helper`),
-TLC-cross-checked deferred BlockSyncUpdate cache/defer integration gate
+TLC-cross-checked direct deferred BlockSyncUpdate cache/defer integration gate
 (`deferred-block-sync-cache`),
-TLC-cross-checked deferred BlockSyncUpdate replay gate
+TLC-cross-checked direct deferred BlockSyncUpdate replay gate
 (`deferred-block-sync-replay`),
-TLC-cross-checked future BlockSyncUpdate drop/window gate
+TLC-cross-checked direct future BlockSyncUpdate drop/window gate
 (`block-sync-future-window`),
-TLC-cross-checked RBC block-body repair admission gate
+TLC-cross-checked direct RBC block-body repair admission gate
 (`block-body-repair`),
-TLC-cross-checked exact body requester stash-window gate
+TLC-cross-checked direct body requester stash-window gate
 (`block-body-request-stash`),
-TLC-cross-checked same-height block-body repair admission gate
+TLC-cross-checked direct same-height block-body repair admission gate
 (`same-height-block-body-repair`),
-TLC-cross-checked block-body repair observed epoch source gate
+TLC-cross-checked direct block-body repair observed epoch source gate
 (`block-body-repair-epoch`),
 TLC-cross-checked direct commit-QC source selection gate
 (`direct-commit-qc-for-block`),
-TLC-cross-checked QC materialization/Kura recovery gate
+TLC-cross-checked direct QC materialization/Kura recovery gate
 (`materialize-qc`),
-TLC-cross-checked BlockBodyResponse direct commit-QC extraction gate
+TLC-cross-checked direct BlockBodyResponse commit-QC extraction gate
 (`block-body-direct-commit-qc`),
-TLC-cross-checked detached BlockBodyResponse commit-QC handling gate
+TLC-cross-checked direct detached BlockBodyResponse commit-QC handling gate
 (`block-body-detached-commit-qc`),
-TLC-cross-checked exact BlockBodyResponse fallback/companion dispatch gate
+TLC-cross-checked direct BlockBodyResponse fallback/companion dispatch gate
 (`block-body-response-dispatch`),
-TLC-cross-checked invalid-proposal evidence builder helper gate
+TLC-cross-checked direct invalid-proposal evidence builder helper gate
 (`invalid-proposal-evidence`),
-TLC-cross-checked proposal mismatch helper gate (`proposal-mismatch`),
-TLC-cross-checked proposal cache helper gate (`proposal-cache`),
-TLC-cross-checked proposal-hint admission gate (`proposal-hint`),
-TLC-cross-checked stale proposal-hint repair gate
-(`stale-proposal-hint-repair`), TLC-cross-checked stale RBC hint repair gate
+TLC-cross-checked direct proposal mismatch helper gate (`proposal-mismatch`),
+TLC-cross-checked direct proposal cache helper gate (`proposal-cache`),
+TLC-cross-checked direct proposal-hint admission gate (`proposal-hint`),
+TLC-cross-checked direct stale proposal-hint repair no-bug gate
+(`stale-proposal-hint-repair`), TLC-cross-checked direct stale RBC hint repair no-bug gate
 (`stale-rbc-hint-repair`),
-TLC-cross-checked proposal metadata admission gate (`proposal-admission`),
-TLC-cross-checked peer-admin detection helper gate
+TLC-cross-checked direct proposal metadata admission gate (`proposal-admission`),
+TLC-cross-checked direct peer-admin detection helper gate
 (`peer-admin-detection`), TLC-cross-checked QC signer-bitmap admission
-(`qc-signers`), raw QC signer-count helper gate
+(`qc-signers`), TLC-cross-checked direct raw QC signer-count helper gate
 (`qc-signer-count`), TLC-cross-checked direct BlockCreated admission aggregate exactness gate
-(`block-created-admission`), TLC-cross-checked missing-block request clear
-helper gate (`missing-request-clear`), TLC-cross-checked missing-block clear
+(`block-created-admission`), TLC-cross-checked direct missing-block request clear
+helper gate (`missing-request-clear`), TLC-cross-checked direct missing-block clear
 reason helper gate
-(`missing-block-clear`), TLC-cross-checked proposal budget/cap helper gate
-(`proposal-budget`), TLC-cross-checked non-RBC payload frame budget helper gate
-(`non-rbc-payload-budget`), TLC-cross-checked proposal backpressure
+(`missing-block-clear`), TLC-cross-checked direct proposal budget/cap helper gate
+(`proposal-budget`), TLC-cross-checked direct non-RBC payload frame budget helper gate
+(`non-rbc-payload-budget`), TLC-cross-checked direct proposal backpressure
 classification helper gate (`proposal-backpressure`), TLC-cross-checked
 proposal-defer warning throttle helper gate (`proposal-defer-warning`),
-TLC-cross-checked proposal batch trim/canonicalization helper gate
-(`proposal-batch`), TLC-cross-checked lane/dataspace commitment snapshot
+TLC-cross-checked direct proposal batch trim/canonicalization helper gate
+(`proposal-batch`), TLC-cross-checked direct lane/dataspace commitment snapshot
 builder gate (`commitment-snapshot-builder`),
 TLC-cross-checked collector retry/gossip helper gate (`collector-plan`),
-TLC-cross-checked lane interleave routing-decision helper gate
-(`lane-interleave`), TLC-cross-checked collector fanout/selection helper gate
-(`collector-selection`), TLC-cross-checked topology ordered-roster mutation
-helper gate (`topology-mutation`), TLC-cross-checked PRF leader/shuffle
+TLC-cross-checked direct lane interleave routing-decision helper gate
+(`lane-interleave`), TLC-cross-checked direct collector fanout/selection helper gate
+(`collector-selection`), TLC-cross-checked direct topology ordered-roster
+mutation no-bug gate (`topology-mutation`), TLC-cross-checked direct PRF leader/shuffle
 topology helper gate (`prf-leader-shuffle`), TLC-cross-checked topology
-fanout/redundant-send helper gate, TLC-cross-checked active topology selection
+fanout/redundant-send helper gate, TLC-cross-checked direct active topology selection
 helper gate
-(`active-topology-selection`), TLC-cross-checked trusted-peer P2P topology
+(`active-topology-selection`), TLC-cross-checked direct trusted-peer P2P topology
 refresh helper gate
 (`p2p-topology-trusted`), TLC-cross-checked P2P topology refresh coordinator
 gate
-(`p2p-topology-refresh`), TLC-cross-checked quorum retransmit target helper
+(`p2p-topology-refresh`), TLC-cross-checked direct quorum retransmit target helper
 gate,
-TLC-cross-checked retransmit backpressure pacing helper gate, paced retransmit
+TLC-cross-checked direct retransmit backpressure pacing helper gate, direct paced retransmit
 target selection helper gate (`paced-retransmit-targets`) with TLC
-cross-checks, TLC-cross-checked quorum reschedule backoff helper
-gate, TLC-cross-checked DA/RBC availability reschedule gate
+cross-checks, TLC-cross-checked direct quorum reschedule backoff helper
+gate, TLC-cross-checked direct DA/RBC availability reschedule gate
 (`rbc-availability-reschedule`),
-TLC-cross-checked vote-backed reassembly stall helper gate
+TLC-cross-checked direct vote-backed reassembly stall helper gate
 (`vote-backed-reassembly-stall`),
-TLC-cross-checked completed quorum view-advance helper gate
+TLC-cross-checked direct completed quorum view-advance helper gate
 (`completed-quorum-view-advance`),
-TLC-cross-checked quorum rebroadcast dispatch helper gate
+TLC-cross-checked direct quorum rebroadcast dispatch helper gate
 (`quorum-rebroadcast-dispatch`),
-TLC-cross-checked isolated vote-backed frontier handoff helper gate
+TLC-cross-checked direct isolated vote-backed frontier handoff helper gate
 (`isolated-vote-backed-handoff`),
-TLC-cross-checked pre-timeout vote-backed frontier retransmit handoff gate
+TLC-cross-checked direct pre-timeout vote-backed frontier retransmit handoff gate
 (`preemptive-vote-backed-retransmit`),
-TLC-cross-checked near-quorum preemptive missing-payload escalation coordinator gate
+TLC-cross-checked direct near-quorum preemptive missing-payload escalation coordinator gate
 (`near-quorum-preemptive-escalation`),
-TLC-cross-checked manifest-gated quorum reschedule helper gate, raw QC signer-count helper
-gate (`qc-signer-count`), TLC-cross-checked signer-bitmap construction helper gate
-(`build-signers-bitmap`), canonical/view signer-index
+TLC-cross-checked direct manifest-gated quorum reschedule helper gate,
+TLC-cross-checked signer-bitmap construction helper gate
+(`build-signers-bitmap`), direct canonical/view signer-index
 normalization helper gate (`signer-index-normalization`), TLC-cross-checked
 commit-root consistency, TLC-cross-checked commit-pipeline recovery gate,
-TLC-cross-checked known-block commit-QC recovery
+TLC-cross-checked direct known-block commit-QC recovery
 helper gate, TLC-cross-checked stale-view commit-QC fetch admission helper gate
-(`stale-view-commit-qc-fetch`), TLC-cross-checked commit-anchor QC promotion
+(`stale-view-commit-qc-fetch`), TLC-cross-checked direct commit-anchor QC promotion
 helper gate (`commit-anchor-qc`),
-TLC-cross-checked committed-height QC admission helper gate (`committed-height-qc`),
-TLC-cross-checked empty-block QC drop helper gate (`empty-block-qc-drop`) with
-aggregate exactness,
-TLC-cross-checked pending-progress accounting helper gate with aggregate exactness,
-TLC-cross-checked pending-block lifecycle helper gate with aggregate exactness,
-TLC-cross-checked pending-block marker/cooldown helper gate with aggregate exactness,
-TLC-cross-checked pending-block Kura retry helper gate (`kura-retry`) with
-aggregate exactness,
-TLC-cross-checked commit-pipeline scheduling gate with aggregate exactness,
+TLC-cross-checked direct committed-height QC admission helper gate (`committed-height-qc`),
+TLC-cross-checked direct empty-block QC drop helper gate (`empty-block-qc-drop`) with
+component/anchor exactness,
+TLC-cross-checked direct pending-progress accounting helper gate with aggregate exactness,
+TLC-cross-checked direct pending-block lifecycle helper gate with no-bug exactness,
+TLC-cross-checked direct pending-block marker/cooldown helper gate with no-bug exactness,
+TLC-cross-checked direct pending-block Kura retry no-bug helper gate
+(`kura-retry`) with aggregate exactness,
+TLC-cross-checked direct commit-pipeline scheduling gate with aggregate exactness,
 TLC-cross-checked precommit vote-count helper gate (`precommit-vote-count`),
-TLC-cross-checked precommit vote lock filter gate
+TLC-cross-checked direct precommit vote lock filter gate
 (`drop-precommit-vote-for-lock`),
 TLC-cross-checked set-based voting signer-count helper gate
 (`voting-signer-count`),
-TLC-cross-checked cached vote-log epoch replay helper gate
+TLC-cross-checked direct cached vote-log epoch replay helper gate
 (`distinct-vote-epochs`),
-TLC-cross-checked NEW_VIEW highest-QC vote-selection helper gate
+TLC-cross-checked direct NEW_VIEW highest-QC vote-selection helper gate
 (`new-view-highest-qc-votes`),
-TLC-cross-checked frontier NEW_VIEW catch-up helper gate
+TLC-cross-checked direct frontier NEW_VIEW catch-up helper gate
 (`frontier-new-view-catch-up`),
-TLC-cross-checked late NEW_VIEW near-quorum emission helper gate
+TLC-cross-checked direct late NEW_VIEW near-quorum emission helper gate
 (`late-new-view-emission`),
-TLC-cross-checked near-quorum NEW_VIEW rebroadcast helper gate
-(`near-quorum-new-view-rebroadcast`), TLC-cross-checked precommit-QC
+TLC-cross-checked direct near-quorum NEW_VIEW rebroadcast helper gate
+(`near-quorum-new-view-rebroadcast`), TLC-cross-checked direct precommit-QC
 locked-chain wrapper gate
 (`precommit-qc-extends-locked`),
-TLC-cross-checked requester roster-proof detection helper gate
+TLC-cross-checked direct requester roster-proof detection helper gate
 (`requester-roster-proof`),
-TLC-cross-checked online-validator and relay counter helper gate
+TLC-cross-checked direct online-validator and relay counter helper gate
 (`online-validator-relay-counters`),
-TLC-cross-checked commit-result drain gate (`commit-result-drain`),
-TLC-cross-checked commit-drain summary aggregation helper gate
+TLC-cross-checked direct commit-result drain component gate (`commit-result-drain`),
+TLC-cross-checked direct commit-drain summary aggregation helper gate
 (`commit-drain-summary`),
-TLC-cross-checked commit-pipeline timing sample helper gate
+TLC-cross-checked direct commit-pipeline timing sample helper gate
 (`commit-pipeline-sample`),
-TLC-cross-checked commit-pipeline status recorder helper gate
+TLC-cross-checked direct commit-pipeline status recorder helper gate
 (`commit-pipeline-status`),
-TLC-cross-checked autoscale transition commit gate
+TLC-cross-checked direct autoscale transition commit gate
 (`autoscale-transition`),
-TLC-cross-checked commit-QC signer quorum helper gate
+TLC-cross-checked direct commit-QC signer quorum helper gate
 (`commit-quorum-signers`),
-TLC-cross-checked signature-index recovery helper gate
+TLC-cross-checked direct signature-index recovery helper gate
 (`signature-index-recovery`),
-TLC-cross-checked commit-QC cache/history lookup helper gate
-(`commit-qc-lookup`) with aggregate exactness,
-TLC-cross-checked embedded-QC roster bootstrap helper gate
+TLC-cross-checked direct commit-QC cache/history lookup helper gate
+(`commit-qc-lookup`),
+TLC-cross-checked direct embedded-QC roster bootstrap helper gate
 (`embedded-qc-roster`),
-TLC-cross-checked cached-QC precommit signer record helper gate
+TLC-cross-checked direct cached-QC precommit signer record helper gate
 (`precommit-signer-record`) with aggregate exactness,
 TLC-cross-checked roster-validation memo cache helper gate
 (`roster-validation-memo`) with aggregate exactness,
@@ -9305,7 +9711,7 @@ TLC-cross-checked roster
 index projection helper gate (`roster-index-projection`) with aggregate
 exactness,
 TLC-cross-checked
-membership-view hash helper gate (`membership-view-hash`) with aggregate
+membership-view hash helper gate (`membership-view-hash`) with direct no-bug
 exactness,
 TLC-cross-checked
 membership mismatch status helper gate (`membership-mismatch-status`) with
@@ -9317,20 +9723,19 @@ ingress/fail-closed helper gate (`membership-mismatch-ingress`) with aggregate
 exactness,
 TLC-cross-checked consensus-params ingress helper gate
 (`consensus-params-ingress`) with aggregate exactness,
-TLC-cross-checked prevalidated commit artifact
+TLC-cross-checked direct prevalidated commit artifact
 trust helper gate (`prevalidated-commit-artifact`) with aggregate exactness,
 TLC-cross-checked
 commit-job dispatch gate with aggregate exactness,
-commit-worker channel capacity helper gate (`commit-worker-config`) with
-aggregate exactness, slow
+direct commit-worker channel capacity helper gate (`commit-worker-config`), slow
 commit-stage timing threshold helper gate (`commit-stage-timing-threshold`) with
 aggregate exactness,
 commit-inflight timeout gate with aggregate exactness, post-commit pacemaker
 kick gate with aggregate exactness, idle-view proposal budget gate with
 aggregate exactness,
-TLC-cross-checked pacemaker core state-machine helper gate
-(`pacemaker-core`), TLC-cross-checked pacemaker evaluation gate,
-TLC-cross-checked pacing governor helper gate,
+TLC-cross-checked direct pacemaker core state-machine helper gate
+(`pacemaker-core`), TLC-cross-checked direct pacemaker evaluation component gate,
+TLC-cross-checked direct pacing governor helper gate,
 cached proposal-slot timeout gate with aggregate exactness,
 pending fast-path timeout helper gate (`pending-fast-path-timeout`) with
 aggregate exactness,
@@ -9355,53 +9760,53 @@ timeout/cooldown derivation helper gate (`timeout-derivation`) with aggregate
 exactness,
 round/view helper gate (`round-view-helpers`) with aggregate exactness,
 PhaseTracker mutable state helper gate (`phase-tracker`),
-TLC-cross-checked round-trace status recorder gate (`round-trace-status`),
-failed-commit/block-sync helper gate (`failure-recovery-helpers`),
-TLC-cross-checked transaction requeue branch helper gate
+TLC-cross-checked direct round-trace status recorder gate (`round-trace-status`),
+direct failed-commit/block-sync helper gate (`failure-recovery-helpers`),
+TLC-cross-checked direct transaction requeue branch helper gate
 (`requeue-transactions`),
-TLC-cross-checked tick/deadline scheduling helper gate, worker tick-gap helper
+TLC-cross-checked direct tick/deadline scheduling helper gate, direct worker tick-gap helper
 gate (`worker-tick-gap`),
 TLC-cross-checked proposal parent resolution gate with aggregate exactness,
 TLC-cross-checked highest-QC dependency deferral gate with aggregate exactness,
 TLC-cross-checked precommit-QC view-change selector gate with aggregate exactness,
 TLC-cross-checked commit-evidence replay gate with aggregate exactness, TLC-cross-checked block-sync recovery gate with aggregate exactness, TLC-cross-checked direct certified-block fetch gate,
-TLC-cross-checked missing-block ingress fetch gate, TLC-cross-checked payload progress availability gate, TLC-cross-checked highest-QC fetch body-known gate, TLC-cross-checked local payload availability gate, TLC-cross-checked local block-known routing gate, TLC-cross-checked lock-safety block-known routing gate, TLC-cross-checked missing locked-QC payload recovery gate (`missing-locked-qc-recovery`), TLC-cross-checked local signed-block materialization gate, TLC-cross-checked authoritative payload progress gate, TLC-cross-checked hash-level authoritative block payload gate, TLC-cross-checked pending-block active-for-tip gate, TLC-cross-checked pending fast-unblock decision gate, TLC-cross-checked blocking pending-block counter gate, TLC-cross-checked quorum recovery vote-drain urgency gate, TLC-cross-checked frontier body-gap payload-drain urgency gate, TLC-cross-checked RBC authoritative payload progress gate, TLC-cross-checked slot authoritative payload gate, TLC-cross-checked missing-block fetch planner, TLC-cross-checked recovery status counter helper gate (`recovery-status-counters`), TLC-cross-checked QC rebuild status counter helper gate (`qc-rebuild-status`), TLC-cross-checked QC rebuild quorum reachability helper gate (`qc-rebuild-quorum`), TLC-cross-checked collector-targeting status counter helper gate (`collector-targeting-status`), TLC-cross-checked deferred recovery status counter helper gate (`deferred-recovery-status`), TLC-cross-checked missing-QC liveness status counter helper gate (`missing-qc-liveness-status`), TLC-cross-checked sidecar/no-proposal status counter helper gate (`sidecar-no-proposal-status`), TLC-cross-checked deterministic committee status helper gate (`deterministic-committee-status`), TLC-cross-checked timing/liveness status counter helper gate (`timing-status-counters`), TLC-cross-checked roster-recovery status counter helper gate (`roster-recovery-status`), TLC-cross-checked range-pull recovery helper gate (`range-pull-recovery`), TLC-cross-checked range-pull status counter helper gate (`range-pull-status`), TLC-cross-checked round-recovery bundle window helper gate (`round-recovery-bundle-window`),
-TLC-cross-checked recovery-FSM reason classifier/rank/sort helper gate (`recovery-fsm-reason`),
-TLC-cross-checked committed-edge conflict suppression gate,
-TLC-cross-checked lock-rejected branch sink gate, TLC-cross-checked active-height lock-reject recovery gate,
+TLC-cross-checked direct missing-block ingress fetch gate, TLC-cross-checked direct payload progress availability gate, TLC-cross-checked direct highest-QC fetch body-known gate, TLC-cross-checked direct local payload availability gate, TLC-cross-checked direct local block-known routing gate, TLC-cross-checked direct lock-safety block-known routing gate, TLC-cross-checked missing locked-QC payload recovery gate (`missing-locked-qc-recovery`), TLC-cross-checked direct local signed-block materialization gate, TLC-cross-checked direct authoritative payload progress gate, TLC-cross-checked direct hash-level authoritative block payload gate, TLC-cross-checked direct pending-block active-for-tip gate, TLC-cross-checked direct pending fast-unblock decision gate, TLC-cross-checked direct blocking pending-block counter gate, TLC-cross-checked direct quorum recovery vote-drain urgency gate, TLC-cross-checked direct frontier body-gap payload-drain urgency gate, TLC-cross-checked direct RBC authoritative payload progress gate, TLC-cross-checked direct slot authoritative payload no-bug gate, TLC-cross-checked missing-block fetch planner, TLC-cross-checked direct recovery status counter helper gate (`recovery-status-counters`), TLC-cross-checked direct QC rebuild status counter helper gate (`qc-rebuild-status`), TLC-cross-checked direct QC rebuild quorum reachability helper gate (`qc-rebuild-quorum`), TLC-cross-checked direct collector-targeting status counter helper gate (`collector-targeting-status`), TLC-cross-checked direct deferred recovery status counter helper gate (`deferred-recovery-status`), TLC-cross-checked direct missing-QC liveness status counter helper gate (`missing-qc-liveness-status`), TLC-cross-checked direct sidecar/no-proposal status counter helper gate (`sidecar-no-proposal-status`), TLC-cross-checked direct deterministic committee status helper gate (`deterministic-committee-status`), TLC-cross-checked direct timing/liveness status counter helper gate (`timing-status-counters`), TLC-cross-checked direct roster-recovery status counter helper gate (`roster-recovery-status`), TLC-cross-checked range-pull recovery helper gate (`range-pull-recovery`), TLC-cross-checked direct range-pull status counter helper gate (`range-pull-status`), TLC-cross-checked round-recovery bundle window helper gate (`round-recovery-bundle-window`),
+TLC-cross-checked direct recovery-FSM reason classifier/rank/sort helper gate (`recovery-fsm-reason`),
+TLC-cross-checked direct committed-edge conflict suppression gate,
+TLC-cross-checked direct lock-rejected branch sink gate, TLC-cross-checked active-height lock-reject recovery gate,
 TLC-cross-checked missing-block hard-cap recovery gate,
 TLC-cross-checked missing-block hard-cap cleanup gate,
 TLC-cross-checked missing-block view-change escalation gate, TLC-cross-checked precommit vote-emission gate,
 TLC-cross-checked native AMX attestation gate,
 TLC-cross-checked native AMX queue-journal replay gate, TLC-cross-checked native AMX routing-plan projection gate,
 TLC-cross-checked native AMX receipt validation gate, TLC-cross-checked native AMX control-plane ingress with aggregate exactness,
-TLC-cross-checked vNext chain-order helper gate, TLC-cross-checked vNext stake-weight/quorum helper gate
-(`vnext-stake-weight`), TLC-cross-checked vNext re-chain helper gate,
-TLC-cross-checked vNext re-chain error label helper gate, TLC-cross-checked
-vNext aggregate certificate verification gate, TLC-cross-checked vNext
-signing-preimage gate, TLC-cross-checked vNext control-certificate ingress gate,
-TLC-cross-checked vNext slot-lifecycle gate, TLC-cross-checked vNext validation
-ownership gate, TLC-cross-checked vNext deadline/protection helper gate
-(`vnext-deadline-protection`), vNext performance-fault config conversion gate
-(`vnext-performance-config`), pending-block validation worker config helper gate
-(`validation-worker-config`), TLC-cross-checked validation stall/redrive helper gate
-(`validation-stall-redrive`), validation redrive reason label/distinctness
-helper gate (`validation-redrive-label`), validation ownership cleanup helper gate
-(`validation-ownership-cleanup`), TLC-cross-checked vote/QC verification cache-key identity helper
-gate (`verify-cache-key`), TLC-cross-checked async vote-verification ownership gate,
-vote-signature verification worker config helper gate
-(`vote-verify-worker-config`), TLC-cross-checked async QC aggregate-verification ownership gate,
-QC aggregate-verification worker config helper gate (`qc-verify-worker-config`),
-TLC-cross-checked worker-loop drain scheduler gate,
+TLC-cross-checked direct vNext chain-order component gate, TLC-cross-checked direct vNext stake-weight/quorum helper gate
+(`vnext-stake-weight`), TLC-cross-checked direct vNext re-chain helper gate,
+TLC-cross-checked direct vNext re-chain error label helper gate, TLC-cross-checked
+direct vNext aggregate certificate verification gate, TLC-cross-checked direct vNext signing-preimage gate, TLC-cross-checked direct vNext control-certificate ingress component gate,
+TLC-cross-checked direct vNext slot-lifecycle component gate, TLC-cross-checked direct vNext validation
+ownership component gate, TLC-cross-checked direct vNext deadline/protection helper gate
+(`vnext-deadline-protection`), direct vNext performance-fault config conversion gate
+(`vnext-performance-config`), direct pending-block validation worker config helper gate
+(`validation-worker-config`), TLC-cross-checked direct validation stall/redrive helper gate
+(`validation-stall-redrive`), TLC-cross-checked direct validation redrive reason label/distinctness
+helper gate (`validation-redrive-label`), validation ownership cleanup direct
+exactness helper gate
+(`validation-ownership-cleanup`), TLC-cross-checked direct vote/QC verification cache-key identity helper
+gate (`verify-cache-key`), TLC-cross-checked direct async vote-verification ownership gate,
+direct vote-signature verification worker config helper gate
+(`vote-verify-worker-config`), TLC-cross-checked direct async QC aggregate-verification ownership gate,
+TLC-cross-checked direct QC aggregate-verification worker config helper gate (`qc-verify-worker-config`),
+TLC-cross-checked direct worker-loop drain scheduler component gate,
 TLC-cross-checked actor-gate priority/fairness with aggregate exactness,
-TLC-cross-checked worker-loop budget/adaptive-cap gate,
-TLC-cross-checked worker ingress routing gate,
-worker-loop stage helper gate, TLC-cross-checked worker-queue status accounting gate,
+TLC-cross-checked direct worker-loop budget/adaptive-cap component gate,
+TLC-cross-checked direct worker ingress routing component gate,
+direct worker-loop stage helper gate, TLC-cross-checked direct worker-queue status accounting gate,
 TLC-cross-checked NPoS VRF epoch-seal staging gate,
-commit-anchor QC promotion helper gate (`commit-anchor-qc`),
-committed-height QC admission helper gate (`committed-height-qc`),
+direct commit-anchor QC promotion helper gate (`commit-anchor-qc`),
+direct committed-height QC admission helper gate (`committed-height-qc`),
 TLC-cross-checked proposal assembly gate, TLC-cross-checked Kura durability
-commit retry gate, TLC-cross-checked Kura persistence status counter/snapshot helper gate
+commit retry gate, TLC-cross-checked direct Kura persistence status counter/snapshot helper gate
 (`kura-store-status`), Kura writer wake coalescing gate, Kura writer periodic
 fsync fault regression gate, State DA cursor apply fault regression gate, Kura
 pipeline sidecar queue cap gate, Kura durable budget metadata snapshot gate,
@@ -9413,43 +9818,43 @@ IVM WSV checkpoint durable-state dedupe/benchmark gate,
 State view generation retry gate, WSV state write lock separation gate,
 WSV state write lock telemetry alias gate, WSV heavy-world state-write-lock benchmark gate,
 TLC-cross-checked post-commit cleanup gate, TLC-cross-checked frontier-gap
-realignment gate, frontier block-sync hint/direct-response permit gate,
-TLC-cross-checked same-height vote conflict helper gate, aggregate same-height vote-lock helper gate,
-TLC-cross-checked proposal stale same-height vote helper gate,
-TLC-cross-checked same-height vote recovery view-gap helper gate,
-TLC-cross-checked tip-extension helper gate,
-TLC-cross-checked DA gate helper gate,
-TLC-cross-checked DA gate status transition semantics helper gate
+realignment gate, direct frontier block-sync hint/direct-response permit gate,
+TLC-cross-checked direct same-height vote conflict helper gate, direct aggregate same-height vote-lock helper gate,
+TLC-cross-checked direct proposal stale same-height vote helper gate,
+TLC-cross-checked direct same-height vote recovery view-gap helper gate,
+TLC-cross-checked direct tip-extension helper gate,
+TLC-cross-checked direct DA gate helper gate,
+TLC-cross-checked direct DA gate status transition semantics helper gate
 (`da-gate-status`),
-TLC-cross-checked DA manifest guard helper gate,
-TLC-cross-checked consensus handshake capability construction helper gate,
-TLC-cross-checked consensus handshake helper gate,
-TLC-cross-checked runtime mode flip helper gate,
-TLC-cross-checked effective consensus-mode selection helper gate,
+TLC-cross-checked direct DA manifest guard helper gate,
+TLC-cross-checked direct consensus handshake capability construction helper gate,
+TLC-cross-checked direct consensus handshake helper gate,
+TLC-cross-checked direct runtime mode flip helper gate,
+TLC-cross-checked direct effective consensus-mode selection helper gate,
 TLC-cross-checked effective consensus timing aggregation helper gate,
-TLC-cross-checked NEW_VIEW stats helper gate,
-TLC-cross-checked NEW_VIEW tracker quorum/selection helper gate (`new-view-tracker`),
-TLC-cross-checked timing monitor helper gate,
+TLC-cross-checked direct NEW_VIEW stats helper gate,
+TLC-cross-checked direct NEW_VIEW tracker quorum/selection helper gate (`new-view-tracker`),
+TLC-cross-checked direct timing monitor no-bug gate,
 TLC-cross-checked hotspot summary accumulator helper gate (`hotspot-log-summary`),
-TLC-cross-checked adaptive observability timing/fanout helper gate (`adaptive-observability`),
-TLC-cross-checked pacing backpressure helper gate,
+TLC-cross-checked direct adaptive observability timing/fanout helper gate (`adaptive-observability`),
+TLC-cross-checked direct pacing backpressure helper gate,
 TLC-cross-checked counter-driven backpressure cooldown helper gate
 (`counter-backpressure-cooldown`),
-TLC-cross-checked per-reason pacemaker backpressure tracker gate
+TLC-cross-checked direct per-reason pacemaker backpressure tracker gate
 (`pacemaker-backpressure-tracker`),
-TLC-cross-checked locked-QC helper gate,
-TLC-cross-checked stake snapshot quorum helper gate,
-TLC-cross-checked NPoS validator election helper gate (`validator-election`),
+TLC-cross-checked direct locked-QC helper gate,
+TLC-cross-checked direct stake snapshot no-bug gate,
+TLC-cross-checked direct NPoS validator election helper gate (`validator-election`),
 TLC-cross-checked topology role/signature filter gate
 (`topology-role-filter`),
-TLC-cross-checked live local-vote roster helper gate (`live-vote-roster`),
-TLC-cross-checked canonical round-roster helper gate (`canonical-round-roster`),
-TLC-cross-checked block-specific vote-roster selection gate (`vote-roster-selection`),
-TLC-cross-checked vote-roster cache/support helper gate (`vote-roster-cache`),
-TLC-cross-checked commit-topology state/reset helper gate (`commit-topology-state`),
-TLC-cross-checked roster index projection helper gate
+TLC-cross-checked direct live local-vote roster helper gate (`live-vote-roster`),
+TLC-cross-checked direct canonical round-roster helper gate (`canonical-round-roster`),
+TLC-cross-checked direct block-specific vote-roster selection gate (`vote-roster-selection`),
+TLC-cross-checked direct vote-roster cache/support helper gate (`vote-roster-cache`),
+TLC-cross-checked direct commit-topology state/reset helper gate (`commit-topology-state`),
+TLC-cross-checked direct roster index projection no-bug gate
 (`roster-index-projection`),
-TLC-cross-checked membership-view hash helper gate (`membership-view-hash`),
+TLC-cross-checked direct membership-view hash helper gate (`membership-view-hash`),
 TLC-cross-checked membership mismatch status helper gate
 (`membership-mismatch-status`),
 TLC-cross-checked membership advert publication helper gate
@@ -9458,94 +9863,95 @@ TLC-cross-checked membership mismatch ingress/fail-closed helper gate
 (`membership-mismatch-ingress`),
 TLC-cross-checked consensus-params ingress helper gate
 (`consensus-params-ingress`),
-TLC-cross-checked prevalidated commit artifact trust helper gate
+TLC-cross-checked direct prevalidated commit artifact trust helper gate
 (`prevalidated-commit-artifact`),
 TLC-cross-checked commit-job dispatch gate,
-TLC-cross-checked precommit signer-history block-sync fallback gate,
-TLC-cross-checked pure engine constructor initial-state gate,
-TLC-cross-checked pure engine read-only accessor gate,
+TLC-cross-checked direct precommit signer-history block-sync fallback gate,
+TLC-cross-checked pure engine direct exactness constructor initial-state gate,
+TLC-cross-checked pure engine direct read-only accessor gate,
 TLC-cross-checked pure engine tick gate,
 TLC-cross-checked pure engine tick unrelated-state preservation gate,
-TLC-cross-checked pure engine NewView subject projection helper gate, pure engine certificate
+TLC-cross-checked pure engine direct NewView subject projection helper gate, pure engine certificate
 prefilter dispatch gate, pure engine certificate prefilter state-handoff gate,
 TLC-cross-checked pure engine certificate prefilter unrelated-state preservation gate,
-TLC-cross-checked pure engine view-advance saturation gate,
+TLC-cross-checked pure engine direct view-advance saturation component gate,
 TLC-cross-checked engine NewView-QC gate,
-TLC-cross-checked pure engine exact NewView-QC highest-QC record gate,
+TLC-cross-checked pure engine direct exactness NewView-QC highest-QC record gate,
 TLC-cross-checked pure engine NewView-QC unrelated-state preservation gate,
-TLC-cross-checked pure engine exact NewView-QC advance gate,
+TLC-cross-checked pure engine direct exactness NewView-QC advance gate,
 TLC-cross-checked pure engine handle-dispatch gate,
-TLC-cross-checked pure engine top-level argument-forwarding gate,
-TLC-cross-checked pure engine top-level output relay gate,
+TLC-cross-checked pure engine direct top-level argument-forwarding component gate,
+TLC-cross-checked pure engine direct top-level output relay component gate,
 TLC-cross-checked pure engine proposal-ingress gate,
 TLC-cross-checked pure engine exact proposal output-field gate,
-TLC-cross-checked pure engine exact proposal state-mutation gate,
-TLC-cross-checked pure engine proposal unrelated-state preservation gate,
-TLC-cross-checked pure engine exact proposal validation-owner gate,
-TLC-cross-checked proposal-lock helper gate,
-TLC-cross-checked QC-round compatibility helper gate,
-TLC-cross-checked QC reference projection helper gate,
-TLC-cross-checked QC reference comparator helper gate,
-TLC-cross-checked highest-QC record helper gate,
-TLC-cross-checked commit-subject helper gate,
-TLC-cross-checked payload lookup helper gate,
-TLC-cross-checked validation-priority helper gate,
-TLC-cross-checked vote-backed evidence helper gate,
-TLC-cross-checked vote payload actionable helper gate,
-actionable vote-backed proposal evidence helper gate,
-slot proposal evidence helper gate,
-round liveness helper gate,
-roster recovery FSM helper gate,
-consensus recovery prune helper gate,
-frontier live-owner work helper gate,
-keep-frontier-pending-active helper gate,
-stale-view pending prune helper gate,
-superseded frontier payload retention helper gate
+TLC-cross-checked pure engine direct exactness proposal state-mutation gate,
+TLC-cross-checked pure engine proposal unrelated-state preservation direct component gate,
+TLC-cross-checked pure engine direct exactness proposal validation-owner gate,
+TLC-cross-checked direct exactness proposal-lock helper gate,
+TLC-cross-checked direct QC-round compatibility helper gate,
+TLC-cross-checked direct exactness QC reference projection helper gate,
+TLC-cross-checked direct exactness QC reference comparator helper gate,
+TLC-cross-checked direct exactness highest-QC record helper gate,
+TLC-cross-checked commit-subject direct component gate,
+TLC-cross-checked direct exactness payload lookup helper gate,
+TLC-cross-checked direct validation-priority helper gate,
+TLC-cross-checked direct vote-backed evidence no-bug gate,
+TLC-cross-checked direct vote payload actionable no-bug gate,
+TLC-cross-checked direct actionable vote-backed proposal evidence helper gate,
+direct slot proposal evidence no-bug gate,
+direct round liveness no-bug gate,
+direct roster recovery FSM no-bug gate,
+direct consensus recovery prune helper gate,
+direct frontier live-owner work helper gate,
+direct keep-frontier-pending-active helper gate,
+direct stale-view pending prune no-bug gate,
+direct superseded frontier payload retention helper gate
 (`superseded-frontier-payload-retention`),
-stale missing-block request prune helper gate,
-stale missing commit-QC request prune helper gate,
-stale RBC session prune helper gate,
-highest-QC defer marker prune helper gate,
+direct stale missing-block request prune no-bug gate,
+direct stale missing commit-QC request prune no-bug gate,
+direct stale RBC session prune no-bug gate,
+direct highest-QC defer marker prune helper gate,
 fast-finality inline validation helper gate,
-observer signature-mismatch recovery helper gate (`observer-signature-recovery`),
-validation failure finalization helper gate (`validation-failure-finalize`),
-validation-reject reason label helper gate
+direct observer signature-mismatch recovery helper gate (`observer-signature-recovery`),
+direct validation failure finalization helper gate (`validation-failure-finalize`),
+direct validation-reject reason label helper gate
 (`validation-reject-reason-label`),
-validation-reject status counter/snapshot helper gate
+validation-reject status counter/snapshot component/anchor gate
 (`validation-reject-status`),
 peer-key policy status counter/snapshot helper gate
 (`peer-key-policy-status`),
-view-change cause status counter/snapshot helper gate
+view-change cause status counter/snapshot component/anchor gate
 (`view-change-cause-status`),
-view-change proof/index status counter helper gate
+view-change proof/index status counter component/anchor gate
 (`view-change-proof-status`),
-leader/highest-QC/locked-QC status projection helper gate (`qc-status`),
+leader/highest-QC/locked-QC status projection component/anchor gate
+(`qc-status`),
 TLC-cross-checked validation evidence QC selector helper gate (`validation-evidence-qc`),
 TLC-cross-checked pure engine prepare-QC gate,
-TLC-cross-checked pure engine exact Prepare-QC lock/highest-QC record gate,
-TLC-cross-checked pure engine exact Prepare-QC phase-transition gate,
+TLC-cross-checked pure engine direct exactness Prepare-QC lock/highest-QC record gate,
+TLC-cross-checked pure engine direct exactness Prepare-QC phase-transition gate,
 TLC-cross-checked pure engine Prepare-QC unrelated-state preservation gate,
-TLC-cross-checked pure engine prepare-vote cache/output gate,
+TLC-cross-checked pure engine direct exactness prepare-vote cache/output gate,
 TLC-cross-checked pure engine commit-QC gate,
-TLC-cross-checked pure engine exact Commit-QC highest-QC record gate,
-TLC-cross-checked pure engine exact Commit-QC phase-transition gate,
+TLC-cross-checked pure engine direct exactness Commit-QC highest-QC record gate,
+TLC-cross-checked pure engine direct exactness Commit-QC phase-transition gate,
 TLC-cross-checked pure engine Commit-QC unrelated-state preservation gate,
-TLC-cross-checked pure engine payload-available Commit-QC exact finality gate,
-TLC-cross-checked pure engine missing-payload Commit-QC pending/fetch gate,
+TLC-cross-checked pure engine direct exactness payload-available Commit-QC finality gate,
+TLC-cross-checked pure engine direct exactness missing-payload Commit-QC pending/fetch gate,
 TLC-cross-checked pure engine Commit-QC validation cleanup gate,
 TLC-cross-checked pure engine committed-block gate,
-TLC-cross-checked pure engine exact committed-block record gate,
+TLC-cross-checked pure engine direct exactness committed-block record gate,
 TLC-cross-checked pure engine reconfiguration staging gate,
-TLC-cross-checked pure engine reconfiguration activation-height dedup gate,
-TLC-cross-checked pure engine committed-block cleanup gate,
-TLC-cross-checked pure engine committed-block unrelated-state preservation gate,
-TLC-cross-checked pure engine exact payload-availability record gate,
+TLC-cross-checked pure engine direct reconfiguration activation-height dedup component gate,
+TLC-cross-checked pure engine committed-block cleanup direct component gate,
+TLC-cross-checked pure engine committed-block unrelated-state preservation direct component gate,
+TLC-cross-checked pure engine direct exactness payload-availability record gate,
 TLC-cross-checked pure engine payload-availability gate,
-TLC-cross-checked pure engine payload-availability unrelated-state preservation gate,
+TLC-cross-checked pure engine payload-availability unrelated-state preservation direct component gate,
 TLC-cross-checked pure engine validation-result gate,
-TLC-cross-checked pure engine validation-result unrelated-state preservation gate,
-TLC-cross-checked pure engine exact validation-owner cleanup gate,
-TLC-cross-checked pure engine exact invalid-validation round/output advance gate,
+TLC-cross-checked pure engine validation-result unrelated-state preservation direct component gate,
+TLC-cross-checked pure engine direct exactness validation-owner cleanup gate,
+TLC-cross-checked pure engine direct exactness invalid-validation round/output advance gate,
 TLC-cross-checked reconfiguration, TLC-cross-checked certified-recovery, TLC-cross-checked view-change, TLC-cross-checked validation-callback,
 TLC-cross-checked certificate-admission, TLC-cross-checked highest-QC selection, TLC-cross-checked optional highest-QC selection-filter bounded models,
 TLC-cross-checked certified-fetch with aggregate exactness, TLC-cross-checked pure-engine certificate

@@ -160,8 +160,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-Safety ==
+AllCasesMatchSpec ==
   \A c \in Cases: Matches(c)
+
+Safety ==
+  AllCasesMatchSpec
 
 PermissionedThreshold ==
   /\ Matches("permissioned_under_quorum")

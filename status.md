@@ -2,6 +2,6364 @@
 
 Last updated: 2026-06-08
 
+## 2026-06-08 SCCP TRON route-config post-deploy blockers
+
+- Hardened TAIRA XOR TRON route-config manifest normalization so
+  production-ready route manifests cannot carry non-empty
+  `postDeployLiveEvidence` production blocker arrays. Scalar blocker
+  containers, padded entries, and non-string entries now fail closed before a
+  governed Torii overlay can be rendered.
+- Added adversarial route-config coverage for source-event blocker drift,
+  scalar `productionBlockers`, padded route-canary blocker entries, and
+  non-string full-TOML blocker entries.
+- Validation:
+  - `node --check scripts/sccp_tron_taira_xor_deploy.mjs`
+  - `node --check scripts/sccp_tron_taira_xor_deploy.test.mjs`
+  - `node --test --test-name-pattern "TRON route-config rejects malformed or foreign route manifests" scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`1` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`40` passed)
+
+## 2026-06-08 Sumeragi fork-npos TLC cross-check
+
+- Added `fork-npos` to the Sumeragi TLC runner so the NPoS stake-quorum
+  fork-safety config is independently checked by TLC, matching the existing
+  Apalache PR baseline mode for the same finite conflicting-branch model.
+- Documented the new TLC command in the formal README and updated the
+  fork-safety assumption-map note to state that `fork-fast`, `fork-npos`, and
+  the `fork-bug-*` expected-failure mutation are cross-checked by both engines.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 JVM_ARGS="-Xss16m -Xmx12288m" bash scripts/formal/sumeragi_apalache.sh fork-npos`
+    (`NoError`, length `9`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fork-npos`
+    (`1749` states generated, `444` distinct states, no errors)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 BFV full-bootstrap proof-key material envelope
+
+- Replaced opaque BFV full-bootstrap proof-key material admission with a
+  canonical Norito `BfvFullBootstrapProofKeyMaterialEnvelopeV1` carried inside
+  `BfvFullBootstrapProofKeyV1::key_material`.
+- The envelope binds backend-native prover/verifier key bytes to the proof-key
+  role, backend, key format, circuit id, registered BFV parameter/RNS/
+  decomposition digests, bootstrap depth, governed public-input schema digest,
+  statement/claim layout, witness digest domain, witness material layout, trace
+  counts, hash shape, and supported bound modes before proof-key artifacts are
+  accepted.
+- Generated proof-key pair validation now decodes those envelopes and compares
+  native key bytes directly, so role-specific envelopes cannot hide duplicate
+  prover/verifier native key material.
+- Added regressions for all-zero native key material, raw opaque key material,
+  and drifted key-material envelope metadata, and updated proof-key commitment
+  goldens to the envelope-bound key format.
+- Validation:
+  - `cargo check -j 1 -p iroha_crypto --lib`
+  - `cargo check -j 1 -p iroha_core --lib`
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof --lib -- --nocapture`
+    (`5` passed)
+  - `cargo test -j 1 -p iroha_core governed_full_bootstrap_execution_verifier_key_rejects_inert_key_material --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs status.md roadmap.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs status.md roadmap.md`
+    (no matches)
+  - `make guards`
+
+## 2026-06-08 Soracloud full-bootstrap witness proof-profile metadata
+
+- Promoted the BFV full-bootstrap execution witness digest layout to explicit
+  crypto profile metadata: the public-input schema now advertises the witness
+  digest domain, witness material version/field count, ciphertext trace stage
+  count, bound trace stage count, and required trace/bounds bindings.
+- Bound the same witness-layout fields into prover/verifier proof-key metadata,
+  individual proof-key material commitments, and generated proof-key pair
+  commitments, with validation rejecting stale witness domain, material layout,
+  trace count, or trace-bounds count drift.
+- Updated the Soracloud execution proof public schema bytes and stable schema
+  hash so verifier records advertise the exact witness layout consumed by the
+  crypto proof profile.
+- Validation:
+  - `cargo check -j 1 -p iroha_crypto --lib`
+  - `cargo check -j 1 -p iroha_core --lib`
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof_schema_and_key_commitments_reject_adversarial_drift --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof --lib -- --nocapture`
+    (`5` passed)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe --lib -- --nocapture`
+    (`3` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs status.md roadmap.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_data_model/src/soracloud.rs status.md roadmap.md`
+    (no matches)
+  - `make guards`
+
+## 2026-06-08 Sumeragi direct NoBugInvariant fast-config batch
+
+- Converted the remaining 28 fast configs from the generic `NoBugInvariant`
+  target to model-specific direct core invariants, completing the 52-mode drain
+  while keeping `NoBugInvariant` and `SafetyFast` compatibility aliases in the
+  models for mutation configs.
+- The final batch covers consensus recovery prune, Kura retry, missing-block
+  ingress fetch, new-view stats, mode flip, pacemaker core, membership
+  view-hash, pacing backpressure, precommit QC/lock and signer-history checks,
+  superseded frontier payload retention, round liveness, topology mutation,
+  highest-QC fetch-body-known, validator election, penalty offender selection,
+  payload progress availability, slot proposal evidence, quorum recovery vote
+  drain, stale RBC/session/proposal/missing-commit/missing-block repair,
+  pending-fast unblock, vote payload/actionable/backed evidence, and timing
+  monitor. Remaining fast configs that still check `NoBugInvariant` dropped
+  from `52` to `0`.
+- Extended the formal coverage guard so any fast CFG that references generic
+  `NoBugInvariant`, `Safety`, or `SafetyFast` checks directly is rejected.
+- Validation:
+  - `target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck` for the
+    28 final Sumeragi modules
+    (all `EXITCODE: OK`)
+  - `bash scripts/formal/sumeragi_tlc.sh` for the 28 final fast modes
+    (all passed)
+  - `bash scripts/formal/sumeragi_apalache.sh` for the 28 final fast modes
+    (all `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`118` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Soracloud full-bootstrap execution native AIR admission
+
+- Hardened the Soracloud full-bootstrap execution proof backend under
+  `zk-stark` so, after the governed verifier key is matched but before proof
+  quota accounting, preverified-cache lookup, or backend verification, Core
+  decodes the native `StarkVerifyEnvelopeV1` and requires the OpenVerify
+  binding AIR transcript label, domain tag, circuit id, trace width, opening
+  count, composition root, and public digest to match the outer
+  `OpenVerifyEnvelope` statement.
+- Exposed the existing deterministic STARK OpenVerify AIR domain/digest helpers
+  inside Core and pinned the generic binding AIR trace width as a named native
+  STARK constant so Soracloud admission does not duplicate magic values.
+- Added a `zk-stark` regression that starts from real generated
+  full-bootstrap execution proof envelopes and proves transcript-label,
+  domain-tag, missing-AIR, circuit-id, trace-width, opening-count,
+  composition-root, and public-digest drift fail before backend verification.
+- Validation:
+  - `cargo check -j 1 -p iroha_core --lib`
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_rejects_native_air_binding_drift --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof_rejects_unverified_fake_proof --lib -- --nocapture`
+    (`1` passed)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/iroha_core/src/zk.rs crates/iroha_core/src/zk_stark.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs status.md roadmap.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_core/src/zk.rs crates/iroha_core/src/zk_stark.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs status.md roadmap.md`
+    (no matches)
+  - `make guards`
+
+## 2026-06-08 Sumeragi aggregate-free fast-config guard
+
+- Extended `scripts/formal/check_sumeragi_formal_coverage.py` so every
+  `_fast.cfg` is rejected if it references the generic aggregate `Safety` or
+  `SafetyFast` checks directly, including multiline `INVARIANTS` blocks.
+- Converted the remaining 18 aggregate fast configs found by that guard to
+  model-specific direct invariants while keeping `Safety`/`SafetyFast`
+  compatibility aliases inside the models: counter backpressure cooldown,
+  engine read accessors, evidence horizon, highest-QC optional selection,
+  hotspot log summary, near-quorum preemptive escalation, paced retransmit
+  targets, peer-admin detection, preemptive vote-backed retransmit, proposal
+  cache/mismatch, RBC chunk allocation/broadcast order/payload cap/payload
+  chunking/rebroadcast selection/RS16 initial fanout, and superseded frontier
+  payload retention.
+- Updated the formal README inventory, fast-mode table, and roadmap wording so
+  these modes are described as direct fast checks rather than generic aggregate
+  checks.
+- Validation:
+  - `target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck` for the
+    18 touched Sumeragi modules
+    (all `EXITCODE: OK`)
+  - `bash scripts/formal/sumeragi_tlc.sh` for the 18 touched fast modes
+    (all passed)
+  - `bash scripts/formal/sumeragi_apalache.sh` for the 18 touched fast modes
+    (all `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`118` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Soracloud full-bootstrap execution schema witness binding
+
+- Updated the canonical Soracloud full-bootstrap execution proof public-input
+  schema to advertise the `execution_witness_digest` now bound by each typed
+  per-slot claim. The stable schema hash moved to
+  `10feae939d8241545107d478406b591521f59602dfc4d85d77653cc06a251aa5`.
+- Added data-model regression coverage that rejects a stale pre-witness schema
+  layout even if the hash is mechanically updated.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-fhe-material-profile cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-fhe-material-profile cargo test -j 1 -p iroha_data_model soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest --lib -- --nocapture`
+    (`1` passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-fhe-material-profile cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof_rejects_verifier_record_metadata_drift --lib -- --nocapture`
+    (`1` passed)
+
+## 2026-06-08 Sumeragi direct SafetyFast final fast-config batch
+
+- Removed the remaining direct `INVARIANT SafetyFast` uses from all fast
+  configs by adding named direct aliases for same-height no-proposal storm
+  recovery, vNext stake-weight/quorum helpers, validation evidence QC
+  selection, validation failure finalization, validation worker config
+  derivation, vote-roster cache/support, vote-roster selection,
+  vote-verification worker config derivation, worker-loop stage helpers, and
+  worker tick-gap scheduling. Fast configs using `INVARIANT SafetyFast`
+  dropped from 10 to 0; direct `INVARIANT Safety` remains at 0.
+- Kept `SafetyFast` as a compatibility alias inside the models so existing
+  mutation configs retain their expected-failure wiring while PR fast configs
+  target model-specific direct invariant names.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiSameHeightNoProposalStormGate SumeragiVNextStakeWeightGate SumeragiValidationEvidenceQcGate SumeragiValidationFailureFinalizeGate SumeragiValidationWorkerConfigGate SumeragiVoteRosterCacheGate SumeragiVoteRosterSelectionGate SumeragiVoteVerifyWorkerConfigGate SumeragiWorkerLoopStageGate SumeragiWorkerTickGapGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in same-height-no-proposal-storm-fast vnext-stake-weight-fast validation-evidence-qc-fast validation-failure-finalize-fast validation-worker-config-fast vote-roster-cache-fast vote-roster-selection-fast vote-verify-worker-config-fast worker-loop-stage-fast worker-tick-gap-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `66/33`, `2/2`, `2/1`, `2/1`, `2/1`,
+    `2/1`, `2/1`, `2/1`, `2/1`, `2/1`)
+  - `for mode in same-height-no-proposal-storm-fast vnext-stake-weight-fast validation-evidence-qc-fast validation-failure-finalize-fast validation-worker-config-fast vote-roster-cache-fast vote-roster-selection-fast vote-verify-worker-config-fast worker-loop-stage-fast worker-tick-gap-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 JVM_ARGS="-Xss16m -Xmx12288m" bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `89`, `14`, `2`, `69`, `57`,
+    `2`, `2`, `110`, `26`, `37`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+    mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast helper/fanout batch
+
+- Removed `INVARIANT SafetyFast` from eight more fast configs by adding named
+  direct aliases for RBC unverified-roster admission, recovery-FSM reason
+  classification, transaction requeue planning, signature-index recovery,
+  committed signed-quorum fetch fallback, signer-index normalization,
+  pending-block tip extension, and topology fanout/redundant-send checks.
+  Remaining fast configs using `INVARIANT SafetyFast` dropped from 18 to 10;
+  direct `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiRbcUnverifiedRosterGate SumeragiRecoveryFsmReasonGate SumeragiRequeueTransactionsGate SumeragiSignatureIndexRecoveryGate SumeragiSignedQuorumFetchFallbackGate SumeragiSignerIndexNormalizationGate SumeragiTipExtensionHelpersGate SumeragiTopologyFanoutGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in rbc-unverified-roster-fast recovery-fsm-reason-fast requeue-transactions-fast signature-index-recovery-fast signed-quorum-fetch-fallback-fast signer-index-normalization-fast tip-extension-helpers-fast topology-fanout-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `13/12`, `2/1`, `2/1`, `2/1`, `2/1`,
+    `2/1`, `2/1`, `2/1`)
+  - `for mode in rbc-unverified-roster-fast recovery-fsm-reason-fast requeue-transactions-fast signature-index-recovery-fast signed-quorum-fetch-fallback-fast signer-index-normalization-fast tip-extension-helpers-fast topology-fanout-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 JVM_ARGS="-Xss16m -Xmx12288m" bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `66`, `32`, `3`, `2`, `7`,
+    `88`, `4`, `62`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+	    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual
+	    mode, `10347` documented modes, `499` TLC fast modes, `9842` TLC
+	    mutation modes)
+
+## 2026-06-08 SCCP all-lanes governed blocker schema
+
+- Hardened `scripts/sccp_all_lanes_evidence.py` so destination rollout and
+  route allowlist `blockers` fields are validated as empty lists of non-empty
+  canonical strings. Scalar containers, empty entries, padded strings, and
+  non-string entries now remain explicit all-lanes production blockers.
+- Added adversarial coverage that mutates a complete governed evidence bundle
+  across ETH, BSC, Solana, and TRON blocker containers and verifies production
+  readiness stays closed with field-specific diagnostics.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k "malformed_governed_blocker_containers or missing_ton_audit_and_route_blocker or release_checklist_rejects_malformed_lane_containers"`
+    (`3` passed, `129` deselected)
+
+## 2026-06-08 SCCP BSC route-manifest post-deploy blockers
+
+- Hardened TAIRA XOR BSC route-config normalization so `productionReady` route
+  manifests cannot carry non-empty `postDeployLiveEvidence` production blocker
+  arrays. Malformed blocker containers now fail closed before a governed Torii
+  overlay can be rendered.
+- Added adversarial route-config coverage for non-empty source-event blockers,
+  scalar blocker containers, whitespace-padded blocker entries, and malformed
+  snake-case blocker arrays.
+- Validation:
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.mjs`
+  - `node --check scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+  - `node --test --test-name-pattern "post-deploy evidence" scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`1` passed)
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+    (`27` passed)
+
+## 2026-06-08 SCCP TRON route-manifest source-event blockers
+
+- Hardened TAIRA XOR TRON route-manifest live-evidence normalization so
+  `source_event_transaction_production_ready = true` cannot coexist with
+  non-empty `source_event_transaction_production_blockers`. Malformed blocker
+  containers now fail closed before a production-ready route manifest can be
+  rendered.
+- Added adversarial route-manifest coverage for contradictory source-event
+  blockers, scalar blocker containers, and whitespace-padded blocker entries.
+- Validation:
+  - `node --check scripts/sccp_tron_taira_xor_deploy.mjs`
+  - `node --test --test-name-pattern "route manifest draft rejects forged or incomplete live evidence" scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`1` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`40` passed)
+
+## 2026-06-08 SCCP release-bundle verifier exact evidence coverage
+
+- Added a focused release-bundle verifier regression that hand-edits both the
+  embedded readiness evidence and standalone all-lanes summary to advertise an
+  all-zero route-canary evidence hash plus a forged evidence source. The public
+  verifier now has explicit adversarial coverage for rejecting both malformed
+  fields at both JSON artifact surfaces.
+- Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+- Tightened the verifier-owned active launch checklist recomputation to mirror
+  the readiness-report generator's exact metadata blockers for required record
+  flags, governed source/deployment/destination hashes, active EVM source-gate
+  state, route allowlist binding, and route-canary transaction metadata. The
+  added regression proves truthy record strings, zero governed hashes, string
+  route-match flags, forged route-canary sources, non-positive receipt blocks,
+  and non-finalized receipt markers keep the recomputed checklist blocked.
+- Hardened release-bundle preflight, readiness Markdown, and release-note
+  blocker rendering for top-level blockers, native-prover blockers,
+  source-inventory blockers, and user-prover validation blockers. Malformed
+  blocker containers now render as explicit invalid cells/items in both the
+  generator and verifier-owned expected Markdown instead of flattening strings
+  into character-by-character bullets or `<br>` output, or raising on
+  non-string list entries.
+- Added release-bundle report-boundary validation for the initial preflight
+  readiness report and the copied-evidence bundle-local rebuild. Structurally
+  malformed ready reports now fail with explicit preflight diagnostics before
+  Markdown rendering or manifest generation rather than surfacing as uncaught
+  indexing exceptions.
+- Canonicalized missing future-lane route-canary binding in readiness
+  cryptographic-evidence rows to explicit boolean `false`, while preserving
+  present malformed active-lane values for verifier rejection.
+- Tightened verifier-owned readiness Markdown invariants so checklist, lane,
+  native-prover, source-inventory, user-prover, and top-level blocker text or
+  invalid-marker cells/items must remain visible in the public attachment. This
+  adds direct adversarial coverage for hand-edited Markdown that hides blocker
+  details while preserving the surrounding table structure.
+- Added release-notes attachment invariants for the canonical title, exact
+  readiness status line, manifest handoff, artifact table entries, and blocker
+  lines or invalid-marker bullets. The verifier now reports direct
+  release-notes errors for hand-edited status or blocker drift before the
+  canonical attachment comparison runs.
+- Aligned verifier active-launch blocker collection with the readiness-report
+  generator: embedded readiness evidence and standalone all-lanes root blocker
+  summaries plus active-lane blocker containers must be list-shaped before
+  collection runs. Malformed strings now produce explicit blocker diagnostics
+  instead of character-by-character blocker noise or silent omission.
+- Hardened native EVM prover blocker handling in the active-launch checklist
+  and top-level readiness blocker aggregation. Scalar
+  `validation_blockers`, non-string entries, and padded entries now become
+  explicit schema blockers in both the readiness generator and verifier mirror
+  instead of being filtered, character-expanded, or treated as ready.
+- Hardened the all-lanes release checklist itself so malformed lane record,
+  destination-binding, route-allowlist, route-canary, source-adapter ready, or
+  lane-local blocker containers become explicit checklist blockers instead of
+  tracebacks, truthy clears, hidden route-canary gaps, or falsely ready
+  no-unresolved-blockers state.
+- Hardened the all-lanes evidence validator root preflight so non-object roots
+  and non-string section keys become structured production blockers instead of
+  raising before lane-level missing-evidence diagnostics can be emitted.
+- Tightened the retired-network surface guard so the exact
+  specific no-support sentence must be present in each launch-scope docs/status
+  file, and pinned that regression in the release-bundle verifier source
+  inventory.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "malformed_ready_report or malformed_copied_report_before_render or preflight_rejects_truthy_production_ready or preflight_marks_malformed_blocker_containers"`
+    (`4` passed, `356` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "accepts_active_launch_lane_without_future_lanes or malformed_ready_report or malformed_copied_report_before_render or preflight_rejects_truthy_production_ready or preflight_marks_malformed_blocker_containers"`
+    (`5` passed, `355` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "passes_with_only_active_launch_lane or preserves_malformed_crypto_evidence_values"`
+    (`2` passed, `226` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`361` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`229` passed)
+  - `rg -n "Substrate/Polkadot networks are explicitly outside SCCP launch support for now\\." docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
+    (exact launch-scope sentence present in all four files)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`8` passed)
+  - `git diff --check -- docs/source/bridge_proofs.md roadmap.md status.md scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `git diff --cached --check -- docs/source/bridge_proofs.md roadmap.md status.md scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `git diff --name-only --diff-filter=U`
+    (no unresolved merge paths)
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" docs/source/bridge_proofs.md roadmap.md status.md scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+    (no conflict markers)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "route_canary_evidence_drift or route_canary_field_drift or route_canary_zero_addresses or route_canary_hash_drift"`
+    (`4` passed, `344` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "recomputes_active_checklist_with_exact_metadata or compares_summary_launch_ready_exactly or release_checklist_drift or release_checklist_field_type_drift or readiness_boolean_type_drift or route_canary_evidence_drift"`
+    (`6` passed, `343` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "markdown_marks_malformed_blocker_containers or markdown_compares_row_ready_exactly or compares_checklist_ready_exactly or passes_with_only_active_launch_lane"`
+    (`4` passed, `224` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "release_notes_mark_malformed_blocker_containers or release_note_status_compares_ready_exactly or readiness_markdown_marks_bad_blocker_containers or verifier_readiness_markdown_compares_rows_exactly or readiness_boolean_type_drift or malformed_source_inventory_gate"`
+    (`6` passed, `345` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "preflight_marks_malformed_blocker_containers or release_notes_mark_malformed_blocker_containers or preflight_rejects_truthy_production_ready"`
+    (`3` passed, `349` deselected)
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "malformed_native_prover_blockers"`
+    (`1` passed, `228` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "malformed_native_prover_blockers"`
+    (`1` passed, `360` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "active_launch_release_checklist or active_lane_unresolved_blockers or malformed_native_prover_blockers or blocks_without_native_evm_prover_bundle"`
+    (`3` passed, `226` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "active_checklist or malformed_native_prover_blockers or native_evm_prover_bundle"`
+    (`4` passed, `357` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "markdown_invariants_require_blocker_text or markdown_invariants_require_invalid_blocker_markers or readiness_markdown_marks_bad_blocker_containers"`
+    (`3` passed, `351` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "markdown_marks_malformed_blocker_containers"`
+    (`1` passed, `227` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "release_notes_invariants_require_status_and_blockers or release_notes_status_drift or release_notes_drift or requires_manifest_handoff_note"`
+    (`4` passed, `352` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "active_launch_blockers_reject_malformed_containers or malformed_active_launch_blockers or all_lanes_list_scalar_type_drift"`
+    (`3` passed, `355` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "blocks_active_lane_unresolved_blockers"`
+    (`1` passed, `227` deselected)
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k "release_checklist_rejects_malformed_lane_containers or release_checklist_rejects_malformed_source_gate_flags or release_checklist_rejects_malformed_route_canary_summary or release_checklist_rejects_malformed_record_flags or release_checklist_compares_item_ready_exactly or cli_exit_compares_production_ready_exactly"`
+    (`6` passed, `123` deselected)
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k "malformed_root_inputs or non_string_section_keys or malformed_direct_sections or unknown_sections"`
+    (`4` passed, `127` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
+    (`131` passed)
+  - `python3 -m py_compile pytests/scripts/sccp_retired_network_surface_test.py scripts/sccp_verify_release_bundle.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`8` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "retired_network_surface_guard_inventory or retired_network_surface_forbidden_marker or retired_network_scan_evidence"`
+    (`3` passed, `355` deselected)
+
+## 2026-06-08 Soracloud FHE execution witness binding
+
+- Added a deterministic BFV full-bootstrap execution witness digest over the
+  governed artifact-aware prefix trace and per-stage bound trace. Per-slot
+  execution proof claims now bind that digest, the canonical proof public-input
+  schema requires the binding, and proof-key/schema digests were updated for the
+  seven-field claim layout.
+- Core full-bootstrap execution proof derivation now builds claims through the
+  witness helper and recomputes the witness before statement hashing. Runtime
+  verification rejects output ciphertext, output-bound, and witness-digest drift
+  before STARK envelope verification, and Core fixtures now execute the governed
+  full-bootstrap path to produce real proof outputs/bounds.
+- Validation:
+  - `cargo check -j 1 -p iroha_crypto --lib`
+  - `cargo check -j 1 -p iroha_core --lib`
+  - `cargo check -j 1 -p iroha_data_model --lib`
+  - `cargo check -j 1 -p iroha_torii --lib`
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_execution --lib -- --nocapture`
+    (`3` passed, `680` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof --lib -- --nocapture`
+    (`5` passed, `678` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_inert_key_material --lib -- --nocapture`
+    (`1` passed, `7337` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`
+    (`1` passed, `7337` filtered out)
+  - `cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof_rejects_unverified_fake_proof --lib -- --nocapture`
+    (`1` passed, `7281` filtered out)
+  - `cargo test -j 1 -p iroha_data_model full_bootstrap --lib -- --list`
+    (`19` tests listed)
+  - `cargo test -j 1 -p iroha_data_model fhe_full_bootstrap_execution_proof_validate_accepts_canonical_envelope --lib -- --nocapture`
+    (`1` passed, `1528` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_stale_full_bootstrap_verifier_key_commitment_locally --lib -- --nocapture`
+    (`1` passed, `2360` filtered out)
+
+## 2026-06-08 Sumeragi direct SafetyFast RBC session/store batch
+
+- Removed `INVARIANT SafetyFast` from eight more fast configs by adding named
+  direct aliases for RBC progress-stage synchronization, local READY emission,
+  persisted chunk sampling, session chunk ingest, READY/DELIVER recording, RBC
+  status handle lifecycle, RBC status lookup, and persisted session-store guard
+  checks. Remaining fast configs using `INVARIANT SafetyFast` dropped from 26
+  to 18; direct `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiRbcProgressStageGate SumeragiRbcReadyEmissionGate SumeragiRbcSamplingGate SumeragiRbcSessionChunkIngestGate SumeragiRbcSessionReadyDeliverGate SumeragiRbcStatusHandleGate SumeragiRbcStatusLookupGate SumeragiRbcStoreGuardGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in rbc-progress-stage-fast rbc-ready-emission-fast rbc-sampling-fast rbc-session-chunk-ingest-fast rbc-session-ready-deliver-fast rbc-status-handle-fast rbc-status-lookup-fast rbc-store-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `22/21`, `2/1`, `27/26`, `2/1`, `2/1`,
+    `2/1`, `2/1`, `60/59`)
+  - `for mode in rbc-progress-stage-fast rbc-ready-emission-fast rbc-sampling-fast rbc-session-chunk-ingest-fast rbc-session-ready-deliver-fast rbc-status-handle-fast rbc-status-lookup-fast rbc-store-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 JVM_ARGS="-Xss16m -Xmx12288m" bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `164`, `43`, `92`, `46`, `44`,
+    `20`, `7`, `192`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast RBC helper/availability batch
+
+- Removed `INVARIANT SafetyFast` from eight more fast configs by adding
+  named direct aliases and retargeting quorum retransmit plus RBC availability
+  aggregate exactness wrappers at their core invariants. The converted modes
+  cover quorum retransmit target selection, RBC availability reschedule gating,
+  READY/DELIVER deferral throttling, local DELIVER emission, RBC hot-repair
+  backpressure, RBC next-due scheduling, RBC outbound chunk flush, and RBC
+  payload layout projection. Remaining fast configs using
+  `INVARIANT SafetyFast` dropped from 34 to 26; direct `INVARIANT Safety`
+  remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiQuorumRetransmitTargetsGate SumeragiRbcAvailabilityRescheduleGate SumeragiRbcDeferralThrottleGate SumeragiRbcDeliverEmissionGate SumeragiRbcHotRepairGate SumeragiRbcNextDueGate SumeragiRbcOutboundFlushGate SumeragiRbcPayloadLayoutGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in quorum-retransmit-fast rbc-availability-reschedule-fast rbc-deferral-throttle-fast rbc-deliver-emission-fast rbc-hot-repair-fast rbc-next-due-fast rbc-outbound-flush-fast rbc-payload-layout-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `2/1`, `24/23`, `2/1`, `46/45`,
+    `2/1`, `15/14`, `2/1`)
+  - `for mode in quorum-retransmit-fast rbc-availability-reschedule-fast rbc-deferral-throttle-fast rbc-deliver-emission-fast rbc-hot-repair-fast rbc-next-due-fast rbc-outbound-flush-fast rbc-payload-layout-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 JVM_ARGS="-Xss16m -Xmx12288m" bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `42`, `83`, `99`, `26`, `138`,
+    `30`, `64`, `50`; the default 4 GiB local heap was insufficient for
+    `quorum-retransmit-fast`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast RBC status/action batch
+
+- Removed `INVARIANT SafetyFast` from eight more fast configs by adding
+  named direct aliases and retargeting the retransmit aggregate/full-safety
+  wrappers at the core retransmit invariant. The converted modes cover RBC
+  backlog/status summaries, same-height vote conflict selection, delivered
+  payload byte telemetry, RBC stalled-rebroadcast actions, tick/deadline
+  helpers, RBC status persistence, vNext performance config conversion, and
+  retransmit backpressure pacing. Remaining fast configs using
+  `INVARIANT SafetyFast` dropped from 42 to 34; direct `INVARIANT Safety`
+  remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiRbcBacklogStatusGate SumeragiSameHeightVoteConflictGate SumeragiRbcDeliveredPayloadBytesGate SumeragiRbcRebroadcastActionGate SumeragiTickDeadlineHelpersGate SumeragiRbcStatusPersistenceGate SumeragiVNextPerformanceConfigGate SumeragiRetransmitBackpressureGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in rbc-backlog-status-fast same-height-vote-conflict-fast rbc-delivered-payload-bytes-fast rbc-rebroadcast-action-fast tick-deadline-helpers-fast rbc-status-persistence-fast vnext-performance-config-fast retransmit-backpressure-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: all `2/1`)
+  - `for mode in rbc-backlog-status-fast same-height-vote-conflict-fast rbc-delivered-payload-bytes-fast rbc-rebroadcast-action-fast tick-deadline-helpers-fast rbc-status-persistence-fast vnext-performance-config-fast retransmit-backpressure-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `47`, `8`, `42`, `36`, `10`,
+    `14`, `49`, `98`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast RBC cursor/label batch
+
+- Removed `INVARIANT SafetyFast` from eight more fast configs by adding
+  direct aliases for RBC repair request, delivered-session rebroadcast,
+  rebroadcast cursor selection, RBC status retention, same-height block-body
+  repair, vNext re-chain error labels, validation redrive labels, and RBC
+  recovery helper checks. Remaining fast configs using `INVARIANT SafetyFast`
+  dropped from 50 to 42; direct `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiRbcRepairRequestGate SumeragiRbcDeliveredRebroadcastGate SumeragiRbcRebroadcastCursorGate SumeragiRbcStatusRetentionGate SumeragiSameHeightBlockBodyRepairGate SumeragiVNextRechainErrorLabelGate SumeragiValidationRedriveLabelGate SumeragiRbcRecoveryHelperGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in rbc-repair-request-fast rbc-delivered-rebroadcast-fast rbc-rebroadcast-cursor-fast rbc-status-retention-fast same-height-block-body-repair-fast vnext-rechain-error-label-fast validation-redrive-label-fast rbc-recovery-helper-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `28/27`, `2/1`, `2/1`, `2/1`, `2/1`,
+    `2/1`, `2/1`, `16/15`)
+  - `for mode in rbc-repair-request-fast rbc-delivered-rebroadcast-fast rbc-rebroadcast-cursor-fast rbc-status-retention-fast same-height-block-body-repair-fast vnext-rechain-error-label-fast validation-redrive-label-fast rbc-recovery-helper-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `135`, `32`, `18`, `8`, `3`,
+    `7`, `8`, `38`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast RBC/recovery batch
+
+- Removed `INVARIANT SafetyFast` from eight more fast configs by adding
+  named direct aliases and retargeting aggregate exactness wrappers at those
+  aliases. The converted modes cover quorum reschedule backoff, RBC chunk post
+  debug scheduling, RBC missing-INIT rebroadcast, RBC targeted repair,
+  same-height vote recovery-gap thresholds, validation reject reason labels,
+  vote-backed reassembly stall detection, and RBC missing-block recovery.
+  Remaining fast configs using `INVARIANT SafetyFast` dropped from 58 to 50;
+  direct `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiQuorumRescheduleBackoffGate SumeragiRbcChunkPostDebugGate SumeragiRbcMissingInitRebroadcastGate SumeragiRbcTargetedRepairGate SumeragiSameHeightVoteRecoveryGapGate SumeragiValidationRejectReasonLabelGate SumeragiVoteBackedReassemblyStallGate SumeragiRbcMissingBlockRecoveryGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in quorum-reschedule-backoff-fast rbc-chunk-post-debug-fast rbc-missing-init-rebroadcast-fast rbc-targeted-repair-fast same-height-vote-recovery-gap-fast validation-reject-reason-label-fast vote-backed-reassembly-stall-fast rbc-missing-block-recovery-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `24/23`, `19/18`, `28/27`, `2/1`,
+    `2/1`, `2/1`, `32/31`)
+  - `for mode in quorum-reschedule-backoff-fast rbc-chunk-post-debug-fast rbc-missing-init-rebroadcast-fast rbc-targeted-repair-fast same-height-vote-recovery-gap-fast validation-reject-reason-label-fast vote-backed-reassembly-stall-fast rbc-missing-block-recovery-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `96`, `68`, `58`, `109`, `5`,
+    `84`, `94`, `129`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast proposal/QC batch
+
+- Removed `INVARIANT SafetyFast` from eight more fast configs by adding
+  model-specific direct aliases and retargeting aggregate exactness wrappers at
+  those aliases. The converted modes cover proposal batch trimming and
+  canonicalization, proposal budget/cap derivation, stale same-height proposal
+  voting, raw QC signer-counting, QC validation evidence/reason projection, QC
+  aggregate-verification worker config derivation, and quorum rebroadcast
+  dispatch. Remaining fast configs using `INVARIANT SafetyFast` dropped from
+  66 to 58; direct `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiProposalBatchGate SumeragiProposalBudgetGate SumeragiProposalStaleVoteGate SumeragiQcSignerCountGate SumeragiQcValidationEvidenceGate SumeragiQcValidationReasonGate SumeragiQcVerifyWorkerConfigGate SumeragiQuorumRebroadcastDispatchGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in proposal-batch-fast proposal-budget-fast proposal-stale-vote-fast qc-signer-count-fast qc-validation-evidence-fast qc-validation-reason-fast qc-verify-worker-config-fast quorum-rebroadcast-dispatch-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: all `2/1`)
+  - `for mode in proposal-batch-fast proposal-budget-fast proposal-stale-vote-fast qc-signer-count-fast qc-validation-evidence-fast qc-validation-reason-fast qc-verify-worker-config-fast quorum-rebroadcast-dispatch-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `4`, `8`, `5`, `57`, `3`, `7`,
+    `110`, `138`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast observer/topology batch
+
+- Removed `INVARIANT SafetyFast` from eight more fast configs by using
+  existing direct aggregate invariants or adding model-specific aliases. The
+  converted modes cover observer signature-mismatch recovery, trusted-peer P2P
+  topology refresh, pending-progress accounting, pending fetch/body response
+  flushing, pipeline event emission, cached-QC precommit signer records,
+  prevalidated commit artifact trust, and PRF leader/shuffle topology checks.
+  Remaining fast configs using `INVARIANT SafetyFast` dropped from 74 to 66;
+  direct `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiObserverSignatureRecoveryGate SumeragiP2pTopologyTrustedGate SumeragiPendingProgressGate SumeragiPendingResponseFlushGate SumeragiPipelineEventEmissionGate SumeragiPrecommitSignerRecordGate SumeragiPrevalidatedCommitArtifactGate SumeragiPrfLeaderShuffleGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in observer-signature-recovery-fast p2p-topology-trusted-fast pending-progress-fast pending-response-flush-fast pipeline-event-emission-fast precommit-signer-record-fast prevalidated-commit-artifact-fast prf-leader-shuffle-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `2/1`, `2/1`, `2/1`, `12/11`,
+    `2/1`, `2/1`, `3/2`)
+  - `for mode in observer-signature-recovery-fast p2p-topology-trusted-fast pending-progress-fast pending-response-flush-fast pipeline-event-emission-fast precommit-signer-record-fast prevalidated-commit-artifact-fast prf-leader-shuffle-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `86`, `13`, `10`, `18`, `120`,
+    `48`, `11`, `12`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast missing-QC batch
+
+- Removed `INVARIANT SafetyFast` from eight more fast configs by adding
+  model-specific direct aliases and preserving the existing component/anchor
+  invariants. The converted modes cover missing-payload fetch-window pacing,
+  same-height missing-QC stall detection, missing-QC reacquire action and
+  admission handling, missing-QC stall range-pull behavior, missing-block
+  request clearing, NEW_VIEW highest-QC vote selection, and non-RBC payload
+  frame budgeting. Remaining fast configs using `INVARIANT SafetyFast` dropped
+  from 82 to 74; direct `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  the affected modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiMissingPayloadFetchWindowGate SumeragiMissingQcHeightStallGate SumeragiMissingQcReacquireActionGate SumeragiMissingQcReacquireAdmissionGate SumeragiMissingQcStallRangePullGate SumeragiMissingRequestClearGate SumeragiNewViewHighestQcVotesGate SumeragiNonRbcPayloadBudgetGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in missing-payload-fetch-window-fast missing-qc-height-stall-fast missing-qc-reacquire-action-fast missing-qc-reacquire-admission-fast missing-qc-stall-range-pull-fast missing-request-clear-fast new-view-highest-qc-votes-fast non-rbc-payload-budget-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `27/26`, `48/24`, `23/22`, `25/24`,
+    `2/1`, `2/1`, `2/1`)
+  - `for mode in missing-payload-fetch-window-fast missing-qc-height-stall-fast missing-qc-reacquire-action-fast missing-qc-reacquire-admission-fast missing-qc-stall-range-pull-fast missing-request-clear-fast new-view-highest-qc-votes-fast non-rbc-payload-budget-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `5`, `172`, `147`, `128`, `182`,
+    `2`, `6`, `5`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast scheduling/evidence batch
+
+- Removed `INVARIANT SafetyFast` from eight more fast configs by adding or
+  wiring model-specific direct aliases. The converted modes cover
+  commit-pipeline scheduling, invalid-proposal evidence building, invalid-QC
+  shape detection, isolated vote-backed handoff, live-frontier idle missing-QC
+  suppression, manifest-gated quorum reschedule, DA manifest guard behavior,
+  and missing commit-QC actionable dependency checks. Remaining fast configs
+  using `INVARIANT SafetyFast` dropped from 90 to 82; direct
+  `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiCommitPipelineSchedulingGate SumeragiInvalidProposalEvidenceBuildGate SumeragiInvalidQcShapeGate SumeragiIsolatedVoteBackedHandoffGate SumeragiLiveFrontierIdleMissingQcGate SumeragiManifestGateRescheduleGate SumeragiManifestGuardGate SumeragiMissingCommitQcActionableGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in commit-pipeline-scheduling-fast invalid-proposal-evidence-fast invalid-qc-shape-fast isolated-vote-backed-handoff-fast live-frontier-idle-missing-qc-fast manifest-gate-reschedule-fast manifest-guard-fast missing-commit-qc-actionable-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `45/23`, `2/1`, `2/1`, `2/1`, `19/18`,
+    `2/1`, `2/1`, `27/26`)
+  - `for mode in commit-pipeline-scheduling-fast invalid-proposal-evidence-fast invalid-qc-shape-fast isolated-vote-backed-handoff-fast live-frontier-idle-missing-qc-fast manifest-gate-reschedule-fast manifest-guard-fast missing-commit-qc-actionable-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `66`, `12`, `9`, `150`, `104`,
+    `122`, `9`, `356`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast case-alias batch
+
+- Removed `INVARIANT SafetyFast` from eight fast configs by adding named
+  direct match/spec aliases and pointing the configs at those aliases. The
+  converted modes cover block-body fetch handling, pending fetch response send
+  and batch fanout, canonical fetch-response deferral, consensus handshake,
+  lane interleaving, live vote roster selection, and missing-block clear
+  reasons. Remaining fast configs using `INVARIANT SafetyFast` dropped from
+  98 to 90; direct `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiFetchBlockBodyHandleGate SumeragiFetchPendingResponseSendGate SumeragiFetchPendingResponsesBatchGate SumeragiFetchResponseDeferralGate SumeragiHandshakeGate SumeragiLaneInterleaveGate SumeragiLiveVoteRosterGate SumeragiMissingBlockClearGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in fetch-block-body-handle-fast fetch-pending-response-send-fast fetch-pending-responses-batch-fast fetch-response-deferral-fast handshake-fast lane-interleave-fast live-vote-roster-fast missing-block-clear-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: all `2/1`)
+  - `for mode in fetch-block-body-handle-fast fetch-pending-response-send-fast fetch-pending-responses-batch-fast fetch-response-deferral-fast handshake-fast lane-interleave-fast live-vote-roster-fast missing-block-clear-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `9`, `13`, `20`, `3`, `4`, `5`,
+    `2`, `2`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast projection/ingress batch
+
+- Removed `INVARIANT SafetyFast` from five fast configs by expanding the
+  wrapper to named direct constituents. The converted modes cover ingress
+  dedup/block-payload bucket routing, invalid-signature labels, known-block
+  commit-QC recovery, Kura replica adverts, and consensus message
+  timing/control/native-AMX projection. The remaining fast configs using
+  `INVARIANT SafetyFast` dropped from 103 to 98; direct `INVARIANT Safety`
+  remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiIngressDedupCacheGate SumeragiInvalidSignatureLabelsGate SumeragiKnownBlockCommitQcRecoveryGate SumeragiKuraReplicaAdvertGate SumeragiMessageProjectionGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in ingress-dedup-cache-fast invalid-signature-labels-fast known-block-commit-qc-recovery-fast kura-replica-advert-fast message-projection-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `2/1`, `2/1`, `2/1`, `31/30`)
+  - `for mode in ingress-dedup-cache-fast invalid-signature-labels-fast known-block-commit-qc-recovery-fast kura-replica-advert-fast message-projection-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `36`, `40`, `8`, `36`, `98`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud FHE proof-key layout and pair binding
+
+- Extended typed BFV full-bootstrap prover/verifier proof-key artifacts to bind
+  the canonical execution public-input layout directly: statement-material
+  version/count, per-slot claim version/count, public-input hash shape, and the
+  exact/bounded claim capability bits are now carried by proof-key payloads and
+  committed into both the generated-pair and per-key material commitments.
+- Added a generated prover/verifier proof-key pair commitment. Governed
+  full-bootstrap material now stores that pair commitment, artifact-bundle
+  validation recomputes it from decoded prover/verifier key artifacts, and Core
+  plus Torii reject stale signed material before verifier-key extraction or job
+  instruction construction.
+- Added a shared BFV proof-key-pair constructor plus a crypto regression that
+  keeps individual key commitments valid while mutating verifier key bytes,
+  proving bundle validation recomputes the pair commitment from concrete
+  prover/verifier key material instead of trusting advertised metadata.
+- Validation:
+  - `cargo check -j 1 -p iroha_crypto --lib`
+  - `cargo check -j 1 -p iroha_data_model --lib`
+  - `cargo check -j 1 -p iroha_core --lib`
+  - `cargo check -j 1 -p iroha_torii --lib`
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof --lib -- --nocapture`
+    (`5` passed, `677` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof_key_pair_commitment_rejects_mismatched_pairs --lib -- --nocapture`
+    (`1` passed, `680` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_inert_key_material --lib -- --nocapture`
+    (`1` passed, `7336` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`
+    (`1` passed, `7336` filtered out)
+  - `cargo test -j 1 -p iroha_data_model full_bootstrap --lib -- --list`
+    (`18` tests listed)
+  - `cargo test -j 1 -p iroha_data_model fhe_full_bootstrap_material_proof_validate_accepts_canonical_envelope --lib -- --nocapture`
+    (`1` passed, `1527` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_stale_full_bootstrap_verifier_key_commitment_locally --lib -- --nocapture`
+    (`1` passed, `2359` filtered out)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_torii/src/soracloud.rs status.md roadmap.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" crates/iroha_crypto/src/fhe_bfv.rs crates/iroha_core/src/smartcontracts/isi/soracloud.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_torii/src/soracloud.rs status.md roadmap.md`
+    (no matches)
+  - `make guards`
+    (`serde-guard`, AoS guard, and retired codec dependency guard passed)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-proof-key-layout cargo test -j 1 -p iroha_crypto full_bootstrap_proof_schema_and_key_commitments_reject_adversarial_drift --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-proof-key-layout cargo test -j 1 -p iroha_crypto full_bootstrap_proof_schema_artifact_digest_is_stable --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-proof-key-layout cargo test -j 1 -p iroha_crypto full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_preflight --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-proof-key-layout cargo test -j 1 -p iroha_crypto full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-proof-key-layout cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1527` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-proof-key-layout cargo test -j 1 -p iroha_core governed_full_bootstrap_execution_verifier_key_rejects_artifact_bundle_drift --lib -- --nocapture`
+    (`1` passed, `7281` filtered out; unrelated core test-helper warning remains)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-bfv-proof-key-layout cargo test -j 1 -p iroha_torii stale_full_bootstrap_ --lib -- --nocapture`
+    (`2` passed, `2358` filtered out)
+
+## 2026-06-08 Sumeragi direct SafetyFast frontier/kura batch
+
+- Removed `INVARIANT SafetyFast` from eleven fast configs by expanding the
+  wrapper to named direct constituent invariants already present in each model.
+  The converted modes cover contiguous-frontier payload hints, frontier
+  block-sync hints/direct-response permits, parent-QC hint retargeting,
+  quorum-owner actionable cleanup, reassembly activity, recovery advance,
+  repair view-change suppression, same-slot activity, sidecar expected-hash and
+  retarget helpers, and pending-block Kura retry. The remaining fast configs
+  using `INVARIANT SafetyFast` dropped from 114 to 103; direct
+  `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  these modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiContiguousFrontierPayloadHintGate SumeragiFrontierBlockSyncHintGate SumeragiFrontierParentQcHintRetargetGate SumeragiFrontierQuorumOwnerActionableGate SumeragiFrontierReassemblyActivityGate SumeragiFrontierRecoveryAdvanceGate SumeragiFrontierRepairViewChangeGate SumeragiFrontierSameSlotActivityGate SumeragiFrontierSidecarExpectedHashGate SumeragiFrontierSidecarRetargetGate SumeragiKuraRetryGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in contiguous-frontier-payload-hint-fast frontier-block-sync-hint-fast frontier-parent-qc-hint-retarget-fast frontier-quorum-owner-actionable-fast frontier-reassembly-activity-fast frontier-recovery-advance-fast frontier-repair-view-change-fast frontier-same-slot-activity-fast frontier-sidecar-expected-hash-fast frontier-sidecar-retarget-fast kura-retry-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `15/14`, `2/1`, `14/13`, `22/21`, `34/33`,
+    `78/39`, `48/24`, `38/37`, `27/26`, `29/28`, `2/1`)
+  - `for mode in contiguous-frontier-payload-hint-fast frontier-block-sync-hint-fast frontier-parent-qc-hint-retarget-fast frontier-quorum-owner-actionable-fast frontier-reassembly-activity-fast frontier-recovery-advance-fast frontier-repair-view-change-fast frontier-same-slot-activity-fast frontier-sidecar-expected-hash-fast frontier-sidecar-retarget-fast kura-retry-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `182`, `35`, `190`, `142`, `202`,
+    `178`, `108`, `258`, `177`, `191`, `32`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast roster/stale-helper batch
+
+- Removed `INVARIANT SafetyFast` from sixteen fast configs by pointing them
+  at existing `NoBugInvariant` targets. The converted modes cover roster index
+  projection, roster recovery FSM, round liveness, slot authoritative payload,
+  slot proposal evidence, stake snapshots, stale missing-block and commit-QC
+  request pruning, stale proposal/RBC hint repair, stale RBC session and
+  stale-view pending pruning, timing monitor, topology mutation, vote-backed
+  evidence, and vote-payload actionable helpers. The remaining fast configs
+  using `INVARIANT SafetyFast` dropped from 130 to 114; direct
+  `INVARIANT Safety` remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  the converted modes are described as direct no-bug checks.
+- Validation:
+  - `for model in SumeragiRosterIndexProjectionGate SumeragiRosterRecoveryFsmGate SumeragiRoundLivenessGate SumeragiSlotAuthoritativePayloadGate SumeragiSlotProposalEvidenceGate SumeragiStakeSnapshotGate SumeragiStaleMissingBlockRequestPruneGate SumeragiStaleMissingCommitQcPruneGate SumeragiStaleProposalHintRepairGate SumeragiStaleRbcHintRepairGate SumeragiStaleRbcSessionPruneGate SumeragiStaleViewPendingPruneGate SumeragiTimingMonitorGate SumeragiTopologyMutationGate SumeragiVoteBackedEvidenceGate SumeragiVotePayloadActionableGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in roster-index-projection-fast roster-recovery-fsm-fast round-liveness-fast slot-authoritative-payload-fast slot-proposal-evidence-fast stake-snapshot-fast stale-missing-block-request-prune-fast stale-missing-commit-qc-prune-fast stale-proposal-hint-repair-fast stale-rbc-hint-repair-fast stale-rbc-session-prune-fast stale-view-pending-prune-fast timing-monitor-fast topology-mutation-fast vote-backed-evidence-fast vote-payload-actionable-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`,
+    `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `3/2`, `2/1`,
+    `2/1`)
+  - `for mode in roster-index-projection-fast roster-recovery-fsm-fast round-liveness-fast slot-authoritative-payload-fast slot-proposal-evidence-fast stake-snapshot-fast stale-missing-block-request-prune-fast stale-missing-commit-qc-prune-fast stale-proposal-hint-repair-fast stale-rbc-hint-repair-fast stale-rbc-session-prune-fast stale-view-pending-prune-fast timing-monitor-fast topology-mutation-fast vote-backed-evidence-fast vote-payload-actionable-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `15`, `61`, `178`, `61`, `134`,
+    `5`, `87`, `113`, `19`, `23`, `115`, `124`, `5`, `15`, `36`, `16`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast no-bug helper batch
+
+- Removed `INVARIANT SafetyFast` from seventeen fast configs by pointing them
+  at existing `NoBugInvariant` targets, preserving each model's no-bug proof
+  surface while avoiding the generic wrapper name. The converted modes cover QC
+  materialization, membership-view hashing, missing-block ingress fetch,
+  runtime mode flip, NEW_VIEW stats, pacemaker core, pacing backpressure,
+  payload progress availability, penalty offender selection, pending-block
+  active/lifecycle/marker/unblock helpers, precommit-QC locked-chain and
+  signer-history helpers, quorum recovery vote-drain urgency, and RBC
+  authoritative payload progress. The remaining fast configs using
+  `INVARIANT SafetyFast` dropped from 147 to 130; direct `INVARIANT Safety`
+  remains at 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  the converted modes are described as direct no-bug checks.
+- Validation:
+  - `for model in SumeragiMaterializeQcGate SumeragiMembershipViewHashGate SumeragiMissingBlockIngressFetchGate SumeragiModeFlipGate SumeragiNewViewStatsGate SumeragiPacemakerCoreGate SumeragiPacingBackpressureGate SumeragiPayloadProgressAvailabilityGate SumeragiPenaltyOffenderSelectionGate SumeragiPendingBlockActiveForTipGate SumeragiPendingBlockLifecycleGate SumeragiPendingBlockMarkerGate SumeragiPendingFastUnblockGate SumeragiPrecommitQcExtendsLockedGate SumeragiPrecommitSignerHistoryGate SumeragiQuorumRecoveryVoteDrainUrgentGate SumeragiRbcAuthoritativePayloadProgressGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in materialize-qc-fast membership-view-hash-fast missing-block-ingress-fetch-fast mode-flip-fast new-view-stats-fast pacemaker-core-fast pacing-backpressure-fast payload-progress-availability-fast penalty-offender-selection-fast pending-block-active-for-tip-fast pending-block-lifecycle-fast pending-block-marker-fast pending-fast-unblock-fast precommit-qc-extends-locked-fast precommit-signer-history-fast quorum-recovery-vote-drain-fast rbc-authoritative-payload-progress-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`,
+    `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`,
+    `2/1`, `2/1`)
+  - `for mode in materialize-qc-fast membership-view-hash-fast missing-block-ingress-fetch-fast mode-flip-fast new-view-stats-fast pacemaker-core-fast pacing-backpressure-fast payload-progress-availability-fast penalty-offender-selection-fast pending-block-active-for-tip-fast pending-block-lifecycle-fast pending-block-marker-fast pending-fast-unblock-fast precommit-qc-extends-locked-fast precommit-signer-history-fast quorum-recovery-vote-drain-fast rbc-authoritative-payload-progress-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `15`, `13`, `28`, `5`, `5`, `5`,
+    `5`, `32`, `81`, `44`, `25`, `22`, `57`, `5`, `3`, `47`, `49`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast payload/lock support batch
+
+- Removed `INVARIANT SafetyFast` from twelve fast configs covering
+  frontier body-gap payload-drain urgency, frontier live-owner work,
+  highest-QC defer marker pruning, highest-QC body-known fetch suppression,
+  keep-frontier-pending-active preservation, known-block QC enqueue/work/drain
+  helpers, local payload availability, local signed-block lookup,
+  lock-rejected sink lifecycle, and locked-QC helper checks. The remaining
+  fast configs using `INVARIANT SafetyFast` dropped from 159 to 147; direct
+  `INVARIANT Safety` remains at 0.
+- Pointed sparse configs at existing direct targets `NoBugInvariant` or
+  `MatchesSpec`, and removed redundant `SafetyFast` lines where the fast config
+  already listed every direct constituent invariant.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  the converted modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiFrontierBodyGapPayloadDrainUrgentGate SumeragiFrontierLiveOwnerWorkGate SumeragiHighestQcDeferMarkerPruneGate SumeragiHighestQcFetchBodyKnownGate SumeragiKeepFrontierPendingActiveGate SumeragiKnownBlockQcDrainGate SumeragiKnownBlockQcEnqueueGate SumeragiKnownBlockQcWorkGate SumeragiLocalPayloadAvailabilityGate SumeragiLocalSignedBlockLookupGate SumeragiLockRejectedSinkGate SumeragiLockedQcHelperGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in frontier-body-gap-payload-drain-fast frontier-live-owner-work-fast highest-qc-defer-marker-prune-fast highest-qc-fetch-body-known-fast keep-frontier-pending-active-fast known-block-qc-drain-fast known-block-qc-enqueue-fast known-block-qc-work-fast local-payload-availability-fast local-signed-block-lookup-fast lock-rejected-sink-fast locked-qc-helper-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `133/11`,
+    `31/5`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`)
+  - `for mode in frontier-body-gap-payload-drain-fast frontier-live-owner-work-fast highest-qc-defer-marker-prune-fast highest-qc-fetch-body-known-fast keep-frontier-pending-active-fast known-block-qc-drain-fast known-block-qc-enqueue-fast known-block-qc-work-fast local-payload-availability-fast local-signed-block-lookup-fast lock-rejected-sink-fast locked-qc-helper-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `45`, `102`, `57`, `32`, `53`,
+    `38`, `46`, `6`, `30`, `58`, `14`, `5`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast evidence/commit-support batch
+
+- Removed `INVARIANT SafetyFast` from thirteen fast configs covering
+  collector fanout/selection, commit-topology state refresh/reset, consensus
+  message labels, DA gate helpers, deferred BlockSyncUpdate cache/defer
+  integration, detached and direct commit-QC handling, cached vote-log epoch
+  replay, double-vote recording, effective-mode selection, evidence
+  canonicalization/validation, and execution-witness root projection. The
+  remaining fast configs using `INVARIANT SafetyFast` dropped from 172 to 159;
+  direct `INVARIANT Safety` remains at 0.
+- Added or reused direct invariant targets:
+  `CollectorSelectionOutputMatchesSpec`, `CommitTopologyStateMatchesSpec`,
+  `ConsensusMessageLabelsExactness`, `DaGateHelperMatchesSpec`,
+  `DeferredBlockSyncCacheMatchesSpec`,
+  `DetachedBlockBodyCommitQcMatchesSpec`,
+  `DirectCommitQcForBlockMatchesSpec`, `DistinctVoteEpochsMatchesSpec`,
+  `DoubleVoteRecordingMatchesSpec`, `EvidenceCanonicalizationMatchesSpec`, and
+  `EvidenceValidationMatchesSpec`. Pointed `effective-mode-fast` at
+  `NoBugInvariant`, and expanded `exec-witness-roots-fast` to direct
+  constituents already present in the model.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  the converted modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiCollectorSelectionGate SumeragiCommitTopologyStateGate SumeragiConsensusMessageLabelsGate SumeragiDaGateHelperGate SumeragiDeferredBlockSyncCacheGate SumeragiDetachedBlockBodyCommitQcGate SumeragiDirectCommitQcForBlockGate SumeragiDistinctVoteEpochsGate SumeragiDoubleVoteRecordingGate SumeragiEffectiveModeGate SumeragiEvidenceCanonicalizationGate SumeragiEvidenceValidationGate SumeragiExecWitnessRootProjectionGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in collector-selection-fast commit-topology-state-fast consensus-message-labels-fast da-gate-fast deferred-block-sync-cache-fast block-body-detached-commit-qc-fast direct-commit-qc-for-block-fast distinct-vote-epochs-fast double-vote-recording-fast effective-mode-fast evidence-canonicalization-fast evidence-validation-fast exec-witness-roots-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`,
+    `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `17/16`)
+  - `for mode in collector-selection-fast commit-topology-state-fast consensus-message-labels-fast da-gate-fast deferred-block-sync-cache-fast block-body-detached-commit-qc-fast direct-commit-qc-for-block-fast distinct-vote-epochs-fast double-vote-recording-fast effective-mode-fast evidence-canonicalization-fast evidence-validation-fast exec-witness-roots-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `76`, `2`, `14`, `5`, `17`, `4`,
+    `8`, `5`, `30`, `5`, `12`, `44`, `106`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast roster/commit support batch
+
+- Removed `INVARIANT SafetyFast` from twelve fast configs covering
+  BlockSyncUpdate stale-view admission, frontier vote-placeholder handling,
+  canonical contiguous-frontier reanchor, canonical round-roster selection,
+  commit-pipeline timing samples, commit-QC cache/history lookup,
+  commit-worker channel capacity, lane/dataspace commitment snapshots,
+  committed-height QC admission, consensus handshake capability construction,
+  consensus-evidence penalty actions, and consensus recovery prune/clear
+  helpers. The remaining fast configs using `INVARIANT SafetyFast` dropped
+  from 184 to 172; direct `INVARIANT Safety` remains at 0.
+- Added direct aliases for wrapper-only checks:
+  `StaleViewMatchesSpec`, `VotePlaceholderMatchesSpec`,
+  `CanonicalRoundRosterMatchesSpec`, `CommitPipelineSampleMatchesSpec`,
+  `CommitQcLookupSourceMatchesSpec`, and
+  `CommitmentSnapshotBuilderExactness`. Removed redundant wrapper lines where
+  the fast config already lists direct constituents, and pointed no-bug configs
+  at `NoBugInvariant`.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  the converted modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiBlockSyncStaleViewGate SumeragiBlockSyncVotePlaceholderGate SumeragiCanonicalFrontierReanchorGate SumeragiCanonicalRoundRosterGate SumeragiCommitPipelineSampleGate SumeragiCommitQcLookupGate SumeragiCommitWorkerConfigGate SumeragiCommitmentSnapshotBuilderGate SumeragiCommittedHeightQcGate SumeragiConsensusHandshakeCapsGate SumeragiConsensusPenaltyActionGate SumeragiConsensusRecoveryPruneGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in block-sync-stale-view-fast block-sync-vote-placeholder-fast canonical-frontier-reanchor-fast canonical-round-roster-fast commit-pipeline-sample-fast commit-qc-lookup-fast commit-worker-config-fast commitment-snapshot-builder-fast committed-height-qc-fast consensus-handshake-caps-fast consensus-penalty-action-fast consensus-recovery-prune-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `2/1`, `88/44`, `2/1`, `2/1`,
+    `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`)
+  - `for mode in block-sync-stale-view-fast block-sync-vote-placeholder-fast canonical-frontier-reanchor-fast canonical-round-roster-fast commit-pipeline-sample-fast commit-qc-lookup-fast commit-worker-config-fast commitment-snapshot-builder-fast committed-height-qc-fast consensus-handshake-caps-fast consensus-penalty-action-fast consensus-recovery-prune-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `10`, `11`, `63`, `2`, `2`,
+    `30`, `34`, `21`, `87`, `5`, `63`, `95`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast helper/roster batch
+
+- Removed `INVARIANT SafetyFast` from twelve fast configs covering cached
+  proposal rebroadcast, commit-anchor QC promotion, commit-QC-only fetch
+  response dispatch, commit-QC signer quorum, completed quorum view advance,
+  deferred BlockSyncUpdate helper/replay paths, known-block snapshot hints,
+  empty-block QC drop cleanup, commit-drain summaries, failed-commit/block-sync
+  helpers, and uncertified block-sync roster admission. The remaining fast
+  configs using `INVARIANT SafetyFast` dropped from 196 to 184; direct
+  `INVARIANT Safety` remains at 0.
+- Added direct match aliases for universal/exact fast checks:
+  `CommitQcOnlyFetchMatchesSpec`, `CommitQuorumSignersMatchesSpec`,
+  `DeferredHelperMatchesSpec`, `SnapshotHintMatchesSpec`,
+  `DeferredReplayMatchesSpec`, `EmptyBlockMatchesSpec`,
+  `CommitDrainSummaryMatchesSpec`, and `RosterAdmissionMatchesSpec`. Expanded
+  cached proposal rebroadcast, completed-quorum view advance, empty-block QC
+  drop, and failure-recovery helper configs to their direct constituents, and
+  pointed the commit-anchor QC config at `NoBugInvariant`.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  the converted modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiCachedProposalRebroadcastGate SumeragiCommitAnchorQcGate SumeragiCommitQcOnlyFetchResponseGate SumeragiCommitQuorumSignersGate SumeragiCompletedQuorumViewAdvanceGate SumeragiDeferredBlockSyncHelperGate SumeragiBlockSyncSnapshotHintGate SumeragiDeferredBlockSyncReplayGate SumeragiEmptyBlockQcDropGate SumeragiCommitDrainSummaryGate SumeragiFailureRecoveryHelpersGate SumeragiBlockSyncRosterGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in cached-proposal-rebroadcast-fast commit-anchor-qc-fast commit-qc-only-fetch-response-fast commit-quorum-signers-fast completed-quorum-view-advance-fast deferred-block-sync-helper-fast block-sync-snapshot-hint-fast deferred-block-sync-replay-fast empty-block-qc-drop-fast commit-drain-summary-fast failure-recovery-helpers-fast block-sync-roster-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `27/26`, `2/1`, `2/1`, `2/1`, `2/1`,
+    `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`)
+  - `for mode in cached-proposal-rebroadcast-fast commit-anchor-qc-fast commit-qc-only-fetch-response-fast commit-quorum-signers-fast completed-quorum-view-advance-fast deferred-block-sync-helper-fast block-sync-snapshot-hint-fast deferred-block-sync-replay-fast empty-block-qc-drop-fast commit-drain-summary-fast failure-recovery-helpers-fast block-sync-roster-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `128`, `25`, `15`, `30`, `126`,
+    `13`, `12`, `11`, `44`, `2`, `36`, `4`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast block-sync conflict batch
+
+- Removed `INVARIANT SafetyFast` from twelve fast configs covering selected-QC
+  prefilter/quorum/candidate gates, RBC compact block-message projection,
+  BlockBodyResponse dispatch, no-roster/future-window/vote-deferral/snapshot
+  roster paths, committed-height conflict evidence, committed-edge conflict
+  suppression, and blocking pending-block counters. The remaining fast configs
+  using `INVARIANT SafetyFast` dropped from 208 to 196; direct
+  `INVARIANT Safety` remains at 0.
+- Added direct match aliases for universal/conjunctive fast checks:
+  `ResponseDispatchMatchesSpec`, `NoRosterMatchesSpec`,
+  `CommitConflictMatchesSpec`, `SelectedQcMatchesSpec`,
+  `FutureWindowMatchesSpec`, `SelectedQuorumMatchesSpec`,
+  `VoteDeferralMatchesSpec`, and `SnapshotRosterMatchesSpec`. Expanded the
+  selected-QC prefilter config to its existing direct constituents, removed the
+  redundant RBC compact wrapper line, and pointed committed-edge conflict and
+  blocking pending-block configs at `NoBugInvariant`.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  the converted modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiBlockSyncSelectedQcPrefilterGate SumeragiBlockMessageRbcCompactGate SumeragiBlockBodyResponseDispatchGate SumeragiBlockSyncNoRosterGate SumeragiBlockSyncCommitConflictGate SumeragiBlockSyncSelectedQcGate SumeragiBlockSyncFutureWindowGate SumeragiBlockSyncSelectedQuorumGate SumeragiBlockSyncVoteDeferralGate SumeragiCommittedEdgeConflictGate SumeragiBlockingPendingBlocksGate SumeragiBlockSyncSnapshotRosterGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in block-sync-selected-qc-prefilter-fast block-message-rbc-compact-fast block-body-response-dispatch-fast block-sync-no-roster-fast block-sync-commit-conflict-fast block-sync-selected-qc-fast block-sync-future-window-fast block-sync-selected-quorum-fast block-sync-vote-deferral-fast committed-edge-conflict-fast blocking-pending-blocks-fast block-sync-snapshot-roster-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `16/15`, `2/1`, `2/1`, `2/1`,
+    `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`)
+  - `for mode in block-sync-selected-qc-prefilter-fast block-message-rbc-compact-fast block-body-response-dispatch-fast block-sync-no-roster-fast block-sync-commit-conflict-fast block-sync-selected-qc-fast block-sync-future-window-fast block-sync-selected-quorum-fast block-sync-vote-deferral-fast committed-edge-conflict-fast blocking-pending-blocks-fast block-sync-snapshot-roster-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `36`, `58`, `11`, `19`, `19`,
+    `3`, `5`, `380`, `15`, `17`, `67`, `13`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud FHE artifact-bundle digest material
+
+- Switched the BFV full-bootstrap artifact-bundle digest to a typed digest
+  material carrying version, artifact-digest count, and per-role artifact hashes for the
+  coefficient-to-slot, slot-to-coefficient, blind-rotation, sample-extraction,
+  accumulator, proof-schema, prover-key, and verifier-key artifacts.
+- Pinned the canonical bundle digest and added valid alternate-artifact
+  regressions proving the digest changes when each mutable artifact role is
+  changed under a matching governed material. The execution proof statement
+  test now also pins the canonical exact and bounded proof-mode statement
+  digests while consuming the new bundle digest layout.
+- Validation:
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_artifact_bundle_binds_material_commitments_and_execution_preflight --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_execution_proof_statement_binds_claim_and_artifacts --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+
+## 2026-06-08 Sumeragi direct SafetyFast block-sync/wire batch
+
+- Removed `INVARIANT SafetyFast` from twelve more fast configs covering
+  block-message height/view projection, cached block-message wire framing,
+  canonical payload bytes, block-sync QC fallback and locked-QC gates, known
+  hintless/roster paths, implicit recovery, selected-signature validation,
+  selected-roster apply, and block-body repair epoch source helpers. The
+  remaining fast configs using `INVARIANT SafetyFast` dropped from 220 to 208;
+  direct `INVARIANT Safety` remains at 0.
+- Added direct match aliases where the fast property was a universal equality:
+  `HeightViewMatchesSpec`, `KnownHintlessMatchesSpec`,
+  `RepairEpochMatchesSpec`, `KnownRosterMatchesSpec`,
+  `QcFallbackMatchesSpec`, `SelectedSignatureMatchesSpec`,
+  `ImplicitRecoveryMatchesSpec`, and `KnownSelectedRosterMatchesSpec`.
+  Expanded direct conjunction configs for block-payload canonicalization and
+  selected-apply, removed the redundant wire-frame wrapper line, and pointed
+  locked-QC at `NoBugInvariant`.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  the converted modes are described as direct checks.
+- Validation:
+  - `for model in SumeragiBlockMessageHeightViewGate SumeragiBlockSyncKnownHintlessGate SumeragiBlockBodyRepairEpochGate SumeragiBlockSyncKnownRosterGate SumeragiBlockPayloadCanonicalizationGate SumeragiBlockMessageWireGate SumeragiBlockSyncSelectedApplyGate SumeragiBlockSyncQcFallbackGate SumeragiBlockSyncSelectedSignaturesGate SumeragiBlockSyncImplicitRecoveryGate SumeragiBlockSyncKnownSelectedRosterGate SumeragiBlockSyncLockedQcGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in block-message-height-view-fast block-sync-known-hintless-fast block-body-repair-epoch-fast block-sync-known-roster-fast block-payload-canonicalization-fast block-message-wire-fast block-sync-selected-apply-fast block-sync-qc-fallback-fast block-sync-selected-signatures-fast block-sync-implicit-recovery-fast block-sync-known-selected-roster-fast block-sync-locked-qc-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `27/26`, `2/1`, `2/1`, `2/1`, `2/1`,
+    `22/21`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`, `2/1`)
+  - `for mode in block-message-height-view-fast block-sync-known-hintless-fast block-body-repair-epoch-fast block-sync-known-roster-fast block-payload-canonicalization-fast block-message-wire-fast block-sync-selected-apply-fast block-sync-qc-fallback-fast block-sync-selected-signatures-fast block-sync-implicit-recovery-fast block-sync-known-selected-roster-fast block-sync-locked-qc-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `99`, `9`, `3`, `20`, `19`,
+    `312`, `50`, `4`, `3`, `8`, `20`, `5`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi direct SafetyFast background/block-body batch
+
+- Removed `INVARIANT SafetyFast` from twelve additional fast configs covering
+  background fallback/frame-cap/dispatch/bypass scheduling, autoscale transition
+  gating, BlockCreated frontier wire rebuild, block-message priority/kind
+  projection, active topology selection, and block-body direct commit-QC,
+  repair-admission, and request-stash helpers. The remaining fast configs using
+  `INVARIANT SafetyFast` dropped from 232 to 220; direct `INVARIANT Safety`
+  remains at 0.
+- Named exact direct predicates for the universal match checks:
+  `DispatchMatchesSpec`, `FramePreparationMatchesSpec`,
+  `TransitionMatchesSpec`, `BypassMatchesSpec`,
+  `DirectCommitQcMatchesSpec`, `RepairAdmissionMatchesSpec`, and
+  `StashWindowMatchesSpec`. For the block-message, BlockCreated, and active
+  topology configs, the redundant wrapper line was removed because the configs
+  already carry the direct exactness/component obligations.
+- Updated the formal README inventory/table rows and roadmap coverage notes so
+  the converted modes are described as direct checks instead of wrapper-driven
+  aggregate fast checks.
+- Validation:
+  - `for model in SumeragiBackgroundFallbackGate SumeragiBackgroundFrameCapGate SumeragiAutoscaleTransitionGate SumeragiBackgroundDispatchGate SumeragiBackgroundBypassGate SumeragiBlockCreatedFrontierWireGate SumeragiBlockMessagePriorityGate SumeragiBlockMessageKindGate SumeragiActiveTopologySelectionGate SumeragiBlockBodyDirectCommitQcGate SumeragiBlockBodyRepairGate SumeragiBlockBodyRequestStashGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+    (all `EXITCODE: OK`)
+  - `for mode in background-fallback-fast background-frame-cap-fast autoscale-transition-fast background-dispatch-fast background-bypass-fast block-created-frontier-wire-fast block-message-priority-fast block-message-kind-fast active-topology-selection-fast block-body-direct-commit-qc-fast block-body-repair-fast block-body-request-stash-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh "$mode"; done`
+    (`No error`; state counts: `2/1`, `2/1`, `2/1`, `2/1`, `2/1`,
+    `36/35`, `24/23`, `31/30`, `2/1`, `2/1`, `2/1`, `2/1`)
+  - `for mode in background-fallback-fast background-frame-cap-fast autoscale-transition-fast background-dispatch-fast background-bypass-fast block-created-frontier-wire-fast block-message-priority-fast block-message-kind-fast active-topology-selection-fast block-body-direct-commit-qc-fast block-body-repair-fast block-body-request-stash-fast; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh "$mode"; done`
+    (`NoError`; state-0 invariant counts: `14`, `11`, `2`, `11`, `8`,
+    `425`, `90`, `135`, `68`, `3`, `3`, `4`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud FHE proof-key profile binding
+
+- Extended typed BFV full-bootstrap prover/verifier key artifacts so the inner
+  proof-key payload carries the registered parameter digest, RNS
+  modulus-chain digest, key-switch decomposition-chain digest, and maximum
+  bootstrap depth in addition to backend, format, circuit, schema, and key
+  bytes.
+- Bound those profile/depth fields into the domain-separated proof-key material
+  commitment and made the encoder, artifact commitment extractor, and governed
+  material validator reject inner proof-key profile drift.
+- Validation:
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof_key_artifact_commitment_helper_rejects_adversarial_envelopes --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof_schema_and_key_commitments_reject_adversarial_drift --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof_schema_artifact_digest_is_stable --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `cargo test -j 1 -p iroha_core governed_full_bootstrap_execution_verifier_key_rejects_inert_key_material --lib -- --nocapture`
+    (`1` passed, `7281` filtered out)
+  - `cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1527` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_empty_execution_proofs_for_full_bootstrap_job --lib -- --nocapture`
+    (`1` passed, `2356` filtered out)
+
+## 2026-06-08 Sumeragi direct SafetyFast batch
+
+- Removed `SafetyFast` from ten fast configs covering block-known routing,
+  lock-safety block-known routing, authoritative payload/block lookup,
+  BlockSyncUpdate target/proof helpers, actionable vote-backed proposal
+  evidence, active lock-reject recovery, adaptive observability, and precommit
+  lock filtering. The remaining fast configs using `INVARIANT SafetyFast`
+  dropped from 242 to 232.
+- Named direct `ActionsMatchSpec` predicates for adaptive observability and
+  precommit lock filtering so their fast configs can target the actual
+  equality property instead of the aggregate alias.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  describe these modes as direct helper/component checks.
+- Validation:
+  - `for model in SumeragiAuthoritativeBlockPayloadGate SumeragiBlockKnownLocallyGate SumeragiBlockKnownForLockGate SumeragiBlockSyncUpdateTargetsGate SumeragiApplyCachedQcsGate SumeragiActionableVoteBackedProposalGate SumeragiActiveLockRejectRecoveryGate SumeragiAdaptiveObservabilityGate SumeragiAuthoritativePayloadProgressGate SumeragiDropPrecommitVoteForLockGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh authoritative-block-payload-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-known-locally-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-known-for-lock-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-update-targets-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh apply-cached-qcs-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh actionable-vote-backed-proposal-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh active-lock-reject-recovery-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh adaptive-observability-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh authoritative-payload-progress-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh drop-precommit-vote-for-lock-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh authoritative-block-payload-fast`
+    (`52` verification conditions, `52` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-known-locally-fast`
+    (`32` verification conditions, `32` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-known-for-lock-fast`
+    (`45` verification conditions, `45` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-update-targets-fast`
+    (`19` verification conditions, `19` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh apply-cached-qcs-fast`
+    (`15` verification conditions, `15` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh actionable-vote-backed-proposal-fast`
+    (`35` verification conditions, `35` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh active-lock-reject-recovery-fast`
+    (`27` verification conditions, `27` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh adaptive-observability-fast`
+    (`5` verification conditions, `5` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh authoritative-payload-progress-fast`
+    (`55` verification conditions, `55` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh drop-precommit-vote-for-lock-fast`
+    (`5` verification conditions, `5` state-0 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi final direct invariant wiring
+
+- Removed the remaining generic `Safety` invariant references from the last ten
+  fast configs by naming their exact safety formulas directly:
+  `AllCasesMatchSpec`, `ActionsMatchSpec`, `SelectionMatchesSpec`, and
+  `OutputMatchesSpec`. The remaining fast configs using `INVARIANT Safety`
+  dropped from 10 to 0.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  describe these modes as direct helper/component checks.
+- Validation:
+  - `for model in SumeragiEmbeddedQcRosterGate SumeragiExecWitnessRecorderGate SumeragiFrontierNewViewCatchUpGate SumeragiExecWitnessAccessKeyGate SumeragiLateNewViewEmissionGate SumeragiQcRebuildQuorumGate SumeragiNearQuorumNewViewRebroadcastGate SumeragiVrfLocalStateGate SumeragiSmtPathHashGate SumeragiRequesterRosterProofGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh embedded-qc-roster-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh exec-witness-recorder-fast`
+    (`23` states generated, `23` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-new-view-catch-up-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh exec-witness-access-key-fast`
+    (`26` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh late-new-view-emission-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-rebuild-quorum-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh near-quorum-new-view-rebroadcast-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-local-state-fast`
+    (`30` states generated, `15` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh smt-path-hash-fast`
+    (`17` states generated, `17` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh requester-roster-proof-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh embedded-qc-roster-fast`
+    (`8` verification conditions, `8` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh exec-witness-recorder-fast`
+    (`5` verification conditions, `5` state-0 and `1` state-1 invariant;
+    `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-new-view-catch-up-fast`
+    (`3` verification conditions, `3` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh exec-witness-access-key-fast`
+    (`5` verification conditions, `5` state-0 and `1` state-1 invariant;
+    `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh late-new-view-emission-fast`
+    (`4` verification conditions, `4` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-rebuild-quorum-fast`
+    (`3` verification conditions, `3` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh near-quorum-new-view-rebroadcast-fast`
+    (`8` verification conditions, `8` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-local-state-fast`
+    (`3` verification conditions, `3` state-0 and `3` state-1 invariants;
+    `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh smt-path-hash-fast`
+    (`5` verification conditions, `5` state-0 and `1` state-1 invariant;
+    `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh requester-roster-proof-fast`
+    (`3` verification conditions, `3` state-0 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi RBC VRF admission direct wiring
+
+- Removed the generic `Safety` invariant from fifteen RBC, VRF, proposal,
+  vote, validator-election, and pending-RBC fast configs. The remaining fast
+  configs using `INVARIANT Safety` dropped from 25 to 10.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  describe these modes as direct component/helper checks.
+- Validation:
+  - `for model in SumeragiRbcCommitProcessingGate SumeragiVrfMessageAdmissionGate SumeragiRbcChunkTargetGate SumeragiVrfMaterialDerivationGate SumeragiVrfEpochWindowGate SumeragiProposalAdmissionGate SumeragiProposalBackpressureGate SumeragiVoteAdmissionGate SumeragiVrfEpochRestoreGate SumeragiVrfEpochBoundaryGate SumeragiRbcCausalityGate SumeragiProposalHintAdmissionGate SumeragiValidatorElectionGate SumeragiRbcDeliverAcceptanceGate SumeragiPendingRbcStashGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-commit-processing-fast`
+    (`40` states generated, `20` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-admission-fast`
+    (`485` states generated, `22` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-chunk-target-fast`
+    (`18` states generated, `9` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-material-derivation-fast`
+    (`5` states generated, `2` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-epoch-window-fast`
+    (`122` states generated, `11` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-admission-fast`
+    (`362` states generated, `19` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-backpressure-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-admission-fast`
+    (`530` states generated, `23` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-epoch-restore-fast`
+    (`325` states generated, `18` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-epoch-boundary-fast`
+    (`362` states generated, `19` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-causality-fast`
+    (`442` states generated, `21` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-hint-fast`
+    (`401` states generated, `20` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh validator-election-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-deliver-acceptance-fast`
+    (`20` states generated, `10` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-rbc-stash-fast`
+    (`485` states generated, `22` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-commit-processing-fast`
+    (`19` verification conditions, `19` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-admission-fast`
+    (`23` verification conditions, `23` state-0 and `16` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-chunk-target-fast`
+    (`18` verification conditions, `18` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-material-derivation-fast`
+    (`12` verification conditions, `12` state-0 and `11` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-epoch-window-fast`
+    (`11` verification conditions, `11` state-0 and `10` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-admission-fast`
+    (`49` verification conditions, `49` state-0 and `29` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-backpressure-fast`
+    (`13` verification conditions, `13` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-admission-fast`
+    (`37` verification conditions, `37` state-0 and `26` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-epoch-restore-fast`
+    (`4` verification conditions, `4` state-0 and `3` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-epoch-boundary-fast`
+    (`3` verification conditions, `3` state-0 and `1` state-1
+    invariant; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-causality-fast`
+    (`14` verification conditions, `14` state-0 and `13` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-hint-fast`
+    (`43` verification conditions, `43` state-0 and `28` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh validator-election-fast`
+    (`5` verification conditions, `5` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-deliver-acceptance-fast`
+    (`14` verification conditions, `14` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-rbc-stash-fast`
+    (`58` verification conditions, `58` state-0 and `33` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi pacing and tracker direct wiring
+
+- Removed the generic `Safety` invariant from six fast configs:
+  commit-result drain, validation priority, pacing-governor factor evaluation,
+  pacemaker evaluation, pacemaker backpressure tracking, and NEW_VIEW tracking.
+  The remaining fast configs using `INVARIANT Safety` dropped from 31 to 25.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  describe these modes as direct helper/component checks.
+- Validation:
+  - `for model in SumeragiCommitResultDrainGate SumeragiValidationPriorityGate SumeragiPacingGovernorGate SumeragiPacemakerEvaluationGate SumeragiPacemakerBackpressureTrackerGate SumeragiNewViewTrackerGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-result-drain-fast`
+    (`27` states generated, `14` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh validation-priority-fast`
+    (`26` states generated, `13` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pacing-governor-fast`
+    (`36` states generated, `18` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pacemaker-evaluation-fast`
+    (`25` states generated, `13` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pacemaker-backpressure-tracker-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh new-view-tracker-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-result-drain-fast`
+    (`34` verification conditions, `34` state-0 and `23` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh validation-priority-fast`
+    (`14` verification conditions, `14` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pacing-governor-fast`
+    (`40` verification conditions, `40` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pacemaker-evaluation-fast`
+    (`24` verification conditions, `24` state-0 and `19` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pacemaker-backpressure-tracker-fast`
+    (`22` verification conditions, `22` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh new-view-tracker-fast`
+    (`7` verification conditions, `7` state-0 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi vNext and worker direct wiring
+
+- Removed the generic `Safety` invariant from eight vNext/worker fast configs:
+  aggregate signature verification, re-chain helper, async vote verification,
+  validation ownership, worker ingress routing, worker drain scheduling, slot
+  lifecycle, and worker budget adaptation. The remaining fast configs using
+  `INVARIANT Safety` dropped from 39 to 31.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  describe these modes as direct component/helper checks.
+- Validation:
+  - `for model in SumeragiVNextSignatureGate SumeragiVNextRechainGate SumeragiVoteVerifyAsyncGate SumeragiVNextValidationGate SumeragiWorkerIngressRoutingGate SumeragiWorkerDrainSchedulerGate SumeragiVNextSlotLifecycleGate SumeragiWorkerBudgetAdaptiveGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vnext-signature-fast`
+    (`290` states generated, `17` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vnext-rechain-fast`
+    (`197` states generated, `14` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-verify-async-fast`
+    (`381` states generated, `19` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vnext-validation-fast`
+    (`325` states generated, `18` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh worker-ingress-fast`
+    (`1807` states generated, `42` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh worker-drain-fast`
+    (`507` states generated, `22` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vnext-slot-lifecycle-fast`
+    (`842` states generated, `29` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh worker-budget-fast`
+    (`993` states generated, `31` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-signature-fast`
+    (`30` verification conditions, `30` state-0 and `13` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-rechain-fast`
+    (`34` verification conditions, `34` state-0 and `14` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-verify-async-fast`
+    (`43` verification conditions, `43` state-0 and `28` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-validation-fast`
+    (`29` verification conditions, `29` state-0 and `14` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh worker-ingress-fast`
+    (`62` verification conditions, `62` state-0 and `48` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh worker-drain-fast`
+    (`62` verification conditions, `62` state-0 and `33` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-slot-lifecycle-fast`
+    (`27` verification conditions, `27` state-0 and `20` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh worker-budget-fast`
+    (`50` verification conditions, `50` state-0 and `49` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud FHE canonical gas schedule verifier gates
+
+- Tightened Core input-admission and bootstrap-key proof verification so active
+  verifier records must carry their canonical gas schedule ids, not merely any
+  non-empty gas-schedule value.
+- Promoted the input-admission gas schedule id to a data-model constant and
+  added focused verifier-record drift coverage for the input-admission gate
+  while updating the bootstrap-key drift table to catch schedule-id mismatch.
+- Validation:
+  - `cargo test -j 1 -p iroha_core fhe_input_admission_backend_rejects_verifier_record_gas_schedule_drift --lib -- --nocapture`
+  - `cargo test -j 1 -p iroha_core soracloud_fhe_bootstrap_key_proof_rejects_verifier_record_metadata_drift --lib -- --nocapture`
+
+## 2026-06-08 Sumeragi helper component direct wiring
+
+- Removed the generic `Safety` invariant from eight helper/component fast
+  configs: reconfiguration deduplication, top-level input forwarding,
+  top-level output relay, vNext control ingress, async QC verification
+  ownership, QC round compatibility, vNext chain order, and vNext signing
+  preimage construction. The remaining fast configs using `INVARIANT Safety`
+  dropped from 47 to 39.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  label these modes as direct component/helper checks.
+- Validation:
+  - `for model in SumeragiEngineReconfigurationDedupGate SumeragiEngineHandleOutputRelayGate SumeragiEngineHandleForwardingGate SumeragiVNextControlIngressGate SumeragiQcVerifyAsyncGate SumeragiQcRoundCompatibilityGate SumeragiVNextChainOrderGate SumeragiVNextSigningPreimageGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-reconfiguration-dedup-fast`
+    (`28673` states generated, `4096` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-handle-output-relay-fast`
+    (`278529` states generated, `32768` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-handle-forwarding-fast`
+    (`13313` states generated, `2048` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vnext-control-ingress-fast`
+    (`133` states generated, `11` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-verify-async-fast`
+    (`553` states generated, `23` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-round-compatibility-fast`
+    (`61441` states generated, `8192` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vnext-chain-order-fast`
+    (`530` states generated, `23` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vnext-signing-preimage-fast`
+    (`65` states generated, `8` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-reconfiguration-dedup-fast`
+    (`30` verification conditions, `30` state-0 and `17` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-handle-output-relay-fast`
+    (`35` verification conditions, `35` state-0 and `15` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-handle-forwarding-fast`
+    (`85` verification conditions, `85` state-0 and `43` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-control-ingress-fast`
+    (`32` verification conditions, `32` state-0 and `22` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-verify-async-fast`
+    (`44` verification conditions, `44` state-0 and `29` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-round-compatibility-fast`
+    (`18` verification conditions, `18` state-0 and `10` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-chain-order-fast`
+    (`23` verification conditions, `23` state-0 and `20` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-signing-preimage-fast`
+    (`17` verification conditions, `17` state-0 and `16` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi pure-engine component direct wiring
+
+- Removed the generic `Safety` invariant from eight pure-engine component
+  fast configs: NewView subject projection, view-advance saturation,
+  proposal state preservation, commit-subject side effects, committed-block
+  cleanup, committed-block state preservation, payload state preservation, and
+  validation state preservation. The remaining fast configs using
+  `INVARIANT Safety` dropped from 55 to 47.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  describe these modes as direct component checks instead of umbrella `Safety`
+  wrappers.
+- Validation:
+  - `for model in SumeragiEngineCommitSubjectGate SumeragiEngineNewViewSubjectGate SumeragiEngineCommittedBlockCleanupGate SumeragiEngineCommittedBlockStatePreservationGate SumeragiEnginePayloadStatePreservationGate SumeragiEngineProposalStatePreservationGate SumeragiEngineValidationStatePreservationGate SumeragiEngineViewAdvanceSaturationGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-commit-subject-fast`
+    (`577` states generated, `128` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-new-view-subject-fast`
+    (`1281` states generated, `256` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-committed-block-cleanup-fast`
+    (`6145` states generated, `1024` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-committed-block-state-preservation-fast`
+    (`2817` states generated, `512` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-payload-state-preservation-fast`
+    (`577` states generated, `128` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-proposal-state-preservation-fast`
+    (`13313` states generated, `2048` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-validation-state-preservation-fast`
+    (`28673` states generated, `4096` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-view-advance-saturation-fast`
+    (`1281` states generated, `256` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-subject-fast`
+    (`24` verification conditions, `24` state-0 and `8` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-subject-fast`
+    (`23` verification conditions, `23` state-0 and `8` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-cleanup-fast`
+    (`26` verification conditions, `26` state-0 and `11` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-state-preservation-fast`
+    (`46` verification conditions, `46` state-0 and `21` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-state-preservation-fast`
+    (`77` verification conditions, `77` state-0 and `41` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-state-preservation-fast`
+    (`46` verification conditions, `46` state-0 and `21` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-validation-state-preservation-fast`
+    (`73` verification conditions, `73` state-0 and `33` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-view-advance-saturation-fast`
+    (`17` verification conditions, `17` state-0 and `7` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud governed full-bootstrap verifier-key artifact payload
+
+- Tightened Core governed full-bootstrap execution verifier-key derivation under
+  `zk-stark`: the verifier-key artifact now has to decode as a production-floor
+  STARK/FRI verifier-key payload for the canonical Soracloud full-bootstrap
+  execution circuit before it can become the governed `VerifyingKeyBox`.
+- The feature-enabled full-bootstrap execution fixture now embeds production
+  STARK verifier parameters in the governed verifier-key artifact, so the
+  verified active-verifier path exercises release-shaped verifier material
+  instead of opaque bytes.
+- Validation:
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_opaque_stark_payload --lib -- --nocapture`
+    (`1` passed, `7336` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark governed_full_bootstrap_execution_verifier_key_rejects_below_floor_stark_payload --lib -- --nocapture`
+    (`1` passed, `7336` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`
+    (`1` passed, `7336` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_requires_governed_verifier_record --lib -- --nocapture`
+    (`1` passed, `7336` filtered out)
+  - `cargo check -j 1 -p iroha_core --lib`
+
+## 2026-06-08 Soracloud FHE STARK verifier-key admission floors
+
+- Added a shared STARK/FRI production verifier-key payload validator that
+  enforces version/circuit id binding, supported hash selectors, binary
+  FRI/Merkle structure, the ledger-grade STARK parameter floors
+  (`n_log2`, blowup, and query count), and native verifier maximums.
+- Replaced the one-off Soracloud bootstrap/material verifier-record admission
+  checks with a profile-driven gate covering input admission, bootstrap-key,
+  full-bootstrap material, and full-bootstrap execution canonical records.
+  Inline canonical Soracloud STARK verifier keys now decode and reject
+  below-floor verifier parameters during `RegisterVerifyingKey` and
+  `UpdateVerifyingKey`, before any runtime proof path can depend on them.
+- Validation:
+  - `cargo test -j 1 -p iroha_core --features zk-stark stark_fri_production_verifying_key_payload_validation_fails_closed --lib -- --nocapture`
+    (`1` passed, `7334` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark register_vk_accepts_soracloud_fhe_stark_verifier_payload_at_production_floor --lib -- --nocapture`
+    (`1` passed, `7334` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark register_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor --lib -- --nocapture`
+    (`1` passed, `7334` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark update_vk_rejects_soracloud_fhe_stark_verifier_payload_below_production_floor --lib -- --nocapture`
+    (`1` passed, `7334` filtered out)
+  - `cargo check -j 1 -p iroha_core --lib`
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/iroha_core/src/zk_stark.rs crates/iroha_core/src/smartcontracts/isi/world.rs status.md roadmap.md`
+  - `rg -n '^(<<<<<<<|=======|>>>>>>>)' crates/iroha_core/src/zk_stark.rs crates/iroha_core/src/smartcontracts/isi/world.rs status.md roadmap.md`
+    (no matches)
+  - `git diff --name-only -- Cargo.lock` (no output)
+  - `make guards`
+
+## 2026-06-08 Soracloud full-bootstrap derived STARK proof helpers
+
+- Added `zk-stark` Core helpers that derive canonical full-bootstrap proof
+  statements before proving: material proofs now derive the policy statement
+  from BFV parameters, refresh-transcript public key, and governed evaluation
+  keys; execution proofs now derive one per-slot statement from the concrete
+  input/output ciphertext claims, bound mode, bound metadata, and governed
+  artifact bundle.
+- Routed the verified full-bootstrap execution active-verifier regression
+  through the per-slot derived helper, so the positive verifier path now covers
+  statement derivation plus STARK proof construction.
+- The execution proof helper now reuses Core's input-slot shape guard and
+  rejects missing or surplus output slots before proof construction, so empty
+  input envelopes and stale output sidecars fail before producing proof vectors.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-proof-helper-slots cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_empty_input_slots --lib -- --nocapture`
+    (`1` passed, `7337` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-proof-helper-slots cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_output_slot_count_drift --lib -- --nocapture`
+    (`1` passed, `7337` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_proof_for_evaluation_keys_derives_policy_statement --lib -- --nocapture`
+    (`1` passed, `7329` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`
+    (`1` passed, `7330` filtered out)
+  - `cargo fmt --all -- --check`
+  - `cargo check -j 1 -p iroha_core --lib`
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs status.md roadmap.md`
+  - `make guards`
+
+## 2026-06-08 Soracloud full-bootstrap STARK proof constructors
+
+- Promoted the full-bootstrap material and execution STARK `OpenVerifyEnvelope`
+  proof packaging out of test fixtures into `zk-stark` Core helpers:
+  `prove_soracloud_fhe_full_bootstrap_material_proof_v1` and
+  `prove_soracloud_fhe_full_bootstrap_execution_proof_v1`.
+- The shared finalizer derives `envelope_hash` from the exact Norito proof
+  bytes, derives `vk_commitment` from the decoded envelope, binds the requested
+  canonical circuit id, and rejects cross-circuit proof boxes before returning a
+  `ProofAttachment`.
+- Routed the verified full-bootstrap material and execution active-verifier
+  regressions through the production constructors, while keeping fake proof
+  fixtures on the rejection path.
+- Validation:
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_stark_proof_finalizer_binds_circuit_and_hashes --lib -- --nocapture`
+    (`1` passed, `7327` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_material_proof_accepts_verified_active_verifier --lib -- --nocapture`
+    (`1` passed, `7328` filtered out)
+  - `cargo test -j 1 -p iroha_core --features zk-stark soracloud_fhe_full_bootstrap_execution_proof_accepts_verified_active_verifier --lib -- --nocapture`
+    (`1` passed, `7328` filtered out)
+  - `cargo check -j 1 -p iroha_core --lib`
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/iroha_core/src/smartcontracts/isi/soracloud.rs status.md roadmap.md`
+  - `make guards`
+
+## 2026-06-08 Soracloud full-bootstrap material verifier-record hardening
+
+- Tightened Core full-bootstrap material proof verification so the active
+  verifier record must carry the canonical material-proof gas schedule id, not
+  merely a non-empty gas-schedule value.
+- Added a Core adversarial regression that mutates material-proof verifier
+  status, namespace, backend, curve, public-input schema hash, circuit id,
+  version, gas schedule, active circuit mapping, proof byte cap, key presence,
+  key length, and commitment before proof verification.
+- Validation:
+  - `cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_material_proof_rejects_verifier_record_metadata_drift --lib -- --nocapture`
+    (`1` passed, `7280` filtered out)
+
+## 2026-06-08 Sumeragi warning/vote/penalty direct exactness fast wiring
+
+- Removed the generic `Safety` invariant from the VRF penalties report,
+  vote duplicate-key, proposal-defer warning throttle, QC-insufficient warning
+  throttle, and native AMX journal replay fast configs so each mode checks its
+  named candidate-level or component exactness invariants directly.
+- Updated the formal README inventory/table rows to label those warning,
+  vote, penalty, and native AMX modes as direct exactness/component checks.
+- Validation:
+  - `for model in SumeragiVrfPenaltiesReportGate SumeragiVoteDuplicateKeyGate SumeragiProposalDeferWarningThrottleGate SumeragiQcInsufficientWarningThrottleGate SumeragiNativeAmxJournalReplay; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vrf-penalties-report-fast`
+    (`30` states generated, `15` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-duplicate-key-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh proposal-defer-warning-fast`
+    (`16` states generated, `16` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-insufficient-warning-fast`
+    (`16` states generated, `15` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh native-amx-journal-fast`
+    (`1245185` states generated, `131072` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-penalties-report-fast`
+    (`21` verification conditions, `21` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-duplicate-key-fast`
+    (`19` verification conditions, `19` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-defer-warning-fast`
+    (`16` verification conditions, `16` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-insufficient-warning-fast`
+    (`15` verification conditions, `15` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh native-amx-journal-fast`
+    (`15` verification conditions, `15` state-0 and `13` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud FHE public-input schema hash goldens
+
+- Added a data-model regression pinning the canonical Soracloud FHE
+  public-input schema hashes for input admission, bootstrap-key proof,
+  full-bootstrap material proof, and full-bootstrap execution proof records.
+  These hashes are the verifier-record identifiers Core checks before native
+  verification or preverified-cache lookup.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model soracloud_fhe_public_input_schema_hashes_are_stable --lib -- --nocapture`
+    (`1` passed, `1527` filtered out)
+
+## 2026-06-08 BFV full-bootstrap proof-key artifact encode hardening
+
+- Tightened the typed full-bootstrap proof-key artifact encoder so it rejects
+  stale or placeholder key-material commitments before emitting governed
+  prover/verifier key artifacts.
+- Added adversarial crypto coverage for artifact-derived proof-key material
+  commitments, including role-swapped requests, zero/depth-drifted bootstrap
+  depth, stale inner commitments, empty backend-native key bytes, and all-zero
+  backend-native key bytes.
+- Extended full-bootstrap material proof-statement coverage so drifted
+  prover/verifier key-material commitments change the crypto statement digest
+  and the Soracloud data-model transcript-derived policy digest.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-boundary cargo test -j 1 -p iroha_crypto full_bootstrap_proof_key_artifact_commitment_helper_rejects_adversarial_envelopes --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-boundary cargo test -j 1 -p iroha_crypto full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-boundary cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`18` passed, `662` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-inert-verifier cargo test -j 1 -p iroha_core governed_full_bootstrap_execution_verifier_key_rejects_inert_key_material --lib -- --nocapture`
+    (`1` passed, `7279` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-policy-v2 cargo test -j 1 -p iroha_data_model --lib fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest -- --nocapture`
+    (`1` passed, `1527` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-statement-crypto cargo test -j 1 -p iroha_crypto full_bootstrap_material_proof_statement_digest_binds_governance_inventory --lib -- --nocapture`
+    (`1` passed, `679` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-statement-dm cargo test -j 1 -p iroha_data_model bfv_refresh_transcript_derives_full_bootstrap_material_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1527` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-statement-dm cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures fhe_execution_policy -- --nocapture`
+    (`3` passed, `74` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-statement-dm cargo test -j 1 -p iroha_data_model --test soracloud_manifest_fixtures fhe_governance_bundle -- --nocapture`
+    (`4` passed, `73` filtered out)
+  - `cargo fmt -p iroha_crypto -p iroha_core -p iroha_data_model -- --check`
+
+## 2026-06-08 Sumeragi timing/validation helper direct exactness fast wiring
+
+- Removed the generic `Safety` invariant from the effective timing,
+  online-validator relay counter, same-height vote-lock, vNext deadline
+  protection, validation stall/redrive, and verify-cache key fast configs so
+  each mode checks its named candidate-level exactness invariants directly.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  label those timing, validation, relay, and cache helper modes as direct
+  exactness checks.
+- Validation:
+  - `for model in SumeragiEffectiveTimingGate SumeragiOnlineValidatorRelayCountersGate SumeragiSameHeightVoteLockGate SumeragiVNextDeadlineProtectionGate SumeragiValidationStallRedriveGate SumeragiVerifyCacheKeyGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh effective-timing-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh online-validator-relay-counters-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh same-height-vote-lock-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vnext-deadline-protection-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh validation-stall-redrive-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh verify-cache-key-fast`
+    (`54` states generated, `27` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh effective-timing-fast`
+    (`26` verification conditions, `26` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh online-validator-relay-counters-fast`
+    (`28` verification conditions, `28` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh same-height-vote-lock-fast`
+    (`28` verification conditions, `28` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vnext-deadline-protection-fast`
+    (`36` verification conditions, `36` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh validation-stall-redrive-fast`
+    (`37` verification conditions, `37` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh verify-cache-key-fast`
+    (`28` verification conditions, `28` state-0 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi residual status counter direct exactness fast wiring
+
+- Removed the generic `Safety` invariant from the worker-queue status,
+  transaction queue backpressure status, vote-validation drop status,
+  pending-RBC status, recovery status counter, and QC rebuild status fast
+  configs so each mode checks its named candidate-level exactness invariants
+  directly.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  label those residual status/counter modes as direct exactness checks.
+- Validation:
+  - `for model in SumeragiWorkerQueueStatusGate SumeragiTxQueueBackpressureStatusGate SumeragiVoteValidationDropStatusGate SumeragiPendingRbcStatusGate SumeragiRecoveryStatusCountersGate SumeragiQcRebuildStatusGate; do JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck "docs/formal/sumeragi/${model}.tla"; done`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh worker-queue-status-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh tx-queue-backpressure-status-fast`
+    (`14` states generated, `14` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh vote-validation-drop-status-fast`
+    (`15` states generated, `15` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pending-rbc-status-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh recovery-status-counters-fast`
+    (`16` states generated, `16` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-rebuild-status-fast`
+    (`19` states generated, `19` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh worker-queue-status-fast`
+    (`30` verification conditions, `30` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh tx-queue-backpressure-status-fast`
+    (`24` verification conditions, `24` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vote-validation-drop-status-fast`
+    (`39` verification conditions, `39` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-rbc-status-fast`
+    (`31` verification conditions, `31` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh recovery-status-counters-fast`
+    (`19` verification conditions, `19` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-rebuild-status-fast`
+    (`22` verification conditions, `22` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP all-lanes exact readiness aggregation
+
+- Hardened the all-lanes SCCP evidence summary so release-checklist aggregate
+  readiness, lane record-presence gates, and CLI success exit codes require
+  exact boolean `true` values. Malformed truthy strings in record flags,
+  checklist items, or top-level `production_ready` now fail closed.
+- The all-lanes route-canary checklist now also requires canonical non-zero
+  bytes32 canary evidence hashes and the expected live evidence source for each
+  lane, so tampered summary objects cannot clear the canary gate with an
+  all-zero hash or truthy source string.
+- Applied the same exact checklist aggregate rule to the standalone readiness
+  report and verifier-owned expected checklist.
+- Added adversarial all-lanes regressions for malformed record flags,
+  malformed checklist item readiness, and a monkeypatched CLI summary returning
+  `production_ready: "true"`, plus a malformed route-canary summary.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k "malformed_route_canary_summary or release_checklist_pinpoints_canary_gaps or release_checklist_reports_ready_bundle or release_checklist_rejects_malformed_record_flags or release_checklist_compares_item_ready_exactly or cli_exit_compares_production_ready_exactly"`
+    (`6` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "compares_checklist_ready_exactly or passes_with_only_active_launch_lane"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "compares_summary_launch_ready_exactly or rejects_readiness_boolean_type_drift"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP readiness Markdown exact row status
+
+- Hardened SCCP readiness-report Markdown and verifier-owned expected Markdown
+  so checklist rows, lane readiness rows, route-canary bound labels, and
+  native-prover required labels use exact JSON booleans. Lane record-flag cells
+  now use the same exact rule. Malformed truthy strings render as conservative
+  blocked, unbound, or record-missing values instead of ready-looking
+  release-note rows.
+- Added adversarial report-renderer and verifier-renderer coverage that starts
+  from a valid ready bundle/report, mutates row-level readiness flags to
+  truthy strings, and verifies the Markdown remains blocked, unbound, and
+  record-missing.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "markdown_compares_row_ready_exactly or compares_checklist_ready_exactly"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "readiness_markdown_compares_rows_exactly or release_note_status_compares_ready_exactly"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP release-bundle exact production-ready status
+
+- Hardened SCCP release-bundle status rendering, preflight publication checks,
+  final verification output, readiness-report Markdown status, and
+  verifier-owned not-ready checks so only `production_ready is True` is treated
+  as ready. Malformed truthy strings now remain blocked and render as
+  `NOT READY`.
+- Added adversarial bundle coverage for malformed release-note readiness status
+  and for a CLI preflight report that returns `production_ready: "true"` before
+  artifact copy.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "release_note_status_compares_ready_exactly or preflight_rejects_truthy_production_ready or compares_summary_launch_ready_exactly or manifest_preserves_malformed_readiness_values or rejects_readiness_boolean_type_drift"`
+    (`5` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "compares_checklist_ready_exactly or passes_with_only_active_launch_lane or malformed_crypto_evidence_values"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP readiness report exact checklist readiness
+
+- Hardened the standalone SCCP release-readiness report so top-level
+  `production_ready` requires the active launch checklist `ready` value to be
+  exactly boolean `true`. A malformed truthy checklist value now leaves the
+  public report blocked instead of clearing through Python truthiness.
+- Added adversarial coverage that monkeypatches the active launch checklist to
+  return a truthy string while every other active-lane gate is valid.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "compares_checklist_ready_exactly or passes_with_only_active_launch_lane or malformed_crypto_evidence_values"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "compares_summary_launch_ready_exactly or manifest_preserves_malformed_readiness_values"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP source-adapter gate exact-boolean readiness
+
+- Hardened the all-lanes release checklist so source-adapter gate `required`
+  and `ready` fields are interpreted with exact JSON-boolean semantics. A
+  malformed gate container, non-boolean `required`, or required gate whose
+  `ready` value is a truthy string now leaves governed-deployment readiness
+  blocked instead of clearing through Python truthiness.
+- Tightened the release-bundle verifier's manifest-vs-summary active launch
+  comparison so recomputed launch readiness is compared exactly rather than
+  bool-coerced before checking the manifest `production_ready` claim.
+- Added adversarial coverage for malformed all-lanes source-gate flags and for
+  a malformed recomputed active launch checklist value in bundle verification.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py scripts/sccp_verify_release_bundle.py scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_all_lanes_evidence_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k "release_checklist_rejects_malformed_source_gate_flags or release_checklist_reports_ready_bundle or release_checklist_pinpoints_canary_gaps"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "compares_summary_launch_ready_exactly or manifest_preserves_malformed_readiness_values or writes_hash_bound_public_artifacts"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP release manifest readiness flag preservation
+
+- Hardened SCCP release-bundle manifest generation so the public
+  `production_ready`, `release_checklist_ready`, and `corridor_ready` manifest
+  fields preserve the exact readiness values from the generated report instead
+  of truthy-coercing malformed strings or integers into release-ready claims.
+- The generated-bundle self-verification path now runs only when report
+  `production_ready is True`, matching the verifier's exact-boolean schema
+  requirements.
+- Added adversarial bundle-helper coverage proving malformed manifest readiness
+  values survive into the manifest surface and are caught by the existing
+  verifier boolean-field checks.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_bundle.py scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "manifest_preserves_malformed_readiness_values or writes_hash_bound_public_artifacts or expected_crypto_evidence_preserves_malformed_values"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "malformed_crypto_evidence_values or passes_with_only_active_launch_lane or release_readiness_report_passes_for_complete_evidence_and_corridor"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP cryptographic-evidence value preservation
+
+- Hardened SCCP readiness report and release-bundle verifier cryptographic
+  evidence row builders so route-canary `evidence_bound`, source-adapter gate
+  `required`, gate hash, and audit-hash container values are preserved from
+  the normalized lane summary instead of being truthy-coerced or defaulted into
+  valid-looking values.
+- Added adversarial coverage proving malformed boolean strings, numeric gate
+  hashes, and wrong-shaped source-gate audit containers survive into the public
+  row surfaces where the existing release-bundle schema checks can reject them.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "malformed_crypto_evidence_values or passes_with_only_active_launch_lane or release_readiness_report_passes_for_complete_evidence_and_corridor"`
+    (`3` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "expected_crypto_evidence_preserves_malformed_values or rejects_crypto_evidence_field_type_drift"`
+    (`2` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP active unresolved-blocker readiness metadata gate
+
+- Hardened the SCCP release-readiness checklist so the active Ethereum
+  no-unresolved-blockers item reads and validates the active lane's own blocker
+  list instead of relying only on the top-level aggregate blocker list.
+- The active blocker collector now rejects malformed top-level blocker entries,
+  malformed active lane blocker containers, and non-string or empty lane-local
+  blocker entries, while deduplicating blockers already present in the
+  top-level aggregate.
+- Added adversarial release-readiness regression coverage for lane-only
+  operator holds, malformed active lane blocker containers, empty blocker
+  entries, duplicate aggregate/lane blockers, and malformed aggregate blocker
+  entries.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "passes_with_only_active_launch_lane or active_lane_unresolved_blockers or malformed_active_required_record_metadata or malformed_active_governed_deployment_metadata or malformed_active_route_allowlist_binding or malformed_active_route_canary_metadata or release_readiness_report_passes_for_complete_evidence_and_corridor"`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP active required-record readiness metadata gate
+
+- Hardened the SCCP release-readiness checklist so the active Ethereum
+  required-records item cannot become ready unless the normalized lane summary
+  is domain `1`, chain `eth`, `production_ready = true`, and every required
+  record flag is exactly boolean `true`.
+- The required-records item now also rejects unknown record-summary fields, so
+  operator-added truthy keys cannot hide a malformed active launch summary.
+- Added adversarial release-readiness regression coverage for chain drift,
+  lane not-ready drift, missing record summaries, truthy non-boolean record
+  flags, missing required record flags, and unknown record-summary fields.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "passes_with_only_active_launch_lane or malformed_active_required_record_metadata or malformed_active_governed_deployment_metadata or malformed_active_route_allowlist_binding or malformed_active_route_canary_metadata or release_readiness_report_passes_for_complete_evidence_and_corridor"`
+    (`6` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP active governed-deployment readiness metadata gate
+
+- Hardened the SCCP release-readiness checklist so the active Ethereum
+  governed-deployment item cannot become ready unless the normalized summary
+  carries canonical non-zero source-material, source-deployment,
+  destination-binding, and expected destination-binding hashes, with the
+  supplied destination binding matching the recomputed expected value.
+- The active EVM launch lane now also fails the governed-deployment checklist
+  if source-adapter gate metadata is missing, marked not ready, marked
+  required, or carries a gate hash/audit hashes where no full-light-client
+  source gate should exist.
+- Added adversarial release-readiness regression coverage for zero or
+  non-canonical source/deployment/destination hashes, missing expected
+  destination binding hashes, false destination-binding match flags, mismatched
+  expected binding hashes, missing source-adapter gate summaries, not-ready or
+  required active EVM gate flags, and unexpected active EVM gate hash/audit
+  metadata.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "passes_with_only_active_launch_lane or malformed_active_governed_deployment_metadata or malformed_active_route_allowlist_binding or malformed_active_route_canary_metadata or release_readiness_report_passes_for_complete_evidence_and_corridor"`
+    (`5` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP active route-allowlist readiness metadata gate
+
+- Hardened the SCCP release-readiness checklist so the active Ethereum launch
+  route-allowlist item cannot become ready unless the normalized summary carries
+  canonical non-zero source-material, source-deployment, destination-binding,
+  route-allowlist, and expected route-allowlist hashes, with the supplied route
+  hash matching the recomputed expected binding tuple.
+- Added adversarial release-readiness regression coverage for zero or
+  non-canonical route hashes, missing expected route hashes, false match flags,
+  mismatched expected hashes, zero source material hashes, missing source
+  deployment hashes, and zero destination binding hashes.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "passes_with_only_active_launch_lane or malformed_active_route_allowlist_binding or malformed_active_route_canary_metadata or release_readiness_report_passes_for_complete_evidence_and_corridor"`
+    (`4` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP active route-canary readiness metadata gate
+
+- Hardened the SCCP release-readiness checklist so the active Ethereum launch
+  lane cannot become ready unless the normalized route-canary summary carries
+  the canonical `evm_message_proof_accepted_transaction` evidence source,
+  non-zero transaction hash, finalized receipt block number/hash, receipts
+  root, and message id.
+- Added adversarial release-readiness regression coverage for zero canary
+  evidence hashes, forged evidence sources, missing or non-canonical
+  transaction hashes, zero receipt block hashes, zero receipts roots, zero
+  message ids, non-positive or string receipt block numbers, and
+  non-finalized receipt blocks.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "release_readiness_report_passes_for_complete_evidence_and_corridor or release_readiness_report_passes_with_only_active_launch_lane or malformed_active_route_canary_metadata or strict_phase_evidence_blocks_missing_artifacts"`
+    (`4` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 SCCP TRON runtime route-manifest address gate
+
+- Hardened the Rust `iroha_config` SCCP route-manifest parser so TRON token,
+  bridge, source bridge, and destination verifier contract literals must be
+  canonical non-zero TRON Base58Check mainnet addresses before entering runtime
+  config.
+- TRON route alias resolution now preserves raw source/verifier literals through
+  address validation, so whitespace-wrapped aliases fail closed instead of being
+  silently trimmed before checksum validation.
+- Added adversarial parser coverage for bad Base58Check checksum, malformed
+  Base58 alphabet, whitespace-wrapped source bridge aliases, zero-payload TRON
+  addresses, non-canonical extra-leading-zero encodings, and duplicate contract
+  role addresses. Added a raw SHA-256 known-answer regression in
+  `iroha_crypto` for the Base58Check checksum helper.
+- Validation:
+  - `cargo test -p iroha_crypto sha256_returns_raw_digest_bytes --lib -- --nocapture`
+    (`1` passed)
+  - `cargo test -p iroha_config sccp_route_manifest_user_config_tests --lib -- --nocapture`
+    (`53` passed)
+  - `cargo test -p iroha_config sccp_route_manifest -- --nocapture`
+    (`53` unit tests passed; integration test binaries had `0` matching tests)
+
+## 2026-06-08 SCCP TRON runtime route-manifest binding gate
+
+- Hardened the Rust `iroha_config` SCCP route-manifest parser so
+  production-ready TAIRA XOR TRON routes must carry the governed mainnet
+  `network_id_hex` and a dynamic `destination_binding_key` recomputed from the
+  normalized network id, destination verifier address, verifier code hash, and
+  verifier key hash.
+- Production-ready TRON routes now also require the governed TAIRA burn-record
+  settlement profile: settlement asset definition id
+  `6TEAJqbb8oEPmLncoNiMRbLEK6tw`, verifier-key backend `halo2/ipa`,
+  verifier-key name `taira_xor_burn_record_v1`, and gas limit `2000000`.
+- Added adversarial parser coverage for testnet network-id drift, stale
+  destination-binding keys, settlement asset drift, burn-record verifier-key
+  backend/name drift, and burn-record gas-limit drift.
+- Validation:
+  - `cargo test -p iroha_config sccp_route_manifest_user_config_tests --lib -- --nocapture`
+    (`47` passed)
+  - `cargo test -p iroha_config sccp_route_manifest -- --nocapture`
+    (`47` unit tests passed; integration test binaries had `0` matching tests)
+
+## 2026-06-08 SCCP TRON runtime route-manifest metadata gate
+
+- Hardened the Rust `iroha_config` SCCP route-manifest parser so
+  production-ready TAIRA XOR TRON routes must keep the governed mainnet metadata:
+  `route_id = "taira_tron_xor"`, `counterparty_domain = 5`,
+  `asset_key = "xor"`, `tron_network = "mainnet"`, `chain = "tron-mainnet"`,
+  `chain_id_hex = "0x2b6653dc"`, and `verifier_target = "TronContract"`.
+- TRON chain IDs are normalized to lowercase before admission, so uppercase or
+  whitespace-wrapped mainnet values still converge to the canonical runtime
+  value while Nile/testnet or foreign chain ids fail closed for production-ready
+  routes.
+- Added adversarial parser coverage for route-id drift, counterparty-domain
+  drift, asset-key drift, TRON network drift, chain-key drift, chain-id drift,
+  and verifier-target drift.
+- Validation:
+  - `cargo test -p iroha_config sccp_route_manifest_user_config_tests --lib -- --nocapture`
+    (`41` passed)
+  - `cargo test -p iroha_config sccp_route_manifest -- --nocapture`
+    (`41` unit tests passed; integration test binaries had `0` matching tests)
+
+## 2026-06-08 SCCP TRON runtime route-manifest parser gate
+
+- Hardened the Rust `iroha_config` SCCP route-manifest parser so TRON route
+  manifests normalize core and post-deploy hash fields as non-zero bytes32
+  values instead of preserving raw strings.
+- Production-ready TRON route manifests now require
+  `post_deploy_full_toml_ready = true`, source-bridge config hash, source-event
+  transaction id, route-canary evidence hash, route-canary transaction id, and
+  offline full-TOML SHA-256 before entering the runtime config.
+- Added positive and adversarial parser coverage for TRON production evidence:
+  uppercase/whitespace hash normalization, missing full-TOML readiness, missing
+  offline full-TOML hash, malformed post-deploy transaction hashes, and zero
+  verifier-key hashes.
+- Validation:
+  - `cargo test -p iroha_config sccp_route_manifest_user_config_tests --lib -- --nocapture`
+    (`34` passed)
+  - `cargo test -p iroha_config sccp_route_manifest -- --nocapture`
+    (`34` unit tests passed; integration test binaries had `0` matching tests)
+
+## 2026-06-08 SCCP TRON route-config readback-ack gate
+
+- Hardened the TAIRA XOR TRON route-config normalizer so production-ready
+  manifests must retain the post-deploy live-readback acknowledgement before a
+  governed Torii overlay can be rendered. Camel/snake aliases must agree, and
+  false or missing markers fail closed.
+- Added adversarial route-config coverage for missing readback acknowledgements,
+  false readback acknowledgements, and contradictory alias attempts.
+- Validation:
+  - `node --test --test-name-pattern "TRON route-config" scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`3` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`40` passed)
+
+## 2026-06-08 SCCP TRON route-config version-hash gate
+
+- Hardened the TAIRA XOR TRON route-config normalizer so top-level route
+  manifest, destination-rollout, and destination-binding versions must stay at
+  v1, burn-record `codeHash` must be canonical bytes32, and burn-record VK
+  references must use supported key-reference text before overlay rendering.
+- Added adversarial coverage for version drift at all three manifest layers,
+  malformed burn-record code hashes, and unsupported VK-reference text.
+- Validation:
+  - `node --test --test-name-pattern "TRON route-config" scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`3` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`40` passed)
+
+## 2026-06-08 SCCP TRON route-config rollout-alias gate
+
+- Hardened the TAIRA XOR TRON route-config normalizer so
+  `destinationRollout.destinationNetworkId`,
+  `destinationRollout.verifierIdentity`, root
+  `sccpTronDestinationVerifierAddress`, `settlement.submitPath`, and
+  `settlement.mode` must match the governed TAIRA XOR TRON lane before overlay
+  rendering.
+- Added adversarial coverage for destination-network drift, verifier-identity
+  drift, root destination-verifier alias drift, settlement submit-path drift,
+  and settlement mode drift.
+- Kept the launch-scope note explicit: Retired platform-family lanes are explicitly outside SCCP launch support for now.
+- Validation:
+  - `node --test --test-name-pattern "TRON route-config" scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`3` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`40` passed)
+
+## 2026-06-08 SCCP TRON route-config manifest-integrity gate
+
+- Hardened the TAIRA XOR TRON route-config normalizer so destination verifier
+  backend/proof-family drift, duplicate token/bridge/source/verifier
+  addresses, mismatched burn-record artifact SHA-256 values, and settlement
+  route/asset drift fail before the Torii overlay is emitted.
+- Added adversarial coverage for stale verifier backend and proof-family
+  metadata, duplicate TRON contract addresses, tampered burn-record artifact
+  digest metadata, and wrong settlement route id or asset key.
+- Kept the launch-scope note explicit: Retired platform-family lanes are explicitly outside SCCP launch support for now.
+- Validation:
+  - `node --test --test-name-pattern "TRON route-config" scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`3` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`40` passed)
+
+## 2026-06-08 SCCP TRON route-config destination-binding gate
+
+- Hardened the TAIRA XOR TRON route-config normalizer so destination binding
+  keys and hashes are recomputed from the declared network id, verifier
+  address, verifier code hash, and verifier key hash before overlay rendering.
+  Rollout and `destinationBinding` entries must agree with that recomputation
+  and must preserve the SORA -> TRON domain direction.
+- Added adversarial coverage for destination rollout source/target drift,
+  `destinationBinding` source/target drift, network-id drift, stale binding
+  keys, and stale binding hashes.
+- Kept the launch-scope note explicit: Retired platform-family lanes are explicitly outside SCCP launch support for now.
+- Validation:
+  - `node --test --test-name-pattern "TRON route-config" scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`3` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`40` passed)
+
+## 2026-06-08 SCCP TRON route-config identity gate
+
+- Hardened the TAIRA XOR TRON route-config normalizer so malformed or foreign
+  manifests fail closed before overlay rendering. The route id, asset key,
+  counterparty-domain, verifier target, TRON profile, chain id, and network id
+  must match the governed TAIRA XOR TRON lane, and `productionReady` overlays
+  are rejected for non-mainnet profiles.
+- Added adversarial coverage for wrong route id, wrong asset key, wrong domain,
+  wrong verifier target, non-mainnet production readiness, and profile field
+  drift in chain and network ids.
+- Kept the launch-scope note explicit: Retired platform-family lanes are explicitly outside SCCP launch support for now.
+- Validation:
+  - `node --test --test-name-pattern "TRON route-config" scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`3` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`40` passed)
+
+## 2026-06-08 SCCP TRON route-config post-deploy evidence gate
+
+- Hardened the TAIRA XOR TRON route-config normalizer so production-ready route
+  manifests must carry `postDeployLiveEvidence`, `fullTomlReady: true`, and a
+  pinned `offlineFullTomlSha256` before the Torii overlay can be rendered.
+- Added adversarial coverage for stale hand-edited production manifests missing
+  the whole post-deploy evidence block, downgrading full-TOML readiness, or
+  dropping the offline full-TOML digest.
+- Validation:
+  - `node --test --test-name-pattern "TRON route-config" scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`2` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`39` passed)
+
+## 2026-06-08 SCCP TRON route-config disabled-reason gate
+
+- Hardened the TAIRA XOR TRON route-config normalizer so production-ready route
+  manifests fail closed when `disabledReason` or `disabled_reason` is still set,
+  and contradictory camel/snake disabled-reason aliases are rejected before the
+  Torii overlay can be rendered.
+- Added adversarial coverage for stale hand-edited production manifests that
+  keep a disabled reason, including both supported field spellings and alias
+  disagreement.
+- Validation:
+  - `node --test --test-name-pattern "TRON route-config refuses production-ready manifests with disabled reasons" scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`1` passed)
+  - `node --test scripts/sccp_tron_taira_xor_deploy.test.mjs`
+    (`38` passed)
+
+## 2026-06-08 BFV full-bootstrap verifier-key artifact hardening
+
+- Added Core coverage that forges governed full-bootstrap execution
+  verifier-key artifacts with empty and all-zero backend-native key bytes while
+  recalculating the governed digest/commitment, proving Core rejects inert
+  verifier-key material before verifier-record lookup.
+- Revalidated the data-model FHE execution policy proof-statement binding path
+  and the crypto proof-profile artifact helper that derives key-material
+  commitments from typed artifacts.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-inert-verifier cargo test -j 1 -p iroha_core governed_full_bootstrap_execution_verifier_key_rejects_inert_key_material --lib -- --nocapture`
+    (`1` passed, `7279` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-policy-v2 cargo test -j 1 -p iroha_data_model --lib sample_fhe_execution_policy -- --nocapture`
+    (`0` passed, `1527` filtered out; compile-only filter for policy literals)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-data-model-policy-v2 cargo test -j 1 -p iroha_data_model --lib fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest -- --nocapture`
+    (`1` passed, `1527` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-boundary cargo test -j 1 -p iroha_crypto full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `678` filtered out)
+  - `cargo fmt -p iroha_crypto -p iroha_core -p iroha_data_model -- --check`
+
+## 2026-06-08 SCCP release artifact path text readiness gate
+
+- Promoted the existing SCCP release artifact path text inventory into the
+  production-readiness report and release-bundle required `source_inventory`
+  schema as `release_artifact_path_text_gate`.
+- The gate pins Markdown-unsafe character rejection for manifest artifact
+  paths, readiness inputs, native prover payload paths, copied bundle
+  filenames, and bundle filesystem entries before release notes can render
+  artifact tables.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_artifact_path_text or markdown_unsafe'`
+    (`4` passed, `215` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_artifact_path_text or markdown_unsafe'`
+    (`9` passed, `332` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`219` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`341` passed)
+
+## 2026-06-08 SCCP release bundle output-path readiness gate
+
+- Promoted the existing SCCP release bundle output-path inventory into the
+  production-readiness report and release-bundle required `source_inventory`
+  schema as `release_bundle_output_path_gate`.
+- The gate pins bundle CLI regressions that reject symlinked output
+  directories, symlinked output ancestors, and control-character output
+  directory paths before bundle generation can create or overwrite release
+  artifacts.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_bundle_output_path or output_path'`
+    (`2` passed, `215` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_bundle_output_path or output_path'`
+    (`2` passed, `337` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`217` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`339` passed)
+
+## 2026-06-08 SCCP release bundle source-copy readiness gate
+
+- Promoted the existing SCCP release bundle source-copy inventory into the
+  production-readiness report and release-bundle required `source_inventory`
+  schema as `release_bundle_source_copy_gate`.
+- The gate pins bundle CLI regressions that reject symlinked or
+  control-character evidence inputs, phase evidence, native EVM prover
+  manifests, and native prover payload sources before bundle copy can run.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'release_bundle_source_copy or source_copy'`
+    (`2` passed, `213` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'release_bundle_source_copy or source_copy'`
+    (`2` passed, `335` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`215` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`337` passed)
+
+## 2026-06-08 SCCP phase-evidence source readiness gate
+
+- Promoted the existing SCCP phase-evidence duplicate-input inventory into the
+  production-readiness report and release-bundle required `source_inventory`
+  schema as `phase_evidence_source_gate`.
+- The gate pins readiness-report and release-bundle CLI regressions that reject
+  duplicate `--phase-evidence` assignments and `--phase-evidence-dir`
+  collisions before corridor phase evidence can satisfy production readiness.
+- Kept the launch-scope note explicit: Retired platform-family networks are explicitly outside SCCP launch support for now.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'phase_evidence_source or phase_evidence'`
+    (`7` passed, `206` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'phase_evidence_source or phase_evidence'`
+    (`9` passed, `326` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`213` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`335` passed)
+
+## 2026-06-08 SCCP BSC inbound adversarial readiness gate
+
+- Promoted the existing BSC inbound adversarial SDK inventory into the SCCP
+  production-readiness report and release-bundle required `source_inventory`
+  schema as `bsc_inbound_adversarial_gate`.
+- The gate pins public SDK regressions for hash-only proof bypasses,
+  receipt-proof metadata drift, source-event digest drift, malformed source
+  logs, and missing source-event validation before BSC inbound source proofs can
+  be accepted.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'bsc_inbound_adversarial'`
+    (`2` passed, `209` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'bsc_inbound_adversarial'`
+    (`2` passed, `331` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`211` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`333` passed)
+
+## 2026-06-08 SCCP Ethereum SDK receipt-metadata readiness gate
+
+- Promoted the existing Ethereum SDK receipt-metadata inventory into the SCCP
+  production-readiness report and release-bundle required `source_inventory`
+  schema as `ethereum_sdk_receipt_metadata_guard_gate`.
+- The gate pins public SDK regressions that reject block-receipt metadata drift
+  and typed receipts before receipt proof builders can run.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'sdk_receipt_metadata or receipt_metadata'`
+    (`3` passed, `206` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'sdk_receipt_metadata or receipt_metadata'`
+    (`2` passed, `330` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`209` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`332` passed)
+
+## 2026-06-08 Sumeragi telemetry/projection direct exactness fast wiring
+
+- Removed the generic `Safety` invariant from the phase-latency telemetry,
+  telemetry summary, settlement, Nexus economics, NPoS repair coverage, and
+  mode status fast configs so each mode checks its named candidate-level
+  exactness invariants directly.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  label those telemetry/projection status modes as direct exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/{SumeragiPhaseLatencyStatusGate,SumeragiTelemetryStatusGate,SumeragiSettlementStatusGate,SumeragiNexusEconomicsStatusGate,SumeragiNposRepairCoverageStatusGate,SumeragiModeStatusGate}.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh phase-latency-status-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh telemetry-status-fast`
+    (`26` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh settlement-status-fast`
+    (`27` states generated, `27` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh nexus-economics-status-fast`
+    (`28` states generated, `28` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh npos-repair-coverage-status-fast`
+    (`18` states generated, `18` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh mode-status-fast`
+    (`28` states generated, `28` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh phase-latency-status-fast`
+    (`33` verification conditions, `33` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh telemetry-status-fast`
+    (`28` verification conditions, `28` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh settlement-status-fast`
+    (`33` verification conditions, `33` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh nexus-economics-status-fast`
+    (`34` verification conditions, `34` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh npos-repair-coverage-status-fast`
+    (`18` verification conditions, `18` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh mode-status-fast`
+    (`30` verification conditions, `30` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 BFV full-bootstrap proof-schema digest golden
+
+- Added a focused crypto regression pinning the canonical full-bootstrap proof
+  public-input schema artifact digest and prover-key material commitment digest,
+  so proof-profile layout or commitment drift is explicit.
+- Validation:
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof_schema_artifact_digest_is_stable --lib -- --nocapture`
+    (`1` passed, `678` filtered out)
+
+## 2026-06-08 SCCP Ethereum JavaScript receipt-admission readiness gate
+
+- Promoted the existing Ethereum JavaScript receipt-admission inventory into
+  the SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as `ethereum_js_receipt_admission_guard_gate`.
+- The gate pins browser proof regressions that reject receipt metadata drift,
+  missing beacon finality, typed receipts, and mutable prover-callback evidence
+  before local proving can run.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'js_receipt_admission or receipt_admission'`
+    (`3` passed, `204` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'js_receipt_admission or receipt_admission'`
+    (`2` passed, `329` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`207` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`331` passed)
+
+## 2026-06-08 Sumeragi liveness/status counter direct exactness fast wiring
+
+- Removed the generic `Safety` invariant from the missing-QC liveness,
+  sidecar/no-proposal, timing status, roster-recovery, range-pull, and
+  round-trace status fast configs so each mode checks its named
+  candidate-level exactness invariants directly.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  label those liveness/status counter modes as direct exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/{SumeragiMissingQcLivenessStatusGate,SumeragiSidecarNoProposalStatusGate,SumeragiTimingStatusCountersGate,SumeragiRosterRecoveryStatusGate,SumeragiRangePullStatusGate,SumeragiRoundTraceStatusGate}.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-qc-liveness-status-fast`
+    (`19` states generated, `19` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh sidecar-no-proposal-status-fast`
+    (`16` states generated, `16` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh timing-status-counters-fast`
+    (`25` states generated, `25` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-recovery-status-fast`
+    (`20` states generated, `20` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh range-pull-status-fast`
+    (`15` states generated, `15` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh round-trace-status-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-qc-liveness-status-fast`
+    (`23` verification conditions, `23` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh sidecar-no-proposal-status-fast`
+    (`24` verification conditions, `24` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh timing-status-counters-fast`
+    (`27` verification conditions, `27` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-recovery-status-fast`
+    (`26` verification conditions, `26` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh range-pull-status-fast`
+    (`21` verification conditions, `21` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh round-trace-status-fast`
+    (`32` verification conditions, `32` state-0 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi status projection direct exactness fast wiring
+
+- Removed the generic `Safety` invariant from the deferred-recovery status,
+  deterministic-committee status, effective-timing status, ingress status,
+  Kura store status, and lane-detail status fast configs so each mode checks
+  its named candidate-level exactness invariants directly.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  label those status/projection helper modes as direct exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/{SumeragiDeferredRecoveryStatusGate,SumeragiDeterministicCommitteeStatusGate,SumeragiEffectiveTimingStatusGate,SumeragiIngressStatusCountersGate,SumeragiKuraStoreStatusGate,SumeragiLaneDetailStatusGate}.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh deferred-recovery-status-fast`
+    (`12` states generated, `12` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh deterministic-committee-status-fast`
+    (`8` states generated, `8` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh effective-timing-status-fast`
+    (`13` states generated, `13` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh ingress-status-counters-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh kura-store-status-fast`
+    (`25` states generated, `25` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh lane-detail-status-fast`
+    (`26` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh deferred-recovery-status-fast`
+    (`16` verification conditions, `16` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh deterministic-committee-status-fast`
+    (`9` verification conditions, `9` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh effective-timing-status-fast`
+    (`34` verification conditions, `34` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh ingress-status-counters-fast`
+    (`37` verification conditions, `37` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh kura-store-status-fast`
+    (`32` verification conditions, `32` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh lane-detail-status-fast`
+    (`29` verification conditions, `29` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP Ethereum block receipt transaction-hash readiness gate
+
+- Promoted the existing Ethereum block receipt transaction-hash inventory into
+  the SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as
+  `ethereum_receipt_block_transaction_hash_gate`.
+- The gate pins evidence and SDK regressions that reject duplicate transaction
+  hashes in block receipt lists before receipt trie proofs can be built.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'block_transaction_hash or block_receipt_transaction_hash'`
+    (`3` passed, `202` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'block_transaction_hash or block_receipt_transaction_hash'`
+    (`2` passed, `328` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`205` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`330` passed)
+
+## 2026-06-08 Sumeragi status helper direct exactness fast wiring
+
+- Removed the generic `Safety` invariant from the collector-targeting status,
+  commit-pipeline status, consensus-capability status, and DA-gate status fast
+  configs so each mode checks its named candidate-level exactness invariants
+  directly.
+- Updated the formal README inventory/table rows and roadmap coverage notes to
+  label those status helper modes as direct exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/{SumeragiCollectorTargetingStatusGate,SumeragiCommitPipelineStatusGate,SumeragiConsensusCapsStatusGate,SumeragiDaGateStatusGate}.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh collector-targeting-status-fast`
+    (`17` states generated, `17` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-pipeline-status-fast`
+    (`13` states generated, `13` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh consensus-caps-status-fast`
+    (`16` states generated, `16` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh da-gate-status-fast`
+    (`21` states generated, `21` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh collector-targeting-status-fast`
+    (`19` verification conditions, `19` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-pipeline-status-fast`
+    (`27` verification conditions, `27` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh consensus-caps-status-fast`
+    (`26` verification conditions, `26` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh da-gate-status-fast`
+    (`26` verification conditions, `26` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi block-sync helper direct exactness fast wiring
+
+- Removed the generic `Safety` invariant from the block-sync QC status,
+  recovery-mode, roster status, and warning-throttle fast configs so each mode
+  checks its named candidate-level exactness invariants directly.
+- Updated the formal README inventory and roadmap coverage notes to label
+  those block-sync helper/status modes as direct exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/{SumeragiBlockSyncQcStatusGate,SumeragiBlockSyncRecoveryModeGate,SumeragiBlockSyncRosterStatusGate,SumeragiBlockSyncWarningThrottleGate}.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-qc-status-fast`
+    (`22` states generated, `21` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-recovery-mode-fast`
+    (`50` states generated, `25` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-roster-status-fast`
+    (`23` states generated, `22` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-warning-throttle-fast`
+    (`21` states generated, `20` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-qc-status-fast`
+    (`25` verification conditions, `25` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-recovery-mode-fast`
+    (`26` verification conditions, `26` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-roster-status-fast`
+    (`25` verification conditions, `25` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-warning-throttle-fast`
+    (`22` verification conditions, `22` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP Ethereum receipt duplicate-JSON readiness gate
+
+- Promoted the existing Ethereum receipt RPC duplicate-JSON inventory into the
+  SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as
+  `ethereum_receipt_rpc_duplicate_json_gate`.
+- The gate pins receipt-proof evidence regressions that reject duplicate
+  JSON-RPC result or receipt keys before receipt proof evidence can be parsed.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'duplicate_json'`
+    (`3` passed, `200` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'duplicate_json'`
+    (`4` passed, `325` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`203` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`329` passed)
+
+## 2026-06-08 BFV full-bootstrap proof-profile adversarial hardening
+
+- Added adversarial coverage that rejects every missing full-bootstrap
+  proof-schema statement/claim binding, including parameter, public-key,
+  bootstrap-key, material, artifact-bundle, slot, ciphertext, mode, and
+  residual/noise-bound commitments.
+- Pinned proof-key material commitments so prover/verifier role, public-input
+  schema digest, backend-native key bytes, and zero-placeholder commitments
+  cannot drift without validation failure.
+- Extended governed full-bootstrap material records with distinct prover and
+  verifier key-material commitments derived from typed proof-key artifacts, and
+  rejected stale, zero, or duplicate governed commitments before proof keys are
+  admitted.
+- Moved full-bootstrap material-proof verifier admission from the verifier-key
+  artifact digest to the dedicated verifier key-material commitment, and
+  refreshed the shared BFV operation fixture so `vk_commitment_hex` binds the
+  backend verifier bytes rather than the artifact envelope digest.
+- Extended Core exact and bounded full-bootstrap runtime regressions so stale
+  prover/verifier proof-key material commitments fail during governed artifact
+  preflight before Galois-key availability or final output execution.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-boundary cargo test -j 1 -p iroha_crypto full_bootstrap_proof_schema_and_key_commitments_reject_adversarial_drift --lib -- --nocapture`
+    (`1` passed, `677` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-boundary cargo test -j 1 -p iroha_crypto full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `677` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-boundary cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`16` passed, `662` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_material_proof_profile_binds_expected_verifier_inputs --lib -- --nocapture`
+    (`1` passed, `678` filtered out)
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`18` passed, `662` filtered out)
+  - `cargo test -j 1 -p iroha_data_model full_bootstrap --lib -- --nocapture`
+    (`18` passed, `1509` filtered out)
+  - `cargo check -j 1 -p iroha_core --lib`
+  - `cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_material_profile_binds_proof_schema_and_verifier_commitment --lib -- --nocapture`
+    (`1` passed, `7279` filtered out)
+  - `cargo test -j 1 -p iroha_core print_soracloud_bfv_operation_vectors --lib -- --ignored --nocapture`
+    (`1` passed, `7279` filtered out)
+  - `cargo test -j 1 -p iroha_core soracloud_bfv_operation_vectors_match_shared_fixture --lib -- --nocapture`
+    (`1` passed, `7279` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-stale-proof-keys cargo test -j 1 -p iroha_core soracloud_bootstrap_full_material_requires_signed_artifact_bundle_on_runtime_path --lib -- --nocapture`
+    (`1` passed, `7281` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-stale-proof-keys cargo test -j 1 -p iroha_core soracloud_bounded_bootstrap_full_material_requires_signed_artifact_bundle_on_runtime_path --lib -- --nocapture`
+    (`1` passed, `7281` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-stale-proof-keys cargo test -j 1 -p iroha_core full_bootstrap --lib -- --nocapture`
+    (`30` passed, `7252` filtered out)
+  - `cargo fmt --all -- --check`
+  - `make guards`
+
+## 2026-06-08 Sumeragi pure-engine helper direct exactness fast wiring
+
+- Removed the generic `Safety` invariant from the constructor initial-state,
+  highest-QC record, payload lookup, proposal-lock predicate, QC-reference
+  projection, and QC-reference comparator fast configs so each mode checks its
+  named helper/domain invariants directly.
+- Updated the formal README inventory/table wording and roadmap coverage notes
+  to describe these pure-engine helper modes as direct exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/{SumeragiEngineInitialStateGate,SumeragiEngineHighestQcRecordGate,SumeragiEnginePayloadLookupGate,SumeragiEngineProposalLockGate,SumeragiEngineQcRefProjectionGate,SumeragiEngineQcRefComparatorGate}.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-initial-state-fast`
+    (`9` states generated, `4` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-highest-qc-record-fast`
+    (`6145` states generated, `1024` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-payload-lookup-fast`
+    (`113` states generated, `32` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-proposal-lock-fast`
+    (`28673` states generated, `4096` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-qc-ref-projection-fast`
+    (`577` states generated, `128` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-qc-ref-comparator-fast`
+    (`4` states generated, `2` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-initial-state-fast`
+    (`70` verification conditions, `70` state-0 and `31` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-highest-qc-record-fast`
+    (`27` verification conditions, `27` state-0 and `4` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-lookup-fast`
+    (`19` verification conditions, `19` state-0 and `11` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-lock-fast`
+    (`21` verification conditions, `21` state-0 and `11` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-qc-ref-projection-fast`
+    (`22` verification conditions, `22` state-0 and `3` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-qc-ref-comparator-fast`
+    (`24` verification conditions, `24` state-0 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 BFV full-bootstrap direct-path boundary hardening
+
+- Updated the BFV module-level production boundary to reflect the current
+  artifact-backed full-bootstrap executable prefix while keeping
+  security-complete bootstrapping tracked as the remaining arithmetic/prover
+  backend work.
+- Added bounded-noise direct full-bootstrap negative coverage proving drifted
+  governed material is rejected before no-artifact execution or bound helpers
+  can fall through to artifact-availability errors.
+- Extended the bounded-noise Soracloud runtime regression so drifted signed
+  artifact bundles and role-swapped artifact envelopes fail before Galois-key
+  availability or final output execution.
+- Added Torii signed-request preflight coverage proving full-bootstrap artifact
+  attachments are rejected locally when they are outside full-bootstrap context,
+  and when a matching signed material digest points at an artifact envelope with
+  the wrong declared sample-extraction role or stale prover/verifier
+  key-material commitments.
+- Validation:
+  - `cargo fmt -p iroha_crypto`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-boundary cargo test -j 1 -p iroha_crypto evaluation_key_bundle_binds_full_bootstrap_material_but_direct_execution_requires_artifacts --lib -- --nocapture`
+    (`1` passed, `676` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-boundary cargo test -j 1 -p iroha_crypto full_bootstrap --lib -- --nocapture`
+    (`15` passed, `662` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-bounded-artifacts cargo test -j 1 -p iroha_core soracloud_bounded_bootstrap_full_material_requires_signed_artifact_bundle_on_runtime_path --lib -- --nocapture`
+    (`1` passed, `7281` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-fhe-role-artifact cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_role_swapped_full_bootstrap_artifacts_locally --lib -- --nocapture`
+    (`1` passed, `2356` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-fhe-role-artifact cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects_artifacts_without_full_bootstrap_context --lib -- --nocapture`
+    (`1` passed, `2357` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-fhe-role-artifact cargo test -j 1 -p iroha_torii stale_full_bootstrap_ --lib -- --nocapture`
+    (`2` passed, `2358` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-torii-fhe-role-artifact cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`27` passed, `2333` filtered out)
+
+## 2026-06-08 Sumeragi validation ownership cleanup direct exactness
+
+- Split the validation ownership cleanup aggregate `Safety` postcondition into
+  named exact invariants for legacy ownership, vNext ownership, superseded
+  markers, vNext slots, and retained rounds.
+- Updated `validation-ownership-cleanup-fast` to check those exact invariants
+  directly alongside the target-removal, unrelated-preservation, and
+  round-projection invariants; retained the aggregate `Safety` operator for
+  mutation configs.
+- Updated the formal README inventory/table wording and roadmap coverage note
+  to describe the fast mode as a direct exactness helper check.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiValidationOwnershipCleanupGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh validation-ownership-cleanup-fast`
+    (`111` states generated, `11` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh validation-ownership-cleanup-fast`
+    (`16` verification conditions, `16` state-0 and `15` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP Ethereum source-event zero-digest readiness gate
+
+- Promoted the existing Ethereum source-event zero-digest inventory into the
+  SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as
+  `ethereum_receipt_source_event_zero_digest_gate`.
+- The gate pins receipt-proof evidence regressions that reject all-zero
+  source-event digests before source-event evidence can be accepted.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'zero_digest'`
+    (`3` passed, `198` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'zero_digest'`
+    (`2` passed, `326` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`201` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`328` passed)
+
+## 2026-06-08 Sumeragi pure-engine advance/finality direct fast wiring
+
+- Removed the generic `Safety` invariant from the
+  `engine-reconfiguration-staging-fast`,
+  `engine-new-view-state-preservation-fast`,
+  `engine-prepare-vote-cache-fast`, `engine-commit-pending-fetch-fast`,
+  `engine-new-view-advance-fast`, and
+  `engine-commit-available-commit-fast` configs so those modes check their
+  listed staging, preservation, cache/output, pending/fetch, advance, finality,
+  and domain invariants directly.
+- Updated the formal README inventory/table wording and roadmap coverage notes
+  to describe the NewView advance, Prepare vote-cache, Commit pending-fetch,
+  and Commit available-finality modes as direct exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineReconfigurationStagingGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineNewViewStatePreservationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEnginePrepareVoteCacheGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineCommitQcPendingFetchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineNewViewAdvanceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineCommitQcAvailableCommitGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-reconfiguration-staging-fast`
+    (`28673` states generated, `4096` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-new-view-state-preservation-fast`
+    (`278529` states generated, `32768` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-prepare-vote-cache-fast`
+    (`6145` states generated, `1024` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-commit-pending-fetch-fast`
+    (`6145` states generated, `1024` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-new-view-advance-fast`
+    (`131073` states generated, `16384` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-commit-available-commit-fast`
+    (`2817` states generated, `512` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-reconfiguration-staging-fast`
+    (`28` verification conditions, `28` state-0 and `12` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-state-preservation-fast`
+    (`55` verification conditions, `55` state-0 and `25` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-vote-cache-fast`
+    (`34` verification conditions, `34` state-0 and `17` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-pending-fetch-fast`
+    (`37` verification conditions, `37` state-0 and `13` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-advance-fast`
+    (`44` verification conditions, `44` state-0 and `17` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-available-commit-fast`
+    (`46` verification conditions, `46` state-0 and `22` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud FHE execution-proof preflight
+
+- Core now preflights full-bootstrap execution-proof material after FHE input
+  loading and before artifact-aware full-bootstrap execution, so missing,
+  short, or surplus execution-proof vectors fail before the heavier arithmetic
+  path runs.
+- The preflight uses the actual loaded identifier-envelope slot count, preserving
+  flexible encrypted-identifier widths while still enforcing one execution proof
+  per produced slot at runtime.
+- Validation:
+  - `cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof_preflight_rejects_non_exact_proof_count --lib -- --nocapture`
+    (`1` passed, `7278` filtered out)
+  - `cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof --lib -- --nocapture`
+    (`14` passed, `7265` filtered out)
+
+## 2026-06-08 Soracloud full-bootstrap proof-key role binding
+
+- Added an explicit `key_role` to BFV full-bootstrap proof-key artifacts so
+  prover-key and verifier-key typed payloads bind their own role, not only the
+  surrounding artifact envelope role.
+- Encoding and decoding now reject proof-key payloads whose inner role does not
+  match the artifact role. This closes a role-confusion path where a
+  role-mismatched typed proof key could be manually wrapped under the expected
+  outer role while still matching the governed material digest.
+- Updated the crypto, data-model, and Core full-bootstrap artifact fixtures to
+  populate the role-bound key payload.
+- Validation:
+  - `cargo test -j 1 -p iroha_crypto full_bootstrap_proof_profile_artifacts_are_typed_and_profile_bound --lib -- --nocapture`
+    (`1` passed, `676` filtered out)
+  - `cargo test -j 1 -p iroha_data_model full_bootstrap --lib -- --nocapture`
+    (`18` passed, `1509` filtered out)
+  - `cargo check -j 1 -p iroha_core --lib`
+  - `cargo fmt --all -- --check`
+  - `make guards`
+
+## 2026-06-08 Sumeragi pure-engine dispatch/validation direct fast wiring
+
+- Removed the generic `Safety` invariant from the
+  `engine-tick-state-preservation-fast`,
+  `engine-prepare-state-preservation-fast`,
+  `engine-validation-invalid-advance-fast`, `engine-validation-ownership-fast`,
+  `engine-handle-dispatch-fast`, and `engine-commit-validation-cleanup-fast`
+  configs so those modes check their listed preservation, dispatch, cleanup,
+  exactness, and domain invariants directly.
+- Updated the formal README inventory/table wording and roadmap coverage notes
+  to describe the validation-owner and invalid-validation advance modes as
+  direct exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineTickStatePreservationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEnginePrepareStatePreservationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineValidationInvalidAdvanceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineValidationOwnershipGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineHandleDispatchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineCommitQcValidationCleanupGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-tick-state-preservation-fast`
+    (`2817` states generated, `512` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-prepare-state-preservation-fast`
+    (`28673` states generated, `4096` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-validation-invalid-advance-fast`
+    (`2817` states generated, `512` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-validation-ownership-fast`
+    (`1281` states generated, `256` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-handle-dispatch-fast`
+    (`6145` states generated, `1024` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-commit-validation-cleanup-fast`
+    (`13313` states generated, `2048` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-tick-state-preservation-fast`
+    (`50` verification conditions, `50` state-0 and `29` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-state-preservation-fast`
+    (`39` verification conditions, `39` state-0 and `17` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-validation-invalid-advance-fast`
+    (`38` verification conditions, `38` state-0 and `23` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-validation-ownership-fast`
+    (`25` verification conditions, `25` state-0 and `11` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-handle-dispatch-fast`
+    (`31` verification conditions, `31` state-0 and `15` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-validation-cleanup-fast`
+    (`21` verification conditions, `21` state-0 and `11` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi pure-engine record/state direct fast wiring
+
+- Removed the generic `Safety` invariant from the
+  `engine-new-view-highest-qc-fast`, `engine-payload-record-fast`,
+  `engine-proposal-state-fast`, `engine-commit-state-preservation-fast`, and
+  `engine-prepare-lock-highest-fast` configs so those modes check their listed
+  exactness, preservation, and domain invariants directly.
+- Updated the formal README inventory/table wording and roadmap coverage notes
+  to describe the exact record/state modes as direct exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineNewViewHighestQcGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEnginePayloadAvailabilityRecordGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineProposalStateGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineCommitQcStatePreservationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEnginePrepareLockHighestGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-new-view-highest-qc-fast`
+    (`131073` states generated, `16384` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-payload-record-fast`
+    (`1281` states generated, `256` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-proposal-state-fast`
+    (`2817` states generated, `512` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-commit-state-preservation-fast`
+    (`131073` states generated, `16384` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-prepare-lock-highest-fast`
+    (`589825` states generated, `65536` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-new-view-highest-qc-fast`
+    (`27` verification conditions, `27` state-0 and `16` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-payload-record-fast`
+    (`27` verification conditions, `27` state-0 and `16` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-state-fast`
+    (`45` verification conditions, `45` state-0 and `30` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-state-preservation-fast`
+    (`43` verification conditions, `43` state-0 and `17` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-lock-highest-fast`
+    (`38` verification conditions, `38` state-0 and `23` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud host ABI envelope validation hardening
+
+- Extended Soracloud host request/response envelope validation to bind the
+  declared operation to the payload variant and dispatch into payload-specific
+  validation before pointer-ABI literals are accepted.
+- Added adversarial regressions for request payload commitment sentinels,
+  mismatched payload lengths/commitments, delete payload smuggling, response
+  digest sentinels, mismatched egress body hashes, and empty egress content
+  types.
+- Updated Kotodama Soracloud host-operation fixture literals to satisfy the
+  stricter data-model validator while preserving existing access-key
+  normalization.
+- Validation:
+  - `cargo fmt -p iroha_data_model -p kotodama_lang`
+  - `cargo test -j 1 -p iroha_data_model host_request_envelope --lib -- --nocapture`
+    (`7` passed)
+  - `cargo test -j 1 -p iroha_data_model host_response_envelope --lib -- --nocapture`
+    (`6` passed)
+  - `cargo test -j 1 -p iroha_data_model fhe_execution_policy_validate_requires_bootstrap_key_proof_statement_digest --lib -- --nocapture`
+    (`1` passed, `1526` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-kotodama-host cargo test -j 1 -p kotodama_lang manifest_access_set_hints_include_static_soracloud_operation_keys --lib -- --nocapture`
+    (`1` passed, `463` filtered out)
+
+## 2026-06-08 Sumeragi pure-engine direct exactness fast wiring
+
+- Removed the generic `Safety` invariant from the
+  `engine-prepare-phase-fast`, `engine-proposal-validation-owner-fast`,
+  `engine-commit-highest-qc-fast`, `engine-commit-phase-fast`, and
+  `engine-committed-block-record-fast` configs so those modes check their
+  listed exactness/domain invariants directly.
+- Updated the formal README inventory/table wording and roadmap coverage notes
+  to describe those modes as direct exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEnginePreparePhaseGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineProposalValidationOwnerGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineCommitQcHighestRecordGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineCommitQcPhaseGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineCommittedBlockRecordGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-prepare-phase-fast`
+    (`28673` states generated, `4096` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-proposal-validation-owner-fast`
+    (`2817` states generated, `512` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-commit-highest-qc-fast`
+    (`278529` states generated, `32768` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-commit-phase-fast`
+    (`131073` states generated, `16384` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-committed-block-record-fast`
+    (`1281` states generated, `256` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-prepare-phase-fast`
+    (`21` state-0 and `12` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-validation-owner-fast`
+    (`22` state-0 and `14` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-highest-qc-fast`
+    (`25` state-0 and `16` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-commit-phase-fast`
+    (`23` state-0 and `13` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-committed-block-record-fast`
+    (`26` state-0 and `15` state-1 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud FHE production helper boundary
+
+- Marked the legacy no-artifact Soracloud FHE residual-bound wrapper as
+  test-only, matching the production full-bootstrap path that requires governed
+  artifact-aware execution and bound propagation.
+- Moved Soracloud IVM host validation fixture imports behind `cfg(test)` so the
+  non-test Core library check no longer carries test-only imports.
+- Validation:
+  - `cargo check -p iroha_core --lib`
+    (finished successfully)
+  - `cargo test -j 1 -p iroha_core soracloud_fhe_job_residual_metadata --lib -- --nocapture`
+    (`4` passed, `7274` filtered out)
+  - `cargo test -j 1 -p iroha_core soracloud_syscalls_reject_zero_prehash_request_digest_before_runtime_fallback --lib -- --nocapture`
+    (`1` passed, `7277` filtered out)
+
+## 2026-06-08 SCCP Ethereum source-event evidence-mode readiness gate
+
+- Promoted the existing Ethereum source-event evidence-mode inventory into the
+  SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as `ethereum_receipt_source_event_mode_gate`.
+- The gate pins receipt-proof evidence guards that require source-bridge
+  validation or an explicit receipt-only mode before receipt proof summaries can
+  be emitted.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_event_mode'`
+    (`3` passed, `196` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_event_mode'`
+    (`2` passed, `325` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`199` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`327` passed)
+
+## 2026-06-08 SCCP Ethereum source-event context readiness gate
+
+- Promoted the existing Ethereum source-event context inventory into the SCCP
+  production-readiness report and release-bundle required `source_inventory`
+  schema as `ethereum_receipt_source_event_context_gate`.
+- The gate pins receipt-proof evidence guards that bind source-event logs to
+  receipt transaction hash, block hash, and block number before source-event
+  evidence is accepted.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'source_event_context'`
+    (`3` passed, `194` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'source_event_context'`
+    (`2` passed, `324` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`197` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`326` passed)
+
+## 2026-06-08 Sumeragi status/tracker fast component wiring
+
+- Removed the generic `Safety` invariant from the `commit-inflight-status-fast`,
+  `commit-quorum-status-fast`, `fast-finality-inline-validation-fast`,
+  `phase-tracker-fast`, `precommit-vote-count-fast`, `qc-status-fast`,
+  `validation-reject-status-fast`, `view-change-cause-status-fast`, and
+  `view-change-proof-status-fast` configs so those modes check their listed
+  aggregate, component, and anchor invariants directly.
+- Updated the formal README inventory/table wording and roadmap coverage notes
+  to describe those modes as component/anchor or aggregate/anchor checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitInflightStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitQuorumStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFastFinalityInlineValidationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPhaseTrackerGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPrecommitVoteCountGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiQcStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiValidationRejectStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiViewChangeCauseStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiViewChangeProofStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-inflight-status-fast`
+    (`27` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-quorum-status-fast`
+    (`24` states generated, `23` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh fast-finality-inline-validation-fast`
+    (`22` states generated, `11` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh phase-tracker-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh precommit-vote-count-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh qc-status-fast`
+    (`19` states generated, `18` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh validation-reject-status-fast`
+    (`18` states generated, `17` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh view-change-cause-status-fast`
+    (`23` states generated, `22` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh view-change-proof-status-fast`
+    (`17` states generated, `16` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-inflight-status-fast`
+    (`SafetyAnchors`: `39` VCs; `109` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-quorum-status-fast`
+    (`SafetyAnchors`: `28` VCs; `79` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fast-finality-inline-validation-fast`
+    (`EligibleCaseResultAnchors`: `3` VCs; `GateRejectionAnchors`: `6`
+    VCs; `CapBoundaryAnchors`: `3` VCs; `29` state-0 invariants;
+    `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh phase-tracker-fast`
+    (`NewTrackerAnchors`: `3` VCs; `StartRoundAnchors`: `4` VCs;
+    `ViewChangeAnchors`: `4` VCs; `RecordPhaseAnchors`: `5` VCs;
+    `LookupAnchors`: `4` VCs; `41` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh precommit-vote-count-fast`
+    (`SpecReturnClassification`: `4` VCs; `SpecPhaseGateAnchors`: `6`
+    VCs; `SpecBitmapBoundaryAnchors`: `8` VCs; `22` state-0 invariants;
+    `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-status-fast`
+    (`SafetyAnchors`: `30` VCs; `88` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh validation-reject-status-fast`
+    (`SafetyAnchors`: `49` VCs; `116` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh view-change-cause-status-fast`
+    (`SafetyAnchors`: `43` VCs; `112` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh view-change-proof-status-fast`
+    (`SafetyAnchors`: `24` VCs; `70` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi RBC status fast component wiring
+
+- Removed the generic `Safety` invariant from the `rbc-abort-status-fast`,
+  `rbc-mismatch-status-fast`, `rbc-store-pressure-log-fast`,
+  `rbc-store-status-fast`, and `round-gap-status-fast` configs so those modes
+  check their listed component and anchor invariants directly.
+- Updated the formal README inventory/table wording and roadmap coverage notes
+  to describe those modes as component/anchor checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcAbortStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcMismatchStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcStorePressureLogGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcStoreStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRoundGapStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-abort-status-fast`
+    (`12` states generated, `11` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-mismatch-status-fast`
+    (`17` states generated, `16` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-store-pressure-log-fast`
+    (`20` states generated, `19` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-store-status-fast`
+    (`21` states generated, `20` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh round-gap-status-fast`
+    (`27` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-abort-status-fast`
+    (`SafetyAnchors`: `12` VCs; `36` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-mismatch-status-fast`
+    (`SafetyAnchors`: `18` VCs; `53` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-store-pressure-log-fast`
+    (`PressureLogSafetyAnchors`: `39` VCs; `79` state-0 and `1`
+    state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-store-status-fast`
+    (`StatusSafetyAnchors`: `33` VCs; `67` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh round-gap-status-fast`
+    (`RoundGapSafetyAnchors`: `45` VCs; `91` state-0 and `1`
+    state-1 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP Ethereum receipt RLP zero-address readiness gate
+
+- Promoted the existing Ethereum receipt RLP zero-address inventory into the
+  SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as `ethereum_receipt_rlp_zero_address_gate`.
+- The gate pins public SDK and evidence helpers that preserve zero log
+  addresses in generic receipt RLP before SCCP source-event ABI filtering runs.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'receipt_rlp_zero_address'`
+    (`3` passed, `192` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'receipt_rlp_zero_address'`
+    (`2` passed, `323` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`195` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`325` passed)
+
+## 2026-06-08 Sumeragi status/helper fast component wiring
+
+- Removed the generic `Safety` invariant from the `history-status-fast`,
+  `invalid-signature-throttle-fast`, `local-peer-removed-status-fast`,
+  `peer-key-policy-status-fast`, and `penalty-status-fast` configs so those
+  modes check their listed component and anchor invariants directly.
+- Updated the formal README inventory/table wording and roadmap coverage notes
+  to describe those modes as component/anchor checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiHistoryStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiInvalidSignatureThrottleGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLocalPeerRemovedStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPeerKeyPolicyStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPenaltyStatusGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh history-status-fast`
+    (`27` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh invalid-signature-throttle-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh local-peer-removed-status-fast`
+    (`12` states generated, `11` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh peer-key-policy-status-fast`
+    (`20` states generated, `19` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh penalty-status-fast`
+    (`18` states generated, `17` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh history-status-fast`
+    (`SafetyAnchors`: `26` VCs; `81` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh invalid-signature-throttle-fast`
+    (`InvalidSignatureThrottleSafetyAnchors`: `35` VCs; `74` state-0
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh local-peer-removed-status-fast`
+    (`LocalPeerRemovedStatusSafetyAnchors`: `14` VCs; `32` state-0 and
+    `1` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh peer-key-policy-status-fast`
+    (`SafetyAnchors`: `43` VCs; `110` state-0 and `1` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh penalty-status-fast`
+    (`PenaltyStatusSafetyAnchors`: `28` VCs; `57` state-0 and `1`
+    state-1 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP Ethereum receipt RLP zero-topic readiness gate
+
+- Promoted the existing Ethereum receipt RLP zero-topic inventory into the SCCP
+  production-readiness report and release-bundle required `source_inventory`
+  schema as `ethereum_receipt_rlp_zero_topic_gate`.
+- The gate pins public SDK and evidence helpers that preserve zero log topics
+  in generic receipt RLP before SCCP source-event ABI filtering runs.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'receipt_rlp_zero_topic'`
+    (`3` passed, `190` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'receipt_rlp_zero_topic'`
+    (`2` passed, `322` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`193` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`324` passed)
+
+## 2026-06-08 Sumeragi signing fast component wiring
+
+- Removed the generic `Safety` invariant from the `rbc-preimage-fast` and
+  `classic-signature-fast` configs so those modes check their listed concrete
+  component and anchor invariants directly.
+- Updated the formal README inventory/table wording and roadmap coverage notes
+  to describe those modes as component/anchor checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRbcSigningPreimageGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiClassicSignatureGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh rbc-preimage-fast`
+    (`17` states generated, `4` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh classic-signature-fast`
+    (`785` states generated, `28` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-preimage-fast`
+    (`RbcPreimageSafetyAnchors`: `11` VCs; `25` state-0 and `2`
+    state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh classic-signature-fast`
+    (`ClassicSignatureSafetyAnchors`: `38` VCs; `80` state-0 and `2`
+    state-1 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi exec-witness/rebroadcast fast component wiring
+
+- Removed the generic `Safety` invariant from the `exec-witness-roots-fast` and
+  `cached-proposal-rebroadcast-fast` configs so those modes check their listed
+  `SafetyFast`, component safety/exactness, and anchor invariants directly.
+- Updated the formal README inventory/table wording to describe those modes as
+  component/anchor checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCachedProposalRebroadcastGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiExecWitnessRootProjectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh cached-proposal-rebroadcast-fast`
+    (`27` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh exec-witness-roots-fast`
+    (`17` states generated, `16` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh cached-proposal-rebroadcast-fast`
+    (`SafetyFast`: `25` VCs; `CachedProposalRebroadcastSafetyAnchors`:
+    `50` VCs; `153` state-0 and `1` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh exec-witness-roots-fast`
+    (`SafetyFast`: `1` VC; `ExecWitnessRootSafetyAnchors`: `51` VCs;
+    `107` state-0 and `1` state-1 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP Ethereum receipt-root zero readiness gate
+
+- Promoted the existing Ethereum receipt-root zero SDK inventory into the SCCP
+  production-readiness report and release-bundle required `source_inventory`
+  schema as `ethereum_receipt_root_zero_gate`.
+- The gate pins public SDK regressions that reject all-zero typed receipt roots
+  before receipt-proof bytes can be built.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'receipt_root_zero'`
+    (`3` passed, `188` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'receipt_root_zero'`
+    (`2` passed, `321` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`191` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`323` passed)
+
+## 2026-06-08 Sumeragi missing-QC fast component wiring
+
+- Removed the generic `Safety` invariant from the
+  `missing-qc-reacquire-admission-fast`, `missing-qc-reacquire-action-fast`,
+  `missing-commit-qc-actionable-fast`, `missing-qc-height-stall-fast`, and
+  `missing-qc-stall-range-pull-fast` configs so those modes check their listed
+  `SafetyFast`, component safety, and anchor invariants directly.
+- Updated the formal README inventory/table wording to describe those modes as
+  component/anchor checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingQcReacquireAdmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingQcReacquireActionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingCommitQcActionableGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingQcHeightStallGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMissingQcStallRangePullGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-qc-reacquire-admission-fast`
+    (`23` states generated, `22` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-qc-reacquire-action-fast`
+    (`48` states generated, `24` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-commit-qc-actionable-fast`
+    (`27` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-qc-height-stall-fast`
+    (`27` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh missing-qc-stall-range-pull-fast`
+    (`25` states generated, `24` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-qc-reacquire-admission-fast`
+    (`SafetyFast`: `21` VCs; `MissingQcReacquireAdmissionSafetyAnchors`:
+    `42` VCs; `128` state-0 and `1` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-qc-reacquire-action-fast`
+    (`SafetyFast`: `24` VCs; `MissingQcReacquireActionSafetyAnchors`:
+    `48` VCs; `147` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-commit-qc-actionable-fast`
+    (`SafetyFast`: `59` VCs; `MissingCommitQcActionableSafetyAnchors`:
+    `115` VCs; `356` state-0 and `1` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-qc-height-stall-fast`
+    (`SafetyFast`: `29` VCs; `MissingQcHeightStallSafetyAnchors`: `55`
+    VCs; `172` state-0 and `1` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh missing-qc-stall-range-pull-fast`
+    (`SafetyFast`: `30` VCs; `MissingQcStallRangePullSafetyAnchors`: `59`
+    VCs; `182` state-0 and `1` state-1 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi frontier recovery fast component wiring
+
+- Removed the generic `Safety` invariant from the
+  `canonical-frontier-reanchor-fast`, `frontier-repair-view-change-fast`,
+  `frontier-recovery-advance-fast`, `live-frontier-idle-missing-qc-fast`, and
+  `same-height-no-proposal-storm-fast` configs so those modes check their
+  listed `SafetyFast`, component safety, and anchor invariants directly.
+- Updated the formal README inventory/table wording to describe those modes as
+  component/anchor checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCanonicalFrontierReanchorGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRepairViewChangeGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierRecoveryAdvanceGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiLiveFrontierIdleMissingQcGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiSameHeightNoProposalStormGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh canonical-frontier-reanchor-fast`
+    (`88` states generated, `44` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-repair-view-change-fast`
+    (`48` states generated, `24` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-recovery-advance-fast`
+    (`78` states generated, `39` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh live-frontier-idle-missing-qc-fast`
+    (`19` states generated, `18` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh same-height-no-proposal-storm-fast`
+    (`66` states generated, `33` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh canonical-frontier-reanchor-fast`
+    (`SafetyFast`: `12` VCs; `CanonicalFrontierReanchorSafetyAnchors`:
+    `24` VCs; `75` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-repair-view-change-fast`
+    (`SafetyFast`: `21` VCs; `FrontierRepairViewChangeSafetyAnchors`:
+    `42` VCs; `129` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 JVM_ARGS="-Xss16m -Xmx8192m" bash scripts/formal/sumeragi_apalache.sh frontier-recovery-advance-fast`
+    (`SafetyFast`: `35` VCs; `FrontierRecoveryAdvanceSafetyAnchors`:
+    `70` VCs; `213` state-0 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh live-frontier-idle-missing-qc-fast`
+    (`SafetyFast`: `17` VCs; `LiveFrontierIdleMissingQcSafetyAnchors`:
+    `34` VCs; `104` state-0 and `1` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh same-height-no-proposal-storm-fast`
+    (`SafetyFast`: `5` VCs; `SameHeightNoProposalStormSafetyAnchors`:
+    `38` VCs; `89` state-0 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP Ethereum outbound provider-validation readiness gate
+
+- Promoted the existing Ethereum outbound provider-validation inventory into
+  the SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as
+  `ethereum_outbound_provider_validation_gate`.
+- The gate pins public SDK and facade guards that validate app-supplied
+  Ethereum mainnet execution providers before outbound submitter callbacks can
+  run.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'outbound_provider_validation or provider_before_outbound_submitter'`
+    (`3` passed, `186` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'outbound_provider_validation'`
+    (`2` passed, `320` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`189` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`322` passed)
+
+## 2026-06-08 Soracloud full-bootstrap count exactness
+
+- Enforced `bootstrap_count == 1` for `FullBootstrapV1` jobs in Core execution,
+  bound propagation, full-bootstrap execution proof verification, and Torii
+  signed-request preflight.
+- Added Core regressions for exact, bounded-noise, and proof-boundary
+  multi-count rejection, plus a Torii preflight regression proving full-mode
+  count drift fails before missing-proof checks when policy would otherwise
+  allow it.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-count-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core multi_count --lib -- --nocapture`
+    (`3` passed, `7274` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-count-torii CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii full_bootstrap_multi_count --lib -- --nocapture`
+    (`1` passed, `2353` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-count-torii CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`23` passed, `2331` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-full-bootstrap-count-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core bootstrap_full_material_requires_artifacts --lib -- --nocapture`
+    (`2` passed, `7275` filtered out)
+
+## 2026-06-08 SCCP Ethereum local-admission readiness gate
+
+- Promoted the existing Ethereum local-admission SDK inventory into the SCCP
+  production-readiness report and release-bundle required `source_inventory`
+  schema as `ethereum_local_admission_gate`.
+- The gate pins public SDK regressions that reject mutated proof bytes,
+  all-zero proof/public-input/bundle/envelope bytes, empty envelopes, zero
+  statement/source-material/source-adapter hashes, and stale proof-family
+  metadata before local admission payloads can be submitted.
+- Retired platform-family lanes are explicitly outside SCCP launch support for
+  now.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'local_admission_gate or local_admission'`
+    (`2` passed, `185` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'local_admission_inventory_gate or local_admission'`
+    (`2` passed, `319` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`187` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`321` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 Soracloud agent apartment digest sentinel rejection
+
+- Extended Soracloud agent-apartment runtime validation so apartment manifest
+  hashes, queued mailbox payload hashes, autonomy request commitments, and audit
+  event manifest/payload/result/receipt/artifact hashes reject zero-prehash
+  placeholders before runtime or audit evidence can be trusted.
+- Agent-apartment records now also bind the stored manifest hash to the
+  canonical embedded manifest and queued mailbox payload hashes to canonical
+  payload bytes.
+- Validation:
+  - `cargo fmt -p iroha_data_model`
+  - `cargo test -j 1 -p iroha_data_model zero_prehash --lib -- --nocapture`
+    (`39` passed)
+  - `cargo test -j 1 -p iroha_data_model agent_apartment_record --lib -- --nocapture`
+    (`5` passed)
+  - `cargo test -j 1 -p iroha_data_model agent_apartment_audit_event --lib -- --nocapture`
+    (`3` passed)
+
+## 2026-06-08 Sumeragi projection/output fast component wiring
+
+- Removed the generic `Safety` invariant from the
+  `engine-proposal-output-fast`, `message-projection-fast`, and
+  `pipeline-event-emission-fast` configs so the fast modes check their listed
+  component, `SafetyFast`, and anchor invariants directly.
+- Updated the formal README inventory/table wording to describe those modes as
+  component or component/anchor checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiEngineProposalOutputGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiMessageProjectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPipelineEventEmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh engine-proposal-output-fast`
+    (`2817` states generated, `512` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh message-projection-fast`
+    (`31` states generated, `30` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh pipeline-event-emission-fast`
+    (`12` states generated, `11` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh engine-proposal-output-fast`
+    (component invariants: `17` VCs; `36` state-0 and `24` state-1
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh message-projection-fast`
+    (`SafetyFast`: `21` VCs; `MessageProjectionSafetyAnchors`: `34`
+    VCs; `119` state-0 and `1` state-1 invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pipeline-event-emission-fast`
+    (`SafetyFast`: `26` VCs; `PipelineEventEmissionSafetyAnchors`: `29`
+    VCs; `120` state-0 and `1` state-1 invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi stale-view and voting-count fast aggregate wiring
+
+- Removed the generic `Safety` invariant from the
+  `stale-view-commit-qc-fetch-fast` and `voting-signer-count-fast` configs so
+  those modes check their aggregate and component exactness invariants
+  directly.
+- Updated the formal README inventory/table wording to call both modes
+  aggregate exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiStaleViewCommitQcFetchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiVotingSignerCountGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh stale-view-commit-qc-fetch-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh voting-signer-count-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh stale-view-commit-qc-fetch-fast`
+    (`StaleViewCommitQcFetchExactness`: `5` VCs; `14` state-0
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh voting-signer-count-fast`
+    (`VotingSignerSupportCountExactness`: `32` VCs; `69` state-0
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi roster-selection fast aggregate exactness wiring
+
+- Removed the generic `Safety` invariant from the
+  `roster-artifact-selection-fast` and `persisted-roster-selection-fast`
+  configs so the fast modes check their aggregate and component exactness
+  invariants directly.
+- Updated the formal README inventory/table wording to call both modes
+  aggregate exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterArtifactSelectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiPersistedRosterSelectionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-artifact-selection-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh persisted-roster-selection-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-artifact-selection-fast`
+    (`RosterArtifactSelectionExactness`: `8` VCs; `20` state-0
+    invariants; `NoError`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh persisted-roster-selection-fast`
+    (`PersistedRosterSelectionExactness`: `8` VCs; `20` state-0
+    invariants; `NoError`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1`
+    scheduled/manual mode, `10347` documented modes, `499` TLC fast modes,
+    `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP Ethereum outbound pre-callback readiness gate
+
+- Promoted the existing Ethereum outbound pre-callback SDK inventory into the
+  SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as `ethereum_outbound_precallback_gate`.
+- The gate pins public SDK regressions that reject foreign-lane outbound
+  requests, forged destination bindings, missing or partial proof-artifact
+  hashes, zero proof-artifact hashes, and callback-visible proof material
+  before outbound prover callbacks can run.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'outbound_precallback_gate or outbound_precallback'`
+    (`3` passed, `182` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'outbound_precallback_inventory_gate or outbound_precallback'`
+    (`2` passed, `318` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`185` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`320` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 Soracloud host-envelope nested validation
+
+- Hardened `SoracloudHostRequestEnvelopeV1` and
+  `SoracloudHostResponseEnvelopeV1` validation so host request/response
+  operation tags must match their payload variants before runtime dispatch.
+- Added operation-specific host payload validation for committed-state paths,
+  state mutations, mailbox messages, journal/checkpoint artifacts,
+  config/secret/credential reads, and egress fetches. The checks reject
+  zero-prehash digest sentinels, malformed host paths/names, inconsistent
+  found/payload pairs, delete mutations with payload material, and payload/body
+  hashes that do not match their byte preimages.
+- Core Soracloud host syscalls now call the data-model request validator after
+  decoding the pointer-ABI request, so malformed or forged request envelopes
+  fail closed before the ordinary contract-execution runtime fallback.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model soracloud_host --lib -- --nocapture`
+    (`5` passed, `1522` filtered out)
+  - `cargo test -j 1 -p iroha_core soracloud_syscalls_reject_zero_prehash_request_digest_before_runtime_fallback --lib -- --nocapture`
+    (`1` passed, `7277` filtered out)
+  - `cargo test -j 1 -p iroha_data_model zero_prehash --lib -- --nocapture`
+    (`43` passed, `1484` filtered out)
+  - `cargo fmt --all -- --check`
+  - `make guards`
+
+## 2026-06-08 Soracloud agent/training/HF digest sentinel rejection
+
+- Extended the shared Soracloud digest sentinel guard to agent-apartment
+  manifest hashes, mailbox payload hashes, autonomy request/result/runtime
+  artifact commitments, training checkpoint metric hashes, HF source ids,
+  normalized runtime hashes, shared-lease pool/member/audit source and pool ids,
+  and model-host violation evidence ids, placement/pool/source ids, and slash
+  ids.
+- Agent-apartment records now also require the embedded manifest hash and
+  mailbox payload hashes to match their canonical preimages before the record is
+  accepted.
+- Added adversarial regressions proving zero-prehash placeholders fail before
+  agent runtime state, training metrics, HF source metadata, shared-lease
+  accounting, audit events, or model-host violation evidence can trust those
+  hashes.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model agent_apartment --lib -- --nocapture`
+    (`14` passed, `1500` filtered out)
+  - `cargo test -j 1 -p iroha_data_model training_job --lib -- --nocapture`
+    (`7` passed, `1497` filtered out)
+  - `cargo test -j 1 -p iroha_data_model zero_prehash --lib -- --nocapture`
+    (`39` passed, `1475` filtered out)
+  - `cargo test -j 1 -p iroha_data_model hf_source_record --lib -- --nocapture`
+    (`3` passed, `1506` filtered out)
+  - `cargo test -j 1 -p iroha_data_model hf_shared_lease --lib -- --nocapture`
+    (`10` passed, `1499` filtered out)
+  - `cargo test -j 1 -p iroha_data_model model_host_violation_evidence --lib -- --nocapture`
+    (`3` passed, `1506` filtered out)
+  - `cargo fmt --all -- --check`
+  - `make guards`
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs status.md roadmap.md`
+  - `git diff --name-only -- Cargo.lock`
+
+## 2026-06-08 Sumeragi roster-validation fast aggregate exactness wiring
+
+- Removed the generic `Safety` invariant from the
+  `roster-validation-memo-fast`, `roster-validation-cached-fast`, and
+  `roster-validation-core-fast` configs so the fast modes check their
+  aggregate and component exactness invariants directly.
+- Updated the formal README inventory/table wording to call those three modes
+  aggregate exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterValidationMemoGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterValidationCachedGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiRosterValidationCoreGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-memo-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-cached-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh roster-validation-core-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-validation-memo-fast`
+    (`RosterValidationMemoCacheExactness` produced `6` verification
+    conditions; the checker inspected `16` state invariants at state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-validation-cached-fast`
+    (`RosterValidationCachedExactness` produced `7` verification conditions;
+    the checker inspected `18` state invariants at state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh roster-validation-core-fast`
+    (`RosterValidationCoreExactness` produced `11` verification conditions;
+    the checker inspected `26` state invariants at state `0`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Sumeragi topology fast aggregate exactness wiring
+
+- Removed the generic `Safety` invariant from the `topology-role-filter-fast`
+  and `p2p-topology-refresh-fast` configs so both fast modes check their
+  explicit aggregate/component exactness invariants directly.
+- Updated the formal README inventory/table wording to call those two modes
+  aggregate exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiTopologyRoleFilterGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiP2pTopologyRefreshGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh topology-role-filter-fast`
+    (`2` states generated, `2` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh p2p-topology-refresh-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh topology-role-filter-fast`
+    (`TopologyRoleFilterExactness` produced `8` verification conditions; the
+    checker inspected `13` state invariants at state `0` and `1` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh p2p-topology-refresh-fast`
+    (`P2pTopologyRefreshExactness` produced `15` verification conditions; the
+    checker inspected `31` state invariants at state `0`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud deployment/artifact placement digest sentinel rejection
+
+- Extended the shared Soracloud digest sentinel guard to container bundle
+  hashes, service and agent container-manifest references, service artifact
+  references, and HF placement identifiers, source/pool ids, and selection
+  seeds.
+- Added adversarial regressions proving zero-prehash placeholders fail before
+  deployment bundles, artifact refs, agent/service manifests, or placement
+  records can trust those hashes.
+- Validation:
+  - `cargo fmt -p iroha_data_model`
+  - `cargo test -j 1 -p iroha_data_model zero_prehash --lib -- --nocapture`
+    (`30` passed, `1472` filtered out)
+  - `cargo test -j 1 -p iroha_data_model container_validate --lib -- --nocapture`
+    (`6` passed, `1496` filtered out)
+  - `cargo test -j 1 -p iroha_data_model service_validate --lib -- --nocapture`
+    (`9` passed, `1493` filtered out)
+  - `cargo test -j 1 -p iroha_data_model hf_placement_record --lib -- --nocapture`
+    (`2` passed, `1500` filtered out)
+  - `cargo test -j 1 -p iroha_data_model agent_apartment_manifest --lib -- --nocapture`
+    (`4` passed, `1498` filtered out)
+  - `cargo fmt --all -- --check`
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs status.md roadmap.md docs/source/bridge_proofs.md docs/source/engineering_backlog.md`
+  - `git diff -- Cargo.lock`
+  - Clean conflict-marker and retired-term scans.
+
+## 2026-06-08 Soracloud model provenance digest sentinel rejection
+
+- Hardened model weight-version and model-artifact admission so weight
+  artifact, training config, reproducibility, provenance attestation,
+  promotion gate, and user-upload chunk-manifest hashes reject the zero
+  prehash sentinel before provenance payloads or artifact records are accepted.
+- Added focused regressions for all model weight-version and model-artifact
+  digest fields guarded by the shared Soracloud digest sentinel check.
+- Validation:
+  - `cargo test -j 1 -p iroha_data_model zero_prehash --lib -- --nocapture`
+    (`16` passed, `1469` filtered out)
+  - `cargo test -j 1 -p iroha_data_model model_weight --lib -- --nocapture`
+    (`6` passed, `1479` filtered out)
+  - `cargo test -j 1 -p iroha_data_model model_artifact --lib -- --nocapture`
+    (`6` passed, `1491` filtered out)
+  - `cargo test -j 1 -p iroha_data_model fhe_ --lib -- --nocapture`
+    (`67` passed, `1430` filtered out)
+  - `cargo test -j 1 -p iroha_torii fhe_job_run_proof_preflight_rejects --lib -- --nocapture`
+    (`22` passed, `2331` filtered out)
+  - `cargo fmt --all -- --check`
+  - `make guards`
+
+## 2026-06-08 SCCP Ethereum inbound adversarial readiness gate
+
+- Promoted the existing Ethereum inbound adversarial SDK inventory into the
+  SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as `ethereum_inbound_adversarial_gate`.
+- The gate pins public SDK regressions for failed receipts, source-event drift,
+  hash-only proof bypasses, immutable evidence snapshots, oversized proof
+  bytes, finality mismatches, sync-committee quorum checks, and wrong-domain
+  receipt transcripts before inbound source proofs can be accepted.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'inbound_adversarial_gate or inbound_adversarial'`
+    (`3` passed, `180` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'inbound_adversarial_inventory_gate or inbound_adversarial'`
+    (`3` passed, `316` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`183` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`319` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 Sumeragi frontier cleanup/payload-hint fast aggregate exactness wiring
+
+- Removed the generic `Safety` invariant from the
+  `frontier-quorum-owner-actionable-fast` and
+  `contiguous-frontier-payload-hint-fast` configs so each fast mode checks its
+  aggregate exactness, component exactness/safety, and anchor invariants
+  directly.
+- Updated the formal README inventory/table wording to call those two modes
+  aggregate exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiFrontierQuorumOwnerActionableGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiContiguousFrontierPayloadHintGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-quorum-owner-actionable-fast`
+    (`22` states generated, `21` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh contiguous-frontier-payload-hint-fast`
+    (`15` states generated, `14` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-quorum-owner-actionable-fast`
+    (`FrontierQuorumOwnerCleanupExactness` produced `20` verification
+    conditions; the checker inspected `182` state invariants at state `0` and
+    `1` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh contiguous-frontier-payload-hint-fast`
+    (`ContiguousFrontierPayloadHintExactness` produced `29` verification
+    conditions; the checker inspected `234` state invariants at state `0` and
+    `1` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 SCCP Ethereum inbound adversarial readiness gate
+
+- Promoted the existing Ethereum inbound adversarial SDK inventory into the
+  SCCP production-readiness report and release-bundle required
+  `source_inventory` schema as `ethereum_inbound_adversarial_gate`.
+- The gate pins public SDK regressions for failed receipts, source-event drift,
+  hash-only proof bypasses, immutable evidence snapshots, oversized proof
+  bytes, finality mismatches, sync-committee quorum checks, and wrong-domain
+  receipt transcripts before inbound source proofs can be accepted.
+- Validation:
+  - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k 'inbound_adversarial_gate or inbound_adversarial'`
+    (`3` passed, `180` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k 'inbound_adversarial_inventory_gate or inbound_adversarial'`
+    (`3` passed, `316` deselected)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py`
+    (`183` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py`
+    (`319` passed)
+  - `python3 -m pytest -q pytests/scripts/sccp_retired_network_surface_test.py`
+    (`7` passed)
+
+## 2026-06-08 Soracloud full-bootstrap execution slot binding
+
+- Added `slot_index` to the typed BFV full-bootstrap execution proof claim and
+  the canonical proof public-input schema so statement hashes bind the
+  zero-based output envelope slot, not only the input/output ciphertexts and
+  bound metadata.
+- Threaded Core full-bootstrap proof verification and proof fixtures through
+  the slot index, then extended the slot-order regression to prove slot-position
+  replay fails even when duplicated ciphertext slots make the input/output
+  claims otherwise identical.
+- Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-slot-statement-crypto CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_crypto full_bootstrap_execution_proof_statement --lib -- --nocapture`
+    (`1` passed, `676` filtered out)
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-fhe-slot-statement-core CARGO_INCREMENTAL=0 cargo test -j 1 -p iroha_core soracloud_fhe_full_bootstrap_execution_proof_rejects_surplus_and_reordered_slot_proofs --lib -- --nocapture`
+    (`1` passed, `7275` filtered out)
+
+## 2026-06-08 Sumeragi frontier activity/sidecar fast aggregate exactness wiring
+
+- Removed the generic `Safety` invariant from the
+  `frontier-same-slot-activity-fast`, `frontier-reassembly-activity-fast`,
+  `frontier-sidecar-retarget-fast`, `frontier-sidecar-expected-hash-fast`, and
+  `frontier-parent-qc-hint-retarget-fast` configs so the fast modes check
+  their aggregate exactness, component exactness/safety, and anchor invariants
+  directly.
+- Updated the formal README inventory/table wording to call those five modes
+  aggregate exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck` for `SumeragiFrontierSameSlotActivityGate.tla`, `SumeragiFrontierReassemblyActivityGate.tla`, `SumeragiFrontierSidecarRetargetGate.tla`, `SumeragiFrontierSidecarExpectedHashGate.tla`, and `SumeragiFrontierParentQcHintRetargetGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-same-slot-activity-fast`
+    (`38` states generated, `37` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-reassembly-activity-fast`
+    (`34` states generated, `33` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-sidecar-retarget-fast`
+    (`29` states generated, `28` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-sidecar-expected-hash-fast`
+    (`27` states generated, `26` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh frontier-parent-qc-hint-retarget-fast`
+    (`14` states generated, `13` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-same-slot-activity-fast`
+    (`FrontierSameSlotActivityExactness` produced `33` verification
+    conditions; the checker inspected `329` state invariants at state `0` and
+    `1` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-reassembly-activity-fast`
+    (`FrontierReassemblyActivityExactness` produced `20` verification
+    conditions; the checker inspected `254` state invariants at state `0` and
+    `1` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-sidecar-retarget-fast`
+    (`FrontierSidecarRetargetExactness` produced `27` verification conditions;
+    the checker inspected `245` state invariants at state `0` and `1` at state
+    `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-sidecar-expected-hash-fast`
+    (`FrontierSidecarExpectedHashExactness` produced `25` verification
+    conditions; the checker inspected `227` state invariants at state `0` and
+    `1` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-parent-qc-hint-retarget-fast`
+    (`FrontierParentQcHintRetargetExactness` produced `32` verification
+    conditions; the checker inspected `246` state invariants at state `0` and
+    `1` at state `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 Soracloud service/runtime digest sentinel rejection
+
+- Extended shared Soracloud digest sentinel rejection to service deployment
+  state, app-infra service refs/audit events, service audit events, runtime
+  state, Inrou replica runtime state, service-state governance links, mailbox
+  messages, and runtime receipts.
+- Added negative regressions proving zero-prehash placeholders fail before
+  those hashes are trusted as manifest, governance, mailbox, receipt, placement,
+  or artifact evidence.
+- Validation:
+  - `cargo fmt --all -- --check`
+  - `cargo test -j 1 -p iroha_data_model zero_prehash --lib -- --nocapture`
+    (`25` passed, `1472` filtered out)
+  - `cargo test -j 1 -p iroha_data_model service_ --lib -- --nocapture`
+    (`32` passed, `1465` filtered out)
+  - `git diff --check -- crates/iroha_data_model/src/soracloud.rs status.md roadmap.md docs/source/bridge_proofs.md docs/source/engineering_backlog.md`
+  - `git diff -- Cargo.lock`
+  - Clean conflict-marker and retired-term scans.
+
+## 2026-06-08 Sumeragi bitmap/hydration/dispatch/collector fast aggregate exactness wiring
+
+- Removed the remaining generic `Safety` invariant from the
+  `build-signers-bitmap-fast`, `block-sync-update-roster-fast`,
+  `commit-job-dispatch-fast`, and `collector-plan-fast` configs so each fast
+  mode checks its explicit aggregate and component exactness invariants
+  directly.
+- Updated the formal README inventory/table wording to call these four modes
+  aggregate exactness checks.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBuildSignersBitmapGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockSyncUpdateRosterHydrationGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCommitJobDispatchGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiCollectorPlanGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh build-signers-bitmap-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-sync-update-roster-fast`
+    (`2` states generated, `1` distinct state)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh commit-job-dispatch-fast`
+    (`25` states generated, `13` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh collector-plan-fast`
+    (`16` states generated, `8` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh build-signers-bitmap-fast`
+    (`BuildSignersBitmapExactness` produced `19` verification conditions; the
+    checker inspected `45` state invariants at state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-update-roster-fast`
+    (`BlockSyncUpdateRosterHydrationExactness` produced `8` verification
+    conditions; the checker inspected `20` state invariants at state `0`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-job-dispatch-fast`
+    (`CommitJobDispatchExactness` produced `28` verification conditions; the
+    checker inspected `69` state invariants at state `0` and `57` at state `1`)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh collector-plan-fast`
+    (`CollectorPlanRetryGossipExactness` produced `19` verification
+    conditions; the checker inspected `55` state invariants at state `0`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
+## 2026-06-08 BlockCreated admission runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiBlockCreatedAdmissionGate.tla`, covering all `24` direct
+  `BlockCreated` admission cases: authoritative and stale-recovery accepts,
+  duplicate handling, aborted replay revival, pending/inflight deferral,
+  future-height parent and gap repair, empty payload trigger gating, proposal
+  mismatch handling, local-removal and stale drops, lock and ownership
+  rejection, proposal-hint failures, locked-QC rejection, and RBC payload
+  mismatch rejection.
+- Aligned `BlockCreated` handling with the formal side-effect gates: duplicate
+  observations now refresh frontier/missing-block state without creating a new
+  authoritative slot owner, far-future gaps also arm range-pull repair from the
+  committed anchor, proposal-mismatch preservation clears obsolete
+  missing-block requests, and RBC payload mismatches drop before admission
+  without sidecar recovery accounting or retained pending/owner state.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_created_admission_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh block-created-admission-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh block-created-admission-fast`
+  - TLC and Apalache sweeps for all `54`
+    `block-created-admission-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_created_admission_{tlc,apalache}/`.
+
+## 2026-06-08 Raw QC signer-count runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiQcSignerCountGate.tla`, covering all `12` raw bitmap anchor cases:
+  empty, zero-byte, low/high bit, full byte, sparse two/three-byte maps,
+  padding bits, alternating pair, two full bytes, three zero bytes, and mixed
+  three-byte input.
+- The matrix drives `qc_signer_count(...)` directly through lightweight QC
+  values with no roster dependency, confirming that the helper counts every set
+  bit in every aggregate bitmap byte without truncation, saturation, or padding
+  interpretation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core qc_signer_count_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh qc-signer-count-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh qc-signer-count-fast`
+  - TLC and Apalache sweeps for all `13` `qc-signer-count-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/qc_signer_count_{tlc,apalache}/`.
+
+## 2026-06-08 QC signer-bitmap runtime gate
+
+- Added inline runtime parity coverage for `SumeragiQcSignerBitmap.tla`,
+  covering the parser/admission contract for canonical bitmap length,
+  out-of-range padding bits, observer padding, exact quorum, under-quorum
+  rejection, and two-byte signer maps.
+- The matrix drives `parse_signers_bitmap(...)` directly with distinct
+  `voting_len` and `topology_len` values, then checks that accepted QCs are
+  based only on voting signers via `commit_quorum_from_len(...)`. Observer bits
+  remain visible in the parsed-present set but do not satisfy quorum.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core qc_signer_bitmap_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh qc-signers-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh qc-signers-fast`
+  - TLC and Apalache sweeps for all `4` `qc-signers-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/qc_signers_{tlc,apalache}/`.
+
+## 2026-06-08 Peer-admin detection runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiPeerAdminDetectionGate.tla`, covering all `10` instruction-ID
+  cases and all `11` accepted-transaction cases from the formal model.
+- The runtime matrix uses `OpaqueInstruction` to exercise exact, mixed-case,
+  prefixed/suffixed, reversed, unrelated, and empty wire IDs without depending
+  on concrete peer-admin constructors. It also verifies that only external
+  signed instruction batches are inspected, non-instruction executables are
+  ignored, empty/non-admin batches are false, and any admin instruction in a
+  mixed batch is sufficient.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core peer_admin_detection_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh peer-admin-detection-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh peer-admin-detection-fast`
+  - TLC and Apalache sweeps for all `18` `peer-admin-detection-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/peer_admin_detection_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal admission runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiProposalAdmissionGate.tla`, covering all `18` proposal metadata
+  admission cases: accepted proposals with new/current/stale/promoted highest
+  QCs, lock-lag highest-QC deferral after admission, stale height/view drops,
+  proposal/highest-QC epoch and height mismatches, parent mismatch,
+  stored/local metadata mismatches, committed-edge conflicts, missing future
+  highest-QC deferral, and locked-QC rejection.
+- Aligned `handle_proposal(...)` with the proposal-hint path by treating an
+  incoming highest QC that exactly matches `actor.highest_qc` as locally known
+  before missing-dependency deferral. This lets proposal admission validate
+  pending/inflight local metadata for current highest-QC references instead of
+  deferring them solely because Kura does not yet contain the block.
+- The runtime matrix observes concrete side effects across proposal cache
+  insertion, proposal-slot observation, highest-QC mutation, dependency
+  requests/defer markers, PRF and leader-index status, phase sampling, deferred
+  vote replay, proposal-seen and committed-cache pruning, committed-edge
+  suppression, and the no commit-pipeline/no payload-phase-progress guarantees.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_admission_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh proposal-admission-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh proposal-admission-fast`
+  - TLC and Apalache sweeps for all `43` `proposal-admission-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_admission_{tlc,apalache}/`.
+
+## 2026-06-08 Stale RBC hint repair runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiStaleRbcHintRepairGate.tla`, covering all `11` stale RBC
+  proposal-hint repair cases: hint-backed chunk admission, DA-disabled denial,
+  non-repair-kind denial, non-frontier height denial, missing cached hint,
+  cached hint height/view/hash mismatches, and rejected-stale no-side-effect
+  guarantees.
+- Tightened `stale_frontier_proposal_hint_matches(...)` so the stale-RBC
+  admission bridge checks the cached hint's embedded height and view in
+  addition to the block hash. Normal `ProposalCache::insert_hint` entries
+  already satisfy this; the explicit guard matches the formal exact-hint
+  identity rule and protects the repair path against malformed cache state.
+- The runtime matrix drives the concrete handlers: `RbcChunk` verifies accepted
+  stale chunks are stashed and arm exact-frontier body repair, while
+  `RbcChunkRequest` verifies non-repair kinds still drop as stale without
+  pending-RBC or repair-slot side effects.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core stale_rbc_hint_repair_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh stale-rbc-hint-repair-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh stale-rbc-hint-repair-fast`
+  - TLC and Apalache sweeps for all `11` `stale-rbc-hint-repair-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/stale_rbc_hint_repair_{tlc,apalache}/`.
+
+## 2026-06-08 Stale proposal-hint repair runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiStaleProposalHintRepairGate.tla`, covering all `13` stale
+  proposal-hint repair cases: exact committed-QC repair, DA-disabled denial,
+  non-active height denial, local-view boundary checks, missing committed QC,
+  committed-QC height/view/hash/epoch mismatches, and rejected-stale
+  no-side-effect guarantees.
+- Exposed `stale_proposal_hint_can_seed_frontier_repair` internally to sibling
+  main-loop tests and verified that its DA guard, active-height check,
+  one-view-late requirement, and exact committed-QC comparison match the formal
+  gate. The `da_disabled` matrix row flips the actor's effective runtime timing
+  after DA-enabled harness startup so the test exercises the production guard
+  without disabling DA during consensus initialization.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core stale_proposal_hint_repair_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh stale-proposal-hint-repair-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh stale-proposal-hint-repair-fast`
+  - TLC and Apalache sweeps for all `14`
+    `stale-proposal-hint-repair-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/stale_proposal_hint_repair_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal hint admission runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiProposalHintAdmissionGate.tla`, covering all `19` proposal-hint
+  admission cases: accepted highest-QC updates, current/stale highest hints,
+  phase promotion, committed-conflict cache replacement, lock-lag update
+  deferral, stale height/view drops, malformed highest-QC references, cached
+  conflicts, committed-edge conflict suppression, missing future dependencies,
+  local block metadata mismatches, and locked-QC rejection.
+- The matrix observes the handler's concrete side effects across cache
+  installation, slot observation, highest-QC updates to the incoming QC,
+  dependency markers/requests, PRF context updates, phase sampling, deferred
+  vote replay, old observed-slot pruning, committed-height cache pruning, and
+  committed-edge suppression telemetry.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_hint_admission_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh proposal-hint-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh proposal-hint-fast`
+  - TLC and Apalache sweeps for all `40` `proposal-hint-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_hint_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal cache runtime gate
+
+- Extracted a `ProposalCacheShape` projection in
+  `crates/iroha_core/src/sumeragi/main_loop/proposals.rs`, covering bounded
+  hint/proposal counts, independent limit enforcement, live-key-only observed
+  timestamps, and observed timestamps for every live cache entry.
+- Rewired `ProposalCache` mutations through debug assertions against that
+  projection while preserving the existing behavior: hint and proposal limits
+  are enforced independently, overflow evicts the lowest key in the overflowing
+  map, zero-cap inserts are immediately evicted, shared observed timestamps
+  survive when the other cache kind remains live, and pruning removes committed
+  heights from all maps.
+- Added inline runtime parity coverage for `SumeragiProposalCacheGate.tla`,
+  including all `15` formal cases for empty cache, under/over/zero-limit
+  insertions, replacement, pops, missing pops, shared observed timestamps,
+  eviction telemetry, and pruning.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_cache_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh proposal-cache-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-cache-fast`
+  - TLC and Apalache sweeps for all `25` `proposal-cache-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_cache_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal mismatch runtime gate
+
+- Extracted `ProposalMismatchKind` and `proposal_mismatch_kind(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/proposals.rs`, covering the
+  formal mismatch priority order: height, view, parent hash, transaction root,
+  state root, then payload hash.
+- Rewired `detect_proposal_mismatch(...)` through the projection while
+  preserving the existing detailed mismatch payloads and reason strings.
+  The projection keeps the zero parent/transaction-root defaults for missing
+  header roots and the zero state-root compatibility rule, while still checking
+  payload hash after a compatible zero state root.
+- Added inline runtime parity coverage for `SumeragiProposalMismatchGate.tla`,
+  including matching full headers, genesis parent default, missing tx-root
+  default, state-root zero compatibility, state-zero plus payload mismatch,
+  each individual mismatch kind, and all formal priority cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_mismatch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh proposal-mismatch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh proposal-mismatch-fast`
+  - TLC and Apalache sweeps for all `15` `proposal-mismatch-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_mismatch_{tlc,apalache}/`.
+
+## 2026-06-08 Invalid proposal evidence runtime gate
+
+- Extracted an `InvalidProposal` evidence projection in
+  `crates/iroha_core/src/sumeragi/main_loop.rs` and split proposer-index
+  fallback into `proposer_index_from_signature_index(...)`, covering wrapper
+  kind/payload preservation, first-signature proposer selection, zero fallback
+  for absent or out-of-range signature indices, header view, caller-supplied
+  epoch, caller-supplied payload hash, QC parent/height binding, block height,
+  and reason string preservation.
+- Rewired `invalid_proposal_evidence(...)` and
+  `build_invalid_proposal_evidence(...)` through debug assertions against that
+  projection while preserving the existing evidence payload, kind, proposal
+  construction, and validation behavior.
+- Added inline runtime parity coverage for
+  `SumeragiInvalidProposalEvidenceBuildGate.tla`, including wrapper
+  proposal/reason preservation, no-signature fallback, first-signature builder
+  fields, multi-signature first-index selection, header-vs-QC view, arg-vs-QC
+  epoch, payload hash, QC subject/height, parent, block height, and reason
+  cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core invalid_proposal_evidence_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh invalid-proposal-evidence-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh invalid-proposal-evidence-fast`
+  - TLC and Apalache sweeps for all `16`
+    `invalid-proposal-evidence-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/invalid_proposal_evidence_{tlc,apalache}/`.
+
+## 2026-06-08 Block body response dispatch runtime gate
+
+- Extracted the ordering and bypass contract behind
+  `dispatch_block_body_response_with_plain_fallback(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `block_body_response_dispatch_decision(...)`, covering created-companion
+  frame-cap admission, plain BlockCreated fallback for BlockSyncUpdate bodies,
+  rich BlockBodyResponse dispatch, direct commit-QC companion dispatch, and the
+  relative positions of all sends.
+- Rewired the live helper through the projection with debug assertions and made
+  `dispatch_block_created_companion_for_body_response(...)` report whether the
+  cap-gated companion was actually sent. The dispatch sequence remains:
+  under-cap created companion, optional plain fallback for sync bodies, the
+  original response, then optional direct commit-QC companion; every dispatch
+  still uses the bypass/background path.
+- Added inline runtime parity coverage for
+  `SumeragiBlockBodyResponseDispatchGate.tla`, including created/sync,
+  under-cap/over-cap, no-QC/QC combinations, ordering positions, always-sent
+  response, and all-bypass expectations.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_body_response_dispatch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-response-dispatch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-response-dispatch-fast`
+  - TLC and Apalache sweeps for all `14`
+    `block-body-response-dispatch-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_body_response_dispatch_{tlc,apalache}/`.
+
+## 2026-06-08 Detached block-body commit-QC runtime gate
+
+- Extracted the branch contract behind
+  `handle_detached_block_body_commit_qc(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `detached_block_body_commit_qc_decision(...)`, covering no-QC no-op,
+  cached-before clearing without re-handling, post-`handle_qc` cache checks,
+  and fail-closed no-clear outcomes when the QC is still absent from cache.
+- Rewired the live helper through the projection with debug assertions while
+  preserving ordering: absent detached QCs return before cache reads, already
+  cached QCs clear the missing-commit-QC request as obsolete without calling
+  `handle_qc`, and handled QCs clear only when the target QC is cached after
+  the handling attempt, regardless of whether `handle_qc` returned `Ok` or
+  `Err`.
+- Added inline runtime parity coverage for
+  `SumeragiDetachedBlockBodyCommitQcGate.tla`, including no-QC,
+  no-QC-with-cache, cached-before, handle-success cache/no-cache, and
+  handle-error cache/no-cache cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core detached_block_body_commit_qc_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-detached-commit-qc-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-detached-commit-qc-fast`
+  - TLC and Apalache sweeps for all `10`
+    `block-body-detached-commit-qc-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/detached_block_body_commit_qc_{tlc,apalache}/`.
+
+## 2026-06-08 Block body direct commit-QC runtime gate
+
+- Extracted the source-selection contract behind
+  `direct_commit_qc_from_block_body_response(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `block_body_direct_commit_qc_update_source(...)` and
+  `block_body_direct_commit_qc_created_source(...)`, covering body identity
+  validation, embedded commit-QC priority, checkpoint-derived commit-QC
+  fallback, local direct commit-QC fallback, and fail-closed no-source cases.
+- Rewired the live BlockBodyResponse helper through those projections with
+  debug assertions while preserving lazy source priority: update responses use
+  embedded QC first, then checkpoint QC, then local direct QC; created
+  responses can only use local direct QC, and mismatched hash/height/view
+  tuples return no QC before consulting any source.
+- Added inline runtime parity coverage for
+  `SumeragiBlockBodyDirectCommitQcGate.tla`, including update embedded,
+  embedded-over-checkpoint, checkpoint, checkpoint-over-local, local-only,
+  no-QC, hash/height/view mismatch, created local, created no-QC, and
+  created hash/height/view mismatch cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_body_direct_commit_qc_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-direct-commit-qc-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-direct-commit-qc-fast`
+  - TLC and Apalache sweeps for all `14`
+    `block-body-direct-commit-qc-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_body_direct_commit_qc_{tlc,apalache}/`.
+
+## 2026-06-08 Materialize-QC runtime gate
+
+- Extracted the branch contract behind `materialize_qc_for_header(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/commit.rs` into
+  `materialize_qc_decision(...)`, covering cached-QC priority, empty-roster
+  Kura recovery, non-empty vote formation, recovery after a form miss, rebuilt
+  QC success, cache insertion for materialized QCs, and fail-closed outcomes.
+- Rewired the live helper through the projection with debug assertions at the
+  cached, empty-roster recovery/no-recovery, try-form, formed, recovered, and
+  rebuilt branches while leaving the existing signature, stake, root-filter,
+  quorum, aggregate, and canonical signer mapping checks intact.
+- Added inline runtime parity coverage for `SumeragiMaterializeQcGate.tla`,
+  including cached existing, empty roster recovery/no-recovery, formed votes,
+  recovery after form miss, NPoS missing stake, commit-root filter empty,
+  no-votes, permissioned under-quorum/quorum, prepare quorum, NPoS signer map
+  and stake-quorum failures, aggregate errors, and canonical mapping failures.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core materialize_qc_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh materialize-qc-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh materialize-qc-fast`
+  - TLC and Apalache sweeps for all `17` `materialize-qc-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/materialize_qc_{tlc,apalache}/`.
+
+## 2026-06-08 Direct commit-QC for block runtime gate
+
+- Extracted the source-selection and local vote-formation gate behind
+  `direct_commit_qc_for_block(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `direct_commit_qc_for_block_decision(...)`, covering cache priority,
+  world-QC consultation, primary-vs-fallback topology selection, quorum-floor
+  admission, commit-phase/block-subject formation, and cached readback after
+  forming a QC from votes.
+- Rewired the runtime helper through the projection at the cache, world,
+  topology, quorum, and formed-QC readback points while preserving behavior:
+  cached QCs return before world reads, world QCs return before vote formation,
+  a non-empty exact-round roster blocks fallback topology, `min_votes` is
+  floored to `1`, and locally formed QCs are returned only after cache
+  readback for the same block/height/view.
+- Added inline runtime parity coverage for
+  `SumeragiDirectCommitQcForBlockGate.tla`, including cache/world priority,
+  no-try-after-cache/world, primary/fallback topology cases, no-topology,
+  zero-min floor, enough/under-quorum vote gates, formed/no-form results, and
+  try phase/subject binding.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core direct_commit_qc_for_block_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh direct-commit-qc-for-block-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh direct-commit-qc-for-block-fast`
+  - TLC and Apalache sweeps for all `16` `direct-commit-qc-for-block-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/direct_commit_qc_for_block_{tlc,apalache}/`.
+
+## 2026-06-08 Block body repair epoch runtime gate
+
+- Extracted the commit-QC epoch source selection behind
+  `observed_commit_qc_epoch_for_body_repair(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `block_body_repair_epoch_deferred_source(...)`,
+  `block_body_repair_epoch_pending_source(...)`, and
+  `block_body_repair_epoch_decision(...)`.
+- Rewired the runtime helper through those projections while preserving source
+  priority: exact cached commit QC first, matching deferred missing-payload
+  commit QC second, then a pending block only when commit-QC observation and
+  epoch metadata are both present.
+- Added inline runtime parity coverage for
+  `SumeragiBlockBodyRepairEpochGate.tla`, covering cache-only,
+  cache-over-deferred, cache-over-pending, deferred-only,
+  deferred-over-pending, pending-only, all deferred phase/hash/height/view
+  mismatches, missing pending observation, missing pending epoch, and no-source
+  rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_body_repair_epoch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-repair-epoch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-repair-epoch-fast`
+  - TLC and Apalache sweeps for all `13` `block-body-repair-epoch-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_body_repair_epoch_{tlc,apalache}/`.
+
+## 2026-06-08 Same-height block body repair runtime gate
+
+- Extracted the same-height exact block-body repair admission logic in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `same_height_block_body_repair_source_matches(...)` and
+  `same_height_block_body_repair_decision(...)`, covering the frontier-height
+  gate plus pending missing-block, deferred missing-payload QC, and active
+  missing commit-QC repair sources.
+- Rewired `allow_same_height_block_body_repair(...)` through those projections
+  while preserving the old short-circuit order: pending actionable commit
+  evidence is checked first, deferred actionable commit QCs second, and active
+  missing commit-QC repair only when neither source already admits repair.
+- Added inline runtime parity coverage for
+  `SumeragiSameHeightBlockBodyRepairGate.tla`, including pending/deferred/active
+  source acceptance, multiple-source acceptance, non-frontier rejection, every
+  pending/deferred phase/hash/height/view/actionable mismatch, and no-source
+  rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core same_height_block_body_repair_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh same-height-block-body-repair-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh same-height-block-body-repair-fast`
+  - TLC and Apalache sweeps for all `15`
+    `same-height-block-body-repair-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/same_height_block_body_repair_{tlc,apalache}/`.
+
+## 2026-06-08 Block body request-stash runtime gate
+
+- Extracted the exact block-body requester stash-window calculation in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `block_body_request_stash_window_decision(...)`, exposing the effective
+  missing-request margin, saturated lower bound, saturated upper bound, and
+  final stash decision.
+- Rewired `should_stash_pending_block_body_request(...)` through the pure
+  projection while preserving the configured margin floor of `1`, inclusive
+  next-height and upper-bound behavior, stale/same-height rejection, and
+  Rust-style saturating arithmetic at height boundaries.
+- Added inline runtime parity coverage for
+  `SumeragiBlockBodyRequestStashGate.tla`, including zero/one margins,
+  within-margin and upper-bound acceptance, beyond/same/stale rejection,
+  zero-committed next-height acceptance, and saturated lower/upper edges.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_body_request_stash_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-request-stash-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-request-stash-fast`
+  - TLC and Apalache sweeps for all `11` `block-body-request-stash-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_body_request_stash_{tlc,apalache}/`.
+
+## 2026-06-08 Block body repair runtime gate
+
+- Extracted the RBC exact block-body repair admission check in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into
+  `BlockBodyResponsePayloadIdentity` and
+  `block_body_repair_gate_decision(...)`, covering DA enablement,
+  exact-frontier height, RBC session presence, metadata alignment,
+  authoritative-payload absence, expected payload hash presence, response
+  hash/height/view identity, and payload-hash equality.
+- Rewired `allow_rbc_session_block_body_repair(...)` through the pure gate
+  while preserving its existing admission requirements for both
+  `BlockCreated` and `BlockSyncUpdate` body variants.
+- Added inline runtime parity coverage for
+  `SumeragiBlockBodyRepairGate.tla`, including the two happy body variants
+  and every negative DA, frontier, session, metadata, authoritative-payload,
+  expected-hash, identity, and payload-hash case.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_body_repair_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-body-repair-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-body-repair-fast`
+  - TLC and Apalache sweeps for all `12` `block-body-repair-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_body_repair_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSync future-window runtime gate
+
+- Extracted the generic future consensus-message window in
+  `crates/iroha_core/src/sumeragi/main_loop.rs` into a pure
+  `future_consensus_message_drop_decision(...)` projection for disabled
+  windows, height-window drops, view-window drops, view-change signal
+  allowance, missing phase views, and expired view-age allowance.
+- Added BlockSync-specific future-window projections in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` for requested
+  missing-block margins, far-ahead detection, lower unresolved gaps,
+  known-block/parent short-circuits, and fallback to the generic future
+  height/view window.
+- Rewired `should_drop_future_consensus_message(...)` and
+  `should_drop_future_block_sync_update(...)` through those projections while
+  preserving the important ordering: known blocks bypass all gates, requested
+  far-ahead updates drop before parent availability, lower unresolved gaps drop
+  before parent availability, known parents allow connected chains before the
+  generic future window, and generic height/view windows remain exclusive at
+  their boundaries.
+- Added inline runtime parity coverage for
+  `SumeragiBlockSyncFutureWindowGate.tla`, covering all requested, lower-gap,
+  parent, height-window, view-window, disabled-window, expired-view, and
+  missing-phase-view cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_future_window_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-future-window-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-future-window-fast`
+  - TLC and Apalache sweeps for all `17`
+    `block-sync-future-window-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_future_window_{tlc,apalache}/`.
+
+## 2026-06-08 Deferred BlockSyncUpdate replay runtime gate
+
+- Added a pure replay projection in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` for
+  `try_replay_deferred_block_sync_updates(...)`, covering empty queues,
+  commit/validation blockers, ordered key selection, remove-before-handle,
+  update/sender forwarding, handler-error warning, and single-entry
+  consumption.
+- Rewired the live replay helper through that projection with debug
+  assertions while preserving the existing behavior: replay is blocked while
+  commit or validation work is in flight, the first ordered deferred key is
+  removed before handling, handler errors are logged without reinserting the
+  entry, and later ordered entries remain buffered.
+- Added inline runtime parity coverage for
+  `SumeragiDeferredBlockSyncReplayGate.tla`, including empty/blocker cases,
+  success/error replay, remove-missing behavior, ordered-key selection, and
+  later-entry preservation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core deferred_block_sync_replay_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-replay-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh deferred-block-sync-replay-fast`
+  - TLC and Apalache sweeps for all `16`
+    `deferred-block-sync-replay-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/deferred_block_sync_replay_{tlc,apalache}/`.
+
+## 2026-06-08 Deferred BlockSyncUpdate cache runtime gate
+
+- Added pure cache/defer projections in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` for deferred
+  `BlockSyncUpdate` key construction, insert-vs-merge decisions, commit-vote
+  stripping, bounded cap enforcement after cache writes, and deferred status
+  recording.
+- Rewired `cache_deferred_block_sync_update(...)` and
+  `defer_block_sync_update(...)` through those projections with debug
+  assertions, preserving the full `(height, view, block_hash)` cache key,
+  same-key merge semantics, cap enforcement after insert and merge paths, and
+  `BlockSyncUpdate`/`Deferred`/`CommitPipelineActive` accounting after the
+  cache path runs.
+- Added inline runtime parity coverage for
+  `SumeragiDeferredBlockSyncCacheGate.tla`, covering new entries, sender-none
+  entries, same-key merge/preserve cases, full-key distinctness, cap
+  after-insert/after-merge cases, cache-before-record ordering, and recorded
+  consensus status labels.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core deferred_block_sync_cache_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-cache-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh deferred-block-sync-cache-fast`
+  - TLC and Apalache sweeps for all `20`
+    `deferred-block-sync-cache-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/deferred_block_sync_cache_{tlc,apalache}/`.
+
+## 2026-06-08 Deferred BlockSyncUpdate helper runtime gate
+
+- Extracted the helper decisions behind deferred `BlockSyncUpdate` handling in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into pure
+  projections for validation-inflight blocking, deferral reason priority,
+  merge/fill semantics, commit-evidence detection, and bounded queue eviction
+  ordering/counts.
+- Rewired the live helper methods through those projections while preserving
+  existing side effects: commit work still outranks validation and pending
+  work, certified exact-frontier bypass suppresses all deferral reasons,
+  incoming commit sidecars only fill missing fields, incoming senders replace
+  only when present, evidence entries are retained ahead of sparse entries,
+  and queue eviction metrics increment only for actual removals.
+- Added inline runtime parity coverage for
+  `SumeragiDeferredBlockSyncHelperGate.tla`, covering the validation,
+  deferral, merge, evidence, cap-zero, under-limit, eviction-order, and metric
+  cases represented in the formal model.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core deferred_block_sync_helper_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh deferred-block-sync-helper-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh deferred-block-sync-helper-fast`
+  - TLC and Apalache sweeps for all `29`
+    `deferred-block-sync-helper-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/deferred_block_sync_helper_{tlc,apalache}/`.
+
+## 2026-06-08 Pending response flush runtime gate
+
+- Extracted the readiness decisions for
+  `flush_pending_fetch_requests_if_ready(...)` and
+  `flush_pending_block_body_requests_if_ready(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into a focused
+  pending-flush projection covering absent entries, canonical committed
+  deferral, payload-build admission, pending-entry removal, fetch batch
+  fanout arguments, exact body response construction, requester targeting, and
+  fallback dispatch usage.
+- Rewired both live readiness wrappers through that projection with debug
+  assertions around the existing side effects, including canonical Norito
+  encoding checks that an exact `BlockBodyResponse` body matches the payload
+  built for the block hash/height/view.
+- Added inline runtime parity coverage for
+  `SumeragiPendingResponseFlushGate.tla`, covering absent/deferred/ready/empty
+  fetch and exact-body entries, exact recorded requester targeting, disabled
+  fetch bypass arguments, and exact body hash/height/view/payload binding.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core pending_response_flush_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh pending-response-flush-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh pending-response-flush-fast`
+  - TLC and Apalache sweeps for all `30`
+    `pending-response-flush-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/pending_response_flush_{tlc,apalache}/`.
+
+## 2026-06-08 Fetch-pending responses batch runtime gate
+
+- Extracted the fanout decisions inside
+  `send_fetch_pending_block_responses(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into focused
+  helpers for commit-QC-only dispatch/restash, payload-build admission, and
+  per-peer payload/companion/argument projection.
+- Rewired the live batch path through those decisions while preserving
+  commit-QC-only exclusion from payload fanout, consensus exact-body companion
+  emission, per-peer hintless `BlockSyncUpdate` policy, roster-update
+  `BlockCreated` companion ordering, created-payload bypass arguments, and
+  requester roster/priority argument forwarding.
+- Added inline runtime parity coverage for
+  `SumeragiFetchPendingResponsesBatchGate.tla`, covering empty batches,
+  commit-QC-only success/failure, mixed commit-QC and payload peers, consensus
+  companions, hintless allow/downgrade per peer, roster-update companions,
+  plain created payloads, plain other payloads, and forced bypass.
+- Tightened the formal `HintlessAllowArgForwarded` expected-failure invariant
+  so the `hintless-drops-allow-arg` mutation is rejected by both TLC and
+  Apalache instead of relying only on TLC's aggregate match rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core fetch_pending_responses_batch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh fetch-pending-responses-batch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fetch-pending-responses-batch-fast`
+  - TLC and Apalache sweeps for all `26`
+    `fetch-pending-responses-batch-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/fetch_pending_responses_batch_{tlc,apalache}/`.
+
+## 2026-06-08 Fetch-pending response send runtime gate
+
+- Extracted the branch decisions inside
+  `send_fetch_pending_block_response(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into focused
+  preflight and frame-cap helpers covering hintless downgrade, cached-QC
+  application, update trimming, bypass selection, direct commit-QC companion
+  dispatch, fallback `BlockCreated` emission, and oversized payload drops.
+- Rewired the live send path through those decisions with debug assertions
+  around the existing side effects, preserving direct commit-QC-before-payload
+  ordering and the original bypass decision when an oversized
+  `BlockSyncUpdate` falls back to `BlockCreated`.
+- Added inline runtime parity coverage for
+  `SumeragiFetchPendingResponseSendGate.tla`, covering background, forced,
+  consensus, highest-QC, hintless allow/downgrade, trim/fallback/drop,
+  direct-QC companion, created-payload, and eager RBC payload cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core fetch_pending_response_send_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh fetch-pending-response-send-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fetch-pending-response-send-fast`
+  - TLC and Apalache sweeps for all `26`
+    `fetch-pending-response-send-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/fetch_pending_response_send_{tlc,apalache}/`.
+
+## 2026-06-08 Background fallback runtime gate
+
+- Extracted `dispatch_background_fallback(...)` in
+  `crates/iroha_core/src/sumeragi/main_loop.rs` through an internal
+  `BackgroundFallbackNetworkDispatch` projection so the live fallback path
+  constructs the exact `Post` or `Broadcast` operation before handing it to the
+  network.
+- Added focused runtime parity coverage for
+  `SumeragiBackgroundFallbackGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, covering post block,
+  post control-flow, post native-AMX, broadcast block, broadcast control-flow,
+  and broadcast native-AMX fallback projections.
+- The matrix validates post-vs-broadcast preservation, peer targeting for
+  posts and no peer on broadcasts, block priority preservation via
+  `BlockMessage::priority()`, high-priority control/native messages, and
+  payload class preservation across all fallback request kinds.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core background_fallback_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh background-fallback-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh background-fallback-fast`
+  - TLC and Apalache sweeps for all `13` `background-fallback-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/background_fallback_{tlc,apalache}/`.
+
+## 2026-06-08 Background bypass runtime gate
+
+- Extracted the background scheduler branch table in
+  `crates/iroha_core/src/sumeragi/main_loop.rs` into
+  `BackgroundScheduleAction` plus private helpers for bypass eligibility and
+  final schedule action selection.
+- The live `schedule_background(...)` and `schedule_background_via_queue(...)`
+  paths now share the same decision helper, preserving disabled-worker inline
+  dispatch, forced queueing for via-queue calls, immediate fallback for
+  approved post/broadcast consensus payloads, and queued handling for control
+  flow plus native-AMX requests.
+- Added runtime parity coverage for `SumeragiBackgroundBypassGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, covering all post and
+  broadcast message classes, broadcast fetch/QC non-bypass cases, control and
+  native non-bypass cases, via-queue override behavior, and disabled-worker
+  inline behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core background_bypass_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh background-bypass-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh background-bypass-fast`
+  - TLC and Apalache sweeps for all `13` `background-bypass-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/background_bypass_{tlc,apalache}/`.
+
+## 2026-06-08 Background dispatch runtime gate
+
+- Exposed `background_request_allows_blocking(...)` at `pub(super)` scope in
+  `crates/iroha_core/src/sumeragi/main_loop/background.rs` so focused runtime
+  tests can assert the non-droppable consensus background request policy
+  directly.
+- Added telemetry-enabled runtime parity coverage for
+  `SumeragiBackgroundDispatchGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, covering all six
+  `BackgroundRequest` variants across ready, full, no-worker, and disconnected
+  channel states.
+- The matrix validates ready-queue enqueue metrics, full-queue overflow
+  without drop, missing/disconnected worker drop accounting without overflow,
+  stable kind labels, and returned request reconstruction for caller-side
+  fallback.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core background_dispatch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh background-dispatch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh background-dispatch-fast`
+  - TLC and Apalache sweeps for all `9` `background-dispatch-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/background_dispatch_{tlc,apalache}/`.
+
+## 2026-06-08 Background frame-cap runtime gate
+
+- Added focused runtime parity coverage for
+  `SumeragiBackgroundFrameCapGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, using real consensus
+  wire lengths and the live `block_message_frame_cap(...)`,
+  `trim_block_sync_update_for_frame_cap(...)`,
+  `trim_block_body_response_for_frame_cap(...)`,
+  `direct_block_sync_update_fallback_for_body_response(...)`, and
+  `prepare_background_block_message(...)` paths.
+- The matrix covers control vs payload cap selection, under-cap preservation,
+  oversized payload/update/response drops, commit-vote trimming, permissioned
+  stake removal, permissioned and NPoS commit-QC/checkpoint trim order, NPoS
+  stake preservation, embedded response-update trimming, direct
+  `BlockSyncUpdate` fallback preference, downgrade to `BlockCreated` when
+  direct fallback cannot fit, and final oversized response drops.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core background_frame_cap_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh background-frame-cap-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh background-frame-cap-fast`
+  - TLC and Apalache sweeps for all `19` `background-frame-cap-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/background_frame_cap_{tlc,apalache}/`.
+
+## 2026-06-08 Fetch block body handler runtime gate
+
+- Extracted `handle_fetch_block_body(...)` branch selection in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into a private
+  decision helper covering exact local dispatch, canonical committed-tip
+  deferral, pending-body requester stashing, frontier-slot requester stashing,
+  requester removal, deferred status recording, dedup release count, and use
+  of the plain-fallback response helper.
+- Wired the live handler through the decision helper while preserving the
+  existing dispatch, stash, status, and dedup-release operations.
+- Added focused runtime parity coverage for
+  `SumeragiFetchBlockBodyHandleGate.tla`, covering exact `BlockCreated`
+  dispatch, proof-bearing dispatch, canonical committed deferral, local
+  identity mismatches, no-local frontier/window/outside-window stash behavior,
+  requester removal, deferred records, dedup release, and plain-fallback helper
+  admission.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_fetch_block_body_handle --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh fetch-block-body-handle-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fetch-block-body-handle-fast`
+  - TLC and Apalache sweeps for all `22`
+    `fetch-block-body-handle-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/fetch_block_body_handle_{tlc,apalache}/`.
+
+## 2026-06-08 Fetch response deferral runtime gate
+
+- Extracted the canonical committed fetch/body response deferral decision in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` into private
+  helpers for committed-hash status, response message shape, and the pure
+  height/hash/proof-sidecar predicate used by
+  `should_defer_canonical_committed_fetch_response(...)`.
+- Added focused runtime parity coverage for
+  `SumeragiFetchResponseDeferralGate.tla`, covering canonical `BlockCreated`
+  and bare `BlockSyncUpdate` deferral, non-deferral when commit-QC or
+  validator-checkpoint sidecars are present, non-block messages, next-height
+  and historical responses, committed-hash mismatch, and unknown committed hash.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_fetch_response_deferral --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh fetch-response-deferral-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh fetch-response-deferral-fast`
+  - TLC and Apalache sweeps for all `10`
+    `fetch-response-deferral-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/fetch_response_deferral_{tlc,apalache}/`.
+
+## 2026-06-08 QC-insufficient warning throttle runtime gate
+
+- Added focused runtime parity coverage for
+  `SumeragiQcInsufficientWarningThrottleGate.tla` against
+  `QcInsufficientWarningThrottle::allow(...)` and `clear()` in
+  `crates/iroha_core/src/sumeragi/main_loop.rs`, covering
+  per-kind/phase/hash/height/view keying, strict cooldown suppression,
+  cooldown-boundary emission, suppressed-count replay, zero-cooldown behavior,
+  GC boundary/expiry handling, and clear semantics.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core qc_insufficient_warning_throttle --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh qc-insufficient-warning-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-insufficient-warning-fast`
+  - TLC and Apalache sweeps for all `14`
+    `qc-insufficient-warning-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/qc_insufficient_warning_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSync warning throttle runtime gate
+
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncWarningThrottleGate.tla` against
+  `BlockSyncWarningThrottle::allow(...)` and `clear()` in
+  `crates/iroha_core/src/sumeragi/main_loop.rs`, covering per-kind/hash/height
+  and view keying, strict cooldown suppression, cooldown-boundary emission,
+  suppressed-count replay, burst caps and burst-window reset behavior,
+  zero-cap/zero-cooldown behavior, GC boundary/expiry handling, and clear
+  semantics for both entries and burst counters.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_warning_throttle --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-warning-throttle-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-warning-throttle-fast`
+  - TLC and Apalache sweeps for all `21`
+    `block-sync-warning-throttle-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_warning_throttle_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate commit-conflict runtime gate
+
+- Extracted committed-height BlockSyncUpdate conflict predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through helpers for conflict detection, commit-QC validation
+  admission, evidence emission, drop status classification, missing-request
+  clearing, genesis-stub allowance, and consensus mode-tag selection.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncCommitConflictGate.tla`, anchoring height-zero and
+  absent/same-hash continuation, no-QC conflict drops, invalid-QC conflict
+  drops without evidence, valid-QC conflict evidence emission with the incoming
+  certificate and `commit_conflict_finality` reason, evidence-broadcast-error
+  drop preservation, stake-snapshot propagation, NPoS mode/tag validation, and
+  height-1/view-0 genesis-stub allowance.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_commit_conflict --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-commit-conflict-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-commit-conflict-fast`
+  - TLC and Apalache sweeps for all `24`
+    `block-sync-commit-conflict-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_commit_conflict_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate stale-view runtime gate
+
+- Extracted the BlockSyncUpdate stale-view admission predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through helpers for commit-evidence detection, stale-view drop
+  selection, and `BlockSyncUpdate` / `Dropped` / `StaleView` status recording.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncStaleViewGate.tla`, anchoring fresh-view continuation,
+  stale unrequested unknown drops, requested recovery continuation, locally
+  known block continuation, incoming-QC/checkpoint/commit-vote evidence
+  continuation, stable drop status classification, `Ok(())` return behavior,
+  and preservation of missing-block request state.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_stale_view --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-stale-view-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-stale-view-fast`
+  - TLC and Apalache sweeps for all `15`
+    `block-sync-stale-view-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_stale_view_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate selected-QC cache runtime gate
+
+- Extracted selected-roster unknown-block QC cache predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired
+  `cache_block_sync_qc_for_unknown_block(...)` through the same topology,
+  QC-shape, locked-QC conflict, stale-lock, non-extending, signer-tally,
+  process-acceptance, locked-QC update, missing-context quarantine, and final
+  validation-drop gates used by the selected-QC runtime path.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedQcCacheGate.tla`, anchoring early drops before
+  tally, same-height and stale locked-QC handling, non-extending deferral/drop
+  behavior, fresh signer tally validation, precommit signer and validated-tally
+  recording, `process_precommit_qc(...)` argument forwarding, reject-before-cache
+  behavior, locked-QC update ordering, quarantine removal, commit-QC/cache
+  persistence, missing-context quarantine, and terminal validation drops.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_qc_cache --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-cache-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-qc-cache-fast`
+  - TLC and Apalache sweeps for all `33`
+    `block-sync-selected-qc-cache-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_qc_cache_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate selected-QC process runtime gate
+
+- Extracted selected-roster post-prefilter QC processing predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through them for cached-versus-fresh signer tally selection,
+  block-known-for-commit projection, accepted-QC cache/record gating, commit
+  application, DA cleanup, pending epoch observation, and unknown-block QC
+  caching after the wrapper returns.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedQcProcessGate.tla`, anchoring cached tally reuse,
+  fresh tally validation, tally-error terminal handling, precommit signer and
+  validated-tally recording, `process_precommit_qc(...)` argument forwarding,
+  reject-before-cache behavior, known-block commit application and pipeline
+  request, DA-only RBC cleanup, unknown pending epoch observation, no-QC no-op
+  behavior, and creation-error suppression of unknown-block QC caching.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_qc_process --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-process-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-qc-process-fast`
+  - TLC and Apalache sweeps for all `23`
+    `block-sync-selected-qc-process-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_qc_process_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate selected-QC prefilter runtime gate
+
+- Extracted selected-roster post-apply QC prefilter predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  `block_sync_apply_qc_after_block(...)` closure through them for empty
+  topology recovery, QC hash/height/epoch/phase shape ignores, same-height
+  locked-QC drops, stale-lock drops, non-extending missing-payload deferral,
+  non-extending locked drops, and allowed non-extending retention.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedQcPrefilterGate.tla`, anchoring early `Ok(())`
+  returns before tally, locked-QC status/metric recording, missing locked
+  payload quarantine, lock-conflict logging, continuation to signer tally, and
+  process-precommit eligibility across the model's topology, shape, locked
+  conflict, non-extending, and continuation cases.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_qc_prefilter --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-prefilter-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-qc-prefilter-fast`
+  - TLC and Apalache sweeps for all `20`
+    `block-sync-selected-qc-prefilter-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_qc_prefilter_{tlc,apalache}/`.
+
+## 2026-06-08 BlockSyncUpdate selected-apply runtime gate
+
+- Extracted selected-roster BlockSyncUpdate apply/recovery helpers in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through them for non-extending QC admission, same-height frontier
+  conflict protection, payload-mismatch preservation, authoritative frontier
+  supersede, recovery-mode selection, signed-quorum commit-QC repair, sparse
+  next-height payload recovery, payload-unapplied status, and post-apply QC
+  selection.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedApplyGate.tla`, anchoring the selected-apply
+  matrix across selection/incoming QC evidence, commit certs, checkpoints,
+  commit-vote recovery, aborted revival policy, observed epoch projection,
+  signed-quorum repair side effects, sparse recovery requests, ready-for-QC
+  gating, payload-unapplied status, and QC application.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_apply --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-apply-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-apply-fast`
+  - TLC and Apalache sweeps for all `35`
+    `block-sync-selected-apply-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_apply_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSync recovery-mode runtime gate
+
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncRecoveryModeGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`, anchoring
+  the existing stale BlockCreated and `BlockSyncRecoveryMode` helper contracts
+  without changing production behavior.
+- The matrix covers height-at-or-below stale detection, stale BlockCreated
+  admission by missing request, retained match, or recovery evidence, no-signal
+  stale rejection, authoritative frontier supersede permissions for signed
+  quorum and commit-evidence repair only, stale-without-request bypass for
+  requested-payload and commit-evidence repair only, aborted-pending revival
+  only for commit-evidence repair with the explicit flag, and observed
+  commit-QC epoch projection only from commit-evidence repair.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_recovery_mode --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-recovery-mode-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-recovery-mode-fast`
+  - TLC and Apalache sweeps for all `25`
+    `block-sync-recovery-mode-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_recovery_mode_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate selected-quorum runtime gate
+
+- Extracted selected-roster BlockSyncUpdate quorum helpers in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through them for sparse exact-frontier request admission, missing-QC
+  request eligibility, NPoS vote-only deferral, and repair/drop gating.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedQuorumGate.tla`, anchoring QC/commit-cert/signature/
+  checkpoint quorum sources, explicit and tracked sparse frontier admission,
+  sparse rejection for zero signers, commit-vote suppression, non-frontier and
+  unrequested sparse drops, missing-QC request marking and quorum recomputation,
+  NPoS vote-only deferred returns, classic request continuation, in-slot repair
+  deferral, quorum-missing drop status/reasons/metrics, invalid-QC drop
+  exceptions for block quorum and checkpoint evidence, `Ok(())` terminal paths,
+  apply continuation, and no missing-block cleanup from these terminal drops.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_quorum --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-quorum-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-quorum-fast`
+  - TLC and Apalache sweeps for all `30`
+    `block-sync-selected-quorum-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_quorum_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate selected-QC runtime gate
+
+- Extracted selected-roster BlockSyncUpdate QC-gate helpers in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through them for QC source precedence, shape filtering, aggregate-ok
+  shortcuts, cached-QC recovery, aggregate fallback, and invalid-payload drop
+  decisions.
+- Added focused runtime parity coverage for `SumeragiBlockSyncSelectedQcGate.tla`
+  using real `Qc` values, including adversarial height/hash/epoch/phase shape
+  mutations. The matrix anchors incoming-over-selection-over-checkpoint-over-
+  world-over-cached source precedence, shape rejection before validation,
+  missing-context quarantine, final validation drops, incoming-QC replacement
+  metrics, cached recovery, aggregate fallback acceptance gating, cached and
+  selected aggregate verification shortcuts, hard-lock evidence stripping,
+  usable-QC cache/quarantine cleanup, selected commit-cert projection, invalid
+  incoming-QC payload drops, `Ok(())` invalid-payload returns, and no
+  missing-block cleanup from invalid QC drops.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_qc --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-qc-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-qc-fast`
+  - TLC and Apalache sweeps for all `33` `block-sync-selected-qc-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_qc_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate selected-signatures runtime gate
+
+- Extracted the selected-roster BlockSyncUpdate signature-gate predicates in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and wired the live
+  branch through them for signer-cache insertion, ahead-of-frontier deferral,
+  gap requests, and roster/QC evidence continuation.
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncSelectedSignaturesGate.tla`, anchoring cache-hit reuse,
+  validated-signer caching only with a cache key, parent-only versus gap
+  deferral, effective-topology and selected-roster request context, deferred
+  status/reason and payload-only recovery forwarding, non-deferrable invalid
+  signature drops, evidence-backed empty-signer continuation, terminal drop
+  status/metrics/reasons, QC-candidate continuation, `Ok(())` terminal returns,
+  and no missing-block cleanup from signature drops.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_selected_signatures --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-selected-signatures-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-selected-signatures-fast`
+  - TLC and Apalache sweeps for all `29`
+    `block-sync-selected-signatures-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_selected_signatures_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate known-selected-roster runtime gate
+
+- Added focused runtime parity coverage for
+  `SumeragiBlockSyncKnownSelectedRosterGate.tla` in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`, reusing the tagged
+  known-block commit-QC chooser from the known-roster gate.
+- The matrix anchors selected-roster source/vote-roster bookkeeping,
+  checkpoint recording, prepared-but-unknown commit-roster records,
+  known-block-only commit-roster persistence, incoming-over-selection-over-
+  checkpoint QC replay priority, redundant replay suppression, selected-QC
+  `commit_qc_match` projection, enqueue gating, missing commit-QC cleanup from
+  either local QC cache or local commit-roster snapshot, missing-block cleanup,
+  and known/unknown return behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_known_selected_roster --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-known-selected-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-known-selected-roster-fast`
+  - TLC and Apalache sweeps for all `29`
+    `block-sync-known-selected-roster-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_known_selected_roster_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate known-roster runtime gate
+
+- Extracted the selected-roster known-block commit-QC candidate chooser in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and added focused
+  parity coverage for the `SumeragiBlockSyncKnownRosterGate.tla` contract.
+- The new matrix anchors selected-roster source/vote-roster bookkeeping,
+  checkpoint recording, commit-roster preparation and known-block-only
+  persistence, synthesized versus selected checkpoint persistence, stake
+  inclusion, known-only vote processing, incoming-over-selection-over-checkpoint
+  QC replay priority, redundant replay suppression only when both QC cache and
+  local snapshot match, `commit_qc_match` argument projection, enqueue gating,
+  missing commit-QC/block cleanup, and known/unknown return behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_known_roster --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-known-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-known-roster-fast`
+  - TLC and Apalache sweeps for all `28`
+    `block-sync-known-roster-bug-*` modes; all produced the expected invariant
+    rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_known_roster_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate no-roster runtime gate
+
+- Extracted the no-verifiable-roster known vote-only predicate and
+  effective/trusted fallback roster chooser in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`, then added focused
+  parity coverage for the `SumeragiBlockSyncNoRosterGate.tla` contract.
+- The new matrix anchors known vote-only classification, vote processing
+  suppression when a local commit-roster snapshot is present, missing-block
+  clear behavior and reason for known drops, known hinted drop classification,
+  effective-before-trusted fallback topology selection, exact-frontier repair
+  deferral, missing-QC request/failover calls, unknown drop status/reason and
+  metrics, and terminal `Ok(())`/no-continue behavior.
+- The runtime regression stores a known non-frontier block without a local
+  commit-roster snapshot, seeds the vote roster needed for vote admission, and
+  verifies a vote-only no-roster `BlockSyncUpdate` processes the attached commit
+  vote without deferring or recording missing-roster drop status.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_no_roster --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-no-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-no-roster-fast`
+  - TLC and Apalache sweeps for all `25` `block-sync-no-roster-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_no_roster_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate snapshot-roster runtime gate
+
+- Extracted the known-block commit-roster snapshot selection constructor in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and added focused
+  parity coverage for the `SumeragiBlockSyncSnapshotRosterGate.tla` contract.
+- The new matrix anchors nonempty snapshot gating, journal source provenance,
+  snapshot roster/QC/checkpoint preservation, stake inclusion only when the
+  local stake snapshot matches the selected roster, snapshot cache-key gating,
+  snapshot precedence over persisted/cache/fresh fallbacks, persisted-before-
+  cache/fresh ordering, fresh cache insertion only for certified keyed
+  selections, no-selection behavior, and sidecar-quarantine propagation.
+- The known-block NPoS runtime regression now also asserts the snapshot-derived
+  `BlockSyncRosterSelection` is cached under the local snapshot key with
+  `CommitRosterJournal` provenance and the local roster/QC/checkpoint/stake,
+  after mismatched incoming sidecars are filtered out.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_snapshot --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-snapshot-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-snapshot-roster-fast`
+  - TLC and Apalache sweeps for all `22`
+    `block-sync-snapshot-roster-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/block_sync_snapshot_roster_{tlc,apalache}/`.
+
+## 2026-06-07 BlockSyncUpdate snapshot-hint runtime gate
+
+- Extracted the known-block snapshot-hint sidecar filter in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and added focused
+  parity coverage for the `SumeragiBlockSyncSnapshotHintGate.tla` contract.
+- The new pure matrix anchors no-snapshot and snapshot-known behavior, QC
+  hash/roster preservation, same-roster revalidation, mismatched-roster QC
+  dropping, checkpoint hash filtering, local-stake-gated stake preservation,
+  and the model-only same-hash/different-roster case.
+- The runtime NPoS regression now stores a non-frontier known block with a
+  local commit-roster snapshot, then verifies mismatched incoming QC,
+  checkpoint, and stake sidecars do not replace the local snapshot, do not
+  enqueue incoming-QC work, and do not defer the update.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_snapshot_hint --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-snapshot-hint-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-snapshot-hint-fast`
+  - TLC and Apalache sweeps for all `21`
+    `block-sync-snapshot-hint-bug-*` modes; all produced the expected invariant
+    rejection.
+
+## 2026-06-07 BlockSyncUpdate vote-placeholder runtime gate
+
+- Extracted the BlockSyncUpdate frontier vote-placeholder gate and embedded
+  commit-vote subject matcher in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`, then added focused
+  parity coverage for the `SumeragiBlockSyncVotePlaceholderGate.tla` contract.
+- The new coverage anchors no-vote rejection, valid and two-valid vote
+  placeholder counts, invalid phase/hash/height/view/epoch filtering, mixed
+  vote filtering, QC/checkpoint sidecar rejection, stake sidecar neutrality,
+  exact-frontier/known-local/requested-missing guards, and a runtime NPoS
+  vote-only BlockSyncUpdate path that notes an exact-fetch placeholder without
+  materializing the payload or deferring the update.
+- The direct frontier placeholder regression now also asserts that placeholder
+  creation does not enter generic missing-block retries, emit topology-wide
+  `FetchPendingBlock` traffic, defer block-sync updates, or record
+  consensus-message status.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vote_placeholder --lib --features telemetry -- --nocapture`
+    (`4` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-vote-placeholder-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-vote-placeholder-fast`
+  - TLC and Apalache sweeps for all `20`
+    `block-sync-vote-placeholder-bug-*` modes; all produced the expected
+    invariant rejection.
+
+## 2026-06-07 DA implicit BlockSyncUpdate recovery runtime gate
+
+- Extracted the DA implicit recovery predicate in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs` and added focused
+  parity coverage for the `SumeragiBlockSyncImplicitRecoveryGate.tla` contract.
+- The new coverage anchors already-requested preservation, DA-disabled,
+  known-local, above-frontier, and implicit-disallowed rejection, same-height,
+  next-height, and `u64::MAX` saturated-boundary admission, plus an actor-level
+  next-height check that the implicit flag continues into payload handling
+  without recording consensus-message status, clearing tracked requests, or
+  deferring the update by itself.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_implicit_recovery --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-implicit-recovery-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-implicit-recovery-fast`
+  - TLC and Apalache sweeps for all `12`
+    `block-sync-implicit-recovery-bug-*` modes; all produced the expected
+    invariant rejection.
+
+## 2026-06-07 Known hintless BlockSyncUpdate runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncKnownHintlessGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors the already-known hintless fast path clearing tracked
+  missing-block requests without recording consensus-message status, unknown
+  hintless and unknown QC-hint updates continuing to entry deferral, known
+  QC/checkpoint/stake hints bypassing the hintless skip and preserving their
+  sidecars in the deferred cache, and known vote hints continuing to the later
+  vote-only fast path.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_known_hintless_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-known-hintless-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-known-hintless-fast`
+  - TLC and Apalache sweeps for all `12`
+    `block-sync-known-hintless-bug-*` modes; all produced the expected invariant
+    rejection.
+
+## 2026-06-07 Block-sync vote deferral runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncVoteDeferralGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors valid and mismatched embedded commit-vote filtering,
+  permissioned implicit frontier recovery, NPoS unsolicited vote-only recovery
+  blocking, explicit NPoS missing-block recovery preservation, known vote-only
+  fast-path precedence over entry deferral, deferred update vote stripping, and
+  QC/checkpoint/stake sidecar preservation through the deferred cache.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_vote_deferral_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-vote-deferral-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-vote-deferral-fast`
+  - TLC and Apalache sweeps for all `22`
+    `block-sync-vote-deferral-bug-*` modes; all produced the expected invariant
+    rejection.
+
+## 2026-06-07 Block-sync roster status runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncRosterStatusGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/status.rs`.
+- The new matrix anchors commit/checkpoint pair source accounting, individual
+  commit-QC/checkpoint/history/sidecar/journal source counters, unknown-source
+  no-op behavior, missing and unsolicited `ShareBlocks` drop counters, repeated
+  increment accumulation, direct roster snapshot projection, top-level snapshot
+  inclusion, and reset-after-records clearing.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_roster_status_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-roster-status-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-roster-status-fast`
+  - TLC and Apalache sweeps for all `24`
+    `block-sync-roster-status-bug-*` modes; all produced the expected invariant
+    rejection.
+
+## 2026-06-07 Uncertified block-sync roster admission runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncRosterGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`.
+- The new matrix anchors that explicit missing-block requests allow stale,
+  same-height, next-height, and future uncertified roster selection, while
+  unrequested updates are admitted only at `local_height.saturating_add(1)`,
+  including the `u64::MAX` saturation edge, and reject same/stale/future
+  heights.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core formal_gate_matrix_matches_requested_and_next_height_policy --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-roster-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-roster-fast`
+  - TLC and Apalache sweeps for all `9` `block-sync-roster-bug-*` modes; all
+    produced the expected invariant rejection.
+
+## 2026-06-07 Cached BlockSyncUpdate QC/vote attachment runtime gate
+
+- Added focused runtime parity coverage for the `SumeragiApplyCachedQcsGate.tla`
+  contract in `crates/iroha_core/src/sumeragi/main_loop/commit.rs`.
+- The new matrix anchors existing-QC preservation, existing-checkpoint
+  preservation, checkpoint synthesis only after a final QC exists, no-QC/no-vote
+  no-op behavior, NPoS stake-snapshot repair/preservation, permissioned
+  stake-snapshot non-repair, NPoS signer-history stake-snapshot cloning,
+  matching cached-vote attachment, existing-vote preservation, and
+  wrong-context vote rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core apply_cached_qcs_to_block_sync_update_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh apply-cached-qcs-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh apply-cached-qcs-fast`
+  - TLC and Apalache sweeps for all `16` `apply-cached-qcs-bug-*` modes; all
+    produced the expected invariant rejection.
+
+## 2026-06-07 BlockSyncUpdate target-selection runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncUpdateTargetsGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/commit.rs`.
+- The new matrix anchors zero-limit and empty-world fail-closed behavior, local
+  peer exclusion, registered/trusted stray priority, unregistered-stray
+  rejection, online-world preference over offline fallback, offline world
+  fallback when no world peer is online, gossip-cap enforcement, and
+  only-local no-target behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_update_targets_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-update-targets-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-update-targets-fast`
+  - TLC and Apalache sweeps for all `11`
+    `block-sync-update-targets-bug-*` modes; all produced the expected
+    invariant rejection.
+
+## 2026-06-07 Commit-QC-only fetch response runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiCommitQcOnlyFetchResponseGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new direct-dispatch matrix anchors certified proof before direct
+  `CommitCert`, direct-QC return/no-rebroadcast/no-fallback behavior,
+  no-QC/no-vote deferral, cached commit-vote rebroadcast with requester
+  deduplication, and signed-quorum `BlockSyncUpdate` fallback without inventing
+  a direct `CommitCert`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core commit_qc_only_fetch_response_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh commit-qc-only-fetch-response-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh commit-qc-only-fetch-response-fast`
+  - TLC and Apalache sweeps for all `16`
+    `commit-qc-only-fetch-response-bug-*` modes; all produced the expected
+    invariant rejection.
+
+## 2026-06-07 Signed-quorum fetch fallback runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiSignedQuorumFetchFallbackGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors committed-hash gating, permissioned quorum acceptance
+  and under-quorum rejection, single-validator quorum flooring, NPoS
+  roster-cache stake snapshot acceptance, NPoS state-snapshot priority over a
+  passing cache snapshot, and NPoS stake-quorum error rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core signed_quorum_fetch_fallback_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh signed-quorum-fetch-fallback-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh signed-quorum-fetch-fallback-fast`
+  - TLC and Apalache sweeps for all `16`
+    `signed-quorum-fetch-fallback-bug-*` modes; all produced the expected
+    invariant rejection.
+
+## 2026-06-07 Known-block QC drain runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiKnownBlockQcDrainGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors observable drain behavior: empty queue no-progress,
+  initial budget exhaustion preserving queued work, one-item progress and
+  no-progress removal, two-item progress aggregation, two-item no-progress
+  removal, and per-tick cap preservation for remaining work.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core known_block_qc_drain_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh known-block-qc-drain-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh known-block-qc-drain-fast`
+  - TLC and Apalache sweeps for all `18` `known-block-qc-drain-bug-*` modes;
+    all produced the expected invariant rejection.
+
+## 2026-06-07 Known-block QC work runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiKnownBlockQcWorkGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors constructible preparation branches: QC/block
+  identity, height, epoch, and phase rejection; missing locked-payload
+  deferral for same-height and non-extending QCs; stale locked-QC drops;
+  retained same-height and non-extending known-lock work; extending work; no
+  lock work; and preservation of block, topology, stake snapshot, consensus
+  mode, mode tag, PRF seed, commit-QC match, and `aggregate_ok = None`.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core known_block_qc_work_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh known-block-qc-work-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh known-block-qc-work-fast`
+  - TLC and Apalache sweeps for all `22` `known-block-qc-work-bug-*` modes;
+    all produced the expected invariant rejection.
+
+## 2026-06-07 Known-block QC enqueue runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiKnownBlockQcEnqueueGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors full QC work-key projection, duplicate suppression
+  without overwrite/status/wake side effects, new-work preservation, deferred
+  consensus-message accounting, wake delivery, and full wake-channel
+  no-rollback behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core known_block_qc_enqueue_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh known-block-qc-enqueue-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh known-block-qc-enqueue-fast`
+  - TLC and Apalache sweeps for all `27` `known-block-qc-enqueue-bug-*`
+    modes; all produced the expected invariant rejection.
+
+## 2026-06-07 Block-sync locked-QC runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncLockedQcGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors locked-chain extension checks, missing locked-payload
+  newer-view bypass and same-view rejection, same-height conflict gating,
+  same-height recoverability, stale-against-lock checks, and missing locked
+  payload deferral side effects: payload request, locked-payload quarantine,
+  and locked-QC consensus drop accounting.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_locked_qc_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-locked-qc-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-locked-qc-fast`
+  - TLC and Apalache sweeps for all `22` `block-sync-locked-qc-bug-*` modes;
+    all produced the expected invariant rejection.
+
+## 2026-06-07 Block-sync QC status runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncQcStatusGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/status.rs`.
+- The new test anchors block-sync QC status reset behavior, all seven QC
+  counters, snapshot projection, repeated counter accumulation, final-drop
+  reason overwrite, and post-record reset clearing.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_qc_status_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-qc-status-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-qc-status-fast`
+  - TLC and Apalache sweeps for all `24` `block-sync-qc-status-bug-*` modes;
+    all produced the expected invariant rejection.
+
+## 2026-06-07 Block-sync QC fallback runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiBlockSyncQcFallbackGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new tests anchor the retryable QC-validation classifier and the aggregate
+  fallback acceptance matrix across permissioned and NPoS modes, including
+  commit-only/no-nested-QC requirements, aggregate and bitmap rejection,
+  permissioned quorum flooring, explicit NPoS stake snapshot requirements,
+  stake-quorum rejection, and stake snapshot error rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core block_sync_qc_fallback_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh block-sync-qc-fallback-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-sync-qc-fallback-fast`
+  - TLC and Apalache sweeps for all `19` `block-sync-qc-fallback-bug-*`
+    modes; all produced the expected invariant rejection.
+
+## 2026-06-07 QC validation reason runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiQcValidationReasonGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new matrix anchors all `17` `QcValidationError` variants to their exact
+  telemetry labels, verifies `qc_validation_reason(...)` uses the same
+  projection, and checks the hard/soft evidence boundary plus `InvalidQc`
+  evidence reason preservation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core qc_validation_reason_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh qc-validation-reason-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh qc-validation-reason-fast`
+  - TLC and Apalache sweeps for all `17` `qc-validation-reason-bug-*` modes;
+    all produced the expected invariant rejection.
+
+## 2026-06-07 QC validation evidence runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiQcValidationEvidenceGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new tests anchor hard `QcValidationError` variants emitting `InvalidQc`
+  evidence with the cloned QC and exact telemetry reason, soft local-context or
+  quorum failures emitting no evidence, successful `validate_qc_with_evidence`
+  returning `(Ok, None)`, and hard validation failure returning `(Err,
+  Some(InvalidQc))` with the failing certificate preserved.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core qc_validation_evidence_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh qc-validation-evidence-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh qc-validation-evidence-fast`
+  - TLC and Apalache sweeps for all `24` `qc-validation-evidence-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/qc-validation-evidence-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Invalid-QC shape runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiInvalidQcShapeGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/evidence.rs`.
+- The new matrix anchors empty signer-bitmap detection, `(height, view) =
+  (0, 0)` sentinel detection, empty-bitmap detection when height is zero but
+  view is nonzero, non-emission for height-zero-alone, view-zero-alone, and
+  valid nonempty/nonzero QCs, plus exact `InvalidQc` kind, cloned certificate
+  payload, and fixed diagnostic reason preservation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core invalid_qc_shape_formal_gate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh invalid-qc-shape-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh invalid-qc-shape-fast`
+  - TLC and Apalache sweeps for all `16` `invalid-qc-shape-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/invalid-qc-shape-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Double-vote recording runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiDoubleVoteRecordingGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/evidence.rs`.
+- The new tests anchor bare and topology-aware double-vote detection,
+  root-only commit equivocation, cross-phase commit evidence, canonical swapped
+  keys, rotated signer identity, same raw index/different peer rejection,
+  out-of-range signer rejection, and `record_double_vote` control flow through
+  no-evidence, duplicate-store, store-validation rejection, fresh-store
+  persisted duplicate, horizon rejection, swapped duplicate, cross-phase, and
+  commit-root persistence paths.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core double_vote_recording_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh double-vote-recording-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh double-vote-recording-fast`
+  - TLC and Apalache sweeps for all `37` `double-vote-recording-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/double-vote-recording-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Evidence validation runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiEvidenceValidationGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/evidence.rs`.
+- The new validation tests anchor the full result lattice for kind/payload
+  matching, invalid-QC acceptance, double-vote positive cases
+  (`DoublePrepare`, block-conflicting `DoubleCommit`, root-conflicting
+  `DoubleCommit`, and cross-phase commit evidence), double-vote rejection
+  order, invalid-proposal height/parent checks with view reset ignored, and
+  censorship receipt validation including unique-signer quorum and precedence
+  over quorum checks.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core evidence_validation_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh evidence-validation-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh evidence-validation-fast`
+  - TLC and Apalache sweeps for all `39` `evidence-validation-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/evidence-validation-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Evidence canonicalization runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiEvidenceCanonicalizationGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/evidence.rs`.
+- The new tests anchor order-insensitive double-vote and censorship evidence
+  keys, duplicate receipt preservation, evidence-kind/key binding,
+  canonicalization preserving invalid-QC and invalid-proposal payloads, subject
+  height/view extraction, block-reference extraction, store canonicalization and
+  duplicate rejection, WSV persistence metadata defaults, and valid censorship
+  persistence at the latest submitted height.
+- Runtime persistence does not insert missing-subject evidence because empty
+  censorship evidence is rejected by validation first; the missing-subject path
+  remains covered at the subject-extraction helper boundary.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core evidence_canonicalization_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh evidence-canonicalization-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh evidence-canonicalization-fast`
+  - TLC and Apalache sweeps for all `37`
+    `evidence-canonicalization-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/evidence-canonicalization-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Evidence-horizon runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiEvidenceHorizonGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs` and mirrored the same
+  matrix for the optional configured-horizon persistence helper in
+  `crates/iroha_core/src/sumeragi/evidence.rs`.
+- The new tests anchor zero-horizon filtering disabled, missing subject height
+  defaulting to the current committed height, saturating lower-bound
+  calculation, inclusive lower-bound acceptance, stale evidence rejection,
+  future subject-height acceptance, and the unconfigured-horizon persistence
+  path.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core evidence_horizon_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh evidence-horizon-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh evidence-horizon-fast`
+  - TLC and Apalache sweeps for all `11` `evidence-horizon-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/evidence-horizon-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Vote duplicate-key runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVoteDuplicateKeyGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/votes.rs`.
+- The new helper tests anchor raw vote-key field projection, signer public-key
+  identity binding, raw projection from identity keys, missing-log rejection,
+  every raw-key slot mutation (`phase`, `height`, `view`, `epoch`, `signer`,
+  `chain_order_hash`, `rechain_seq`), block-hash duplicate rejection,
+  non-`NEW_VIEW` highest-QC ignorance, and `NEW_VIEW` exact highest-QC matching
+  without absent-highest wildcarding.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vote_duplicate_key_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vote-duplicate-key-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh vote-duplicate-key-fast`
+  - TLC and Apalache sweeps for all `15` `vote-duplicate-key-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/vote-duplicate-key-{tlc,apalache}-*.log`.
+
+## 2026-06-07 Vote-admission runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVoteAdmissionGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new vote-admission tests anchor accepted prepare vote recording, roster
+  metadata cache writes, signer-identity indexing, duplicate immutability,
+  rejection of non-`NEW_VIEW` highest-QC references, chain-order binding
+  mismatches, invalid signatures, and signed `NEW_VIEW` highest-QC rejection
+  for missing highest QC, invalid highest phase, hash mismatch, height
+  mismatch, and local block metadata mismatch before accepting a matching
+  highest-QC reference.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vote_admission_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vote-admission-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_apalache.sh vote-admission-fast`
+  - TLC and Apalache sweeps for all `31` `vote-admission-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/vote-admission-{tlc,apalache}-*.log`.
+
+## 2026-06-07 VRF penalties-report runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfPenaltiesReportGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/epoch_report.rs`.
+- The new report-store tests anchor initial empty state, report field
+  preservation, latest-epoch tracking by latest write rather than max epoch,
+  exact same-epoch replacement without merging stale fields, multi-epoch
+  retention, missing-epoch reads, side-effect-free reads, clear resetting both
+  reports and latest epoch, and post-clear update behavior. The report-store
+  tests now use a local mutex guard to serialize access to the global
+  in-memory store.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_penalties_report_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vrf-penalties-report-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-penalties-report-fast`
+  - TLC and Apalache sweeps for all `17` `vrf-penalties-report-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_penalties_report_{tlc,apalache}/`.
+
+## 2026-06-07 VRF local-state runtime gate
+
+- Added focused runtime parity coverage for the `SumeragiVrfLocalStateGate.tla`
+  contract in `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new local-state tests anchor fresh-state zeroing, same-epoch material and
+  sent-flag preservation, epoch-switch material clearing, commit and reveal note
+  behavior for same and new epochs, actor creation for all current supported
+  consensus modes (`Permissioned` and `Npos`), actor epoch refresh, and actor
+  reset clearing.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_local_state_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vrf-local-state-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-local-state-fast`
+  - TLC and Apalache sweeps for all `12` `vrf-local-state-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_local_state_{tlc,apalache}/`.
+
+## 2026-06-07 VRF material-derivation runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfMaterialDerivationGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new derivation tests reconstruct the canonical VRF input message
+  (`domain || chain_hash || epoch_be || signer_u64_be`), verify signing with
+  the supplied private key, assert reveal-as-hash-of-signature-payload and
+  commitment-as-hash-of-reveal layering, lock the reveal/commitment tuple
+  shape, and reject mutated drop, endian, order, chain-only, message-hash, raw
+  signature, swapped-return, and context-change variants.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_material_derivation_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vrf-material-derivation-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-material-derivation-fast`
+  - TLC and Apalache sweeps for all `17` `vrf-material-derivation-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_material_derivation_{tlc,apalache}/`.
+
+## 2026-06-07 VRF epoch-restore runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfEpochRestoreGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/epoch.rs`.
+- The new epoch-manager unit tests anchor unfinalized restore of commits,
+  reveals, late reveals, zero-roster state, zero-length flooring, window-offset
+  clamping, contiguous restored rosters, transient report clearing, finalized
+  restore seed derivation and input clearing, saturating finalized epoch
+  advance, snapshot roster-vs-hint selection, empty snapshot penalty lists,
+  wrong-epoch merge no-op behavior, missing-observation hydration, conflict
+  preservation, late-reveal hydration, and identity/report preservation during
+  observation merge.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_epoch_restore_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH bash scripts/formal/sumeragi_tlc.sh vrf-epoch-restore-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-epoch-restore-fast`
+  - TLC and Apalache sweeps for all `22` `vrf-epoch-restore-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_epoch_restore_{tlc,apalache}/`.
+
+## 2026-06-07 VRF epoch-boundary runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfEpochBoundaryGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/epoch.rs`.
+- The new epoch-manager unit tests anchor height-zero and non-boundary no-op
+  behavior, boundary snapshot and penalty preservation, late-reveal
+  participation without entropy contribution, fallback and explicit roster
+  penalties, empty-roster suppression, deterministic signer-ordered entropy,
+  `next_epoch` and reset clearing, take-style consumption, and saturating epoch
+  advance.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_epoch_boundary_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh vrf-epoch-boundary-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-epoch-boundary-fast`
+  - TLC and Apalache sweeps for all `23` `vrf-epoch-boundary-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_epoch_boundary_{tlc,apalache}/`.
+
+## 2026-06-07 VRF epoch-window runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfEpochWindowGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/epoch.rs`.
+- The new epoch-manager unit tests anchor zero-length epoch clamping, commit
+  and reveal offset clamping, height-zero position/epoch behavior, one-based
+  position mapping, `(height - 1)` epoch indexing, modulo position wrapping,
+  commit boundary inclusion, reveal start-after-commit behavior, reveal
+  boundary inclusion, empty reveal windows when the reveal end is before the
+  commit end, and commit/reveal admission rejection at window edges.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_epoch_window_formal_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh vrf-epoch-window-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-epoch-window-fast`
+  - TLC and Apalache sweeps for all `17` `vrf-epoch-window-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_epoch_window_{tlc,apalache}/`.
+
+## 2026-06-07 VRF admission runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiVrfMessageAdmissionGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`, plus a test-only
+  `VrfActor::local_state()` getter and `main_loop`-scoped visibility for the
+  VRF process helpers.
+- The new tests anchor commit and reveal acceptance, duplicate same-value
+  idempotence, epoch/roster/window/rewrite rejection, missing-commit and
+  commitment-mismatch reveal rejection, accepted late reveals without PRF
+  refresh, local-signer-only VRF state updates, signed external rebroadcast,
+  network-origin rebroadcast suppression, missing/bad signature rejection,
+  out-of-topology signer rejection, and missing-manager drop behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vrf_admission_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh vrf-admission-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh vrf-admission-fast`
+  - TLC and Apalache sweeps for all `21` `vrf-admission-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vrf_admission_{tlc,apalache}/`.
+
+## 2026-06-07 Same-height no-proposal storm runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiSameHeightNoProposalStormGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new helper-level tests anchor strict dependency-progress advancement,
+  no-op and progress reset behavior, cooldown owner preservation versus stale
+  owner dropping, committed/frontier/proposal progress clearing, storm
+  record/count semantics, same-view preservation, higher-view increments,
+  dependency timestamp maxing, forced-break suppression and forced recovery,
+  and active-pending idle escalation gates through missing-QC storm recording.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core same_height_no_proposal_storm_formal_gate --lib --features telemetry -- --nocapture`
+    (`4` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh same-height-no-proposal-storm-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh same-height-no-proposal-storm-fast`
+  - TLC and Apalache sweeps for all `36`
+    `same-height-no-proposal-storm-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/same_height_no_proposal_storm_{tlc,apalache}/`.
+
+## 2026-06-07 Frontier-recovery advance runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiFrontierRecoveryAdvanceGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new helper-level tests anchor recovery reason to view-change cause
+  mapping, non-frontier and passive catch-up suppression, non-hard-cap
+  same-height evidence seeding, hard-cap non-exact seed rejection, stale
+  no-actionable cleanup, last-view/dependency-progress maxing, catch-up
+  cooldown and window advancement, cleanup-to-rotate arming, and rotate-armed
+  no-allow/same-view/grace/elapsed behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core frontier_recovery_advance_formal_gate --lib --features telemetry -- --nocapture`
+    (`4` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh frontier-recovery-advance-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; JVM_ARGS="-Xss16m -Xmx16g" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-recovery-advance-fast`
+    (the default Apalache heap exhausted on this model before rerunning with
+    the larger heap)
+  - TLC and Apalache sweeps for all `36`
+    `frontier-recovery-advance-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/frontier_recovery_advance_{tlc,apalache}/`.
+
+## 2026-06-07 Frontier-repair view-change runtime gate
+
+- Added focused runtime parity coverage for the
+  `SumeragiFrontierRepairViewChangeGate.tla` contract in
+  `crates/iroha_core/src/sumeragi/main_loop/tests.rs`.
+- The new helper-level tests anchor cause and frontier-height filtering,
+  quorum/stake-quorum exact-repair suppression, urgent exact-body fetch
+  emission, direct-view-advance and authoritative-payload fallthrough,
+  exact-view mismatch, unarmed/body-present/wrong-mode rejection, passive
+  committed-anchor catch-up precedence without repair seeding, and
+  reassembly-only suppression that seeds catch-up recovery without inventing an
+  exact-slot fetch owner.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core frontier_repair_view_change_formal_gate --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; bash scripts/formal/sumeragi_tlc.sh frontier-repair-view-change-fast`
+  - `export JAVA_HOME="$(/usr/libexec/java_home -v 17 2>/dev/null || echo /opt/homebrew/opt/openjdk@17)"; export PATH="$JAVA_HOME/bin:$PATH"; APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh frontier-repair-view-change-fast`
+  - TLC and Apalache sweeps for all `26`
+    `frontier-repair-view-change-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/frontier_repair_view_change_{tlc,apalache}/`.
+
 ## 2026-06-08 Sumeragi roster/cache fast aggregate exactness wiring
 
 - Removed the remaining generic `Safety` invariant from the
@@ -42,7 +6400,6 @@ Last updated: 2026-06-08
 
 - Retired platform-family lanes are explicitly outside SCCP launch support for
   now.
-- Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 - Kept the active SCCP launch scope limited to Ethereum, BSC, Solana, TON, and
   TRON in the public bridge-proof, backlog, and roadmap notes.
 

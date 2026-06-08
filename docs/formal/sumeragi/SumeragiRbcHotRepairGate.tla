@@ -385,7 +385,7 @@ TypeInvariant ==
        /\ SpecBlocksProposal(c) \in BOOLEAN
        /\ ImplementationBlocksProposal(c) \in BOOLEAN
 
-SafetyFast ==
+RbcHotRepairMatchesSpec ==
   /\ \A c \in ActiveCases:
        ImplementationActive(c) = SpecActive(c)
   /\ \A c \in SuppressCases:
@@ -398,6 +398,9 @@ SafetyFast ==
        ImplementationExempt(c) = SpecExempt(c)
   /\ \A c \in ProposalCases:
        ImplementationBlocksProposal(c) = SpecBlocksProposal(c)
+
+SafetyFast ==
+  RbcHotRepairMatchesSpec
 
 AllActiveCasesMatchSpec ==
   \A c \in ActiveCases:

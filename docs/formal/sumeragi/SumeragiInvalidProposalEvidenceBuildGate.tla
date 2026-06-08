@@ -217,7 +217,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+InvalidProposalEvidenceBuildMatchesSpec ==
   /\ Matches(WrapPreservesProposalReason)
   /\ Matches(BuildFirstSignature)
   /\ Matches(BuildNoSignatureFallback)
@@ -228,6 +228,9 @@ SafetyFast ==
   /\ Matches(BuildQcParentHeight)
   /\ Matches(BuildReasonString)
   /\ ValidBuiltEvidenceShape(BuildQcParentHeight)
+
+SafetyFast ==
+  InvalidProposalEvidenceBuildMatchesSpec
 
 BugWrapperWrongKind ==
   Matches(WrapPreservesProposalReason)

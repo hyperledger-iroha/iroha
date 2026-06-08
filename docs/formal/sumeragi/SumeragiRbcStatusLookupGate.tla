@@ -164,7 +164,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+RbcStatusLookupMatchesSpec ==
   /\ \A c \in LookupCases:
        /\ ActualIsDelivered(c) = SpecIsDelivered(c)
        /\ ActualDeliveredPayloadMatches(c) = SpecDeliveredPayloadMatches(c)
@@ -172,6 +172,9 @@ SafetyFast ==
   /\ \A c \in StaleCases:
        /\ ActualStaleKeysNonEmpty(c) = SpecStaleKeysNonEmpty(c)
        /\ ActualNextDue(c) = SpecNextDue(c)
+
+SafetyFast ==
+  RbcStatusLookupMatchesSpec
 
 BugIsDeliveredRequiresComplete ==
   ActualIsDelivered("delivered_incomplete_match") =

@@ -385,11 +385,14 @@ ReadyStable ==
   /\ ActualReady(ReadyReasonChanged)[2] = ReadyNow(ReadyReasonChanged)
   /\ ActualReady(ReadyReasonChanged)[3] = ReasonB
 
-SafetyFast ==
+RbcDeferralThrottleCoreSafety ==
   /\ DeliverExact
   /\ ReadyExact
   /\ DeliverStable
   /\ ReadyStable
+
+SafetyFast ==
+  RbcDeferralThrottleCoreSafety
 
 AllDeliverCasesMatchSpec ==
   \A c \in DeliverCases:

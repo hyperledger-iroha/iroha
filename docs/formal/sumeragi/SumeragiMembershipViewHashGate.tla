@@ -227,7 +227,7 @@ TypeInvariant ==
        /\ SpecPreimage(c) \in KnownPreimages
        /\ ActualPreimage(c) \in KnownPreimages
 
-NoBugInvariant ==
+MembershipViewHashCoreSafety ==
   \A c \in Cases:
     ActualPreimage(c) = SpecPreimage(c)
 
@@ -253,7 +253,9 @@ MembershipViewHashExactness ==
   /\ MembershipViewHashPeerOrderExact
   /\ MembershipViewHashPeerCardinalityExact
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == MembershipViewHashCoreSafety
+
+SafetyFast == MembershipViewHashCoreSafety
 
 BugDropChainId == NoBugInvariant
 BugDropHeight == NoBugInvariant

@@ -180,8 +180,8 @@ QcVerifyWorkerConfigExactness ==
   /\ QcVerifyWorkerThreadsExact
   /\ QcVerifyWorkerQueueCapsExact
 
-SafetyFast ==
-  ActualOutput = SpecOutput
+QcVerifyWorkerConfigFastSafety ==
+  /\ ActualOutput = SpecOutput
   /\ AutoThreadsUseAvailable
   /\ ExplicitThreadsPreserved
   /\ ZeroWorkCapDerivation
@@ -189,6 +189,9 @@ SafetyFast ==
   /\ ExplicitCapPreservation
   /\ QueueCapsPositive
   /\ QcVerifyWorkerConfigExactness
+
+SafetyFast ==
+  QcVerifyWorkerConfigFastSafety
 
 BugAutoThreadsUseAvailable ==
   ActualAutoHigh = SpecAutoHigh

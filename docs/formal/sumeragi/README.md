@@ -6350,448 +6350,448 @@ verification, and full networking details.
 - `SumeragiRbcDeliverQuorum_bug_force_one_ignored.cfg`: expected-failure force-one debug path mutation.
 - `SumeragiRbcDeliverQuorum_bug_inbound_force_one_acceptance.cfg`: expected-failure receiver-side debug force-one leakage mutation.
 - `SumeragiRbcCausalityGate.tla`: RBC INIT/chunk/READY/DELIVER causality model.
-- `SumeragiRbcCausalityGate_fast.cfg`: CI-friendly RBC causality check.
+- `SumeragiRbcCausalityGate_fast.cfg`: CI-friendly direct RBC causality component check.
 - `SumeragiRbcCausalityGate_bug_*.cfg`: expected-failure INIT evidence, chunk integrity, READY validation, DELIVER validation, stash, duplicate, and commit-wakeup mutations.
 - `SumeragiRbcDeliverAcceptanceGate.tla`: RBC DELIVER acceptance decision model.
-- `SumeragiRbcDeliverAcceptanceGate_fast.cfg`: CI-friendly RBC DELIVER acceptance check.
+- `SumeragiRbcDeliverAcceptanceGate_fast.cfg`: CI-friendly direct RBC DELIVER acceptance decision check.
 - `SumeragiRbcDeliverAcceptanceGate_bug_*.cfg`: expected-failure READY quorum, deferral-order, chunk availability, chunk-root, absent-root, and count-reporting mutations.
 - `SumeragiRbcReadyEmissionGate.tla`: RBC local READY emission decision model.
-- `SumeragiRbcReadyEmissionGate_fast.cfg`: CI-friendly RBC local READY emission check.
+- `SumeragiRbcReadyEmissionGate_fast.cfg`: CI-friendly direct RBC local READY emission check.
 - `SumeragiRbcReadyEmissionGate_bug_*.cfg`: expected-failure terminal, roster, payload, chunk-root, broadcast, observer, local-membership, and builder-miss mutations.
 - `SumeragiRbcDeliverEmissionGate.tla`: RBC local DELIVER emission decision model.
-- `SumeragiRbcDeliverEmissionGate_fast.cfg`: CI-friendly RBC local DELIVER emission check.
+- `SumeragiRbcDeliverEmissionGate_fast.cfg`: CI-friendly direct RBC local DELIVER emission check.
 - `SumeragiRbcDeliverEmissionGate_bug_*.cfg`: expected-failure terminal-session, hydration, roster, payload, READY, chunk-root, local-bypass, builder, committed-suppression, broadcast, recovery, and status mutations.
 - `SumeragiRbcDeliveredRebroadcastGate.tla`: RBC delivered-session rebroadcast scheduling and tick-branch model.
-- `SumeragiRbcDeliveredRebroadcastGate_fast.cfg`: CI-friendly RBC delivered-session rebroadcast check.
+- `SumeragiRbcDeliveredRebroadcastGate_fast.cfg`: CI-friendly direct RBC delivered-session rebroadcast check.
 - `SumeragiRbcDeliveredRebroadcastGate_bug_*.cfg`: expected-failure next-due, observer/DA, cursor, hot-repair, rescue, DELIVER cooldown/build, timestamp, progress, and delivered-branch fallthrough mutations.
 - `SumeragiRbcRebroadcastCursorGate.tla`: RBC stalled-rebroadcast session cursor/selection model.
-- `SumeragiRbcRebroadcastCursorGate_fast.cfg`: CI-friendly RBC stalled-rebroadcast cursor check.
+- `SumeragiRbcRebroadcastCursorGate_fast.cfg`: CI-friendly direct RBC stalled-rebroadcast cursor check.
 - `SumeragiRbcRebroadcastCursorGate_bug_*.cfg`: expected-failure budget, urgent-order, cursor-wrap, duplicate, inactive, and cursor-advance mutations.
 - `SumeragiRbcRebroadcastActionGate.tla`: RBC stalled-rebroadcast non-delivered action model.
-- `SumeragiRbcRebroadcastActionGate_fast.cfg`: CI-friendly RBC stalled-rebroadcast action check.
+- `SumeragiRbcRebroadcastActionGate_fast.cfg`: CI-friendly direct RBC stalled-rebroadcast action check.
 - `SumeragiRbcRebroadcastActionGate_bug_*.cfg`: expected-failure pending-flush, READY retry, roster, invalid-session, payload-repair, backpressure, cooldown, rebroadcaster, READY, hot-repair, and rescue mutations.
 - `SumeragiRbcNextDueGate.tla`: RBC next-due scheduler model.
-- `SumeragiRbcNextDueGate_fast.cfg`: CI-friendly RBC next-due scheduler check.
+- `SumeragiRbcNextDueGate_fast.cfg`: CI-friendly direct RBC next-due scheduler check.
 - `SumeragiRbcNextDueGate_bug_*.cfg`: expected-failure empty-state, immediate-wakeup, session-skip, READY retry, payload/chunk/targeted/READY cooldown, merge, and status-stale mutations.
 - `SumeragiRbcCommitProcessingGate.tla`: RBC commit-pipeline trigger helper model.
-- `SumeragiRbcCommitProcessingGate_fast.cfg`: CI-friendly RBC commit-pipeline trigger helper check.
+- `SumeragiRbcCommitProcessingGate_fast.cfg`: CI-friendly direct RBC commit-pipeline trigger helper check.
 - `SumeragiRbcCommitProcessingGate_bug_*.cfg`: expected-failure READY wakeup, post-delivery duplicate wakeup, no-change wakeup, and first/duplicate DELIVER mutations.
 - `SumeragiRbcChunkTargetGate.tla`: RBC chunk target count/selection helper model.
-- `SumeragiRbcChunkTargetGate_fast.cfg`: CI-friendly RBC chunk target helper check.
+- `SumeragiRbcChunkTargetGate_fast.cfg`: CI-friendly direct RBC chunk target helper check.
 - `SumeragiRbcChunkTargetGate_bug_*.cfg`: expected-failure quorum-floor, default fanout, cap clamp, zero-peer, zero-target, local-selection, truncation, over-selection, and empty-selection mutations.
 - `SumeragiRbcChunkPayloadCapGate.tla`: RBC chunk payload frame-cap helper model.
-- `SumeragiRbcChunkPayloadCapGate_fast.cfg`: CI-friendly RBC chunk payload frame-cap check.
+- `SumeragiRbcChunkPayloadCapGate_fast.cfg`: CI-friendly direct RBC chunk payload frame-cap check.
 - `SumeragiRbcChunkPayloadCapGate_bug_*.cfg`: expected-failure base-overflow, base-equality, headroom-underflow, omitted-base/headroom, wrong-frame-source, off-by-one, nonmaximal-cap, and zero-frame mutations.
 - `SumeragiRbcRebroadcastSelectionGate.tla`: RBC rebroadcaster count/selection helper model.
-- `SumeragiRbcRebroadcastSelectionGate_fast.cfg`: CI-friendly RBC rebroadcaster selection helper check.
+- `SumeragiRbcRebroadcastSelectionGate_fast.cfg`: CI-friendly direct RBC rebroadcaster selection helper check.
 - `SumeragiRbcRebroadcastSelectionGate_bug_*.cfg`: expected-failure payload-count, READY-count, zero-count, leader, full-roster, partial-overselect, and absent-local mutations.
 - `SumeragiRbcChunkAllocationGate.tla`: RBC weighted chunk allocation helper model.
-- `SumeragiRbcChunkAllocationGate_fast.cfg`: CI-friendly RBC weighted chunk allocation helper check.
+- `SumeragiRbcChunkAllocationGate_fast.cfg`: CI-friendly direct RBC weighted chunk allocation helper check.
 - `SumeragiRbcChunkAllocationGate_bug_*.cfg`: expected-failure empty, zero-total, all-zero fallback, zero-weight, remainder tie, weighted leftover, and min-wrapper trim mutations.
 - `SumeragiRbcPayloadChunkingGate.tla`: RBC payload chunk count/boundary helper model.
-- `SumeragiRbcPayloadChunkingGate_fast.cfg`: CI-friendly RBC payload chunking helper check.
+- `SumeragiRbcPayloadChunkingGate_fast.cfg`: CI-friendly direct RBC payload chunking helper check.
 - `SumeragiRbcPayloadChunkingGate_bug_*.cfg`: expected-failure empty-payload, zero-size, floor-division, boundary, chunk-length, empty-chunk, and coverage mutations.
 - `SumeragiRbcPayloadLayoutGate.tla`: RBC payload layout construction/count/index/length model.
-- `SumeragiRbcPayloadLayoutGate_fast.cfg`: CI-friendly RBC payload layout helper check.
+- `SumeragiRbcPayloadLayoutGate_fast.cfg`: CI-friendly direct RBC payload layout helper check.
 - `SumeragiRbcPayloadLayoutGate_bug_*.cfg`: expected-failure construction, legacy-known, count, RS16 parity/tail length, and index projection mutations.
 - `SumeragiRbcSessionChunkIngestGate.tla`: RBC session construction/chunk-ingest/digest-cleanup model.
-- `SumeragiRbcSessionChunkIngestGate_fast.cfg`: CI-friendly RBC session chunk-ingest helper check.
+- `SumeragiRbcSessionChunkIngestGate_fast.cfg`: CI-friendly direct RBC session chunk-ingest helper check.
 - `SumeragiRbcSessionChunkIngestGate_bug_*.cfg`: expected-failure session-construction, rejected-chunk, accepted/duplicate, and digest-cleanup mutations.
 - `SumeragiRbcSessionReadyDeliverGate.tla`: RBC session READY/DELIVER recording model.
-- `SumeragiRbcSessionReadyDeliverGate_fast.cfg`: CI-friendly RBC READY/DELIVER session recording check.
+- `SumeragiRbcSessionReadyDeliverGate_fast.cfg`: CI-friendly direct RBC READY/DELIVER session recording check.
 - `SumeragiRbcSessionReadyDeliverGate_bug_*.cfg`: expected-failure READY duplicate/conflict, roster-hash, first-DELIVER, and DELIVER-replay mutations.
 - `SumeragiRbcDeliveredPayloadBytesGate.tla`: RBC delivered-payload byte telemetry model.
-- `SumeragiRbcDeliveredPayloadBytesGate_fast.cfg`: CI-friendly RBC delivered-payload byte telemetry check.
+- `SumeragiRbcDeliveredPayloadBytesGate_fast.cfg`: CI-friendly direct RBC delivered-payload byte telemetry check.
 - `SumeragiRbcDeliveredPayloadBytesGate_bug_*.cfg`: expected-failure delivered/completeness guard, layout-vs-sum, fallback, saturation, and once-only marker mutations.
 - `SumeragiRbcRs16InitialFanoutGate.tla`: RBC RS16 reduced initial fanout helper model.
-- `SumeragiRbcRs16InitialFanoutGate_fast.cfg`: CI-friendly RBC RS16 initial fanout helper check.
+- `SumeragiRbcRs16InitialFanoutGate_fast.cfg`: CI-friendly direct RBC RS16 initial fanout helper check.
 - `SumeragiRbcRs16InitialFanoutGate_bug_*.cfg`: expected-failure Full/plain/zero-return, required-count, width-clamp, stripe-count, duplicate, out-of-range, sort, coverage, and reconstruction mutations.
 - `SumeragiRbcChunkBroadcastOrderGate.tla`: RBC chunk broadcast order/drop helper model.
-- `SumeragiRbcChunkBroadcastOrderGate_fast.cfg`: CI-friendly RBC chunk broadcast order helper check.
+- `SumeragiRbcChunkBroadcastOrderGate_fast.cfg`: CI-friendly direct RBC chunk broadcast order helper check.
 - `SumeragiRbcChunkBroadcastOrderGate_bug_*.cfg`: expected-failure shuffle, drop-interval, one-based-position, order-preservation, duplicate, and out-of-range mutations.
 - `SumeragiPendingRbcStashGate.tla`: pending-RBC stash cap/TTL/replay model.
-- `SumeragiPendingRbcStashGate_fast.cfg`: CI-friendly pending-RBC stash check.
+- `SumeragiPendingRbcStashGate_fast.cfg`: CI-friendly direct pending-RBC stash component check.
 - `SumeragiPendingRbcStashGate_bug_*.cfg`: expected-failure chunk/byte cap, drop accounting, last-seen TTL, active-session retention, session-limit, flush, dedup release, metrics, repair, backlog, and evicted-frame replay mutations.
 - `SumeragiPendingRbcStatusGate.tla`: pending-RBC status snapshot and counter overlay model.
-- `SumeragiPendingRbcStatusGate_fast.cfg`: CI-friendly pending-RBC status snapshot check.
+- `SumeragiPendingRbcStatusGate_fast.cfg`: CI-friendly pending-RBC status direct exactness check.
 - `SumeragiPendingRbcStatusGate_bug_*.cfg`: expected-failure reset, drop/stash counter, reason-bucket, update, and per-entry projection mutations.
 - `SumeragiIngressDedupCacheGate.tla`: ingress dedup cache and block-payload bucket routing model.
-- `SumeragiIngressDedupCacheGate_fast.cfg`: CI-friendly ingress dedup cache check.
+- `SumeragiIngressDedupCacheGate_fast.cfg`: CI-friendly direct ingress dedup cache and block-payload bucket routing check.
 - `SumeragiIngressDedupCacheGate_bug_*.cfg`: expected-failure cap, duplicate refresh, expiry, capacity eviction, removal, bucket routing, and length projection mutations.
 - `SumeragiIngressStatusCountersGate.tla`: inbound consensus status counter model.
-- `SumeragiIngressStatusCountersGate_fast.cfg`: CI-friendly ingress status counter check.
+- `SumeragiIngressStatusCountersGate_fast.cfg`: CI-friendly ingress status counter direct exactness check.
 - `SumeragiIngressStatusCountersGate_bug_*.cfg`: expected-failure gossip, retransmit, background-drop, block-created, dedup-eviction, and message-handling status mutations.
 - `SumeragiConsensusMessageLabelsGate.tla`: consensus message kind/outcome/reason label model.
-- `SumeragiConsensusMessageLabelsGate_fast.cfg`: CI-friendly consensus message label check.
+- `SumeragiConsensusMessageLabelsGate_fast.cfg`: CI-friendly consensus message label direct exactness check.
 - `SumeragiConsensusMessageLabelsGate_bug_*.cfg`: expected-failure kind, outcome, reason, and deferred-roster label mutations.
 - `SumeragiPhaseLatencyStatusGate.tla`: phase-latency latest/max/EMA status projection model.
-- `SumeragiPhaseLatencyStatusGate_fast.cfg`: CI-friendly phase-latency status check.
+- `SumeragiPhaseLatencyStatusGate_fast.cfg`: CI-friendly phase-latency status direct exactness check.
 - `SumeragiPhaseLatencyStatusGate_bug_*.cfg`: expected-failure reset, latest/max/EMA, pipeline-total, saturation, and snapshot projection mutations.
 - `SumeragiTelemetryStatusGate.tla`: telemetry availability/QC/RBC/pipeline status projection model.
-- `SumeragiTelemetryStatusGate_fast.cfg`: CI-friendly telemetry status projection check.
+- `SumeragiTelemetryStatusGate_fast.cfg`: CI-friendly telemetry status projection direct exactness check.
 - `SumeragiTelemetryStatusGate_bug_*.cfg`: expected-failure availability, QC latency, backlog, activity, reset, and snapshot projection mutations.
 - `SumeragiLaneDetailStatusGate.tla`: lane-detail commitment/relay/governance stripping status model.
-- `SumeragiLaneDetailStatusGate_fast.cfg`: CI-friendly lane-detail status projection check.
+- `SumeragiLaneDetailStatusGate_fast.cfg`: CI-friendly lane-detail status projection direct exactness check.
 - `SumeragiLaneDetailStatusGate_bug_*.cfg`: expected-failure commitment, relay, governance, Nexus-disabled strip, and route-gating mutations.
 - `SumeragiSettlementStatusGate.tla`: DvP/PvP settlement telemetry status and JSON projection model.
-- `SumeragiSettlementStatusGate_fast.cfg`: CI-friendly settlement status projection check.
+- `SumeragiSettlementStatusGate_fast.cfg`: CI-friendly settlement status projection direct exactness check.
 - `SumeragiSettlementStatusGate_bug_*.cfg`: expected-failure reset, event-counter, last-event, repeated-event, snapshot, and JSON projection mutations.
 - `SumeragiNexusEconomicsStatusGate.tla`: Nexus fee/staking economics status and strip projection model.
-- `SumeragiNexusEconomicsStatusGate_fast.cfg`: CI-friendly Nexus economics status check.
+- `SumeragiNexusEconomicsStatusGate_fast.cfg`: CI-friendly Nexus economics status direct exactness check.
 - `SumeragiNexusEconomicsStatusGate_bug_*.cfg`: expected-failure fee-event, staking-delta, snapshot, reset, and strip mutations.
 - `SumeragiNposRepairCoverageStatusGate.tla`: NPoS repair fanout coverage status projection model.
-- `SumeragiNposRepairCoverageStatusGate_fast.cfg`: CI-friendly NPoS repair coverage status check.
+- `SumeragiNposRepairCoverageStatusGate_fast.cfg`: CI-friendly NPoS repair coverage status direct exactness check.
 - `SumeragiNposRepairCoverageStatusGate_bug_*.cfg`: expected-failure record, reset, direct snapshot, and mode-gated status projection mutations.
 - `SumeragiModeStatusGate.tla`: mode/PRF/mode-flip status projection model.
-- `SumeragiModeStatusGate_fast.cfg`: CI-friendly mode/PRF/mode-flip status check.
+- `SumeragiModeStatusGate_fast.cfg`: CI-friendly mode/PRF/mode-flip status direct exactness check.
 - `SumeragiModeStatusGate_bug_*.cfg`: expected-failure PRF, mode tag, lag, kill-switch, flip-counter, last-field, and status projection mutations.
 - `SumeragiConsensusCapsStatusGate.tla`: consensus capability status projection model.
-- `SumeragiConsensusCapsStatusGate_fast.cfg`: CI-friendly consensus capability status projection check.
+- `SumeragiConsensusCapsStatusGate_fast.cfg`: CI-friendly consensus capability status projection direct exactness check.
 - `SumeragiConsensusCapsStatusGate_bug_*.cfg`: expected-failure capability field, getter, status projection, and overwrite mutations.
 - `SumeragiEffectiveTimingStatusGate.tla`: effective timing status projection model.
-- `SumeragiEffectiveTimingStatusGate_fast.cfg`: CI-friendly effective timing status projection check.
+- `SumeragiEffectiveTimingStatusGate_fast.cfg`: CI-friendly effective timing status projection direct exactness check.
 - `SumeragiEffectiveTimingStatusGate_bug_*.cfg`: expected-failure scalar timing, scheduling, fanout, optional NPoS timeout, clear, overwrite, and status projection mutations.
 - `SumeragiTxQueueBackpressureStatusGate.tla`: transaction queue backpressure status projection model.
-- `SumeragiTxQueueBackpressureStatusGate_fast.cfg`: CI-friendly transaction queue backpressure status check.
+- `SumeragiTxQueueBackpressureStatusGate_fast.cfg`: CI-friendly transaction queue backpressure status direct exactness check.
 - `SumeragiTxQueueBackpressureStatusGate_bug_*.cfg`: expected-failure initial state, healthy/saturated storage, getter, snapshot, overwrite, and explicit saturation-state mutations.
 - `SumeragiHistoryStatusGate.tla`: checkpoint, commit-QC, NPoS election, and consensus-key history status model.
 - `SumeragiHistoryStatusGate_fast.cfg`: CI-friendly status history projection check.
 - `SumeragiHistoryStatusGate_bug_*.cfg`: expected-failure history reset, cap, ordering, replacement, route-window, and snapshot projection mutations.
 - `SumeragiCommitQuorumStatusGate.tla`: commit-quorum status tally and route projection model.
-- `SumeragiCommitQuorumStatusGate_fast.cfg`: CI-friendly commit-quorum status projection check.
+- `SumeragiCommitQuorumStatusGate_fast.cfg`: CI-friendly commit-quorum status projection component/anchor check.
 - `SumeragiCommitQuorumStatusGate_bug_*.cfg`: expected-failure reset, record, snapshot, JSON, and typed-status projection mutations.
 - `SumeragiCommitInflightStatusGate.tla`: commit-inflight status lifecycle and route projection model.
-- `SumeragiCommitInflightStatusGate_fast.cfg`: CI-friendly commit-inflight status projection check.
+- `SumeragiCommitInflightStatusGate_fast.cfg`: CI-friendly commit-inflight status projection component/anchor check.
 - `SumeragiCommitInflightStatusGate_bug_*.cfg`: expected-failure reset, start, finish, timeout, elapsed, JSON, and typed-status projection mutations.
 - `SumeragiRbcStatusLookupGate.tla`: RBC status lookup and stale-summary helper model.
-- `SumeragiRbcStatusLookupGate_fast.cfg`: CI-friendly RBC status lookup helper check.
+- `SumeragiRbcStatusLookupGate_fast.cfg`: CI-friendly direct RBC status lookup helper check.
 - `SumeragiRbcStatusLookupGate_bug_*.cfg`: expected-failure delivered lookup, payload-completeness, exact-view, invalid-summary, TTL boundary, future-time, and next-due mutations.
 - `SumeragiRbcStatusRetentionGate.tla`: RBC status retention and update-pruning helper model.
-- `SumeragiRbcStatusRetentionGate_fast.cfg`: CI-friendly RBC status retention helper check.
+- `SumeragiRbcStatusRetentionGate_fast.cfg`: CI-friendly direct RBC status retention helper check.
 - `SumeragiRbcStatusRetentionGate_bug_*.cfg`: expected-failure TTL disabled/boundary/stale/future, capacity pruning, update persistence, timestamp refresh, active-count, and changed-summary mutations.
 - `SumeragiRbcStatusPersistenceGate.tla`: RBC status disk persistence and temp-store fallback model.
-- `SumeragiRbcStatusPersistenceGate_fast.cfg`: CI-friendly RBC status persistence/fallback helper check.
+- `SumeragiRbcStatusPersistenceGate_fast.cfg`: CI-friendly direct RBC status persistence/fallback helper check.
 - `SumeragiRbcStatusPersistenceGate_bug_*.cfg`: expected-failure main/temp selection, invalid-store cleanup, temp promotion, parent-sync, persistence-disable, fatal-metric, and temp-path mutations.
 - `SumeragiRbcStatusHandleGate.tla`: RBC status handle lifecycle and active-store accessor model.
-- `SumeragiRbcStatusHandleGate_fast.cfg`: CI-friendly RBC status handle lifecycle check.
+- `SumeragiRbcStatusHandleGate_fast.cfg`: CI-friendly direct RBC status handle lifecycle check.
 - `SumeragiRbcStatusHandleGate_bug_*.cfg`: expected-failure configure, remove, clear, update-at, active-store, snapshot, and session-count mutations.
 - `SumeragiRbcBacklogStatusGate.tla`: RBC backlog summary and status snapshot model.
-- `SumeragiRbcBacklogStatusGate_fast.cfg`: CI-friendly RBC backlog/status helper check.
+- `SumeragiRbcBacklogStatusGate_fast.cfg`: CI-friendly direct RBC backlog/status helper check.
 - `SumeragiRbcBacklogStatusGate_bug_*.cfg`: expected-failure DA-disabled, inactive, invalid, authoritative-payload, pending-stash, strict-soft-limit, and snapshot publication mutations.
 - `SumeragiRbcAbortStatusGate.tla`: RBC abort status counter and latest-slot model.
-- `SumeragiRbcAbortStatusGate_fast.cfg`: CI-friendly RBC abort status counter check.
+- `SumeragiRbcAbortStatusGate_fast.cfg`: CI-friendly RBC abort status counter component/anchor check.
 - `SumeragiRbcAbortStatusGate_bug_*.cfg`: expected-failure reset, count, latest height/view, lower-slot, zero-slot, and status-snapshot mutations.
 - `SumeragiRbcMismatchStatusGate.tla`: RBC mismatch status counter and label model.
-- `SumeragiRbcMismatchStatusGate_fast.cfg`: CI-friendly RBC mismatch status counter check.
+- `SumeragiRbcMismatchStatusGate_fast.cfg`: CI-friendly RBC mismatch status counter component/anchor check.
 - `SumeragiRbcMismatchStatusGate_bug_*.cfg`: expected-failure label, reset, kind-counter, peer-separation, timestamp, snapshot, and saturation mutations.
 - `SumeragiRbcProgressStageGate.tla`: RBC progress-stage monotonicity and roster sync model.
-- `SumeragiRbcProgressStageGate_fast.cfg`: CI-friendly RBC progress-stage sync check.
+- `SumeragiRbcProgressStageGate_fast.cfg`: CI-friendly direct RBC progress-stage sync check.
 - `SumeragiRbcProgressStageGate_bug_*.cfg`: expected-failure stage-regression, duplicate-progress, observation-skip, quorum-promotion, and roster-source mutations.
 - `SumeragiRbcHotRepairGate.tla`: RBC hot-repair, payload backpressure, and proposal-blocking helper model.
-- `SumeragiRbcHotRepairGate_fast.cfg`: CI-friendly RBC hot-repair/backpressure helper check.
+- `SumeragiRbcHotRepairGate_fast.cfg`: CI-friendly direct RBC hot-repair/backpressure helper check.
 - `SumeragiRbcHotRepairGate_bug_*.cfg`: expected-failure active-session, suppression, exact-frontier repair, urgent-near-tip, backpressure-exemption, and proposal-blocking mutations.
 - `SumeragiRbcRepairRequestGate.tla`: RBC repair request cooldown, target, missing-READY, and state-machine helper model.
-- `SumeragiRbcRepairRequestGate_fast.cfg`: CI-friendly RBC repair request helper check.
+- `SumeragiRbcRepairRequestGate_fast.cfg`: CI-friendly direct RBC repair request helper check.
 - `SumeragiRbcRepairRequestGate_bug_*.cfg`: expected-failure cooldown, target ordering, missing-READY, INIT repair, and chunk repair mutations.
 - `SumeragiRbcTargetedRepairGate.tla`: RBC targeted READY/DELIVER repair helper model.
-- `SumeragiRbcTargetedRepairGate_fast.cfg`: CI-friendly RBC targeted repair helper check.
+- `SumeragiRbcTargetedRepairGate_fast.cfg`: CI-friendly direct RBC targeted repair helper check.
 - `SumeragiRbcTargetedRepairGate_bug_*.cfg`: expected-failure targeted READY, targeted DELIVER, rescue gating, payload rescue, and missing-commit-QC cooldown mutations.
 - `SumeragiRbcOutboundFlushGate.tla`: queued RBC outbound chunk flush helper model.
-- `SumeragiRbcOutboundFlushGate_fast.cfg`: CI-friendly RBC outbound chunk flush helper check.
+- `SumeragiRbcOutboundFlushGate_fast.cfg`: CI-friendly direct RBC outbound chunk flush helper check.
 - `SumeragiRbcOutboundFlushGate_bug_*.cfg`: expected-failure observer/DA/backpressure, cursor, budget, exempt-skip, cleanup, and progress mutations.
 - `SumeragiRbcChunkPostDebugGate.tla`: RBC chunk post scheduling and debug-mask helper model.
-- `SumeragiRbcChunkPostDebugGate_fast.cfg`: CI-friendly RBC chunk post scheduling/debug-mask check.
+- `SumeragiRbcChunkPostDebugGate_fast.cfg`: CI-friendly direct RBC chunk post scheduling/debug-mask check.
 - `SumeragiRbcChunkPostDebugGate_bug_*.cfg`: expected-failure mask-boundary, withholding, equivocation, skip/post, count, cached-frame, and READY-fork mutations.
 - `SumeragiRbcDeferralThrottleGate.tla`: RBC READY/DELIVER deferral throttle helper model.
-- `SumeragiRbcDeferralThrottleGate_fast.cfg`: CI-friendly RBC deferral throttle helper check.
+- `SumeragiRbcDeferralThrottleGate_fast.cfg`: CI-friendly direct RBC deferral throttle helper check.
 - `SumeragiRbcDeferralThrottleGate_bug_*.cfg`: expected-failure first-observation, progress, cooldown, backwards-clock, regression, and state-refresh mutations.
 - `SumeragiRbcMissingInitRebroadcastGate.tla`: RBC missing-INIT broad rebroadcast gate model.
-- `SumeragiRbcMissingInitRebroadcastGate_fast.cfg`: CI-friendly RBC missing-INIT rebroadcast gate check.
+- `SumeragiRbcMissingInitRebroadcastGate_fast.cfg`: CI-friendly direct RBC missing-INIT rebroadcast gate check.
 - `SumeragiRbcMissingInitRebroadcastGate_bug_*.cfg`: expected-failure observer/DA/suppression/backpressure, roster, repair short-circuit, bundle, and broad-send mutations.
 - `SumeragiRbcSamplingGate.tla`: RBC persisted chunk sampling and Merkle-proof helper model.
-- `SumeragiRbcSamplingGate_fast.cfg`: CI-friendly RBC persisted chunk sampling check.
+- `SumeragiRbcSamplingGate_fast.cfg`: CI-friendly direct RBC persisted chunk sampling check.
 - `SumeragiRbcSamplingGate_bug_*.cfg`: expected-failure load, count, completeness, proof, sample ordering, and metadata mutations.
 - `SumeragiRbcStoreGuardGate.tla`: RBC persisted session-store guard and limit-enforcement model.
-- `SumeragiRbcStoreGuardGate_fast.cfg`: CI-friendly RBC session-store guard check.
+- `SumeragiRbcStoreGuardGate_fast.cfg`: CI-friendly direct RBC session-store guard check.
 - `SumeragiRbcStoreGuardGate_bug_*.cfg`: expected-failure manifest, load priority, validation rejection, chunk-integrity, TTL/capacity/pressure, temp-path, and file-classification mutations.
 - `SumeragiRbcStoreStatusGate.tla`: RBC store pressure/counter/eviction status model.
-- `SumeragiRbcStoreStatusGate_fast.cfg`: CI-friendly RBC store status check.
+- `SumeragiRbcStoreStatusGate_fast.cfg`: CI-friendly RBC store status component/anchor check.
 - `SumeragiRbcStoreStatusGate_bug_*.cfg`: expected-failure pressure, deferral/drop, eviction count/history, snapshot, and reset mutations.
 - `SumeragiRbcStorePressureLogGate.tla`: RBC store pressure log throttling model.
-- `SumeragiRbcStorePressureLogGate_fast.cfg`: CI-friendly RBC store pressure log throttling check.
+- `SumeragiRbcStorePressureLogGate_fast.cfg`: CI-friendly RBC store pressure log throttling component/anchor check.
 - `SumeragiRbcStorePressureLogGate_bug_*.cfg`: expected-failure label, transition, repeat-throttle, log-state update, and reset mutations.
 - `SumeragiRoundGapStatusGate.tla`: round-gap marker/snapshot/EMA status model.
-- `SumeragiRoundGapStatusGate_fast.cfg`: CI-friendly round-gap status check.
+- `SumeragiRoundGapStatusGate_fast.cfg`: CI-friendly round-gap status component/anchor check.
 - `SumeragiRoundGapStatusGate_bug_*.cfg`: expected-failure marker identity, incomplete snapshot, duration, EMA, pruning, projection, and reset mutations.
 - `SumeragiRbcRecoveryHelperGate.tla`: RBC stale-message and payload-refetch helper model.
-- `SumeragiRbcRecoveryHelperGate_fast.cfg`: CI-friendly RBC recovery helper check.
+- `SumeragiRbcRecoveryHelperGate_fast.cfg`: CI-friendly direct RBC recovery helper check.
 - `SumeragiRbcRecoveryHelperGate_bug_*.cfg`: expected-failure committed-height, Kura-presence, future-message, invalid-session, delivered-complete, chunk-completeness, and payload-hash mutations.
 - `SumeragiRbcMissingBlockRecoveryGate.tla`: RBC BlockCreated recovery admission, signer fallback, and far-future suppression model.
-- `SumeragiRbcMissingBlockRecoveryGate_fast.cfg`: CI-friendly RBC missing-block recovery helper check.
+- `SumeragiRbcMissingBlockRecoveryGate_fast.cfg`: CI-friendly direct RBC missing-block recovery helper check.
 - `SumeragiRbcMissingBlockRecoveryGate_bug_*.cfg`: expected-failure known-block bypass, metadata recovery, exact-frontier force, signer fallback, and far-future suppression/reanchor mutations.
 - `SumeragiRbcUnverifiedRosterGate.tla`: RBC unverified-roster escape-hatch helper model.
-- `SumeragiRbcUnverifiedRosterGate_fast.cfg`: CI-friendly RBC unverified-roster escape-hatch check.
+- `SumeragiRbcUnverifiedRosterGate_fast.cfg`: CI-friendly direct RBC unverified-roster escape-hatch check.
 - `SumeragiRbcUnverifiedRosterGate_bug_*.cfg`: expected-failure mode, active-fallback, same-epoch payload, vote-roster, next-epoch payload, and empty-roster mutations.
 - `SumeragiRbcSigningPreimageGate.tla`: RBC READY/DELIVER signing-preimage construction model.
-- `SumeragiRbcSigningPreimageGate_fast.cfg`: CI-friendly RBC signing-preimage check.
+- `SumeragiRbcSigningPreimageGate_fast.cfg`: CI-friendly RBC signing-preimage component/anchor check.
 - `SumeragiRbcSigningPreimageGate_bug_*.cfg`: expected-failure domain, subject-field, self-signature, and embedded READY-bundle mutations.
 - `SumeragiClassicSigningPreimageGate.tla`: classic Vote/VRF signing-preimage construction model.
 - `SumeragiClassicSigningPreimageGate_fast.cfg`: CI-friendly classic signing-preimage aggregate exactness check.
 - `SumeragiClassicSigningPreimageGate_bug_*.cfg`: expected-failure domain, type, vote-subject, highest-QC, VRF body, and mutable-signature mutations.
 - `SumeragiVrfMaterialDerivationGate.tla`: local VRF material derivation model.
-- `SumeragiVrfMaterialDerivationGate_fast.cfg`: CI-friendly VRF material derivation check.
+- `SumeragiVrfMaterialDerivationGate_fast.cfg`: CI-friendly direct VRF material derivation helper check.
 - `SumeragiVrfMaterialDerivationGate_bug_*.cfg`: expected-failure domain, input, encoding, order, signature, hash-chain, return-shape, and raw-output mutations.
 - `SumeragiClassicSignatureGate.tla`: classic Vote/QC signature-verification model.
-- `SumeragiClassicSignatureGate_fast.cfg`: CI-friendly classic Vote/QC signature-verification check.
+- `SumeragiClassicSignatureGate_fast.cfg`: CI-friendly classic Vote/QC signature-verification component/anchor check.
 - `SumeragiClassicSignatureGate_bug_*.cfg`: expected-failure mode, roster, bitmap, quorum, aggregate, vote-body, vote-signature, NewView highest-QC, and return-contract mutations.
 - `SumeragiInvalidSignatureLabelsGate.tla`: invalid-signature kind/outcome label model.
-- `SumeragiInvalidSignatureLabelsGate_fast.cfg`: CI-friendly invalid-signature label check.
+- `SumeragiInvalidSignatureLabelsGate_fast.cfg`: CI-friendly direct invalid-signature kind/outcome label check.
 - `SumeragiInvalidSignatureLabelsGate_bug_*.cfg`: expected-failure kind-label, telemetry-wrapper, outcome-label, and RBC `should_log` mutations.
 - `SumeragiInvalidSignatureThrottleGate.tla`: invalid-signature throttle and penalty helper model.
-- `SumeragiInvalidSignatureThrottleGate_fast.cfg`: CI-friendly invalid-signature throttle and penalty check.
+- `SumeragiInvalidSignatureThrottleGate_fast.cfg`: CI-friendly invalid-signature throttle and penalty component/anchor check.
 - `SumeragiInvalidSignatureThrottleGate_bug_*.cfg`: expected-failure log-throttle keying, time-boundary, RBC `should_log`, penalty threshold, cooldown, window, and prune mutations.
 - `SumeragiVoteValidationDropStatusGate.tla`: vote-validation drop telemetry status model.
-- `SumeragiVoteValidationDropStatusGate_fast.cfg`: CI-friendly vote-validation drop telemetry status check.
+- `SumeragiVoteValidationDropStatusGate_fast.cfg`: CI-friendly vote-validation drop telemetry status direct exactness check.
 - `SumeragiVoteValidationDropStatusGate_bug_*.cfg`: expected-failure label, reset, entry, peer aggregate, order/cap, status projection, log-threshold, and saturation mutations.
 - `SumeragiPenaltyOffenderSelectionGate.tla`: evidence penalty offender/epoch/roster selection helper model.
-- `SumeragiPenaltyOffenderSelectionGate_fast.cfg`: CI-friendly penalty offender/epoch/roster selection check.
+- `SumeragiPenaltyOffenderSelectionGate_fast.cfg`: CI-friendly direct penalty offender/epoch/roster selection check.
 - `SumeragiPenaltyOffenderSelectionGate_bug_*.cfg`: expected-failure rotation, range, bitmap, censorship-anchor, NPoS leader, epoch, mode, and roster fallback mutations.
 - `SumeragiConsensusPenaltyActionGate.tla`: consensus-evidence penalty action derivation/application model.
-- `SumeragiConsensusPenaltyActionGate_fast.cfg`: CI-friendly consensus-evidence penalty action check.
+- `SumeragiConsensusPenaltyActionGate_fast.cfg`: CI-friendly direct consensus-evidence penalty action check.
 - `SumeragiConsensusPenaltyActionGate_bug_*.cfg`: expected-failure eligibility, delay, pending, slash, marker, sort/dedup, and action-application mutations.
 - `SumeragiPenaltyStatusGate.tla`: penalty telemetry status projection model.
-- `SumeragiPenaltyStatusGate_fast.cfg`: CI-friendly penalty status projection check.
+- `SumeragiPenaltyStatusGate_fast.cfg`: CI-friendly penalty status projection component/anchor check.
 - `SumeragiPenaltyStatusGate_bug_*.cfg`: expected-failure VRF snapshot, late-reveal, epoch-parameter, applied/pending counter, getter, and status projection mutations.
 - `SumeragiLocalPeerRemovedStatusGate.tla`: local peer removed flag storage/getter model.
-- `SumeragiLocalPeerRemovedStatusGate_fast.cfg`: CI-friendly local peer removed flag check.
+- `SumeragiLocalPeerRemovedStatusGate_fast.cfg`: CI-friendly local peer removed flag component/anchor check.
 - `SumeragiLocalPeerRemovedStatusGate_bug_*.cfg`: expected-failure initial flag, set/get, overwrite, idempotence, and getter side-effect mutations.
 - `SumeragiExecWitnessRecorderGate.tla`: execution-witness recorder lifecycle/keying model.
-- `SumeragiExecWitnessRecorderGate_fast.cfg`: CI-friendly execution-witness recorder lifecycle/keying check.
+- `SumeragiExecWitnessRecorderGate_fast.cfg`: CI-friendly direct execution-witness recorder lifecycle/keying check.
 - `SumeragiExecWitnessRecorderGate_bug_*.cfg`: expected-failure start, inactive-record, read/write/delete, drain, snapshot, guard-drop, key namespace, FASTPQ grouping/finalization, and digest-copy mutations.
 - `SumeragiExecWitnessAccessKeyGate.tla`: execution-witness access-key parser model.
-- `SumeragiExecWitnessAccessKeyGate_fast.cfg`: CI-friendly execution-witness access-key parser check.
+- `SumeragiExecWitnessAccessKeyGate_fast.cfg`: CI-friendly direct execution-witness access-key parser check.
 - `SumeragiExecWitnessAccessKeyGate_bug_*.cfg`: expected-failure unsupported/malformed/invalid keys, prefix routing, id parsing, canonicalization, missing-value defaults, boolean probes, split-tail preservation, and fall-through mutations.
 - `SumeragiExecWitnessRootProjectionGate.tla`: execution-witness parent/post root projection model.
-- `SumeragiExecWitnessRootProjectionGate_fast.cfg`: CI-friendly execution-witness root projection check.
+- `SumeragiExecWitnessRootProjectionGate_fast.cfg`: CI-friendly direct execution-witness root projection component/anchor check.
 - `SumeragiExecWitnessRootProjectionGate_bug_*.cfg`: expected-failure post-root, parent-root, canonicalization, prevalidation, FASTPQ root, and payload-isolation mutations.
 - `SumeragiSmtPathHashGate.tla`: sparse-Merkle path/hash helper model.
-- `SumeragiSmtPathHashGate_fast.cfg`: CI-friendly sparse-Merkle path/hash helper check.
+- `SumeragiSmtPathHashGate_fast.cfg`: CI-friendly direct sparse-Merkle path/hash helper check.
 - `SumeragiSmtPathHashGate_bug_*.cfg`: expected-failure empty-root, input-selection, domain-tag, field-order, missing-child, duplicate-key, ordering, truncation, bit-order, parent-prefix, child-prefix, and tail-mask mutations.
 - `SumeragiBlockMessageRbcCompactGate.tla`: RBC chunk compact block-message helper model.
-- `SumeragiBlockMessageRbcCompactGate_fast.cfg`: CI-friendly RBC chunk compact block-message aggregate exactness check.
+- `SumeragiBlockMessageRbcCompactGate_fast.cfg`: CI-friendly direct RBC chunk compact block-message exactness/component check.
 - `SumeragiBlockMessageRbcCompactGate_bug_*.cfg`: expected-failure compact-boundary, field-preservation, normalization, widening, and priority mutations.
 - `SumeragiBlockMessagePriorityGate.tla`: consensus block-message network-priority model.
-- `SumeragiBlockMessagePriorityGate_fast.cfg`: CI-friendly consensus block-message priority aggregate exactness check.
+- `SumeragiBlockMessagePriorityGate_fast.cfg`: CI-friendly direct consensus block-message priority exactness/component check.
 - `SumeragiBlockMessagePriorityGate_bug_*.cfg`: expected-failure per-variant priority downgrade mutations.
 - `SumeragiBlockMessageHeightViewGate.tla`: consensus block-message height/view projection model.
-- `SumeragiBlockMessageHeightViewGate_fast.cfg`: CI-friendly consensus block-message height/view aggregate exactness check.
+- `SumeragiBlockMessageHeightViewGate_fast.cfg`: CI-friendly direct consensus block-message height/view exactness/component check.
 - `SumeragiBlockMessageHeightViewGate_bug_*.cfg`: expected-failure no-slot, slot-drop, source-projection, compact-widening, and order mutations.
 - `SumeragiBlockMessageKindGate.tla`: consensus block-message log/status kind projection model.
-- `SumeragiBlockMessageKindGate_fast.cfg`: CI-friendly consensus block-message kind aggregate exactness check.
+- `SumeragiBlockMessageKindGate_fast.cfg`: CI-friendly direct consensus block-message kind exactness/component check.
 - `SumeragiBlockMessageKindGate_bug_*.cfg`: expected-failure certified-fetch label, QC phase label, compact chunk label/status, and telemetry projection mutations.
 - `SumeragiKuraReplicaAdvertGate.tla`: Kura replica advert ingress helper model.
-- `SumeragiKuraReplicaAdvertGate_fast.cfg`: CI-friendly Kura replica advert handler check.
+- `SumeragiKuraReplicaAdvertGate_fast.cfg`: CI-friendly direct Kura replica advert ingress helper check.
 - `SumeragiKuraReplicaAdvertGate_bug_*.cfg`: expected-failure unauthenticated/self-advert, remote-drop, and advertised tuple mutation modes.
 - `SumeragiMessageProjectionGate.tla`: consensus message timing/control/native-AMX projection model.
-- `SumeragiMessageProjectionGate_fast.cfg`: CI-friendly consensus message projection check.
+- `SumeragiMessageProjectionGate_fast.cfg`: CI-friendly direct consensus message timing/control/native-AMX projection component/anchor check.
 - `SumeragiMessageProjectionGate_bug_*.cfg`: expected-failure timing presence, label, header field, elapsed saturation, control label, and native-AMX label mutations.
 - `SumeragiPipelineEventEmissionGate.tla`: pipeline event forwarding envelope model.
-- `SumeragiPipelineEventEmissionGate_fast.cfg`: CI-friendly pipeline event emission check.
+- `SumeragiPipelineEventEmissionGate_fast.cfg`: CI-friendly direct pipeline event emission focused component/anchor check.
 - `SumeragiPipelineEventEmissionGate_bug_*.cfg`: expected-failure empty/no-op, single/batch envelope, order/duplicate preservation, closed-sender, failure-log, and panic mutations.
 - `SumeragiBlockMessageWireGate.tla`: consensus block-message cached Norito frame model.
-- `SumeragiBlockMessageWireGate_fast.cfg`: CI-friendly consensus block-message wire-frame aggregate exactness check.
+- `SumeragiBlockMessageWireGate_fast.cfg`: CI-friendly direct consensus block-message wire-frame component/anchor check.
 - `SumeragiBlockMessageWireGate_bug_*.cfg`: expected-failure cache, frame-header, prefix-length, decode, and self-describing payload mutations.
 - `SumeragiBlockCreatedFrontierWireGate.tla`: BlockCreated frontier metadata wire/rebuild helper model.
-- `SumeragiBlockCreatedFrontierWireGate_fast.cfg`: CI-friendly BlockCreated frontier wire/rebuild aggregate exactness check.
+- `SumeragiBlockCreatedFrontierWireGate_fast.cfg`: CI-friendly direct BlockCreated frontier wire/rebuild component/anchor check.
 - `SumeragiBlockCreatedFrontierWireGate_bug_*.cfg`: expected-failure constructor, metadata-copy, proposal rebuild, authoritative fallback, and rebroadcast-gate mutations.
 - `SumeragiBlockPayloadCanonicalizationGate.tla`: canonical proposal payload byte helper model.
-- `SumeragiBlockPayloadCanonicalizationGate_fast.cfg`: CI-friendly canonical proposal payload byte helper check.
+- `SumeragiBlockPayloadCanonicalizationGate_fast.cfg`: CI-friendly direct canonical proposal payload byte helper check.
 - `SumeragiBlockPayloadCanonicalizationGate_bug_*.cfg`: expected-failure result-root, signature, stale-header-root, and canonical payload field-binding mutations.
 - `SumeragiCachedProposalRebroadcastGate.tla`: cached proposal rebroadcast admission and fanout model.
-- `SumeragiCachedProposalRebroadcastGate_fast.cfg`: CI-friendly cached proposal rebroadcast check.
+- `SumeragiCachedProposalRebroadcastGate_fast.cfg`: CI-friendly direct cached proposal rebroadcast component/anchor check.
 - `SumeragiCachedProposalRebroadcastGate_bug_*.cfg`: expected-failure signal, pending, topology, metadata, backpressure, cooldown, wire-payload, fanout, and caching mutations.
 - `SumeragiFrontierSameSlotActivityGate.tla`: exact-slot frontier recovery activity helper model.
-- `SumeragiFrontierSameSlotActivityGate_fast.cfg`: CI-friendly exact-slot frontier recovery activity check.
+- `SumeragiFrontierSameSlotActivityGate_fast.cfg`: CI-friendly direct exact-slot frontier recovery activity aggregate exactness check.
 - `SumeragiFrontierSameSlotActivityGate_bug_*.cfg`: expected-failure payload, ingress, vote-backed, missing-block, missing-commit-QC, missing-payload, stale, and bookkeeping-refresh mutations.
 - `SumeragiFrontierReassemblyActivityGate.tla`: frontier reassembly and same-height RBC sender activity helper model.
-- `SumeragiFrontierReassemblyActivityGate_fast.cfg`: CI-friendly frontier reassembly activity check.
+- `SumeragiFrontierReassemblyActivityGate_fast.cfg`: CI-friendly direct frontier reassembly activity aggregate exactness check.
 - `SumeragiFrontierReassemblyActivityGate_bug_*.cfg`: expected-failure dependency-progress, ingress, RBC sender, validation, deferred-update, and no-source reassembly mutations.
 - `SumeragiFrontierQuorumOwnerActionableGate.tla`: frontier quorum-timeout actionable-owner cleanup helper model.
-- `SumeragiFrontierQuorumOwnerActionableGate_fast.cfg`: CI-friendly frontier actionable-owner cleanup check.
+- `SumeragiFrontierQuorumOwnerActionableGate_fast.cfg`: CI-friendly direct frontier actionable-owner cleanup aggregate exactness check.
 - `SumeragiFrontierQuorumOwnerActionableGate_bug_*.cfg`: expected-failure owner, vote, recovery, wrong-view, stale, non-frontier, and no-source preservation mutations.
 - `SumeragiFrontierSidecarRetargetGate.tla`: contiguous-frontier sidecar retargeting helper model.
-- `SumeragiFrontierSidecarRetargetGate_fast.cfg`: CI-friendly frontier sidecar retarget check.
+- `SumeragiFrontierSidecarRetargetGate_fast.cfg`: CI-friendly direct frontier sidecar retarget aggregate exactness check.
 - `SumeragiFrontierSidecarRetargetGate_bug_*.cfg`: expected-failure override-reason, quarantine, stale-progress, confirmation, tracked/untracked, and reacquire mutations.
 - `SumeragiFrontierSidecarExpectedHashGate.tla`: contiguous-frontier sidecar expected-hash helper model.
-- `SumeragiFrontierSidecarExpectedHashGate_fast.cfg`: CI-friendly frontier sidecar expected-hash check.
+- `SumeragiFrontierSidecarExpectedHashGate_fast.cfg`: CI-friendly direct frontier sidecar expected-hash aggregate exactness check.
 - `SumeragiFrontierSidecarExpectedHashGate_bug_*.cfg`: expected-failure source-priority, height/payload filtering, tie-break, and sidecar commit-QC mutations.
 - `SumeragiContiguousFrontierPayloadHintGate.tla`: contiguous-frontier payload-hint selector helper model.
-- `SumeragiContiguousFrontierPayloadHintGate_fast.cfg`: CI-friendly contiguous-frontier payload-hint selector check.
+- `SumeragiContiguousFrontierPayloadHintGate_fast.cfg`: CI-friendly direct contiguous-frontier payload-hint selector aggregate exactness check.
 - `SumeragiContiguousFrontierPayloadHintGate_bug_*.cfg`: expected-failure phase-rank, deferred-priority, marker-fallback, height, actionable-filter, and tie-break mutations.
 - `SumeragiFrontierParentQcHintRetargetGate.tla`: contiguous-frontier parent QC-hint retarget helper model.
-- `SumeragiFrontierParentQcHintRetargetGate_fast.cfg`: CI-friendly frontier parent QC-hint retarget check.
+- `SumeragiFrontierParentQcHintRetargetGate_fast.cfg`: CI-friendly direct frontier parent QC-hint retarget aggregate exactness check.
 - `SumeragiFrontierParentQcHintRetargetGate_bug_*.cfg`: expected-failure stall, dependency-progress, previous-emit, branch-condition, and target-rewrite mutations.
 - `SumeragiLiveFrontierIdleMissingQcGate.tla`: live-frontier idle missing-QC suppression helper model.
-- `SumeragiLiveFrontierIdleMissingQcGate_fast.cfg`: CI-friendly live-frontier idle missing-QC suppression check.
+- `SumeragiLiveFrontierIdleMissingQcGate_fast.cfg`: CI-friendly direct live-frontier idle missing-QC suppression component/anchor check.
 - `SumeragiLiveFrontierIdleMissingQcGate_bug_*.cfg`: expected-failure liveness, dependency, observed-head, height, and suppressed-branch-effect mutations.
 - `SumeragiMissingQcReacquireAdmissionGate.tla`: missing-QC reacquire admission helper model.
-- `SumeragiMissingQcReacquireAdmissionGate_fast.cfg`: CI-friendly missing-QC reacquire admission check.
+- `SumeragiMissingQcReacquireAdmissionGate_fast.cfg`: CI-friendly direct missing-QC reacquire admission component/anchor check.
 - `SumeragiMissingQcReacquireAdmissionGate_bug_*.cfg`: expected-failure duplicate, proposal/dependency, no-dependency throttle, timeout-streak, and empty-frontier fallback mutations.
 - `SumeragiMissingQcReacquireActionGate.tla`: missing-QC reacquire action orchestration helper model.
-- `SumeragiMissingQcReacquireActionGate_fast.cfg`: CI-friendly missing-QC reacquire action orchestration check.
+- `SumeragiMissingQcReacquireActionGate_fast.cfg`: CI-friendly direct missing-QC reacquire action orchestration component/anchor check.
 - `SumeragiMissingQcReacquireActionGate_bug_*.cfg`: expected-failure prior-attempt, attempt-record, suppression, highest-QC, range-pull, cooldown, success-counter, and return-value mutations.
 - `SumeragiMissingCommitQcActionableGate.tla`: missing commit-QC actionable dependency and local-payload preservation helper model.
-- `SumeragiMissingCommitQcActionableGate_fast.cfg`: CI-friendly missing commit-QC actionable dependency check.
+- `SumeragiMissingCommitQcActionableGate_fast.cfg`: CI-friendly direct missing commit-QC actionable dependency component/anchor check.
 - `SumeragiMissingCommitQcActionableGate_bug_*.cfg`: expected-failure payload, cached-QC, higher NEW_VIEW quorum, non-actionable dependency, subject-height, and local-payload preservation mutations.
 - `SumeragiMissingQcHeightStallGate.tla`: same-height missing-QC stall dampening helper model.
-- `SumeragiMissingQcHeightStallGate_fast.cfg`: CI-friendly same-height missing-QC stall check.
+- `SumeragiMissingQcHeightStallGate_fast.cfg`: CI-friendly direct same-height missing-QC stall component/anchor check.
 - `SumeragiMissingQcHeightStallGate_bug_*.cfg`: expected-failure lifecycle, activation-window, dependency-continuity, reservation, availability, and marker-update mutations.
 - `SumeragiMissingQcStallRangePullGate.tla`: same-height missing-QC stall range-pull emission helper model.
-- `SumeragiMissingQcStallRangePullGate_fast.cfg`: CI-friendly same-height missing-QC stall range-pull check.
+- `SumeragiMissingQcStallRangePullGate_fast.cfg`: CI-friendly direct same-height missing-QC stall range-pull component/anchor check.
 - `SumeragiMissingQcStallRangePullGate_bug_*.cfg`: expected-failure reason, exact-height, suppression, recovery-FSM, cohort, cooldown, and marking mutations.
 - `SumeragiMissingPayloadFetchWindowGate.tla`: same-height missing-payload fetch-window pacing and hash-miss cap helper model.
-- `SumeragiMissingPayloadFetchWindowGate_fast.cfg`: CI-friendly missing-payload fetch-window pacing and hash-miss cap check.
+- `SumeragiMissingPayloadFetchWindowGate_fast.cfg`: CI-friendly direct missing-payload fetch-window pacing and hash-miss cap check.
 - `SumeragiMissingPayloadFetchWindowGate_bug_*.cfg`: expected-failure snapshot, emission-mark, clear-scope, and lock-lag cap mutations.
 - `SumeragiCanonicalFrontierReanchorGate.tla`: canonical contiguous-frontier reanchor helper model.
-- `SumeragiCanonicalFrontierReanchorGate_fast.cfg`: CI-friendly canonical contiguous-frontier reanchor check.
+- `SumeragiCanonicalFrontierReanchorGate_fast.cfg`: CI-friendly direct canonical contiguous-frontier reanchor component/anchor check.
 - `SumeragiCanonicalFrontierReanchorGate_bug_*.cfg`: expected-failure reason, shared-window key, snapshot, progress-watermark, stride, range-pull, and view-suppression mutations.
 - `SumeragiFrontierRepairViewChangeGate.tla`: contiguous-frontier repair view-change suppression helper model.
-- `SumeragiFrontierRepairViewChangeGate_fast.cfg`: CI-friendly contiguous-frontier repair view-change suppression check.
+- `SumeragiFrontierRepairViewChangeGate_fast.cfg`: CI-friendly direct contiguous-frontier repair view-change suppression component/anchor check.
 - `SumeragiFrontierRepairViewChangeGate_bug_*.cfg`: expected-failure cause, height, precedence, repair-source, seed, fetch, and recovery-state mutations.
 - `SumeragiFrontierRecoveryAdvanceGate.tla`: contiguous-frontier recovery advance state-machine helper model.
-- `SumeragiFrontierRecoveryAdvanceGate_fast.cfg`: CI-friendly contiguous-frontier recovery advance state-machine check.
+- `SumeragiFrontierRecoveryAdvanceGate_fast.cfg`: CI-friendly direct contiguous-frontier recovery advance state-machine component/anchor check.
 - `SumeragiFrontierRecoveryAdvanceGate_bug_*.cfg`: expected-failure cause, early-gate, exact-frontier, actionability, suppression, catch-up, and rotate mutations.
 - `SumeragiSameHeightNoProposalStormGate.tla`: same-height no-proposal storm recovery helper model.
-- `SumeragiSameHeightNoProposalStormGate_fast.cfg`: CI-friendly same-height no-proposal storm recovery check.
+- `SumeragiSameHeightNoProposalStormGate_fast.cfg`: CI-friendly direct same-height no-proposal storm recovery component/anchor check.
 - `SumeragiSameHeightNoProposalStormGate_bug_*.cfg`: expected-failure progress, reset, record/count, force-break, and active-pending mutations.
 - `SumeragiVrfMessageAdmissionGate.tla`: VRF commit/reveal message-admission model.
-- `SumeragiVrfMessageAdmissionGate_fast.cfg`: CI-friendly VRF commit/reveal message-admission check.
+- `SumeragiVrfMessageAdmissionGate_fast.cfg`: CI-friendly direct VRF commit/reveal message-admission check.
 - `SumeragiVrfMessageAdmissionGate_bug_*.cfg`: expected-failure mode, manager, topology, signature, epoch/window, rewrite, broadcast, local-state, and PRF-refresh mutations.
 - `SumeragiVrfEpochWindowGate.tla`: VRF epoch-window arithmetic helper model.
-- `SumeragiVrfEpochWindowGate_fast.cfg`: CI-friendly VRF epoch-window arithmetic check.
+- `SumeragiVrfEpochWindowGate_fast.cfg`: CI-friendly direct VRF epoch-window arithmetic helper check.
 - `SumeragiVrfEpochWindowGate_bug_*.cfg`: expected-failure length, offset, position, epoch, commit-window, reveal-window, and outside-window mutations.
 - `SumeragiVrfEpochBoundaryGate.tla`: VRF epoch-boundary finalization helper model.
-- `SumeragiVrfEpochBoundaryGate_fast.cfg`: CI-friendly VRF epoch-boundary finalization check.
+- `SumeragiVrfEpochBoundaryGate_fast.cfg`: CI-friendly direct VRF epoch-boundary finalization helper check.
 - `SumeragiVrfEpochBoundaryGate_bug_*.cfg`: expected-failure no-op, penalty, snapshot, seed, clear/advance, reset/take, roster, and entropy mutations.
 - `SumeragiVrfEpochRestoreGate.tla`: VRF epoch restore/snapshot/observation-merge helper model.
-- `SumeragiVrfEpochRestoreGate_fast.cfg`: CI-friendly VRF epoch restore/snapshot/merge check.
+- `SumeragiVrfEpochRestoreGate_fast.cfg`: CI-friendly direct VRF epoch restore/snapshot/merge helper check.
 - `SumeragiVrfEpochRestoreGate_bug_*.cfg`: expected-failure restore, parameter-clamp, finalized-advance, snapshot, merge, and identity-preservation mutations.
 - `SumeragiVrfLocalStateGate.tla`: local VRF emission state helper model.
-- `SumeragiVrfLocalStateGate_fast.cfg`: CI-friendly local VRF emission state check.
+- `SumeragiVrfLocalStateGate_fast.cfg`: CI-friendly direct local VRF emission state check.
 - `SumeragiVrfLocalStateGate_bug_*.cfg`: expected-failure mode-gate, epoch-reset, same-epoch preservation, commit/reveal note, and actor-reset mutations.
 - `SumeragiVrfPenaltiesReportGate.tla`: VRF penalties report storage helper model.
-- `SumeragiVrfPenaltiesReportGate_fast.cfg`: CI-friendly VRF penalties report storage check.
+- `SumeragiVrfPenaltiesReportGate_fast.cfg`: CI-friendly VRF penalties report storage direct exactness check.
 - `SumeragiVrfPenaltiesReportGate_bug_*.cfg`: expected-failure initial, update, keying, field-preservation, replacement, latest-epoch, missing-get, clear, and read-side-effect mutations.
 - `SumeragiVoteAdmissionGate.tla`: classic inbound vote-admission model.
-- `SumeragiVoteAdmissionGate_fast.cfg`: CI-friendly classic inbound vote-admission check.
+- `SumeragiVoteAdmissionGate_fast.cfg`: CI-friendly direct classic inbound vote-admission check.
 - `SumeragiVoteAdmissionGate_bug_*.cfg`: expected-failure early-drop, roster/defer, duplicate, chain-order, signature, NEW_VIEW highest-QC, conflict, evidence, QC, roster-cache, tracker, pipeline, and progress mutations.
 - `SumeragiVoteDuplicateKeyGate.tla`: vote duplicate raw-key and identity projection helper model.
-- `SumeragiVoteDuplicateKeyGate_fast.cfg`: CI-friendly vote duplicate raw-key and identity projection helper check.
+- `SumeragiVoteDuplicateKeyGate_fast.cfg`: CI-friendly vote duplicate raw-key and identity projection direct exactness check.
 - `SumeragiVoteDuplicateKeyGate_bug_*.cfg`: expected-failure phase, round-context, signer, chain-order, rechain, block-hash, NEW_VIEW highest-QC, and public-key projection mutations.
 - `SumeragiEvidenceHorizonGate.tla`: evidence freshness horizon helper model.
-- `SumeragiEvidenceHorizonGate_fast.cfg`: CI-friendly evidence freshness horizon helper check.
+- `SumeragiEvidenceHorizonGate_fast.cfg`: CI-friendly direct evidence freshness horizon helper check.
 - `SumeragiEvidenceHorizonGate_bug_*.cfg`: expected-failure zero-horizon, missing-subject, saturating-subtraction, inclusive-bound, stale-allow, future-reject, and reference/lower-bound mutations.
 - `SumeragiEvidenceCanonicalizationGate.tla`: evidence canonicalization, deduplication, and persistence helper model.
-- `SumeragiEvidenceCanonicalizationGate_fast.cfg`: CI-friendly evidence canonicalization/deduplication helper check.
+- `SumeragiEvidenceCanonicalizationGate_fast.cfg`: CI-friendly direct evidence canonicalization/deduplication helper check.
 - `SumeragiEvidenceCanonicalizationGate_bug_*.cfg`: expected-failure canonical key, subject extraction, block-reference, store insertion, and persistence-record mutations.
 - `SumeragiEvidenceValidationGate.tla`: evidence validation fail-closed helper model.
-- `SumeragiEvidenceValidationGate_fast.cfg`: CI-friendly evidence validation helper check.
+- `SumeragiEvidenceValidationGate_fast.cfg`: CI-friendly direct evidence validation helper check.
 - `SumeragiEvidenceValidationGate_bug_*.cfg`: expected-failure kind/payload, double-vote, invalid-proposal, censorship quorum, and validation-precedence mutations.
 - `SumeragiDoubleVoteRecordingGate.tla`: double-vote detection and recording pipeline model.
-- `SumeragiDoubleVoteRecordingGate_fast.cfg`: CI-friendly double-vote detection/recording check.
+- `SumeragiDoubleVoteRecordingGate_fast.cfg`: CI-friendly direct double-vote detection/recording check.
 - `SumeragiDoubleVoteRecordingGate_bug_*.cfg`: expected-failure detection, topology signer, canonical key, store gate, persistence, and return-value mutations.
 - `SumeragiInvalidQcShapeGate.tla`: invalid-QC shape-to-evidence helper model.
-- `SumeragiInvalidQcShapeGate_fast.cfg`: CI-friendly invalid-QC shape helper check.
+- `SumeragiInvalidQcShapeGate_fast.cfg`: CI-friendly direct invalid-QC shape helper check.
 - `SumeragiInvalidQcShapeGate_bug_*.cfg`: expected-failure empty-bitmap, zero-sentinel, non-emitting, kind, payload-clone, and reason mutations.
 - `SumeragiQcValidationEvidenceGate.tla`: QC validation error-to-evidence helper model.
-- `SumeragiQcValidationEvidenceGate_fast.cfg`: CI-friendly QC validation evidence mapping check.
+- `SumeragiQcValidationEvidenceGate_fast.cfg`: CI-friendly direct QC validation evidence mapping check.
 - `SumeragiQcValidationEvidenceGate_bug_*.cfg`: expected-failure hard-error, soft-error, kind, certificate, reason, and validation-result mutations.
 - `SumeragiQcValidationReasonGate.tla`: QC validation telemetry reason/evidence-reason label projection model.
-- `SumeragiQcValidationReasonGate_fast.cfg`: CI-friendly QC validation reason label check.
+- `SumeragiQcValidationReasonGate_fast.cfg`: CI-friendly direct QC validation reason label check.
 - `SumeragiQcValidationReasonGate_bug_*.cfg`: expected-failure label and hard/soft evidence-boundary mutations.
 - `SumeragiBlockSyncQcFallbackGate.tla`: block-sync QC retry/fallback helper model.
-- `SumeragiBlockSyncQcFallbackGate_fast.cfg`: CI-friendly block-sync QC retry/fallback check.
+- `SumeragiBlockSyncQcFallbackGate_fast.cfg`: CI-friendly direct block-sync QC retry/fallback check.
 - `SumeragiBlockSyncQcFallbackGate_bug_*.cfg`: expected-failure retry classifier, phase, highest-QC, aggregate, bitmap, permissioned quorum, and NPoS stake-quorum mutations.
 - `SumeragiBlockSyncQcStatusGate.tla`: block-sync QC status accounting model.
-- `SumeragiBlockSyncQcStatusGate_fast.cfg`: CI-friendly block-sync QC status check.
+- `SumeragiBlockSyncQcStatusGate_fast.cfg`: CI-friendly block-sync QC status direct exactness check.
 - `SumeragiBlockSyncQcStatusGate_bug_*.cfg`: expected-failure counter, final-drop reason, snapshot, and reset mutations.
 - `SumeragiBlockSyncLockedQcGate.tla`: block-sync locked-QC helper model.
-- `SumeragiBlockSyncLockedQcGate_fast.cfg`: CI-friendly block-sync locked-QC helper check.
+- `SumeragiBlockSyncLockedQcGate_fast.cfg`: CI-friendly direct block-sync locked-QC helper check.
 - `SumeragiBlockSyncLockedQcGate_bug_*.cfg`: expected-failure extension, same-height conflict, recoverability, deferral, and stale-lock mutations.
 - `SumeragiKnownBlockQcEnqueueGate.tla`: known-block QC work enqueue helper model.
-- `SumeragiKnownBlockQcEnqueueGate_fast.cfg`: CI-friendly known-block QC work enqueue check.
+- `SumeragiKnownBlockQcEnqueueGate_fast.cfg`: CI-friendly direct known-block QC work enqueue check.
 - `SumeragiKnownBlockQcEnqueueGate_bug_*.cfg`: expected-failure key projection, duplicate suppression, insert/status, debug, and wake-signaling mutations.
 - `SumeragiKnownBlockQcWorkGate.tla`: known-block QC work-preparation gate model.
-- `SumeragiKnownBlockQcWorkGate_fast.cfg`: CI-friendly known-block QC work-preparation check.
+- `SumeragiKnownBlockQcWorkGate_fast.cfg`: CI-friendly direct known-block QC work-preparation check.
 - `SumeragiKnownBlockQcWorkGate_bug_*.cfg`: expected-failure topology, shape, locked-QC drop, deferral, retention, and work-field preservation mutations.
 - `SumeragiKnownBlockQcDrainGate.tla`: known-block QC work queue drain model.
-- `SumeragiKnownBlockQcDrainGate_fast.cfg`: CI-friendly known-block QC work queue drain check.
+- `SumeragiKnownBlockQcDrainGate_fast.cfg`: CI-friendly direct known-block QC work queue drain check.
 - `SumeragiKnownBlockQcDrainGate_bug_*.cfg`: expected-failure empty queue, tick-budget, per-tick cap, remaining-work, progress, and remove-before-apply mutations.
 - `SumeragiSignedQuorumFetchFallbackGate.tla`: committed signed-quorum fetch fallback availability helper model.
-- `SumeragiSignedQuorumFetchFallbackGate_fast.cfg`: CI-friendly committed signed-quorum fetch fallback check.
+- `SumeragiSignedQuorumFetchFallbackGate_fast.cfg`: CI-friendly direct committed signed-quorum fetch fallback check.
 - `SumeragiSignedQuorumFetchFallbackGate_bug_*.cfg`: expected-failure committed-hash, topology fallback, signer validation, permissioned quorum, NPoS snapshot, signer-peer, and stake-quorum mutations.
 - `SumeragiCommitQcOnlyFetchResponseGate.tla`: commit-QC-only fetch response dispatch helper model.
-- `SumeragiCommitQcOnlyFetchResponseGate_fast.cfg`: CI-friendly commit-QC-only fetch response dispatch check.
+- `SumeragiCommitQcOnlyFetchResponseGate_fast.cfg`: CI-friendly direct commit-QC-only fetch response dispatch check.
 - `SumeragiCommitQcOnlyFetchResponseGate_bug_*.cfg`: expected-failure direct-QC companion, certified-proof, vote-rebroadcast, requester-target, signed-quorum fallback, bypass-flag, and return-value mutations.
 - `SumeragiRequesterRosterProofGate.tla`: requester local roster-proof detection helper model.
-- `SumeragiRequesterRosterProofGate_fast.cfg`: CI-friendly requester local roster-proof detection helper check.
+- `SumeragiRequesterRosterProofGate_fast.cfg`: CI-friendly direct requester local roster-proof detection helper check.
 - `SumeragiRequesterRosterProofGate_bug_*.cfg`: expected-failure proof-source rejection, no-evidence admission, Commit-QC key, precommit-record key, and highest-QC exact-match mutations.
 - `SumeragiBlockSyncUpdateTargetsGate.tla`: BlockSyncUpdate gossip target-selection helper model.
-- `SumeragiBlockSyncUpdateTargetsGate_fast.cfg`: CI-friendly BlockSyncUpdate gossip target-selection helper check.
+- `SumeragiBlockSyncUpdateTargetsGate_fast.cfg`: CI-friendly direct BlockSyncUpdate gossip target-selection helper check.
 - `SumeragiBlockSyncUpdateTargetsGate_bug_*.cfg`: expected-failure empty-input, local-exclusion, stray-priority, trusted-stray, world-online preference, world fallback, and fanout-cap mutations.
 - `SumeragiApplyCachedQcsGate.tla`: cached BlockSyncUpdate proof/vote attachment helper model.
-- `SumeragiApplyCachedQcsGate_fast.cfg`: CI-friendly cached BlockSyncUpdate proof/vote attachment check.
+- `SumeragiApplyCachedQcsGate_fast.cfg`: CI-friendly direct cached BlockSyncUpdate proof/vote attachment check.
 - `SumeragiApplyCachedQcsGate_bug_*.cfg`: expected-failure commit-QC source priority, checkpoint synthesis/preservation, NPoS stake repair, record-stake clone, and commit-vote attachment mutations.
 - `SumeragiBlockSyncRosterGate.tla`: uncertified block-sync roster admission helper model.
-- `SumeragiBlockSyncRosterGate_fast.cfg`: CI-friendly uncertified block-sync roster admission check.
+- `SumeragiBlockSyncRosterGate_fast.cfg`: CI-friendly direct uncertified block-sync roster admission check.
 - `SumeragiBlockSyncRosterGate_bug_*.cfg`: expected-failure requested-height, next-height, stale, future, and saturated-boundary mutations.
 - `SumeragiBlockSyncRosterStatusGate.tla`: block-sync roster status accounting model.
-- `SumeragiBlockSyncRosterStatusGate_fast.cfg`: CI-friendly block-sync roster source/drop status check.
+- `SumeragiBlockSyncRosterStatusGate_fast.cfg`: CI-friendly block-sync roster source/drop status direct exactness check.
 - `SumeragiBlockSyncRosterStatusGate_bug_*.cfg`: expected-failure source-label, drop-counter, snapshot, and reset mutations.
 - `SumeragiBlockSyncVoteDeferralGate.tla`: BlockSyncUpdate embedded-vote filtering and deferral handoff model.
-- `SumeragiBlockSyncVoteDeferralGate_fast.cfg`: CI-friendly BlockSyncUpdate vote filtering and deferral handoff check.
+- `SumeragiBlockSyncVoteDeferralGate_fast.cfg`: CI-friendly direct BlockSyncUpdate vote filtering and deferral handoff check.
 - `SumeragiBlockSyncVoteDeferralGate_bug_*.cfg`: expected-failure vote filter, request refresh, known vote-only fast-path, and vote-stripped deferral mutations.
 - `SumeragiBlockSyncKnownHintlessGate.tla`: already-known hintless BlockSyncUpdate fast-path model.
-- `SumeragiBlockSyncKnownHintlessGate_fast.cfg`: CI-friendly already-known hintless BlockSyncUpdate check.
+- `SumeragiBlockSyncKnownHintlessGate_fast.cfg`: CI-friendly direct already-known hintless BlockSyncUpdate check.
 - `SumeragiBlockSyncKnownHintlessGate_bug_*.cfg`: expected-failure known-block skip, clear, status, return, and roster-hint mutations.
 - `SumeragiBlockSyncImplicitRecoveryGate.tla`: DA implicit BlockSyncUpdate recovery flag model.
-- `SumeragiBlockSyncImplicitRecoveryGate_fast.cfg`: CI-friendly DA implicit BlockSyncUpdate recovery check.
+- `SumeragiBlockSyncImplicitRecoveryGate_fast.cfg`: CI-friendly direct DA implicit BlockSyncUpdate recovery check.
 - `SumeragiBlockSyncImplicitRecoveryGate_bug_*.cfg`: expected-failure DA gate, requested flag, frontier bound, side-effect, and continuation mutations.
 - `SumeragiBlockSyncVotePlaceholderGate.tla`: frontier vote-placeholder side-effect model.
-- `SumeragiBlockSyncVotePlaceholderGate_fast.cfg`: CI-friendly frontier vote-placeholder check.
+- `SumeragiBlockSyncVotePlaceholderGate_fast.cfg`: CI-friendly direct frontier vote-placeholder check.
 - `SumeragiBlockSyncVotePlaceholderGate_bug_*.cfg`: expected-failure vote filter, sidecar gate, placeholder subject/payload, side-effect, and continuation mutations.
 - `SumeragiBlockSyncSnapshotHintGate.tla`: known-block commit-roster snapshot hint filter model.
-- `SumeragiBlockSyncSnapshotHintGate_fast.cfg`: CI-friendly known-block snapshot hint filter check.
+- `SumeragiBlockSyncSnapshotHintGate_fast.cfg`: CI-friendly direct known-block snapshot hint filter check.
 - `SumeragiBlockSyncSnapshotHintGate_bug_*.cfg`: expected-failure snapshot lookup, QC preservation/revalidation, checkpoint/stake filtering, side-effect, and continuation mutations.
 - `SumeragiBlockSyncSnapshotRosterGate.tla`: known-block commit-roster snapshot roster-selection model.
-- `SumeragiBlockSyncSnapshotRosterGate_fast.cfg`: CI-friendly known-block snapshot roster-selection check.
+- `SumeragiBlockSyncSnapshotRosterGate_fast.cfg`: CI-friendly direct known-block snapshot roster-selection check.
 - `SumeragiBlockSyncSnapshotRosterGate_bug_*.cfg`: expected-failure snapshot selection, journal source, cache insertion, fallback precedence, and sidecar-quarantine mutations.
 - `SumeragiBlockSyncNoRosterGate.tla`: no-verifiable-roster BlockSyncUpdate terminal branch model.
-- `SumeragiBlockSyncNoRosterGate_fast.cfg`: CI-friendly no-verifiable-roster BlockSyncUpdate check.
+- `SumeragiBlockSyncNoRosterGate_fast.cfg`: CI-friendly direct no-verifiable-roster BlockSyncUpdate check.
 - `SumeragiBlockSyncNoRosterGate_bug_*.cfg`: expected-failure known vote-only, fallback topology, repair deferral, missing-QC request/failover, drop-status, and return mutations.
 - `SumeragiBlockSyncKnownRosterGate.tla`: selected-roster known-block terminal path and commit-roster replay model.
-- `SumeragiBlockSyncKnownRosterGate_fast.cfg`: CI-friendly selected-roster known-block terminal path check.
+- `SumeragiBlockSyncKnownRosterGate_fast.cfg`: CI-friendly direct selected-roster known-block terminal path check.
 - `SumeragiBlockSyncKnownRosterGate_bug_*.cfg`: expected-failure source/cache, checkpoint, commit-roster persistence, QC replay, missing-request cleanup, vote-processing, and return mutations.
 - `SumeragiBlockSyncKnownSelectedRosterGate.tla`: selected-roster known-block BlockSyncUpdate replay and cleanup model.
-- `SumeragiBlockSyncKnownSelectedRosterGate_fast.cfg`: CI-friendly selected-roster known-block BlockSyncUpdate check.
+- `SumeragiBlockSyncKnownSelectedRosterGate_fast.cfg`: CI-friendly direct selected-roster known-block BlockSyncUpdate check.
 - `SumeragiBlockSyncKnownSelectedRosterGate_bug_*.cfg`: expected-failure source/cache, checkpoint, commit-roster persistence, QC replay, clear, and return mutations.
 - `SumeragiBlockSyncSelectedSignaturesGate.tla`: selected-roster BlockSyncUpdate signature validation/defer/drop model.
-- `SumeragiBlockSyncSelectedSignaturesGate_fast.cfg`: CI-friendly selected-roster signature gate check.
+- `SumeragiBlockSyncSelectedSignaturesGate_fast.cfg`: CI-friendly direct selected-roster signature gate check.
 - `SumeragiBlockSyncSelectedSignaturesGate_bug_*.cfg`: expected-failure cache, validated-signer insertion, signature deferral, roster-evidence continuation, invalid-signature drop, and cleanup mutations.
 - `SumeragiBlockSyncSelectedQcGate.tla`: selected-roster BlockSyncUpdate QC candidate and evidence model.
-- `SumeragiBlockSyncSelectedQcGate_fast.cfg`: CI-friendly selected-roster QC candidate/evidence check.
+- `SumeragiBlockSyncSelectedQcGate_fast.cfg`: CI-friendly direct selected-roster QC candidate/evidence check.
 - `SumeragiBlockSyncSelectedQcGate_bug_*.cfg`: expected-failure QC source, shape filter, validation recovery, aggregate fallback, locked-conflict, cache, commit-cert, and invalid-payload mutations.
 - `SumeragiBlockSyncSelectedQuorumGate.tla`: selected-roster BlockSyncUpdate quorum and missing-QC repair model.
-- `SumeragiBlockSyncSelectedQuorumGate_fast.cfg`: CI-friendly selected-roster quorum/missing-QC repair check.
+- `SumeragiBlockSyncSelectedQuorumGate_fast.cfg`: CI-friendly direct selected-roster quorum/missing-QC repair check.
 - `SumeragiBlockSyncSelectedQuorumGate_bug_*.cfg`: expected-failure quorum source, sparse frontier, missing-QC request, repair defer/drop, and invalid-QC mutations.
 - `SumeragiBlockSyncRecoveryModeGate.tla`: stale BlockCreated and block-sync recovery-mode helper model.
-- `SumeragiBlockSyncRecoveryModeGate_fast.cfg`: CI-friendly stale BlockCreated/recovery-mode helper check.
+- `SumeragiBlockSyncRecoveryModeGate_fast.cfg`: CI-friendly stale BlockCreated/recovery-mode helper direct exactness check.
 - `SumeragiBlockSyncRecoveryModeGate_bug_*.cfg`: expected-failure stale-height, stale-admission signal, recovery-mode permission, aborted-revival, and observed-epoch mutations.
 - `SumeragiBlockSyncSelectedApplyGate.tla`: selected-roster BlockSyncUpdate apply/recovery-mode model.
-- `SumeragiBlockSyncSelectedApplyGate_fast.cfg`: CI-friendly selected-roster apply/recovery-mode check.
+- `SumeragiBlockSyncSelectedApplyGate_fast.cfg`: CI-friendly direct selected-roster apply/recovery-mode check.
 - `SumeragiBlockSyncSelectedApplyGate_bug_*.cfg`: expected-failure non-extending QC, frontier-owner, recovery-mode, signed-quorum repair, sparse recovery, and QC-apply mutations.
 - `SumeragiBlockSyncSelectedQcPrefilterGate.tla`: selected-roster BlockSyncUpdate post-apply QC prefilter model.
-- `SumeragiBlockSyncSelectedQcPrefilterGate_fast.cfg`: CI-friendly selected-roster post-apply QC prefilter check.
+- `SumeragiBlockSyncSelectedQcPrefilterGate_fast.cfg`: CI-friendly direct selected-roster post-apply QC prefilter check.
 - `SumeragiBlockSyncSelectedQcPrefilterGate_bug_*.cfg`: expected-failure topology, shape, locked-QC, non-extending defer/drop, and continuation mutations.
 - `SumeragiBlockSyncSelectedQcProcessGate.tla`: selected-roster BlockSyncUpdate post-prefilter QC tally/process model.
 - `SumeragiBlockSyncSelectedQcProcessGate_fast.cfg`: CI-friendly selected-roster post-prefilter QC process check.
@@ -6800,205 +6800,205 @@ verification, and full networking details.
 - `SumeragiBlockSyncSelectedQcCacheGate_fast.cfg`: CI-friendly selected-roster unknown-block QC cache check.
 - `SumeragiBlockSyncSelectedQcCacheGate_bug_*.cfg`: expected-failure cache prefilter, signer tally, process argument, lock realignment, cache insertion, and validation-error mutations.
 - `SumeragiBlockSyncStaleViewGate.tla`: BlockSyncUpdate stale-view admission and drop-record model.
-- `SumeragiBlockSyncStaleViewGate_fast.cfg`: CI-friendly BlockSyncUpdate stale-view admission check.
+- `SumeragiBlockSyncStaleViewGate_fast.cfg`: CI-friendly direct BlockSyncUpdate stale-view admission check.
 - `SumeragiBlockSyncStaleViewGate_bug_*.cfg`: expected-failure stale-drop, record, return, clear, and commit-evidence mutations.
 - `SumeragiBlockSyncCommitConflictGate.tla`: committed-height BlockSyncUpdate conflict and invalid-QC evidence model.
-- `SumeragiBlockSyncCommitConflictGate_fast.cfg`: CI-friendly committed-height BlockSyncUpdate conflict check.
+- `SumeragiBlockSyncCommitConflictGate_fast.cfg`: CI-friendly direct committed-height BlockSyncUpdate conflict check.
 - `SumeragiBlockSyncCommitConflictGate_bug_*.cfg`: expected-failure height, committed-block, hash, QC validation, evidence, clear, mode, and drop-reason mutations.
 - `SumeragiBlockSyncWarningThrottleGate.tla`: block-sync warning throttle model.
-- `SumeragiBlockSyncWarningThrottleGate_fast.cfg`: CI-friendly block-sync warning throttle check.
+- `SumeragiBlockSyncWarningThrottleGate_fast.cfg`: CI-friendly block-sync warning throttle direct exactness check.
 - `SumeragiBlockSyncWarningThrottleGate_bug_*.cfg`: expected-failure cooldown, keying, burst-cap, zero-cap, zero-cooldown, GC, and clear mutations.
 - `SumeragiQcInsufficientWarningThrottleGate.tla`: QC-insufficient warning throttle model.
-- `SumeragiQcInsufficientWarningThrottleGate_fast.cfg`: CI-friendly QC-insufficient warning throttle check.
+- `SumeragiQcInsufficientWarningThrottleGate_fast.cfg`: CI-friendly QC-insufficient warning throttle direct exactness check.
 - `SumeragiQcInsufficientWarningThrottleGate_bug_*.cfg`: expected-failure cooldown, keying, zero-cooldown, GC, and clear mutations.
 - `SumeragiFetchResponseDeferralGate.tla`: canonical committed fetch/body response deferral helper model.
-- `SumeragiFetchResponseDeferralGate_fast.cfg`: CI-friendly canonical committed fetch/body response deferral check.
+- `SumeragiFetchResponseDeferralGate_fast.cfg`: CI-friendly direct canonical committed fetch/body response deferral check.
 - `SumeragiFetchResponseDeferralGate_bug_*.cfg`: expected-failure height, hash, payload-kind, and proof-sidecar mutations.
 - `SumeragiFetchBlockBodyHandleGate.tla`: exact block-body fetch handler helper model.
-- `SumeragiFetchBlockBodyHandleGate_fast.cfg`: CI-friendly exact block-body fetch handler check.
+- `SumeragiFetchBlockBodyHandleGate_fast.cfg`: CI-friendly direct exact block-body fetch handler check.
 - `SumeragiFetchBlockBodyHandleGate_bug_*.cfg`: expected-failure exact dispatch, canonical deferral, identity mismatch, frontier stash, pending-window stash, requester-removal, deferred-record, dedup-release, and dispatch-helper mutations.
 - `SumeragiBackgroundFrameCapGate.tla`: background consensus frame-cap preparation helper model.
-- `SumeragiBackgroundFrameCapGate_fast.cfg`: CI-friendly background consensus frame-cap preparation check.
+- `SumeragiBackgroundFrameCapGate_fast.cfg`: CI-friendly direct background consensus frame-cap preparation check.
 - `SumeragiBackgroundFrameCapGate_bug_*.cfg`: expected-failure cap-selection, under-cap preservation, oversized-drop, update-trim, sidecar-priority, NPoS stake, response-downgrade, and direct-fallback mutations.
 - `SumeragiBackgroundDispatchGate.tla`: background consensus request dispatch helper model.
-- `SumeragiBackgroundDispatchGate_fast.cfg`: CI-friendly background request dispatch check.
+- `SumeragiBackgroundDispatchGate_fast.cfg`: CI-friendly direct background request dispatch check.
 - `SumeragiBackgroundDispatchGate_bug_*.cfg`: expected-failure full-queue drop, ready-return, unavailable-worker drop-status, kind-label, and request reconstruction mutations.
 - `SumeragiBackgroundBypassGate.tla`: background scheduler bypass policy model.
-- `SumeragiBackgroundBypassGate_fast.cfg`: CI-friendly background scheduler bypass check.
+- `SumeragiBackgroundBypassGate_fast.cfg`: CI-friendly direct background scheduler bypass check.
 - `SumeragiBackgroundBypassGate_bug_*.cfg`: expected-failure post/broadcast bypass, queue-only broadcast, control/native, disabled-worker, and force-queue mutations.
 - `SumeragiBackgroundFallbackGate.tla`: background fallback network dispatch model.
-- `SumeragiBackgroundFallbackGate_fast.cfg`: CI-friendly background fallback dispatch check.
+- `SumeragiBackgroundFallbackGate_fast.cfg`: CI-friendly direct background fallback dispatch check.
 - `SumeragiBackgroundFallbackGate_bug_*.cfg`: expected-failure post/broadcast, payload-class, priority, and peer-targeting mutations.
 - `SumeragiFetchPendingResponseSendGate.tla`: fetch-pending-block response send helper model.
-- `SumeragiFetchPendingResponseSendGate_fast.cfg`: CI-friendly fetch-pending-block response send check.
+- `SumeragiFetchPendingResponseSendGate_fast.cfg`: CI-friendly direct fetch-pending-block response send check.
 - `SumeragiFetchPendingResponseSendGate_bug_*.cfg`: expected-failure hintless-policy, bypass, cached-QC, trim, fallback, direct-QC companion, and ordering mutations.
 - `SumeragiFetchPendingResponsesBatchGate.tla`: fetch-pending-block batch response fanout model.
-- `SumeragiFetchPendingResponsesBatchGate_fast.cfg`: CI-friendly fetch-pending-block batch response fanout check.
+- `SumeragiFetchPendingResponsesBatchGate_fast.cfg`: CI-friendly direct fetch-pending-block batch response fanout check.
 - `SumeragiFetchPendingResponsesBatchGate_bug_*.cfg`: expected-failure commit-QC-only, payload requester, companion, hintless downgrade, roster-update companion, and bypass mutations.
 - `SumeragiPendingResponseFlushGate.tla`: pending fetch/body response readiness flush model.
-- `SumeragiPendingResponseFlushGate_fast.cfg`: CI-friendly pending fetch/body response readiness flush check.
+- `SumeragiPendingResponseFlushGate_fast.cfg`: CI-friendly direct pending fetch/body response readiness flush check.
 - `SumeragiPendingResponseFlushGate_bug_*.cfg`: expected-failure pending-key, payload-build, canonical deferral, removal, dispatch argument, and body response mutations.
 - `SumeragiDeferredBlockSyncHelperGate.tla`: deferred BlockSyncUpdate helper model.
-- `SumeragiDeferredBlockSyncHelperGate_fast.cfg`: CI-friendly deferred BlockSyncUpdate helper check.
+- `SumeragiDeferredBlockSyncHelperGate_fast.cfg`: CI-friendly direct deferred BlockSyncUpdate helper check.
 - `SumeragiDeferredBlockSyncHelperGate_bug_*.cfg`: expected-failure validation blocker, reason priority, merge, evidence detection, cap ordering, and eviction metric mutations.
 - `SumeragiDeferredBlockSyncCacheGate.tla`: deferred BlockSyncUpdate cache/defer integration model.
-- `SumeragiDeferredBlockSyncCacheGate_fast.cfg`: CI-friendly deferred BlockSyncUpdate cache/defer integration check.
+- `SumeragiDeferredBlockSyncCacheGate_fast.cfg`: CI-friendly direct deferred BlockSyncUpdate cache/defer integration check.
 - `SumeragiDeferredBlockSyncCacheGate_bug_*.cfg`: expected-failure vote clearing, full-key merge, sender replacement, commit-QC preservation, cap enforcement, and deferred-outcome mutations.
 - `SumeragiDeferredBlockSyncReplayGate.tla`: deferred BlockSyncUpdate replay model.
-- `SumeragiDeferredBlockSyncReplayGate_fast.cfg`: CI-friendly deferred BlockSyncUpdate replay check.
+- `SumeragiDeferredBlockSyncReplayGate_fast.cfg`: CI-friendly direct deferred BlockSyncUpdate replay check.
 - `SumeragiDeferredBlockSyncReplayGate_bug_*.cfg`: expected-failure inflight guard, ordered selection, remove-before-handle, forwarding, handler-error, and single-entry replay mutations.
 - `SumeragiBlockSyncFutureWindowGate.tla`: future BlockSyncUpdate drop/window helper model.
-- `SumeragiBlockSyncFutureWindowGate_fast.cfg`: CI-friendly future BlockSyncUpdate drop/window check.
+- `SumeragiBlockSyncFutureWindowGate_fast.cfg`: CI-friendly direct future BlockSyncUpdate drop/window check.
 - `SumeragiBlockSyncFutureWindowGate_bug_*.cfg`: expected-failure known-block, requested-margin, lower-gap, parent, generic height/window, generic view/window, and saturation mutations.
 - `SumeragiBlockBodyRepairGate.tla`: RBC block-body repair admission helper model.
-- `SumeragiBlockBodyRepairGate_fast.cfg`: CI-friendly RBC block-body repair admission check.
+- `SumeragiBlockBodyRepairGate_fast.cfg`: CI-friendly direct RBC block-body repair admission check.
 - `SumeragiBlockBodyRepairGate_bug_*.cfg`: expected-failure DA, frontier, session, metadata, authoritative-payload, payload-hash, body identity, and body-kind mutations.
 - `SumeragiBlockBodyRequestStashGate.tla`: exact body requester stash-window helper model.
-- `SumeragiBlockBodyRequestStashGate_fast.cfg`: CI-friendly exact body requester stash-window check.
+- `SumeragiBlockBodyRequestStashGate_fast.cfg`: CI-friendly direct body requester stash-window check.
 - `SumeragiBlockBodyRequestStashGate_bug_*.cfg`: expected-failure margin-floor, lower-bound, upper-bound, stale/same-height, zero-height, and saturating-boundary mutations.
 - `SumeragiSameHeightBlockBodyRepairGate.tla`: same-height block-body repair admission helper model.
-- `SumeragiSameHeightBlockBodyRepairGate_fast.cfg`: CI-friendly same-height block-body repair admission check.
+- `SumeragiSameHeightBlockBodyRepairGate_fast.cfg`: CI-friendly direct same-height block-body repair admission check.
 - `SumeragiSameHeightBlockBodyRepairGate_bug_*.cfg`: expected-failure frontier, pending-request, deferred-QC, active-repair, round-match, phase, actionability, and no-source mutations.
 - `SumeragiBlockBodyRepairEpochGate.tla`: block-body repair observed commit-QC epoch source helper model.
-- `SumeragiBlockBodyRepairEpochGate_fast.cfg`: CI-friendly block-body repair observed epoch source check.
+- `SumeragiBlockBodyRepairEpochGate_fast.cfg`: CI-friendly direct block-body repair observed epoch source check.
 - `SumeragiBlockBodyRepairEpochGate_bug_*.cfg`: expected-failure cache/deferred/pending priority, source drop, deferred match, pending observation, missing epoch, and no-source mutations.
 - `SumeragiDirectCommitQcForBlockGate.tla`: direct commit-QC source selection and local vote-formation helper model.
 - `SumeragiDirectCommitQcForBlockGate_fast.cfg`: CI-friendly direct commit-QC source selection check.
 - `SumeragiDirectCommitQcForBlockGate_bug_*.cfg`: expected-failure cache/world priority, topology selection, quorum floor, vote-formation, phase, subject, and cache-readback mutations.
 - `SumeragiMaterializeQcGate.tla`: QC materialization and Kura recovery helper model.
-- `SumeragiMaterializeQcGate_fast.cfg`: CI-friendly QC materialization and Kura recovery check.
+- `SumeragiMaterializeQcGate_fast.cfg`: CI-friendly direct QC materialization and Kura recovery check.
 - `SumeragiMaterializeQcGate_bug_*.cfg`: expected-failure cached-QC priority, empty-roster recovery, local vote formation, NPoS stake, root filtering, quorum, aggregation, canonical mapping, cache insertion, and prepare-phase mutations.
 - `SumeragiEmbeddedQcRosterGate.tla`: embedded-QC roster bootstrap model.
-- `SumeragiEmbeddedQcRosterGate_fast.cfg`: CI-friendly embedded-QC roster bootstrap check.
+- `SumeragiEmbeddedQcRosterGate_fast.cfg`: CI-friendly direct embedded-QC roster bootstrap check.
 - `SumeragiEmbeddedQcRosterGate_bug_*.cfg`: expected-failure roster-shape, authoritative-anchor, PoP, quorum, NPoS stake, aggregate validation, recovery, cache, and payload-recovery mutations.
 - `SumeragiBlockBodyDirectCommitQcGate.tla`: BlockBodyResponse direct commit-QC extraction helper model.
-- `SumeragiBlockBodyDirectCommitQcGate_fast.cfg`: CI-friendly BlockBodyResponse direct commit-QC extraction check.
+- `SumeragiBlockBodyDirectCommitQcGate_fast.cfg`: CI-friendly direct BlockBodyResponse commit-QC extraction check.
 - `SumeragiBlockBodyDirectCommitQcGate_bug_*.cfg`: expected-failure identity, update source priority, update source drop, created source drop, and no-source mutations.
 - `SumeragiDetachedBlockBodyCommitQcGate.tla`: detached BlockBodyResponse commit-QC handling helper model.
-- `SumeragiDetachedBlockBodyCommitQcGate_fast.cfg`: CI-friendly detached BlockBodyResponse commit-QC handling check.
+- `SumeragiDetachedBlockBodyCommitQcGate_fast.cfg`: CI-friendly direct detached BlockBodyResponse commit-QC handling check.
 - `SumeragiDetachedBlockBodyCommitQcGate_bug_*.cfg`: expected-failure missing-QC, cached-before, handle attempt, post-cache clear, and error-path mutations.
 - `SumeragiBlockBodyResponseDispatchGate.tla`: exact BlockBodyResponse fallback/companion dispatch helper model.
-- `SumeragiBlockBodyResponseDispatchGate_fast.cfg`: CI-friendly exact BlockBodyResponse fallback/companion dispatch check.
+- `SumeragiBlockBodyResponseDispatchGate_fast.cfg`: CI-friendly direct BlockBodyResponse fallback/companion dispatch check.
 - `SumeragiBlockBodyResponseDispatchGate_bug_*.cfg`: expected-failure companion cap, plain fallback, rich response, direct-QC companion, ordering, and bypass-path mutations.
 - `SumeragiInvalidProposalEvidenceBuildGate.tla`: invalid-proposal evidence wrapper/builder helper model.
-- `SumeragiInvalidProposalEvidenceBuildGate_fast.cfg`: CI-friendly invalid-proposal evidence builder helper check.
+- `SumeragiInvalidProposalEvidenceBuildGate_fast.cfg`: CI-friendly direct invalid-proposal evidence builder helper check.
 - `SumeragiInvalidProposalEvidenceBuildGate_bug_*.cfg`: expected-failure kind, reason, proposal, proposer, view, epoch, payload, QC, parent, and height mutations.
 - `SumeragiProposalMismatchGate.tla`: proposal/header/payload mismatch helper model.
-- `SumeragiProposalMismatchGate_fast.cfg`: CI-friendly proposal mismatch helper check.
+- `SumeragiProposalMismatchGate_fast.cfg`: CI-friendly direct proposal mismatch helper check.
 - `SumeragiProposalMismatchGate_bug_*.cfg`: expected-failure mismatch acceptance, compatibility default, zero-state compatibility, and mismatch-priority mutations.
 - `SumeragiProposalCacheGate.tla`: bounded proposal hint/proposal cache helper model.
-- `SumeragiProposalCacheGate_fast.cfg`: CI-friendly proposal cache helper check.
+- `SumeragiProposalCacheGate_fast.cfg`: CI-friendly direct proposal cache helper check.
 - `SumeragiProposalCacheGate_bug_*.cfg`: expected-failure limit, zero-limit, eviction-order, observed-retention, pop, metric, duplicate-insert, and prune mutations.
 - `SumeragiProposalHintAdmissionGate.tla`: inbound proposal-hint admission model.
-- `SumeragiProposalHintAdmissionGate_fast.cfg`: CI-friendly proposal-hint admission check.
+- `SumeragiProposalHintAdmissionGate_fast.cfg`: CI-friendly direct proposal-hint admission check.
 - `SumeragiProposalHintAdmissionGate_bug_*.cfg`: expected-failure stale/malformed hint, duplicate, committed-edge conflict, missing-highest repair, local metadata, lock, cache/observe, highest-QC update, dependency, PRF, replay, prune, and conflict-suppression mutations.
 - `SumeragiStaleProposalHintRepairGate.tla`: stale-view proposal hint repair exception model.
-- `SumeragiStaleProposalHintRepairGate_fast.cfg`: CI-friendly stale proposal-hint repair check.
+- `SumeragiStaleProposalHintRepairGate_fast.cfg`: CI-friendly direct stale proposal-hint repair no-bug check.
 - `SumeragiStaleProposalHintRepairGate_bug_*.cfg`: expected-failure DA gate, active-height gate, one-view-late gate, committed-QC identity, stale-drop, and rejected-stale side-effect mutations.
 - `SumeragiStaleRbcHintRepairGate.tla`: stale RBC proposal-hint repair bridge model.
-- `SumeragiStaleRbcHintRepairGate_fast.cfg`: CI-friendly stale RBC hint repair check.
+- `SumeragiStaleRbcHintRepairGate_fast.cfg`: CI-friendly direct stale RBC hint repair no-bug check.
 - `SumeragiStaleRbcHintRepairGate_bug_*.cfg`: expected-failure DA gate, repair-kind gate, frontier-height gate, cached-hint identity, stale-drop, chunk-stash, and repair-arm mutations.
 - `SumeragiProposalAdmissionGate.tla`: inbound proposal metadata admission model.
-- `SumeragiProposalAdmissionGate_fast.cfg`: CI-friendly proposal metadata admission check.
+- `SumeragiProposalAdmissionGate_fast.cfg`: CI-friendly direct proposal metadata admission check.
 - `SumeragiProposalAdmissionGate_bug_*.cfg`: expected-failure stale/malformed proposal, committed-edge conflict, missing-highest repair, local metadata, lock, cache/observe, highest-QC update, dependency, PRF, leader-context, replay, prune, conflict-suppression, and no-commit-wakeup mutations.
 - `SumeragiPeerAdminDetectionGate.tla`: peer-admin transaction detection helper model.
-- `SumeragiPeerAdminDetectionGate_fast.cfg`: CI-friendly peer-admin transaction detection helper check.
+- `SumeragiPeerAdminDetectionGate_fast.cfg`: CI-friendly direct peer-admin transaction detection helper check.
 - `SumeragiPeerAdminDetectionGate_bug_*.cfg`: expected-failure instruction-id classifier, signed-transaction, executable-kind, batch-any, and non-admin admission mutations.
 - `SumeragiBlockCreatedAdmissionGate.tla`: direct `BlockCreated` payload admission model.
 - `SumeragiBlockCreatedAdmissionGate_fast.cfg`: CI-friendly direct `BlockCreated` payload admission aggregate exactness check.
 - `SumeragiBlockCreatedAdmissionGate_bug_*.cfg`: expected-failure hard-reject, duplicate, replay-preserve, dependency, parent/gap repair, stale cleanup, evidence, lock-reject, proposal-context, phase, commit-wakeup, missing-request, and payload-mismatch recovery mutations.
 - `SumeragiEmptyBlockQcDropGate.tla`: empty-block QC drop and cleanup model.
-- `SumeragiEmptyBlockQcDropGate_fast.cfg`: CI-friendly empty-block QC drop aggregate check.
+- `SumeragiEmptyBlockQcDropGate_fast.cfg`: CI-friendly direct empty-block QC drop component/anchor check.
 - `SumeragiEmptyBlockQcDropGate_bug_*.cfg`: expected-failure phase/known-block/trigger gates, invalid-payload accounting, downstream continuation, and cleanup mutations.
 - `SumeragiMissingRequestClearGate.tla`: missing-block request clear helper model.
-- `SumeragiMissingRequestClearGate_fast.cfg`: CI-friendly missing-block request clear helper check.
+- `SumeragiMissingRequestClearGate_fast.cfg`: CI-friendly direct missing-block request clear helper check.
 - `SumeragiMissingRequestClearGate_bug_*.cfg`: expected-failure locked-hash preservation, committed-conflict, durable-lock, parentless-preservation, stale-drop, payload-available, and committed-height repair continuity mutations.
 - `SumeragiMissingBlockClearGate.tla`: missing-block clear reason helper model.
-- `SumeragiMissingBlockClearGate_fast.cfg`: CI-friendly missing-block clear reason helper check.
+- `SumeragiMissingBlockClearGate_fast.cfg`: CI-friendly direct missing-block clear reason helper check.
 - `SumeragiMissingBlockClearGate_bug_*.cfg`: expected-failure payload-availability, obsolete-reason, swapped-reason, require-local, and always-clear mutations.
 - `SumeragiProposalBudgetGate.tla`: proposal budget/cap helper model.
-- `SumeragiProposalBudgetGate_fast.cfg`: CI-friendly proposal budget/cap helper check.
+- `SumeragiProposalBudgetGate_fast.cfg`: CI-friendly direct proposal budget/cap helper check.
 - `SumeragiProposalBudgetGate_bug_*.cfg`: expected-failure queue-cap flooring, DA payload-budget, transaction-cap, fast-finality cap, gas-cap, and stale-window mutations.
 - `SumeragiProposalBackpressureGate.tla`: proposal backpressure classification helper model.
-- `SumeragiProposalBackpressureGate_fast.cfg`: CI-friendly proposal backpressure classification check.
+- `SumeragiProposalBackpressureGate_fast.cfg`: CI-friendly direct proposal backpressure classification helper check.
 - `SumeragiProposalBackpressureGate_bug_*.cfg`: expected-failure should-defer, pacing-only, and queue-work admission mutations.
 - `SumeragiProposalDeferWarningThrottleGate.tla`: proposal-defer warning throttle model.
-- `SumeragiProposalDeferWarningThrottleGate_fast.cfg`: CI-friendly proposal-defer warning throttle check.
+- `SumeragiProposalDeferWarningThrottleGate_fast.cfg`: CI-friendly proposal-defer warning throttle direct exactness check.
 - `SumeragiProposalDeferWarningThrottleGate_bug_*.cfg`: expected-failure first-emission, cooldown, keying, empty-topology normalization, zero-cooldown, and GC mutations.
 - `SumeragiNonRbcPayloadBudgetGate.tla`: non-RBC payload frame budget helper model.
-- `SumeragiNonRbcPayloadBudgetGate_fast.cfg`: CI-friendly non-RBC payload frame budget helper check.
+- `SumeragiNonRbcPayloadBudgetGate_fast.cfg`: CI-friendly direct non-RBC payload frame budget helper check.
 - `SumeragiNonRbcPayloadBudgetGate_bug_*.cfg`: expected-failure headroom, saturating subtraction, absent-config, explicit-config, min/clamp, and zero-frame mutations.
 - `SumeragiProposalBatchGate.tla`: proposal batch trim/canonicalization helper model.
-- `SumeragiProposalBatchGate_fast.cfg`: CI-friendly proposal batch trim/canonicalization check.
+- `SumeragiProposalBatchGate_fast.cfg`: CI-friendly direct proposal batch trim/canonicalization check.
 - `SumeragiProposalBatchGate_bug_*.cfg`: expected-failure tail-trim, singleton, zero-size, removed-order, companion-alignment, stable-sort, and length-preservation mutations.
 - `SumeragiLaneInterleaveGate.tla`: lane interleave routing-decision helper model.
-- `SumeragiLaneInterleaveGate_fast.cfg`: CI-friendly lane interleave routing-decision helper check.
+- `SumeragiLaneInterleaveGate_fast.cfg`: CI-friendly direct lane interleave routing-decision helper check.
 - `SumeragiLaneInterleaveGate_bug_*.cfg`: expected-failure empty/singleton, single-lane, lane-order, drain, rotation, wrapping, sorted-lane, and intra-lane order mutations.
 - `SumeragiCommitmentSnapshotBuilderGate.tla`: lane/dataspace commitment snapshot builder model.
-- `SumeragiCommitmentSnapshotBuilderGate_fast.cfg`: CI-friendly lane/dataspace commitment snapshot builder check.
+- `SumeragiCommitmentSnapshotBuilderGate_fast.cfg`: CI-friendly direct lane/dataspace commitment snapshot builder check.
 - `SumeragiCommitmentSnapshotBuilderGate_bug_*.cfg`: expected-failure block-context, aggregate-field, dataspace-id, and sorted-order mutations.
 - `SumeragiCollectorPlanGate.tla`: collector retry/gossip state helper model.
 - `SumeragiCollectorPlanGate_fast.cfg`: CI-friendly collector retry/gossip state aggregate exactness check.
 - `SumeragiCollectorPlanGate_bug_*.cfg`: expected-failure construction, sent-count, target-preservation, peek, next, exhaustion, and one-shot gossip mutations.
 - `SumeragiCollectorSelectionGate.tla`: collector fanout/selection helper model.
-- `SumeragiCollectorSelectionGate_fast.cfg`: CI-friendly collector fanout/selection helper check.
+- `SumeragiCollectorSelectionGate_fast.cfg`: CI-friendly direct collector fanout/selection helper check.
 - `SumeragiCollectorSelectionGate_bug_*.cfg`: expected-failure quorum/proxy-tail, fanout-floor, default-slice, fallback-wrap, seed-routing, and PRF contract mutations.
 - `SumeragiTopologyMutationGate.tla`: topology ordered-roster mutation helper model.
-- `SumeragiTopologyMutationGate_fast.cfg`: CI-friendly topology ordered-roster mutation helper check.
+- `SumeragiTopologyMutationGate_fast.cfg`: CI-friendly direct topology ordered-roster mutation no-bug check.
 - `SumeragiTopologyMutationGate_bug_*.cfg`: expected-failure topology construction, rotation, view-change, membership update, block-commit reset, and canonicalization mutations.
 - `SumeragiPrfLeaderShuffleGate.tla`: PRF leader/shuffle topology helper model.
-- `SumeragiPrfLeaderShuffleGate_fast.cfg`: CI-friendly PRF leader/shuffle topology helper check.
+- `SumeragiPrfLeaderShuffleGate_fast.cfg`: CI-friendly direct PRF leader/shuffle topology helper check.
 - `SumeragiPrfLeaderShuffleGate_bug_*.cfg`: expected-failure empty/single leader, view modulo, permutation, shuffle, and wrapper canonicalization mutations.
 - `SumeragiTopologyFanoutGate.tla`: topology fanout, redundant-send, and view-change quorum helper model.
-- `SumeragiTopologyFanoutGate_fast.cfg`: CI-friendly topology fanout/redundant-send helper check.
+- `SumeragiTopologyFanoutGate_fast.cfg`: CI-friendly direct topology fanout/redundant-send helper check.
 - `SumeragiTopologyFanoutGate_bug_*.cfg`: expected-failure redundant-send formula/clamp, view-change quorum, redundant floor, and topology fanout mutations.
 - `SumeragiTopologyRoleFilterGate.tla`: topology role classification, role-slice, signature filter, and audit-role model.
-- `SumeragiTopologyRoleFilterGate_fast.cfg`: CI-friendly topology role/signature filter check.
+- `SumeragiTopologyRoleFilterGate_fast.cfg`: CI-friendly topology role/signature filter aggregate exactness check.
 - `SumeragiTopologyRoleFilterGate_bug_*.cfg`: expected-failure role partition, role-slice, signature-filter, and audit-rotation mutations.
 - `SumeragiActiveTopologySelectionGate.tla`: active validator topology selection model.
-- `SumeragiActiveTopologySelectionGate_fast.cfg`: CI-friendly active topology selection check.
+- `SumeragiActiveTopologySelectionGate_fast.cfg`: CI-friendly direct active topology selection check.
 - `SumeragiActiveTopologySelectionGate_bug_*.cfg`: expected-failure source-priority, BLS/canonicalization, PoP filtering, quorum guard, and trusted-fallback mutations.
 - `SumeragiP2pTopologyTrustedGate.tla`: trusted-peer P2P topology refresh helper model.
-- `SumeragiP2pTopologyTrustedGate_fast.cfg`: CI-friendly trusted-peer P2P topology refresh helper check.
+- `SumeragiP2pTopologyTrustedGate_fast.cfg`: CI-friendly direct trusted-peer P2P topology refresh helper check.
 - `SumeragiP2pTopologyTrustedGate_bug_*.cfg`: expected-failure local/trusted/world inclusion, outside-only filtering, stray preservation, trusted-observer, and topology-dedup mutations.
 - `SumeragiP2pTopologyRefreshGate.tla`: P2P topology refresh coordinator model.
-- `SumeragiP2pTopologyRefreshGate_fast.cfg`: CI-friendly P2P topology refresh coordinator check.
+- `SumeragiP2pTopologyRefreshGate_fast.cfg`: CI-friendly P2P topology refresh coordinator aggregate exactness check.
 - `SumeragiP2pTopologyRefreshGate_bug_*.cfg`: expected-failure empty/unchanged/changed/stray decision, local-seen latch, local-removal, queue-clear, gossip, network-update, and status mutations.
 - `SumeragiQuorumRetransmitTargetsGate.tla`: quorum retransmit target-selection helper model.
-- `SumeragiQuorumRetransmitTargetsGate_fast.cfg`: CI-friendly quorum retransmit target-selection helper check.
+- `SumeragiQuorumRetransmitTargetsGate_fast.cfg`: CI-friendly direct quorum retransmit target-selection helper check.
 - `SumeragiQuorumRetransmitTargetsGate_bug_*.cfg`: expected-failure empty/local exclusion, observed/missing vote, near-quorum fanout, mapping-failure, ordering, duplicate, and view-mapping mutations.
 - `SumeragiRetransmitBackpressureGate.tla`: retransmit backpressure pacing helper model.
-- `SumeragiRetransmitBackpressureGate_fast.cfg`: CI-friendly retransmit backpressure pacing helper check.
+- `SumeragiRetransmitBackpressureGate_fast.cfg`: CI-friendly direct retransmit backpressure pacing helper check.
 - `SumeragiRetransmitBackpressureGate_bug_*.cfg`: expected-failure queue/RBC pressure threshold, score-composition, target-limit, cooldown, backoff, and timeout-clamp mutations.
 - `SumeragiPacedRetransmitTargetsGate.tla`: paced retransmit target selection helper model.
-- `SumeragiPacedRetransmitTargetsGate_fast.cfg`: CI-friendly paced retransmit target selection check.
+- `SumeragiPacedRetransmitTargetsGate_fast.cfg`: CI-friendly direct paced retransmit target selection check.
 - `SumeragiPacedRetransmitTargetsGate_bug_*.cfg`: expected-failure empty/zero-limit, pre-sort return, sort/dedup, offset, rotation, and truncation mutations.
 - `SumeragiQuorumRescheduleBackoffGate.tla`: quorum reschedule backoff and contiguous-frontier fast resend helper model.
-- `SumeragiQuorumRescheduleBackoffGate_fast.cfg`: CI-friendly quorum reschedule backoff helper check.
+- `SumeragiQuorumRescheduleBackoffGate_fast.cfg`: CI-friendly direct quorum reschedule backoff helper check.
 - `SumeragiQuorumRescheduleBackoffGate_bug_*.cfg`: expected-failure deficit multiplier, stall escalation, resend-window, and fast-resend gate mutations.
 - `SumeragiRbcAvailabilityRescheduleGate.tla`: DA/RBC availability reschedule gate model.
-- `SumeragiRbcAvailabilityRescheduleGate_fast.cfg`: CI-friendly RBC availability reschedule gate check.
+- `SumeragiRbcAvailabilityRescheduleGate_fast.cfg`: CI-friendly direct RBC availability reschedule gate check.
 - `SumeragiRbcAvailabilityRescheduleGate_bug_*.cfg`: expected-failure DA-disabled, timeout, local-payload, pending/session-state, missing-chunk, and READY-quorum mutations.
 - `SumeragiVoteBackedReassemblyStallGate.tla`: vote-backed same-height frontier reassembly stall helper model.
-- `SumeragiVoteBackedReassemblyStallGate_fast.cfg`: CI-friendly vote-backed reassembly stall helper check.
+- `SumeragiVoteBackedReassemblyStallGate_fast.cfg`: CI-friendly direct vote-backed reassembly stall helper check.
 - `SumeragiVoteBackedReassemblyStallGate_bug_*.cfg`: expected-failure hard-cap, slot-owner, recovery-owner, progress-timestamp, and expiry-threshold mutations.
 - `SumeragiCompletedQuorumViewAdvanceGate.tla`: completed quorum-reschedule view-advance helper model.
-- `SumeragiCompletedQuorumViewAdvanceGate_fast.cfg`: CI-friendly completed quorum view-advance helper check.
+- `SumeragiCompletedQuorumViewAdvanceGate_fast.cfg`: CI-friendly direct completed quorum view-advance helper check.
 - `SumeragiCompletedQuorumViewAdvanceGate_bug_*.cfg`: expected-failure exact/generic routing, stale/no-slot fallback, max-view, saturation, timestamp, cause, and slot-state mutations.
 - `SumeragiQuorumRebroadcastDispatchGate.tla`: quorum rebroadcast dispatch helper model.
-- `SumeragiQuorumRebroadcastDispatchGate_fast.cfg`: CI-friendly quorum rebroadcast dispatch helper check.
+- `SumeragiQuorumRebroadcastDispatchGate_fast.cfg`: CI-friendly direct quorum rebroadcast dispatch helper check.
 - `SumeragiQuorumRebroadcastDispatchGate_bug_*.cfg`: expected-failure local-vote, fail-closed exit, force-fanout, vote replay, payload repair, block-sync, and marker mutations.
 - `SumeragiIsolatedVoteBackedHandoffGate.tla`: isolated vote-backed frontier handoff helper model.
-- `SumeragiIsolatedVoteBackedHandoffGate_fast.cfg`: CI-friendly isolated vote-backed handoff helper check.
+- `SumeragiIsolatedVoteBackedHandoffGate_fast.cfg`: CI-friendly direct isolated vote-backed handoff helper check.
 - `SumeragiIsolatedVoteBackedHandoffGate_bug_*.cfg`: expected-failure admission, seed/body-event, slot-validation, range-pull, and reason-label mutations.
 - `SumeragiPreemptiveVoteBackedRetransmitGate.tla`: pre-timeout vote-backed frontier retransmit handoff model.
-- `SumeragiPreemptiveVoteBackedRetransmitGate_fast.cfg`: CI-friendly pre-timeout vote-backed retransmit handoff check.
+- `SumeragiPreemptiveVoteBackedRetransmitGate_fast.cfg`: CI-friendly direct pre-timeout vote-backed retransmit handoff check.
 - `SumeragiPreemptiveVoteBackedRetransmitGate_bug_*.cfg`: expected-failure candidate, pending-state, target-fallback, rebroadcast-output, pending-retention, and near-quorum flag mutations.
 - `SumeragiNearQuorumPreemptiveEscalationGate.tla`: pre-timeout near-quorum missing-payload escalation coordinator model.
-- `SumeragiNearQuorumPreemptiveEscalationGate_fast.cfg`: CI-friendly near-quorum preemptive escalation coordinator check.
+- `SumeragiNearQuorumPreemptiveEscalationGate_fast.cfg`: CI-friendly direct near-quorum preemptive escalation coordinator check.
 - `SumeragiNearQuorumPreemptiveEscalationGate_bug_*.cfg`: expected-failure budget, pending, fresh-request, in-flight recovery, delegate-return, and per-tick-cap mutations.
 - `SumeragiManifestGateRescheduleGate.tla`: manifest-gated quorum-reschedule branch model.
-- `SumeragiManifestGateRescheduleGate_fast.cfg`: CI-friendly manifest-gated quorum-reschedule branch check.
+- `SumeragiManifestGateRescheduleGate_fast.cfg`: CI-friendly direct manifest-gated quorum-reschedule branch check.
 - `SumeragiManifestGateRescheduleGate_bug_*.cfg`: expected-failure manifest effectiveness, retention, marker, rotation, no-target, drop, and vote-evidence mutations.
 - `SumeragiQcSignerBitmap.tla`: QC signer-bitmap admission model.
 - `SumeragiQcSignerBitmap_fast.cfg`: CI-friendly QC signer-bitmap admission check.
@@ -7007,7 +7007,7 @@ verification, and full networking details.
 - `SumeragiQcSignerBitmap_bug_ignore_out_of_bounds.cfg`: expected-failure out-of-bounds signer mutation.
 - `SumeragiQcSignerBitmap_bug_under_quorum_accept.cfg`: expected-failure under-quorum acceptance mutation.
 - `SumeragiQcSignerCountGate.tla`: raw QC signer-bitmap population-count helper model.
-- `SumeragiQcSignerCountGate_fast.cfg`: CI-friendly raw QC signer-count helper check.
+- `SumeragiQcSignerCountGate_fast.cfg`: CI-friendly direct raw QC signer-count helper check.
 - `SumeragiQcSignerCountGate_bug_*.cfg`: expected-failure empty, zero, low/high-bit, full-byte, byte-vs-bit, multi-byte, padding-bit, saturation, and nonzero-byte mutations.
 - `SumeragiCommitRootConsistency.tla`: commit-QC execution-root consistency model.
 - `SumeragiCommitRootConsistency_fast.cfg`: CI-friendly commit-root consistency check.
@@ -7036,100 +7036,100 @@ verification, and full networking details.
 - `SumeragiCommitPipelineRecoveryGate_bug_rebroadcast_without_votes.cfg`: expected-failure empty-vote rebroadcast mutation.
 - `SumeragiCommitPipelineRecoveryGate_bug_rebroadcast_after_qc.cfg`: expected-failure post-QC rebroadcast mutation.
 - `SumeragiKnownBlockCommitQcRecoveryGate.tla`: known-block commit-QC recovery helper model.
-- `SumeragiKnownBlockCommitQcRecoveryGate_fast.cfg`: CI-friendly known-block commit-QC recovery helper check.
+- `SumeragiKnownBlockCommitQcRecoveryGate_fast.cfg`: CI-friendly direct known-block commit-QC recovery helper check.
 - `SumeragiKnownBlockCommitQcRecoveryGate_bug_*.cfg`: expected-failure request-plan, tip-extension, pending-admission, and override/map precedence mutations.
 - `SumeragiStaleViewCommitQcFetchGate.tla`: stale-view commit-QC fetch admission helper model.
-- `SumeragiStaleViewCommitQcFetchGate_fast.cfg`: CI-friendly stale-view commit-QC fetch admission helper check.
+- `SumeragiStaleViewCommitQcFetchGate_fast.cfg`: CI-friendly stale-view commit-QC fetch admission aggregate exactness check.
 - `SumeragiStaleViewCommitQcFetchGate_bug_*.cfg`: expected-failure identity, pending-state, local-vote, tip-extension, parent/tip hash, and absent-tip boundary mutations.
 - `SumeragiCommitAnchorQcGate.tla`: commit-anchor QC promotion helper model.
-- `SumeragiCommitAnchorQcGate_fast.cfg`: CI-friendly commit-anchor QC promotion helper check.
+- `SumeragiCommitAnchorQcGate_fast.cfg`: CI-friendly direct commit-anchor QC promotion helper check.
 - `SumeragiCommitAnchorQcGate_bug_*.cfg`: expected-failure highest/lock selection, lock-change pruning, locked-chain realignment, and status publication mutations.
 - `SumeragiCommittedHeightQcGate.tla`: committed-height QC admission helper model.
-- `SumeragiCommittedHeightQcGate_fast.cfg`: CI-friendly committed-height QC admission helper check.
+- `SumeragiCommittedHeightQcGate_fast.cfg`: CI-friendly direct committed-height QC admission helper check.
 - `SumeragiCommittedHeightQcGate_bug_*.cfg`: expected-failure future/record-only/drop, committed-match side effects, divergent-hash conflict, validation-context, genesis-stub, and evidence mutations.
 - `SumeragiPendingProgressGate.tla`: pending-progress accounting helper model.
-- `SumeragiPendingProgressGate_fast.cfg`: CI-friendly pending-progress accounting aggregate check.
+- `SumeragiPendingProgressGate_fast.cfg`: CI-friendly direct pending-progress accounting aggregate check.
 - `SumeragiPendingProgressGate_bug_*.cfg`: expected-failure touch, activation-refresh, tip-activation, and recent-progress window mutations.
 - `SumeragiPendingBlockLifecycleGate.tla`: pending-block lifecycle helper model.
-- `SumeragiPendingBlockLifecycleGate_fast.cfg`: CI-friendly pending-block lifecycle aggregate check.
+- `SumeragiPendingBlockLifecycleGate_fast.cfg`: CI-friendly direct pending-block lifecycle no-bug check.
 - `SumeragiPendingBlockLifecycleGate_bug_*.cfg`: expected-failure construction, replacement, revive, abort, retire, and retired-payload refresh mutations.
 - `SumeragiPendingBlockMarkerGate.tla`: pending-block marker and cooldown helper model.
-- `SumeragiPendingBlockMarkerGate_fast.cfg`: CI-friendly pending-block marker/cooldown aggregate check.
+- `SumeragiPendingBlockMarkerGate_fast.cfg`: CI-friendly direct pending-block marker/cooldown no-bug check.
 - `SumeragiPendingBlockMarkerGate_bug_*.cfg`: expected-failure commit-stage marker, quorum-reschedule, rebroadcast, and redrive cooldown mutations.
 - `SumeragiKuraRetryGate.tla`: pending-block Kura retry-state helper model.
-- `SumeragiKuraRetryGate_fast.cfg`: CI-friendly pending-block Kura retry aggregate check.
+- `SumeragiKuraRetryGate_fast.cfg`: CI-friendly direct pending-block Kura retry no-bug/aggregate check.
 - `SumeragiKuraRetryGate_bug_*.cfg`: expected-failure due-boundary, reset, mark-persisted, retry-budget, backoff, overflow, and delay-clamp mutations.
 - `SumeragiCommitPipelineSchedulingGate.tla`: commit-pipeline scheduling gate model.
-- `SumeragiCommitPipelineSchedulingGate_fast.cfg`: CI-friendly commit-pipeline scheduling aggregate check.
+- `SumeragiCommitPipelineSchedulingGate_fast.cfg`: CI-friendly direct commit-pipeline scheduling aggregate check.
 - `SumeragiCommitPipelineSchedulingGate_bug_*.cfg`: expected-failure tick/event entry, deadline, recovery-candidate inclusion, budget exhaustion, backlog, last-run, wakeup, idle-budget, and candidate-processing mutations.
 - `SumeragiPrecommitVoteCountGate.tla`: precommit vote-count helper model.
-- `SumeragiPrecommitVoteCountGate_fast.cfg`: CI-friendly precommit vote-count helper check.
+- `SumeragiPrecommitVoteCountGate_fast.cfg`: CI-friendly precommit vote-count aggregate/anchor check.
 - `SumeragiPrecommitVoteCountGate_bug_*.cfg`: expected-failure phase, empty-bitmap, roster-bound, boundary, multi-byte, bit-counting, and saturation mutations.
 - `SumeragiVotingSignerCountGate.tla`: set-based voting signer-count helper model.
-- `SumeragiVotingSignerCountGate_fast.cfg`: CI-friendly voting signer-count helper check.
+- `SumeragiVotingSignerCountGate_fast.cfg`: CI-friendly voting signer-count aggregate exactness check.
 - `SumeragiVotingSignerCountGate_bug_*.cfg`: expected-failure empty, zero-roster, boundary, out-of-range, duplicate-collapse, full-roster, and padding mutations.
 - `SumeragiBuildSignersBitmapGate.tla`: signer-bitmap construction helper model.
 - `SumeragiBuildSignersBitmapGate_fast.cfg`: CI-friendly signer-bitmap construction aggregate exactness check.
 - `SumeragiBuildSignersBitmapGate_bug_*.cfg`: expected-failure length, bit placement, OR, boundary, out-of-range, duplicate-collapse, full-roster, and padding mutations.
 - `SumeragiSignerIndexNormalizationGate.tla`: canonical/view signer-index normalization helper model.
-- `SumeragiSignerIndexNormalizationGate_fast.cfg`: CI-friendly canonical/view signer-index normalization helper check.
+- `SumeragiSignerIndexNormalizationGate_fast.cfg`: CI-friendly direct canonical/view signer-index normalization helper check.
 - `SumeragiSignerIndexNormalizationGate_bug_*.cfg`: expected-failure numeric-position, out-of-range, absent-peer, empty-roster, filtering, and round-trip mutations.
 - `SumeragiDistinctVoteEpochsGate.tla`: cached vote-log epoch replay helper model.
-- `SumeragiDistinctVoteEpochsGate_fast.cfg`: CI-friendly cached vote-log epoch replay helper check.
+- `SumeragiDistinctVoteEpochsGate_fast.cfg`: CI-friendly direct cached vote-log epoch replay helper check.
 - `SumeragiDistinctVoteEpochsGate_bug_*.cfg`: expected-failure vote filter, value-vs-key epoch, topology gate, and duplicate-replay mutations.
 - `SumeragiNewViewHighestQcVotesGate.tla`: NEW_VIEW highest-QC vote-selection helper model.
-- `SumeragiNewViewHighestQcVotesGate_fast.cfg`: CI-friendly NEW_VIEW highest-QC vote-selection helper check.
+- `SumeragiNewViewHighestQcVotesGate_fast.cfg`: CI-friendly direct NEW_VIEW highest-QC vote-selection helper check.
 - `SumeragiNewViewHighestQcVotesGate_bug_*.cfg`: expected-failure signer filter, slot filter, candidate presence/phase, rank, exact-grouping, and duplicate-group mutations.
 - `SumeragiFrontierNewViewCatchUpGate.tla`: active-frontier NEW_VIEW catch-up emission helper model.
-- `SumeragiFrontierNewViewCatchUpGate_fast.cfg`: CI-friendly active-frontier NEW_VIEW catch-up emission check.
+- `SumeragiFrontierNewViewCatchUpGate_fast.cfg`: CI-friendly direct active-frontier NEW_VIEW catch-up emission check.
 - `SumeragiFrontierNewViewCatchUpGate_bug_*.cfg`: expected-failure resilience, view, support, local-signer, frontier, canonical-tip, tracked-view, and successor-window mutations.
 - `SumeragiNearQuorumNewViewRebroadcastGate.tla`: near-quorum NEW_VIEW vote rebroadcast helper model.
-- `SumeragiNearQuorumNewViewRebroadcastGate_fast.cfg`: CI-friendly near-quorum NEW_VIEW vote rebroadcast helper check.
+- `SumeragiNearQuorumNewViewRebroadcastGate_fast.cfg`: CI-friendly direct near-quorum NEW_VIEW vote rebroadcast helper check.
 - `SumeragiNearQuorumNewViewRebroadcastGate_bug_*.cfg`: expected-failure admission, cooldown-floor, backpressure return, pacemaker nudge, phase, backpressure, and label mutations.
 - `SumeragiLateNewViewEmissionGate.tla`: late NEW_VIEW same-highest near-quorum emission helper model.
-- `SumeragiLateNewViewEmissionGate_fast.cfg`: CI-friendly late NEW_VIEW emission check.
+- `SumeragiLateNewViewEmissionGate_fast.cfg`: CI-friendly direct late NEW_VIEW emission check.
 - `SumeragiLateNewViewEmissionGate_bug_*.cfg`: expected-failure frontier/view/local-index, permissioned/NPoS quorum, stake-roster, signer-map, same-slot supersession, candidate-ordering, and inner-emission mutations.
 - `SumeragiOnlineValidatorRelayCountersGate.tla`: online-validator and relay counter helper model.
-- `SumeragiOnlineValidatorRelayCountersGate_fast.cfg`: CI-friendly online-validator and relay counter helper check.
+- `SumeragiOnlineValidatorRelayCountersGate_fast.cfg`: CI-friendly online-validator and relay counter direct exactness check.
 - `SumeragiOnlineValidatorRelayCountersGate_bug_*.cfg`: expected-failure online roster filtering, relay total, direct counter, cap-family, and saturation mutations.
 - `SumeragiCommitResultDrainGate.tla`: commit-result drain gate model.
-- `SumeragiCommitResultDrainGate_fast.cfg`: CI-friendly commit-result drain gate check.
+- `SumeragiCommitResultDrainGate_fast.cfg`: CI-friendly direct commit-result drain component check.
 - `SumeragiCommitResultDrainGate_bug_*.cfg`: expected-failure result id, inflight ownership, worker disconnect, inline fallback, signature-recovery, summary/progress, kickstart, and loop-stop mutations.
 - `SumeragiCommitDrainSummaryGate.tla`: commit-drain summary aggregation helper model.
-- `SumeragiCommitDrainSummaryGate_fast.cfg`: CI-friendly commit-drain summary aggregation helper check.
+- `SumeragiCommitDrainSummaryGate_fast.cfg`: CI-friendly direct commit-drain summary aggregation helper check.
 - `SumeragiCommitDrainSummaryGate_bug_*.cfg`: expected-failure result count, progress preservation, absent timing, per-stage accumulator, and saturation mutations.
 - `SumeragiCommitPipelineSampleGate.tla`: commit-pipeline timing sample helper model.
-- `SumeragiCommitPipelineSampleGate_fast.cfg`: CI-friendly commit-pipeline timing sample helper check.
+- `SumeragiCommitPipelineSampleGate_fast.cfg`: CI-friendly direct commit-pipeline timing sample helper check.
 - `SumeragiCommitPipelineSampleGate_bug_*.cfg`: expected-failure total-finish, duration saturation, duration-field mapping, drain-stage independence, phase-sum, and bookkeeping-leak mutations.
 - `SumeragiCommitPipelineStatusGate.tla`: commit-pipeline status recorder model.
-- `SumeragiCommitPipelineStatusGate_fast.cfg`: CI-friendly commit-pipeline status recorder check.
+- `SumeragiCommitPipelineStatusGate_fast.cfg`: CI-friendly commit-pipeline status recorder direct exactness check.
 - `SumeragiCommitPipelineStatusGate_bug_*.cfg`: expected-failure last-field, EMA, non-EMA, snapshot, and reset mutations.
 - `SumeragiAutoscaleTransitionGate.tla`: autoscale transition commit gate model.
-- `SumeragiAutoscaleTransitionGate_fast.cfg`: CI-friendly autoscale transition commit gate check.
+- `SumeragiAutoscaleTransitionGate_fast.cfg`: CI-friendly direct autoscale transition commit gate check.
 - `SumeragiAutoscaleTransitionGate_bug_*.cfg`: expected-failure enabled, height-match, success-path, and reported-height mutations.
 - `SumeragiCommitQuorumSignersGate.tla`: commit-QC signer quorum helper model.
-- `SumeragiCommitQuorumSignersGate_fast.cfg`: CI-friendly commit-QC signer quorum helper check.
+- `SumeragiCommitQuorumSignersGate_fast.cfg`: CI-friendly direct commit-QC signer quorum helper check.
 - `SumeragiCommitQuorumSignersGate_bug_*.cfg`: expected-failure missing metadata, zero-threshold, threshold-boundary, and failed-branch mutations.
 - `SumeragiSignatureIndexRecoveryGate.tla`: commit signature-index recovery helper model.
-- `SumeragiSignatureIndexRecoveryGate_fast.cfg`: CI-friendly commit signature-index recovery helper check.
+- `SumeragiSignatureIndexRecoveryGate_fast.cfg`: CI-friendly direct commit signature-index recovery helper check.
 - `SumeragiSignatureIndexRecoveryGate_bug_*.cfg`: expected-failure raw-index, fallback, eligibility, ambiguity, duplicate, and replacement-error mutations.
 - `SumeragiCommitQcLookupGate.tla`: commit-QC cache/history lookup helper model.
-- `SumeragiCommitQcLookupGate_fast.cfg`: CI-friendly commit-QC cache/history lookup aggregate check.
+- `SumeragiCommitQcLookupGate_fast.cfg`: CI-friendly direct commit-QC cache/history lookup check.
 - `SumeragiCommitQcLookupGate_bug_*.cfg`: expected-failure cache-priority, history-match, aggregate, topology, and absent-history mutations.
 - `SumeragiPrecommitSignerRecordGate.tla`: cached-QC precommit signer record helper model.
-- `SumeragiPrecommitSignerRecordGate_fast.cfg`: CI-friendly cached-QC precommit signer record aggregate check.
+- `SumeragiPrecommitSignerRecordGate_fast.cfg`: CI-friendly direct cached-QC precommit signer record aggregate check.
 - `SumeragiPrecommitSignerRecordGate_bug_*.cfg`: expected-failure topology, bitmap, aggregate, permissioned quorum, NPoS stake, snapshot, roster, and signer-count mutations.
 - `SumeragiRosterValidationMemoGate.tla`: roster-validation memo cache helper model.
-- `SumeragiRosterValidationMemoGate_fast.cfg`: CI-friendly roster-validation memo cache aggregate check.
+- `SumeragiRosterValidationMemoGate_fast.cfg`: CI-friendly roster-validation memo cache aggregate exactness check.
 - `SumeragiRosterValidationMemoGate_bug_*.cfg`: expected-failure construction, get/touch, insert/update, eviction, lane-isolation, refresh, and capacity-sharing mutations.
 - `SumeragiRosterValidationCachedGate.tla`: cached roster-validation wrapper helper model.
-- `SumeragiRosterValidationCachedGate_fast.cfg`: CI-friendly cached roster-validation wrapper aggregate check.
+- `SumeragiRosterValidationCachedGate_fast.cfg`: CI-friendly cached roster-validation wrapper aggregate exactness check.
 - `SumeragiRosterValidationCachedGate_bug_*.cfg`: expected-failure prefilter, empty-aggregate, memo-key, hit/miss, insert, forwarding, and prefilter-order mutations.
 - `SumeragiRosterValidationCoreGate.tla`: core roster-validation helper model.
-- `SumeragiRosterValidationCoreGate_fast.cfg`: CI-friendly core roster-validation aggregate check.
+- `SumeragiRosterValidationCoreGate_fast.cfg`: CI-friendly core roster-validation aggregate exactness check.
 - `SumeragiRosterValidationCoreGate_bug_*.cfg`: expected-failure hash-version, roster-hash, signer-bitmap, genesis-stub, quorum, stake, PoP, root, preimage, BLS-input, and return-shape mutations.
 - `SumeragiRosterArtifactSelectionGate.tla`: roster artifact selection helper model.
-- `SumeragiRosterArtifactSelectionGate_fast.cfg`: CI-friendly roster artifact selection aggregate check.
+- `SumeragiRosterArtifactSelectionGate_fast.cfg`: CI-friendly roster artifact selection aggregate exactness check.
 - `SumeragiRosterArtifactSelectionGate_bug_*.cfg`: expected-failure view priority, artifact attachment, mismatch preference, stake-resolution, input/root, epoch, and genesis-stub mutations.
 - `SumeragiBlockRosterCachesGate.tla`: block roster cache key/cache helper model.
 - `SumeragiBlockRosterCachesGate_fast.cfg`: CI-friendly block roster cache key/cache aggregate exactness check.
@@ -7141,16 +7141,16 @@ verification, and full networking details.
 - `SumeragiBlockSyncHistoryRosterGate_fast.cfg`: CI-friendly block-sync history roster aggregate exactness check.
 - `SumeragiBlockSyncHistoryRosterGate_bug_*.cfg`: expected-failure history filter, derivation, source, height/view, and fallback mutations.
 - `SumeragiPersistedRosterSelectionGate.tla`: persisted block-sync roster selection helper model.
-- `SumeragiPersistedRosterSelectionGate_fast.cfg`: CI-friendly persisted roster selection aggregate check.
+- `SumeragiPersistedRosterSelectionGate_fast.cfg`: CI-friendly persisted roster selection aggregate exactness check.
 - `SumeragiPersistedRosterSelectionGate_bug_*.cfg`: expected-failure source precedence, cache, sidecar, previous-evidence, and fail-closed mutations.
 - `SumeragiBlockSyncUpdateRosterHydrationGate.tla`: BlockSyncUpdate roster hydration wrapper model.
 - `SumeragiBlockSyncUpdateRosterHydrationGate_fast.cfg`: CI-friendly BlockSyncUpdate roster hydration aggregate exactness check.
 - `SumeragiBlockSyncUpdateRosterHydrationGate_bug_*.cfg`: expected-failure source order, fallback, apply, and NPoS stake-fill mutations.
 - `SumeragiRosterIndexProjectionGate.tla`: roster index projection and epoch-manager normalization model.
-- `SumeragiRosterIndexProjectionGate_fast.cfg`: CI-friendly roster index projection aggregate check.
+- `SumeragiRosterIndexProjectionGate_fast.cfg`: CI-friendly direct roster index projection no-bug check.
 - `SumeragiRosterIndexProjectionGate_bug_*.cfg`: expected-failure provider projection, fallback, overflow, and manager normalization mutations.
 - `SumeragiMembershipViewHashGate.tla`: membership-view hash preimage model.
-- `SumeragiMembershipViewHashGate_fast.cfg`: CI-friendly membership-view hash preimage aggregate check.
+- `SumeragiMembershipViewHashGate_fast.cfg`: CI-friendly direct membership-view hash preimage no-bug check.
 - `SumeragiMembershipViewHashGate_bug_*.cfg`: expected-failure context-field, field-order, peer-order, peer-cardinality, and change-detection mutations.
 - `SumeragiMembershipMismatchStatusGate.tla`: membership snapshot and mismatch status helper model.
 - `SumeragiMembershipMismatchStatusGate_fast.cfg`: CI-friendly membership snapshot/mismatch status aggregate check.
@@ -7165,13 +7165,13 @@ verification, and full networking details.
 - `SumeragiMembershipMismatchIngressGate_fast.cfg`: CI-friendly membership-mismatch ingress and fail-closed aggregate check.
 - `SumeragiMembershipMismatchIngressGate_bug_*.cfg`: expected-failure advert filter, context match, mismatch record/clear, threshold, fail-closed drop, and status-reason mutations.
 - `SumeragiPrevalidatedCommitArtifactGate.tla`: prevalidated commit artifact trust helper model.
-- `SumeragiPrevalidatedCommitArtifactGate_fast.cfg`: CI-friendly prevalidated commit artifact trust aggregate check.
+- `SumeragiPrevalidatedCommitArtifactGate_fast.cfg`: CI-friendly direct prevalidated commit artifact trust aggregate check.
 - `SumeragiPrevalidatedCommitArtifactGate_bug_*.cfg`: expected-failure artifact, commit-QC, root, phase, and witness trust-gate mutations.
 - `SumeragiCommitJobDispatchGate.tla`: commit-job dispatch ownership gate model.
 - `SumeragiCommitJobDispatchGate_fast.cfg`: CI-friendly commit-job dispatch aggregate exactness check.
 - `SumeragiCommitJobDispatchGate_bug_*.cfg`: expected-failure duplicate suppression, pending retention, worker enqueue, queue-full, inline fallback, worker disconnect, return-value, and ownership-exclusivity mutations.
 - `SumeragiCommitWorkerConfigGate.tla`: commit-worker channel capacity helper model.
-- `SumeragiCommitWorkerConfigGate_fast.cfg`: CI-friendly commit-worker channel capacity aggregate check.
+- `SumeragiCommitWorkerConfigGate_fast.cfg`: CI-friendly direct commit-worker channel capacity check.
 - `SumeragiCommitWorkerConfigGate_bug_*.cfg`: expected-failure zero-capacity floor and explicit-capacity preservation mutations.
 - `SumeragiCommitStageTimingThresholdGate.tla`: slow commit-stage timing threshold helper model.
 - `SumeragiCommitStageTimingThresholdGate_fast.cfg`: CI-friendly slow commit-stage timing threshold aggregate check.
@@ -7186,13 +7186,13 @@ verification, and full networking details.
 - `SumeragiIdleViewProposalBudgetGate_fast.cfg`: CI-friendly proposal idle-view budget preservation aggregate check.
 - `SumeragiIdleViewProposalBudgetGate_bug_*.cfg`: expected-failure queue, no-queue hard-stop, mode-flip, commit-inflight, deadline, pacing-only backpressure, hard-backpressure, idle-repair deferral, proposal reservation, and post-proposal retry mutations.
 - `SumeragiPacemakerCoreGate.tla`: Pacemaker state-machine helper model.
-- `SumeragiPacemakerCoreGate_fast.cfg`: CI-friendly Pacemaker state-machine helper check.
+- `SumeragiPacemakerCoreGate_fast.cfg`: CI-friendly direct Pacemaker state-machine helper check.
 - `SumeragiPacemakerCoreGate_bug_*.cfg`: expected-failure construction, interval reset, deadline boundary, fire advancement, zero-interval, and accessor mutations.
 - `SumeragiPacemakerEvaluationGate.tla`: pacemaker evaluation gate model.
-- `SumeragiPacemakerEvaluationGate_fast.cfg`: CI-friendly pacemaker evaluation gate check.
+- `SumeragiPacemakerEvaluationGate_fast.cfg`: CI-friendly direct pacemaker evaluation component check.
 - `SumeragiPacemakerEvaluationGate_bug_*.cfg`: expected-failure deferral logging, pacing-only, hard-backpressure, recovery, deadline, and proposal-attempt mutations.
 - `SumeragiPacingGovernorGate.tla`: pacing-governor factor evaluation model.
-- `SumeragiPacingGovernorGate_fast.cfg`: CI-friendly pacing-governor factor evaluation check.
+- `SumeragiPacingGovernorGate_fast.cfg`: CI-friendly direct pacing-governor factor evaluation check.
 - `SumeragiPacingGovernorGate_bug_*.cfg`: expected-failure sample-count, target-time, pressure/clear threshold, factor-bound, step-clamp, saturating-delta, current-clamp, and ambiguous-window mutations.
 - `SumeragiCachedSlotTimeoutGate.tla`: cached proposal-slot timeout gate model.
 - `SumeragiCachedSlotTimeoutGate_fast.cfg`: CI-friendly cached proposal-slot timeout aggregate check.
@@ -7234,22 +7234,22 @@ verification, and full networking details.
 - `SumeragiRoundViewHelpersGate_fast.cfg`: CI-friendly round/view helper aggregate check.
 - `SumeragiRoundViewHelpersGate_bug_*.cfg`: expected-failure active-round, new-view target, timeout bump, and round-phase trace mutations.
 - `SumeragiPhaseTrackerGate.tla`: `PhaseTracker` mutable state helper model.
-- `SumeragiPhaseTrackerGate_fast.cfg`: CI-friendly `PhaseTracker` helper check.
+- `SumeragiPhaseTrackerGate_fast.cfg`: CI-friendly `PhaseTracker` helper component/anchor check.
 - `SumeragiPhaseTrackerGate_bug_*.cfg`: expected-failure initialization, round-start, view-change, record, view-age, and current-view mutations.
 - `SumeragiRoundTraceStatusGate.tla`: round-trace status recorder model.
-- `SumeragiRoundTraceStatusGate_fast.cfg`: CI-friendly round-trace status recorder check.
+- `SumeragiRoundTraceStatusGate_fast.cfg`: CI-friendly round-trace status recorder direct exactness check.
 - `SumeragiRoundTraceStatusGate_bug_*.cfg`: expected-failure transition, gap snapshot, trace pruning, wake, and event metadata mutations.
 - `SumeragiFailureRecoveryHelpersGate.tla`: failed-commit and block-sync helper model.
-- `SumeragiFailureRecoveryHelpersGate_fast.cfg`: CI-friendly failed-commit and block-sync helper check.
+- `SumeragiFailureRecoveryHelpersGate_fast.cfg`: CI-friendly direct failed-commit and block-sync helper check.
 - `SumeragiFailureRecoveryHelpersGate_bug_*.cfg`: expected-failure QC realignment, requeue drop, view-cause, block-sync readiness, and QC application mutations.
 - `SumeragiRequeueTransactionsGate.tla`: transaction requeue branch helper model.
-- `SumeragiRequeueTransactionsGate_fast.cfg`: CI-friendly transaction requeue branch helper check.
+- `SumeragiRequeueTransactionsGate_fast.cfg`: CI-friendly direct transaction requeue branch helper check.
 - `SumeragiRequeueTransactionsGate_bug_*.cfg`: expected-failure committed duplicate, route, push, gossip, hash-set, and pending-drop mutations.
 - `SumeragiTickDeadlineHelpersGate.tla`: tick/deadline scheduling helper model.
-- `SumeragiTickDeadlineHelpersGate_fast.cfg`: CI-friendly tick/deadline scheduling helper check.
+- `SumeragiTickDeadlineHelpersGate_fast.cfg`: CI-friendly direct tick/deadline scheduling helper check.
 - `SumeragiTickDeadlineHelpersGate_bug_*.cfg`: expected-failure deadline merge, work-budget, budget-exhaustion, commit-bypass, heartbeat, pacemaker nudge, and next-tick scheduling mutations.
 - `SumeragiWorkerTickGapGate.tla`: worker tick-gap helper model.
-- `SumeragiWorkerTickGapGate_fast.cfg`: CI-friendly worker tick-gap helper check.
+- `SumeragiWorkerTickGapGate_fast.cfg`: CI-friendly direct worker tick-gap helper check.
 - `SumeragiWorkerTickGapGate_bug_*.cfg`: expected-failure tick-run boundary, future-last-tick saturation, and idle-wait derivation mutations.
 - `SumeragiProposalParentResolutionGate.tla`: proposal parent resolution and inline backup transport gate model.
 - `SumeragiProposalParentResolutionGate_fast.cfg`: CI-friendly proposal parent resolution and inline backup transport aggregate check.
@@ -7295,106 +7295,106 @@ verification, and full networking details.
 - `SumeragiCertifiedBlockFetchGate_fast.cfg`: CI-friendly direct certified-block fetch aggregate check.
 - `SumeragiCertifiedBlockFetchGate_bug_*.cfg`: expected-failure request-targeting, service-side admission, response splitting, response/proof/body validation, proof pairing, invalid-owner, retry-revival, and materialization-cleanup mutations.
 - `SumeragiMissingBlockIngressFetchGate.tla`: missing-block ingress grace fetch gate model.
-- `SumeragiMissingBlockIngressFetchGate_fast.cfg`: CI-friendly missing-block ingress fetch gate check.
+- `SumeragiMissingBlockIngressFetchGate_fast.cfg`: CI-friendly direct missing-block ingress fetch gate check.
 - `SumeragiMissingBlockIngressFetchGate_bug_*.cfg`: expected-failure payload/non-frontier bypass, initial grace hold, boundary force, request observation, and existing-request force mutations.
 - `SumeragiPayloadProgressAvailabilityGate.tla`: actor-local payload availability for progress model.
-- `SumeragiPayloadProgressAvailabilityGate_fast.cfg`: CI-friendly payload progress availability check.
+- `SumeragiPayloadProgressAvailabilityGate_fast.cfg`: CI-friendly direct payload progress availability check.
 - `SumeragiPayloadProgressAvailabilityGate_bug_*.cfg`: expected-failure pending/inflight owner, invalid-owner fallback, deferred payload, Kura payload, hash-only, and absent-payload mutations.
 - `SumeragiHighestQcFetchBodyKnownGate.tla`: highest-QC body-known fetch suppression model.
-- `SumeragiHighestQcFetchBodyKnownGate_fast.cfg`: CI-friendly highest-QC body-known fetch suppression check.
+- `SumeragiHighestQcFetchBodyKnownGate_fast.cfg`: CI-friendly direct highest-QC body-known fetch suppression check.
 - `SumeragiHighestQcFetchBodyKnownGate_bug_*.cfg`: expected-failure Kura, pending/inflight lookup, valid/invalid body, aborted body, deferred payload, hash-only, and absent-body mutations.
 - `SumeragiLocalPayloadAvailabilityGate.tla`: broad actor-local payload availability model.
-- `SumeragiLocalPayloadAvailabilityGate_fast.cfg`: CI-friendly local payload availability check.
+- `SumeragiLocalPayloadAvailabilityGate_fast.cfg`: CI-friendly direct local payload availability check.
 - `SumeragiLocalPayloadAvailabilityGate_bug_*.cfg`: expected-failure pending/inflight, hash-only processing, deferred payload, Kura payload, and absent-payload mutations.
 - `SumeragiBlockKnownLocallyGate.tla`: actor-local block-known routing model.
-- `SumeragiBlockKnownLocallyGate_fast.cfg`: CI-friendly local block-known routing check.
+- `SumeragiBlockKnownLocallyGate_fast.cfg`: CI-friendly direct local block-known routing check.
 - `SumeragiBlockKnownLocallyGate_bug_*.cfg`: expected-failure pending/inflight, hash-only processing, deferred payload, Kura, and absent-block mutations.
 - `SumeragiBlockKnownForLockGate.tla`: lock-safety block-known routing model.
-- `SumeragiBlockKnownForLockGate_fast.cfg`: CI-friendly lock-safety block-known routing check.
+- `SumeragiBlockKnownForLockGate_fast.cfg`: CI-friendly direct lock-safety block-known routing check.
 - `SumeragiBlockKnownForLockGate_bug_*.cfg`: expected-failure pending validity, rejected-pending fallthrough, inflight, hash-only processing, deferred payload, Kura, and absent-block mutations.
 - `SumeragiMissingLockedQcRecoveryGate.tla`: missing locked-QC payload recovery model.
 - `SumeragiMissingLockedQcRecoveryGate_fast.cfg`: CI-friendly missing locked-QC payload recovery check.
 - `SumeragiMissingLockedQcRecoveryGate_bug_*.cfg`: expected-failure locked-payload request, roster fallback, ingress hold, stale conflict, lock/highest realignment, pruning, and reanchor mutations.
 - `SumeragiLocalSignedBlockLookupGate.tla`: local signed-block materialization model.
-- `SumeragiLocalSignedBlockLookupGate_fast.cfg`: CI-friendly local signed-block materialization check.
+- `SumeragiLocalSignedBlockLookupGate_fast.cfg`: CI-friendly direct local signed-block materialization check.
 - `SumeragiLocalSignedBlockLookupGate_bug_*.cfg`: expected-failure normal/body-repair owner policy, rejected-owner fallthrough, deferred/Kura fallback, and source-priority mutations.
 - `SumeragiAuthoritativePayloadProgressGate.tla`: authoritative payload progress lookup model.
-- `SumeragiAuthoritativePayloadProgressGate_fast.cfg`: CI-friendly authoritative payload progress lookup check.
+- `SumeragiAuthoritativePayloadProgressGate_fast.cfg`: CI-friendly direct authoritative payload progress lookup check.
 - `SumeragiAuthoritativePayloadProgressGate_bug_*.cfg`: expected-failure valid-owner rejection, invalid/aborted owner acceptance, rejected-owner fallthrough, deferred-payload acceptance, Kura commit filtering, and absent-payload mutations.
 - `SumeragiAuthoritativeBlockPayloadGate.tla`: hash-level authoritative payload availability model.
-- `SumeragiAuthoritativeBlockPayloadGate_fast.cfg`: CI-friendly hash-level authoritative payload availability check.
+- `SumeragiAuthoritativeBlockPayloadGate_fast.cfg`: CI-friendly direct hash-level authoritative payload availability check.
 - `SumeragiAuthoritativeBlockPayloadGate_bug_*.cfg`: expected-failure local-source rejection/acceptance, rejected-local RBC fallback, RBC scan/filtering, and absent-payload mutations.
 - `SumeragiPendingBlockActiveForTipGate.tla`: pending-block active-for-tip model.
-- `SumeragiPendingBlockActiveForTipGate_fast.cfg`: CI-friendly pending-block active-for-tip check.
+- `SumeragiPendingBlockActiveForTipGate_fast.cfg`: CI-friendly direct pending-block active-for-tip check.
 - `SumeragiPendingBlockActiveForTipGate_bug_*.cfg`: expected-failure evidence-source rejection, inactive/tip-extension/no-evidence acceptance, and over-strict evidence mutations.
 - `SumeragiPendingFastUnblockGate.tla`: pending fast-unblock decision model.
-- `SumeragiPendingFastUnblockGate_fast.cfg`: CI-friendly pending fast-unblock check.
+- `SumeragiPendingFastUnblockGate_fast.cfg`: CI-friendly direct pending fast-unblock check.
 - `SumeragiPendingFastUnblockGate_bug_*.cfg`: expected-failure zero-timeout, evidence short-circuit, cached/stored evidence, and inclusive-age mutations.
 - `SumeragiBlockingPendingBlocksGate.tla`: blocking pending-block counter model.
-- `SumeragiBlockingPendingBlocksGate_fast.cfg`: CI-friendly blocking pending-block counter check.
+- `SumeragiBlockingPendingBlocksGate_fast.cfg`: CI-friendly direct blocking pending-block counter check.
 - `SumeragiBlockingPendingBlocksGate_bug_*.cfg`: expected-failure active/reschedule/fast-unblock, zero-quorum fallback, aborted/off-tip, vote/QC, reschedule, and age-window mutations.
 - `SumeragiQuorumRecoveryVoteDrainUrgentGate.tla`: quorum recovery vote-drain urgency model.
-- `SumeragiQuorumRecoveryVoteDrainUrgentGate_fast.cfg`: CI-friendly quorum recovery vote-drain urgency check.
+- `SumeragiQuorumRecoveryVoteDrainUrgentGate_fast.cfg`: CI-friendly direct quorum recovery vote-drain urgency check.
 - `SumeragiQuorumRecoveryVoteDrainUrgentGate_bug_*.cfg`: expected-failure quorum-timeout, live/tip, evidence, queue, age-source, boundary, and existential-scan mutations.
 - `SumeragiFrontierBodyGapPayloadDrainUrgentGate.tla`: frontier body-gap payload-drain urgency model.
-- `SumeragiFrontierBodyGapPayloadDrainUrgentGate_fast.cfg`: CI-friendly frontier body-gap payload-drain urgency check.
+- `SumeragiFrontierBodyGapPayloadDrainUrgentGate_fast.cfg`: CI-friendly direct frontier body-gap payload-drain urgency check.
 - `SumeragiFrontierBodyGapPayloadDrainUrgentGate_bug_*.cfg`: expected-failure slot-shape, evidence, backlog, vote-backlog-only, and over-strict conjunction mutations.
 - `SumeragiRbcAuthoritativePayloadProgressGate.tla`: RBC authoritative payload progress lookup model.
-- `SumeragiRbcAuthoritativePayloadProgressGate_fast.cfg`: CI-friendly RBC authoritative payload progress lookup check.
+- `SumeragiRbcAuthoritativePayloadProgressGate_fast.cfg`: CI-friendly direct RBC authoritative payload progress lookup check.
 - `SumeragiRbcAuthoritativePayloadProgressGate_bug_*.cfg`: expected-failure metadata gate, complete-chunk acceptance, chunk rejection, local-fallback skip, and local slot/hash mismatch mutations.
 - `SumeragiSlotAuthoritativePayloadGate.tla`: slot-level authoritative payload lookup model.
-- `SumeragiSlotAuthoritativePayloadGate_fast.cfg`: CI-friendly slot-level authoritative payload lookup check.
+- `SumeragiSlotAuthoritativePayloadGate_fast.cfg`: CI-friendly direct slot-level authoritative payload no-bug check.
 - `SumeragiSlotAuthoritativePayloadGate_bug_*.cfg`: expected-failure pending/inflight status, rejected-owner fallthrough, wrong-slot owner, Kura commit filtering, RBC retained/wrong-slot/non-authoritative, and absent-slot mutations.
 - `SumeragiMissingBlockFetchGate.tla`: QC-first missing-block fetch planner model.
 - `SumeragiMissingBlockFetchGate_fast.cfg`: CI-friendly missing-block fetch planner aggregate check.
 - `SumeragiMissingBlockFetchGate_bug_*.cfg`: expected-failure missing-block request identity, retry/backoff, target selection, send-filter, and request-field mutations.
 - `SumeragiRecoveryStatusCountersGate.tla`: recovery status counter/snapshot helper model.
-- `SumeragiRecoveryStatusCountersGate_fast.cfg`: CI-friendly recovery status counter/snapshot check.
+- `SumeragiRecoveryStatusCountersGate_fast.cfg`: CI-friendly recovery status counter/snapshot direct exactness check.
 - `SumeragiRecoveryStatusCountersGate_bug_*.cfg`: expected-failure fetch telemetry, zero-count, increment, snapshot, and reset mutations.
 - `SumeragiRecoveryFsmReasonGate.tla`: recovery-FSM reason classifier/rank/sort helper model.
-- `SumeragiRecoveryFsmReasonGate_fast.cfg`: CI-friendly recovery-FSM reason classifier/rank/sort check.
+- `SumeragiRecoveryFsmReasonGate_fast.cfg`: CI-friendly direct recovery-FSM reason classifier/rank/sort check.
 - `SumeragiRecoveryFsmReasonGate_bug_*.cfg`: expected-failure reason-label, unknown-fallback, rank, and sort-key mutations.
 - `SumeragiQcRebuildStatusGate.tla`: QC rebuild status counter/snapshot helper model.
-- `SumeragiQcRebuildStatusGate_fast.cfg`: CI-friendly QC rebuild status counter/snapshot check.
+- `SumeragiQcRebuildStatusGate_fast.cfg`: CI-friendly QC rebuild status counter/snapshot direct exactness check.
 - `SumeragiQcRebuildStatusGate_bug_*.cfg`: expected-failure reset, increment, independence, accumulation, and snapshot mutations.
 - `SumeragiQcRebuildQuorumGate.tla`: QC rebuild quorum reachability helper model.
-- `SumeragiQcRebuildQuorumGate_fast.cfg`: CI-friendly QC rebuild quorum reachability check.
+- `SumeragiQcRebuildQuorumGate_fast.cfg`: CI-friendly direct QC rebuild quorum reachability check.
 - `SumeragiQcRebuildQuorumGate_bug_*.cfg`: expected-failure permissioned threshold, NPoS unknown-signer deferral, stake-roster, stake-snapshot, stake-quorum, and quorum-error mutations.
 - `SumeragiCollectorTargetingStatusGate.tla`: collector-targeting status counter/snapshot helper model.
-- `SumeragiCollectorTargetingStatusGate_fast.cfg`: CI-friendly collector-targeting status counter/snapshot check.
+- `SumeragiCollectorTargetingStatusGate_fast.cfg`: CI-friendly collector-targeting status counter/snapshot direct exactness check.
 - `SumeragiCollectorTargetingStatusGate_bug_*.cfg`: expected-failure set/observe, increment, independence, snapshot, and reset mutations.
 - `SumeragiDeferredRecoveryStatusGate.tla`: deferred recovery status counter/snapshot helper model.
-- `SumeragiDeferredRecoveryStatusGate_fast.cfg`: CI-friendly deferred recovery status counter/snapshot check.
+- `SumeragiDeferredRecoveryStatusGate_fast.cfg`: CI-friendly deferred recovery status counter/snapshot direct exactness check.
 - `SumeragiDeferredRecoveryStatusGate_bug_*.cfg`: expected-failure deferred-QC, empty-topology, repeated accumulation, snapshot, and reset mutations.
 - `SumeragiMissingQcLivenessStatusGate.tla`: missing-QC liveness status counter/snapshot helper model.
-- `SumeragiMissingQcLivenessStatusGate_fast.cfg`: CI-friendly missing-QC liveness status counter/snapshot check.
+- `SumeragiMissingQcLivenessStatusGate_fast.cfg`: CI-friendly missing-QC liveness status counter/snapshot direct exactness check.
 - `SumeragiMissingQcLivenessStatusGate_bug_*.cfg`: expected-failure missing-block, missing-QC, forced-proposal, stuck-round, snapshot, and reset mutations.
 - `SumeragiSidecarNoProposalStatusGate.tla`: sidecar/no-proposal status counter/snapshot helper model.
-- `SumeragiSidecarNoProposalStatusGate_fast.cfg`: CI-friendly sidecar/no-proposal status counter/snapshot check.
+- `SumeragiSidecarNoProposalStatusGate_fast.cfg`: CI-friendly sidecar/no-proposal status counter/snapshot direct exactness check.
 - `SumeragiSidecarNoProposalStatusGate_bug_*.cfg`: expected-failure sidecar, no-proposal storm, diagnostic max/last, snapshot, and reset mutations.
 - `SumeragiDeterministicCommitteeStatusGate.tla`: deterministic-committee status store/snapshot helper model.
-- `SumeragiDeterministicCommitteeStatusGate_fast.cfg`: CI-friendly deterministic-committee status store/snapshot check.
+- `SumeragiDeterministicCommitteeStatusGate_fast.cfg`: CI-friendly deterministic-committee status store/snapshot direct exactness check.
 - `SumeragiDeterministicCommitteeStatusGate_bug_*.cfg`: expected-failure set, zero/lower overwrite, counter-confusion, snapshot, and reset mutations.
 - `SumeragiTimingStatusCountersGate.tla`: timing/liveness status counter/snapshot helper model.
-- `SumeragiTimingStatusCountersGate_fast.cfg`: CI-friendly timing/liveness status counter/snapshot check.
+- `SumeragiTimingStatusCountersGate_fast.cfg`: CI-friendly timing/liveness status counter/snapshot direct exactness check.
 - `SumeragiTimingStatusCountersGate_bug_*.cfg`: expected-failure pacemaker, commit-tick, prevote, DA reschedule, RBC deferral, snapshot, getter, and reset mutations.
 - `SumeragiRosterRecoveryStatusGate.tla`: roster-recovery status counter/state/dwell helper model.
-- `SumeragiRosterRecoveryStatusGate_fast.cfg`: CI-friendly roster-recovery status counter/state/dwell check.
+- `SumeragiRosterRecoveryStatusGate_fast.cfg`: CI-friendly roster-recovery status counter/state/dwell direct exactness check.
 - `SumeragiRosterRecoveryStatusGate_bug_*.cfg`: expected-failure roster/catch-up counter, wrong-bucket, repeated accumulation, state, dwell, snapshot, and reset mutations.
 - `SumeragiRangePullRecoveryGate.tla`: range-pull recovery helper model.
 - `SumeragiRangePullRecoveryGate_fast.cfg`: CI-friendly range-pull recovery helper check.
 - `SumeragiRangePullRecoveryGate_bug_*.cfg`: expected-failure stage, tier, target fallback, cooldown, anchor, and reason-classifier mutations.
 - `SumeragiRangePullStatusGate.tla`: range-pull status counter/streak/snapshot helper model.
-- `SumeragiRangePullStatusGate_fast.cfg`: CI-friendly range-pull status counter/streak check.
+- `SumeragiRangePullStatusGate_fast.cfg`: CI-friendly range-pull status counter/streak direct exactness check.
 - `SumeragiRangePullStatusGate_bug_*.cfg`: expected-failure counter increment, repeated accumulation, expiry-streak max/last, snapshot, and reset mutations.
 - `SumeragiRoundRecoveryBundleWindowGate.tla`: round-recovery bundle source/class and same-height window gate model.
 - `SumeragiRoundRecoveryBundleWindowGate_fast.cfg`: CI-friendly round-recovery bundle window gate check.
 - `SumeragiRoundRecoveryBundleWindowGate_bug_*.cfg`: expected-failure label, class, window-boundary, height-keying, and class-collision mutations.
 - `SumeragiCommittedEdgeConflictGate.tla`: committed-edge conflicting highest-QC suppression model.
-- `SumeragiCommittedEdgeConflictGate_fast.cfg`: CI-friendly committed-edge conflict suppression check.
+- `SumeragiCommittedEdgeConflictGate_fast.cfg`: CI-friendly direct committed-edge conflict suppression check.
 - `SumeragiCommittedEdgeConflictGate_bug_*.cfg`: expected-failure suppression guard, artifact cleanup, canonical reanchor, frontier cleanup, owner gating, and recovery-window mutations.
 - `SumeragiLockRejectedSinkGate.tla`: lock-rejected branch sink lifecycle model.
-- `SumeragiLockRejectedSinkGate_fast.cfg`: CI-friendly lock-rejected sink lifecycle check.
+- `SumeragiLockRejectedSinkGate_fast.cfg`: CI-friendly direct lock-rejected sink lifecycle check.
 - `SumeragiLockRejectedSinkGate_bug_*.cfg`: expected-failure note/update, activity gate, fetch/parent suppression, replay drop, height-clear, and purge-surface mutations.
 - `SumeragiActiveLockRejectRecoveryGate.tla`: active-height lock-reject recovery routing model.
 - `SumeragiActiveLockRejectRecoveryGate_fast.cfg`: CI-friendly active-height lock-reject recovery check.
@@ -7428,7 +7428,7 @@ verification, and full networking details.
 - `SumeragiNativeAmxAttestationGate_bug_collapse_retry_bodies.cfg`: expected-failure retried-body cache collision mutation.
 - `SumeragiNativeAmxAttestationGate_bug_collapse_participant_legs.cfg`: expected-failure participant-leg cache collision mutation.
 - `SumeragiNativeAmxJournalReplay.tla`: native AMX queue-plan journal replay model.
-- `SumeragiNativeAmxJournalReplay_fast.cfg`: CI-friendly native AMX journal replay check.
+- `SumeragiNativeAmxJournalReplay_fast.cfg`: CI-friendly native AMX journal replay direct component check.
 - `SumeragiNativeAmxJournalReplay_bug_drop_native_plan.cfg`: expected-failure native plan drop mutation.
 - `SumeragiNativeAmxJournalReplay_bug_collapse_native_to_single.cfg`: expected-failure native plan collapsed to single-route mutation.
 - `SumeragiNativeAmxJournalReplay_bug_single_plan_as_native.cfg`: expected-failure single-route plan replayed as native AMX mutation.
@@ -7501,7 +7501,7 @@ verification, and full networking details.
 - `SumeragiNativeAmxIngressGate_bug_drop_retried_body.cfg`: expected-failure retried-body cache drop mutation.
 - `SumeragiNativeAmxIngressGate_bug_drop_different_participant.cfg`: expected-failure distinct participant-leg cache drop mutation.
 - `SumeragiVNextChainOrderGate.tla`: vNext chain-order helper construction model.
-- `SumeragiVNextChainOrderGate_fast.cfg`: CI-friendly vNext chain-order helper check.
+- `SumeragiVNextChainOrderGate_fast.cfg`: CI-friendly direct vNext chain-order component check.
 - `SumeragiVNextChainOrderGate_bug_accept_empty_order.cfg`: expected-failure empty-order acceptance mutation.
 - `SumeragiVNextChainOrderGate_bug_accept_zero_critical.cfg`: expected-failure zero critical-prefix acceptance mutation.
 - `SumeragiVNextChainOrderGate_bug_accept_critical_after_end.cfg`: expected-failure overlong critical-prefix mutation.
@@ -7522,7 +7522,7 @@ verification, and full networking details.
 - `SumeragiVNextChainOrderGate_bug_bitmap_allows_duplicate.cfg`: expected-failure duplicate signer bitmap mutation.
 - `SumeragiVNextChainOrderGate_bug_bitmap_allows_out_of_range.cfg`: expected-failure out-of-range signer bitmap mutation.
 - `SumeragiVNextRechainGate.tla`: quarantined vNext re-chain helper model.
-- `SumeragiVNextRechainGate_fast.cfg`: CI-friendly vNext re-chain helper check.
+- `SumeragiVNextRechainGate_fast.cfg`: CI-friendly direct vNext re-chain helper check.
 - `SumeragiVNextRechainGate_bug_accept_empty_evidence.cfg`: expected-failure empty-evidence acceptance mutation.
 - `SumeragiVNextRechainGate_bug_ignore_slot_mismatch.cfg`: expected-failure slot-mismatch acceptance mutation.
 - `SumeragiVNextRechainGate_bug_ignore_order_hash_mismatch.cfg`: expected-failure chain-order hash mismatch acceptance mutation.
@@ -7541,10 +7541,10 @@ verification, and full networking details.
 - `SumeragiVNextRechainGate_bug_mutate_certificate_slot.cfg`: expected-failure certificate slot mutation.
 - `SumeragiVNextRechainGate_bug_reuse_previous_hash.cfg`: expected-failure unchanged chain-order hash mutation.
 - `SumeragiVNextRechainErrorLabelGate.tla`: vNext re-chain error label projection model.
-- `SumeragiVNextRechainErrorLabelGate_fast.cfg`: CI-friendly vNext re-chain error label check.
+- `SumeragiVNextRechainErrorLabelGate_fast.cfg`: CI-friendly direct vNext re-chain error label check.
 - `SumeragiVNextRechainErrorLabelGate_bug_*.cfg`: expected-failure label-drift and payload-leakage mutations.
 - `SumeragiVNextSignatureGate.tla`: vNext aggregate certificate verification model.
-- `SumeragiVNextSignatureGate_fast.cfg`: CI-friendly vNext aggregate certificate verification check.
+- `SumeragiVNextSignatureGate_fast.cfg`: CI-friendly direct vNext aggregate certificate verification check.
 - `SumeragiVNextSignatureGate_bug_accept_missing_signature.cfg`: expected-failure missing aggregate signature acceptance mutation.
 - `SumeragiVNextSignatureGate_bug_allow_empty_roster.cfg`: expected-failure empty signer roster acceptance mutation.
 - `SumeragiVNextSignatureGate_bug_ignore_bitmap_length.cfg`: expected-failure non-canonical bitmap length mutation.
@@ -7562,16 +7562,16 @@ verification, and full networking details.
 - `SumeragiVNextSignatureGate_bug_drop_returned_signer.cfg`: expected-failure returned-signer drop mutation.
 - `SumeragiVNextSignatureGate_bug_return_signers_on_reject.cfg`: expected-failure rejected-certificate signer leak mutation.
 - `SumeragiVNextSigningPreimageGate.tla`: vNext signing-preimage construction model.
-- `SumeragiVNextSigningPreimageGate_fast.cfg`: CI-friendly vNext signing-preimage construction check.
+- `SumeragiVNextSigningPreimageGate_fast.cfg`: CI-friendly direct vNext signing-preimage construction check.
 - `SumeragiVNextSigningPreimageGate_bug_*.cfg`: expected-failure domain-separation, body-field, signature-material, vote-projection, and suspicion-hash mutations.
 - `SumeragiVNextControlIngressGate.tla`: vNext control-certificate ingress model.
-- `SumeragiVNextControlIngressGate_fast.cfg`: CI-friendly vNext control-certificate ingress check.
+- `SumeragiVNextControlIngressGate_fast.cfg`: CI-friendly direct vNext control-certificate ingress component check.
 - `SumeragiVNextControlIngressGate_bug_*.cfg`: expected-failure missing-round, already-current, re-chain rejection, valid re-chain, taint-bound escalation, view-change requirement, and view-certificate side-effect mutations.
 - `SumeragiVNextSlotLifecycleGate.tla`: vNext actor-owned slot lifecycle model.
-- `SumeragiVNextSlotLifecycleGate_fast.cfg`: CI-friendly vNext slot-lifecycle check.
+- `SumeragiVNextSlotLifecycleGate_fast.cfg`: CI-friendly direct vNext slot-lifecycle component check.
 - `SumeragiVNextSlotLifecycleGate_bug_*.cfg`: expected-failure no-base, committed-stickiness, validation-dispatch, worker-owner, queue-full, validation-result, deferral, timeout, commit, and recovery side-effect mutations.
 - `SumeragiVNextValidationGate.tla`: vNext validation ownership model.
-- `SumeragiVNextValidationGate_fast.cfg`: CI-friendly vNext validation ownership check.
+- `SumeragiVNextValidationGate_fast.cfg`: CI-friendly direct vNext validation ownership component check.
 - `SumeragiVNextValidationGate_bug_dispatch_queued.cfg`: expected-failure queued-dispatch mutation.
 - `SumeragiVNextValidationGate_bug_raise_running_before_timeout.cfg`: expected-failure early running-suspicion mutation.
 - `SumeragiVNextValidationGate_bug_miss_running_at_timeout.cfg`: expected-failure missed running timeout-boundary mutation.
@@ -7588,58 +7588,58 @@ verification, and full networking details.
 - `SumeragiVNextValidationGate_bug_ignore_matching_invalid.cfg`: expected-failure matching invalid-result ignore mutation.
 - `SumeragiVNextValidationGate_bug_stale_mutates_state.cfg`: expected-failure stale-result state mutation.
 - `SumeragiVNextDeadlineProtectionGate.tla`: vNext validation deadline/protection helper model.
-- `SumeragiVNextDeadlineProtectionGate_fast.cfg`: CI-friendly vNext deadline/protection helper check.
+- `SumeragiVNextDeadlineProtectionGate_fast.cfg`: CI-friendly vNext deadline/protection direct exactness check.
 - `SumeragiVNextDeadlineProtectionGate_bug_*.cfg`: expected-failure due-instant, fresh-deadline, timeout/backpressure protection, and round wakeup mutations.
 - `SumeragiVNextPerformanceConfigGate.tla`: vNext performance-fault config conversion model.
-- `SumeragiVNextPerformanceConfigGate_fast.cfg`: CI-friendly vNext performance-fault config conversion check.
+- `SumeragiVNextPerformanceConfigGate_fast.cfg`: CI-friendly direct vNext performance-fault config conversion check.
 - `SumeragiVNextPerformanceConfigGate_bug_*.cfg`: expected-failure duration saturation, field preservation, and timeout/cooldown independence mutations.
 - `SumeragiVNextStakeWeightGate.tla`: vNext stake-weight lookup and quorum helper model.
-- `SumeragiVNextStakeWeightGate_fast.cfg`: CI-friendly vNext stake-weight lookup and quorum helper check.
+- `SumeragiVNextStakeWeightGate_fast.cfg`: CI-friendly direct vNext stake-weight lookup and quorum helper check.
 - `SumeragiVNextStakeWeightGate_bug_*.cfg`: expected-failure lookup, duplicate-weight, strict-boundary, and arithmetic fail-closed mutations.
 - `SumeragiValidationWorkerConfigGate.tla`: pending-block validation worker config helper model.
-- `SumeragiValidationWorkerConfigGate_fast.cfg`: CI-friendly pending-block validation worker config helper check.
+- `SumeragiValidationWorkerConfigGate_fast.cfg`: CI-friendly direct pending-block validation worker config helper check.
 - `SumeragiValidationWorkerConfigGate_bug_*.cfg`: expected-failure auto-thread clamp, explicit-thread, work-cap, and result-cap mutations.
 - `SumeragiValidationStallRedriveGate.tla`: validation stall/freshness/vNext redrive helper model.
-- `SumeragiValidationStallRedriveGate_fast.cfg`: CI-friendly validation stall/redrive helper check.
+- `SumeragiValidationStallRedriveGate_fast.cfg`: CI-friendly validation stall/redrive direct exactness check.
 - `SumeragiValidationStallRedriveGate_bug_*.cfg`: expected-failure stall-floor/cap, freshness, inline fallback, and vNext redrive mutations.
 - `SumeragiValidationRedriveLabelGate.tla`: validation redrive reason label model.
-- `SumeragiValidationRedriveLabelGate_fast.cfg`: CI-friendly validation redrive reason label, nonzero, and distinctness check.
+- `SumeragiValidationRedriveLabelGate_fast.cfg`: CI-friendly direct validation redrive reason label, nonzero, and distinctness check.
 - `SumeragiValidationRedriveLabelGate_bug_*.cfg`: expected-failure label-drift and label-collision mutations.
 - `SumeragiValidationOwnershipCleanupGate.tla`: validation ownership cleanup helper model.
-- `SumeragiValidationOwnershipCleanupGate_fast.cfg`: CI-friendly validation ownership cleanup helper check.
+- `SumeragiValidationOwnershipCleanupGate_fast.cfg`: CI-friendly validation ownership cleanup direct exactness helper check.
 - `SumeragiValidationOwnershipCleanupGate_bug_*.cfg`: expected-failure target-removal, unrelated-hash preservation, slot cleanup, and empty-round pruning mutations.
 - `SumeragiVerifyCacheKeyGate.tla`: vote/QC verification cache-key identity model.
-- `SumeragiVerifyCacheKeyGate_fast.cfg`: CI-friendly vote/QC verification cache-key identity check.
+- `SumeragiVerifyCacheKeyGate_fast.cfg`: CI-friendly vote/QC verification cache-key identity direct exactness check.
 - `SumeragiVerifyCacheKeyGate_bug_*.cfg`: expected-failure omitted-field, cache-tuple truncation, and signer-public-key binding mutations.
 - `SumeragiVoteVerifyAsyncGate.tla`: actor-side async vote-verification ownership model.
-- `SumeragiVoteVerifyAsyncGate_fast.cfg`: CI-friendly async vote-verification ownership check.
+- `SumeragiVoteVerifyAsyncGate_fast.cfg`: CI-friendly direct async vote-verification ownership check.
 - `SumeragiVoteVerifyAsyncGate_bug_*.cfg`: expected-failure no-worker fallback, duplicate suppression, backpressure, pending retry, worker-result ownership, rejection, and channel-disconnect mutations.
 - `SumeragiVoteVerifyWorkerConfigGate.tla`: vote-signature verification worker config helper model.
-- `SumeragiVoteVerifyWorkerConfigGate_fast.cfg`: CI-friendly vote-signature verification worker config helper check.
+- `SumeragiVoteVerifyWorkerConfigGate_fast.cfg`: CI-friendly direct vote-signature verification worker config helper check.
 - `SumeragiVoteVerifyWorkerConfigGate_bug_*.cfg`: expected-failure auto-thread, explicit-thread, work-cap, and result-cap mutations.
 - `SumeragiQcVerifyAsyncGate.tla`: actor-side async QC aggregate-verification ownership model.
-- `SumeragiQcVerifyAsyncGate_fast.cfg`: CI-friendly async QC aggregate-verification ownership check.
+- `SumeragiQcVerifyAsyncGate_fast.cfg`: CI-friendly direct async QC aggregate-verification ownership check.
 - `SumeragiQcVerifyAsyncGate_bug_*.cfg`: expected-failure cache, inline fallback, worker dispatch, duplicate suppression, known-block stale-lock, worker-result ownership, and disconnect-cleanup mutations.
 - `SumeragiQcVerifyWorkerConfigGate.tla`: QC aggregate-verification worker config helper model.
-- `SumeragiQcVerifyWorkerConfigGate_fast.cfg`: CI-friendly QC aggregate-verification worker config helper check.
+- `SumeragiQcVerifyWorkerConfigGate_fast.cfg`: CI-friendly direct QC aggregate-verification worker config helper check.
 - `SumeragiQcVerifyWorkerConfigGate_bug_*.cfg`: expected-failure auto-thread, explicit-thread, work-cap, and result-cap mutations.
 - `SumeragiActorGatePriorityGate.tla`: actor-gate priority and fairness model.
 - `SumeragiActorGatePriorityGate_fast.cfg`: CI-friendly actor-gate priority and fairness aggregate check.
 - `SumeragiActorGatePriorityGate_bug_*.cfg`: expected-failure entry/block, in-flight, waiter, wakeup, availability, body, urgent, and streak mutation configs.
 - `SumeragiWorkerDrainSchedulerGate.tla`: worker-loop drain scheduler model.
-- `SumeragiWorkerDrainSchedulerGate_fast.cfg`: CI-friendly worker-loop drain scheduler check.
+- `SumeragiWorkerDrainSchedulerGate_fast.cfg`: CI-friendly direct worker-loop drain scheduler component check.
 - `SumeragiWorkerDrainSchedulerGate_bug_*.cfg`: expected-failure vote-priority, frontier repair, quorum-recovery drain, overtime payload, block backlog, low-priority service, accounting, polling, tick, and budget mutations.
 - `SumeragiWorkerBudgetAdaptiveGate.tla`: worker-loop budget/adaptive-cap model.
-- `SumeragiWorkerBudgetAdaptiveGate_fast.cfg`: CI-friendly worker-loop budget/adaptive-cap check.
+- `SumeragiWorkerBudgetAdaptiveGate_fast.cfg`: CI-friendly direct worker-loop budget/adaptive-cap component check.
 - `SumeragiWorkerBudgetAdaptiveGate_bug_*.cfg`: expected-failure time-budget, vote-budget, drain-budget, tick-gap, block-backlog tier, and adaptive-cap mutations.
 - `SumeragiWorkerIngressRoutingGate.tla`: worker ingress routing and parallel worker execution-envelope model.
-- `SumeragiWorkerIngressRoutingGate_fast.cfg`: CI-friendly worker ingress routing check.
+- `SumeragiWorkerIngressRoutingGate_fast.cfg`: CI-friendly direct worker ingress routing component check.
 - `SumeragiWorkerIngressRoutingGate_bug_*.cfg`: expected-failure message routing, enqueue accounting, gate/stage/handler mapping, batch-limit, and drain-sequencing mutations.
 - `SumeragiWorkerLoopStageGate.tla`: worker-loop stage id/from-id/label helper model.
-- `SumeragiWorkerLoopStageGate_fast.cfg`: CI-friendly worker-loop stage helper check.
+- `SumeragiWorkerLoopStageGate_fast.cfg`: CI-friendly direct worker-loop stage helper check.
 - `SumeragiWorkerLoopStageGate_bug_*.cfg`: expected-failure stage id, from-id fallback, and label mutations.
 - `SumeragiWorkerQueueStatusGate.tla`: worker-queue status accounting model.
-- `SumeragiWorkerQueueStatusGate_fast.cfg`: CI-friendly worker-queue status accounting check.
+- `SumeragiWorkerQueueStatusGate_fast.cfg`: CI-friendly worker-queue status accounting direct exactness check.
 - `SumeragiWorkerQueueStatusGate_bug_*.cfg`: expected-failure queue-counter mapping, enqueue/drain/block/drop accounting, snapshot, reset, and pause/resume depth mutations.
 - `SumeragiNposVrfEpochSealGate.tla`: NPoS VRF epoch-seal staging and committed-effect reconciliation model.
 - `SumeragiNposVrfEpochSealGate_fast.cfg`: CI-friendly NPoS VRF epoch-seal aggregate check.
@@ -7648,7 +7648,7 @@ verification, and full networking details.
 - `SumeragiKuraCommitRetryGate_fast.cfg`: CI-friendly Kura durability commit retry aggregate check.
 - `SumeragiKuraCommitRetryGate_bug_*.cfg`: expected-failure alignment, backoff, abort, cleanup, replay, and state-commit failure mutations.
 - `SumeragiKuraStoreStatusGate.tla`: Kura persistence status counter/snapshot model.
-- `SumeragiKuraStoreStatusGate_fast.cfg`: CI-friendly Kura persistence status check.
+- `SumeragiKuraStoreStatusGate_fast.cfg`: CI-friendly Kura persistence status direct exactness check.
 - `SumeragiKuraStoreStatusGate_bug_*.cfg`: expected-failure counter, latest-field, snapshot, and reset mutations.
 - `SumeragiRestartReplayGate.tla`: restarted-peer replay and snapshot/Kura consistency model.
 - `SumeragiRestartReplayGate_fast.cfg`: CI-friendly restarted-peer replay aggregate check.
@@ -7660,103 +7660,103 @@ verification, and full networking details.
 - `SumeragiFrontierGapRealignGate_fast.cfg`: CI-friendly frontier-gap realignment aggregate check.
 - `SumeragiFrontierGapRealignGate_bug_*.cfg`: expected-failure future-evidence, exact-body suppression, anchor selection, target fallback, cooldown, shared-window, stride, priority, and send-accounting mutations.
 - `SumeragiFrontierBlockSyncHintGate.tla`: frontier block-sync hint and direct-response permit model.
-- `SumeragiFrontierBlockSyncHintGate_fast.cfg`: CI-friendly frontier block-sync hint check.
+- `SumeragiFrontierBlockSyncHintGate_fast.cfg`: CI-friendly direct frontier block-sync hint/direct-response permit check.
 - `SumeragiFrontierBlockSyncHintGate_bug_*.cfg`: expected-failure latest-gossip pause, external-hint sync, direct-response permit admission/accounting, TTL, peer-scope, and pruning mutations.
 - `SumeragiSameHeightVoteConflictGate.tla`: same-height local vote conflict helper model.
-- `SumeragiSameHeightVoteConflictGate_fast.cfg`: CI-friendly same-height local vote conflict helper check.
+- `SumeragiSameHeightVoteConflictGate_fast.cfg`: CI-friendly direct same-height local vote conflict helper check.
 - `SumeragiSameHeightVoteConflictGate_bug_*.cfg`: expected-failure vote-selection, conflict, frontier, certified-commit supersession, NewView supersession, and pending-validation mutations.
 - `SumeragiSameHeightVoteLockGate.tla`: aggregate same-height vote-lock helper model.
-- `SumeragiSameHeightVoteLockGate_fast.cfg`: CI-friendly aggregate same-height vote-lock helper check.
+- `SumeragiSameHeightVoteLockGate_fast.cfg`: CI-friendly aggregate same-height vote-lock direct exactness check.
 - `SumeragiSameHeightVoteLockGate_bug_*.cfg`: expected-failure roster, vote-filtering, deduplication, remaining-vote, best-branch, metadata, and frontier-lock mutations.
 - `SumeragiProposalStaleVoteGate.tla`: proposal-side stale same-height vote gate model.
-- `SumeragiProposalStaleVoteGate_fast.cfg`: CI-friendly proposal-side stale same-height vote check.
+- `SumeragiProposalStaleVoteGate_fast.cfg`: CI-friendly direct proposal-side stale same-height vote check.
 - `SumeragiProposalStaleVoteGate_bug_*.cfg`: expected-failure base-blocking, missing-QC repair escape, and assembly composition mutations.
 - `SumeragiSameHeightVoteRecoveryGapGate.tla`: same-height vote recovery view-gap threshold model.
-- `SumeragiSameHeightVoteRecoveryGapGate_fast.cfg`: CI-friendly same-height vote recovery view-gap check.
+- `SumeragiSameHeightVoteRecoveryGapGate_fast.cfg`: CI-friendly direct same-height vote recovery view-gap check.
 - `SumeragiSameHeightVoteRecoveryGapGate_bug_*.cfg`: expected-failure saturating-subtraction, minimum-floor, multiplier, boundary, and escalation-vs-standard relation mutations.
 - `SumeragiTipExtensionHelpersGate.tla`: pending-block stale-tip and chain tip-extension helper model.
-- `SumeragiTipExtensionHelpersGate_fast.cfg`: CI-friendly pending-block stale-tip and chain extension helper check.
+- `SumeragiTipExtensionHelpersGate_fast.cfg`: CI-friendly direct pending-block stale-tip and chain extension helper check.
 - `SumeragiTipExtensionHelpersGate_bug_*.cfg`: expected-failure stale-tip parent/height and chain-extension true/false/unknown mutations.
 - `SumeragiDaGateHelperGate.tla`: DA gate evaluation, satisfaction, and manifest-label helper model.
-- `SumeragiDaGateHelperGate_fast.cfg`: CI-friendly DA gate helper check.
+- `SumeragiDaGateHelperGate_fast.cfg`: CI-friendly direct DA gate helper check.
 - `SumeragiDaGateHelperGate_bug_*.cfg`: expected-failure DA-enabled/disabled, satisfaction-transition, and manifest-label mutations.
 - `SumeragiDaGateStatusGate.tla`: DA gate status counter/snapshot model.
-- `SumeragiDaGateStatusGate_fast.cfg`: CI-friendly DA gate status check.
+- `SumeragiDaGateStatusGate_fast.cfg`: CI-friendly DA gate status direct exactness check.
 - `SumeragiDaGateStatusGate_bug_*.cfg`: expected-failure counter, latest reason, satisfaction, snapshot, getter, and reset mutations.
 - `SumeragiManifestGuardGate.tla`: DA manifest guard outcome, cache merge, block scan, and bundle cap helper model.
-- `SumeragiManifestGuardGate_fast.cfg`: CI-friendly DA manifest guard helper check.
+- `SumeragiManifestGuardGate_fast.cfg`: CI-friendly direct DA manifest guard helper check.
 - `SumeragiManifestGuardGate_bug_*.cfg`: expected-failure manifest enforcement, audit/strict policy, cache merge, block scan, and bundle cap mutations.
 - `SumeragiConsensusHandshakeCapsGate.tla`: consensus handshake capability construction helper model.
-- `SumeragiConsensusHandshakeCapsGate_fast.cfg`: CI-friendly consensus handshake capability construction check.
+- `SumeragiConsensusHandshakeCapsGate_fast.cfg`: CI-friendly direct consensus handshake capability construction check.
 - `SumeragiConsensusHandshakeCapsGate_bug_*.cfg`: expected-failure mode/domain, caps, fingerprint, canonical-param, NPoS payload, epoch, and timeout-base mutations.
 - `SumeragiHandshakeGate.tla`: consensus p2p handshake exact-match and local-projection helper model.
-- `SumeragiHandshakeGate_fast.cfg`: CI-friendly consensus p2p handshake helper check.
+- `SumeragiHandshakeGate_fast.cfg`: CI-friendly direct consensus p2p handshake helper check.
 - `SumeragiHandshakeGate_bug_*.cfg`: expected-failure handshake accept/reject, mismatch-priority, and local-projection mutations.
 - `SumeragiModeFlipGate.tla`: runtime consensus-mode flip helper model.
-- `SumeragiModeFlipGate_fast.cfg`: CI-friendly runtime mode flip helper check.
+- `SumeragiModeFlipGate_fast.cfg`: CI-friendly direct runtime mode flip helper check.
 - `SumeragiModeFlipGate_bug_*.cfg`: expected-failure pending-target, activation-lag, busy-deferral, idle-reset, rebuild, status, and capability-update mutations.
 - `SumeragiEffectiveModeGate.tla`: effective consensus-mode selection helper model.
-- `SumeragiEffectiveModeGate_fast.cfg`: CI-friendly effective consensus-mode selection check.
+- `SumeragiEffectiveModeGate_fast.cfg`: CI-friendly direct effective consensus-mode selection check.
 - `SumeragiEffectiveModeGate_bug_*.cfg`: expected-failure fallback, activation-boundary, pre-activation after-flip, staged-tag, and activation-height projection mutations.
 - `SumeragiEffectiveTimingGate.tla`: effective consensus timing aggregation helper model.
-- `SumeragiEffectiveTimingGate_fast.cfg`: CI-friendly effective consensus timing aggregation check.
+- `SumeragiEffectiveTimingGate_fast.cfg`: CI-friendly effective consensus timing aggregation direct exactness check.
 - `SumeragiEffectiveTimingGate_bug_*.cfg`: expected-failure active/worker/effective mode timing, DA timeout, cooldown, status, and actor mode-time helper mutations.
 - `SumeragiNewViewStatsGate.tla`: NEW_VIEW receipt statistics helper model.
-- `SumeragiNewViewStatsGate_fast.cfg`: CI-friendly NEW_VIEW receipt statistics check.
+- `SumeragiNewViewStatsGate_fast.cfg`: CI-friendly direct NEW_VIEW receipt statistics check.
 - `SumeragiNewViewStatsGate_bug_*.cfg`: expected-failure sender deduplication, per-key counting, capacity-pruning, lexicographic-order, and snapshot mutations.
 - `SumeragiNewViewTrackerGate.tla`: NEW_VIEW tracker quorum/selection helper model.
-- `SumeragiNewViewTrackerGate_fast.cfg`: CI-friendly NEW_VIEW tracker quorum/selection check.
+- `SumeragiNewViewTrackerGate_fast.cfg`: CI-friendly direct NEW_VIEW tracker quorum/selection helper check.
 - `SumeragiNewViewTrackerGate_bug_*.cfg`: expected-failure highest-QC promotion, sender counting, roster-local quorum, selection, pruning, and removal mutations.
 - `SumeragiTimingMonitorGate.tla`: timing/log cooldown monitor model.
-- `SumeragiTimingMonitorGate_fast.cfg`: CI-friendly timing/log cooldown monitor check.
+- `SumeragiTimingMonitorGate_fast.cfg`: CI-friendly direct timing/log cooldown monitor no-bug check.
 - `SumeragiTimingMonitorGate_bug_*.cfg`: expected-failure threshold, cooldown-boundary, suppression-preservation, independent-cooldown, saturating-time, and proposal-attempt mutations.
 - `SumeragiHotspotLogSummaryGate.tla`: hotspot summary accumulator model.
-- `SumeragiHotspotLogSummaryGate_fast.cfg`: CI-friendly hotspot summary accumulator check.
+- `SumeragiHotspotLogSummaryGate_fast.cfg`: CI-friendly direct hotspot summary accumulator check.
 - `SumeragiHotspotLogSummaryGate_bug_*.cfg`: expected-failure initialization, counter update, saturation, interval-boundary, suppressed-only logging, due reset, and reset mutations.
 - `SumeragiAdaptiveObservabilityGate.tla`: adaptive observability timing/fanout helper model.
-- `SumeragiAdaptiveObservabilityGate_fast.cfg`: CI-friendly adaptive observability timing/fanout check.
+- `SumeragiAdaptiveObservabilityGate_fast.cfg`: CI-friendly direct adaptive observability timing/fanout check.
 - `SumeragiAdaptiveObservabilityGate_bug_*.cfg`: expected-failure disabled/reset, resilience, alert, cooldown, collector-limit, interval, trigger, and missing-data baseline mutations.
 - `SumeragiPacingBackpressureGate.tla`: pacing backpressure helper model.
-- `SumeragiPacingBackpressureGate_fast.cfg`: CI-friendly pacing backpressure helper check.
+- `SumeragiPacingBackpressureGate_fast.cfg`: CI-friendly direct pacing backpressure helper check.
 - `SumeragiPacingBackpressureGate_bug_*.cfg`: expected-failure receiver snapshot, refresh, cached-state, defer-refresh, saturation, and pacemaker deferral-state mutations.
 - `SumeragiCounterBackpressureCooldownGate.tla`: counter-driven backpressure cooldown helper model.
-- `SumeragiCounterBackpressureCooldownGate_fast.cfg`: CI-friendly counter-driven backpressure cooldown helper check.
+- `SumeragiCounterBackpressureCooldownGate_fast.cfg`: CI-friendly direct counter-driven backpressure cooldown helper check.
 - `SumeragiCounterBackpressureCooldownGate_bug_*.cfg`: expected-failure counter-source, cooldown-boundary, reset, disable, and queue-projection mutations.
 - `SumeragiPacemakerBackpressureTrackerGate.tla`: per-reason pacemaker backpressure tracker telemetry model.
-- `SumeragiPacemakerBackpressureTrackerGate_fast.cfg`: CI-friendly per-reason pacemaker backpressure tracker check.
+- `SumeragiPacemakerBackpressureTrackerGate_fast.cfg`: CI-friendly direct per-reason pacemaker backpressure tracker check.
 - `SumeragiPacemakerBackpressureTrackerGate_bug_*.cfg`: expected-failure label, deferring-gate, reason-signal, first-activation, sustained-age, clear-duration, idle, and missing-start mutations.
 - `SumeragiLockedQcHelperGate.tla`: locked-QC helper model.
-- `SumeragiLockedQcHelperGate_fast.cfg`: CI-friendly locked-QC helper check.
+- `SumeragiLockedQcHelperGate_fast.cfg`: CI-friendly direct locked-QC helper check.
 - `SumeragiLockedQcHelperGate_bug_*.cfg`: expected-failure lock admission, chain-extension, missing-payload, newer-view bypass, and committed-realignment mutations.
 - `SumeragiPrecommitQcExtendsLockedGate.tla`: precommit-QC locked-chain wrapper model.
-- `SumeragiPrecommitQcExtendsLockedGate_fast.cfg`: CI-friendly precommit-QC locked-chain wrapper check.
+- `SumeragiPrecommitQcExtendsLockedGate_fast.cfg`: CI-friendly direct precommit-QC locked-chain wrapper check.
 - `SumeragiPrecommitQcExtendsLockedGate_bug_*.cfg`: expected-failure fail-open, extension, newer-view bypass, rejection, and warning mutations.
 - `SumeragiDropPrecommitVoteForLockGate.tla`: precommit-vote locked-chain filter model.
-- `SumeragiDropPrecommitVoteForLockGate_fast.cfg`: CI-friendly precommit-vote locked-chain filter check.
+- `SumeragiDropPrecommitVoteForLockGate_fast.cfg`: CI-friendly direct precommit-vote locked-chain filter check.
 - `SumeragiDropPrecommitVoteForLockGate_bug_*.cfg`: expected-failure phase, lock, payload-presence, extension, newer-view bypass, and drop-accounting mutations.
 - `SumeragiStakeSnapshotGate.tla`: NPoS stake snapshot helper model.
-- `SumeragiStakeSnapshotGate_fast.cfg`: CI-friendly stake snapshot helper check.
+- `SumeragiStakeSnapshotGate_fast.cfg`: CI-friendly direct stake snapshot no-bug check.
 - `SumeragiStakeSnapshotGate_bug_*.cfg`: expected-failure empty-roster, fallback, roster-order, hash, active-stake, strict-quorum, signer, snapshot, duplicate-stake, and coverage mutations.
 - `SumeragiValidatorElectionGate.tla`: NPoS validator election helper model.
-- `SumeragiValidatorElectionGate_fast.cfg`: CI-friendly validator election helper check.
+- `SumeragiValidatorElectionGate_fast.cfg`: CI-friendly direct validator election helper check.
 - `SumeragiValidatorElectionGate_bug_*.cfg`: expected-failure constraint, score-ordering, seat-band, entity-correlation, deferred-fill, rejection, and outcome-binding mutations.
 - `SumeragiLiveVoteRosterGate.tla`: live local-vote roster selection and active topology fallback model.
-- `SumeragiLiveVoteRosterGate_fast.cfg`: CI-friendly live local-vote roster check.
+- `SumeragiLiveVoteRosterGate_fast.cfg`: CI-friendly direct live local-vote roster check.
 - `SumeragiLiveVoteRosterGate_bug_*.cfg`: expected-failure future-height, pending-activation, canonicalization, fallback-source, mode-source, and live-key-filter mutations.
 - `SumeragiCanonicalRoundRosterGate.tla`: canonical round-roster selection and commit-QC roll-forward model.
-- `SumeragiCanonicalRoundRosterGate_fast.cfg`: CI-friendly canonical round-roster check.
+- `SumeragiCanonicalRoundRosterGate_fast.cfg`: CI-friendly direct canonical round-roster check.
 - `SumeragiCanonicalRoundRosterGate_bug_*.cfg`: expected-failure future-height, history-priority, pending/previous-topology, canonicalization, parent-hash, exact-parent, strict-parent, candidate-filter, sorting, intermediate-hash, and live-key-filter mutations.
 - `SumeragiVoteRosterSelectionGate.tla`: block-specific vote roster selection, validation wrapper, and NEW_VIEW roster routing model.
-- `SumeragiVoteRosterSelectionGate_fast.cfg`: CI-friendly vote-roster selection check.
+- `SumeragiVoteRosterSelectionGate_fast.cfg`: CI-friendly direct vote-roster selection check.
 - `SumeragiVoteRosterSelectionGate_bug_*.cfg`: expected-failure cache-priority, next-height live-roster, persisted/block-sync, sidecar, historical-remap, committed fallback, future roll-forward, canonicalization, validation-cache, and NEW_VIEW routing mutations.
 - `SumeragiVoteRosterCacheGate.tla`: vote roster cache, POP cache, and local emission topology helper model.
-- `SumeragiVoteRosterCacheGate_fast.cfg`: CI-friendly vote-roster cache/support check.
+- `SumeragiVoteRosterCacheGate_fast.cfg`: CI-friendly direct vote-roster cache/support check.
 - `SumeragiVoteRosterCacheGate_bug_*.cfg`: expected-failure cache-insert, canonicalization, keep-existing, deferred-replay, POP-cache hit/miss, POP-source, cache-cap, roster-hash, empty-roster, and live-emission fallback mutations.
 - `SumeragiCommitTopologyStateGate.tla`: commit-topology refresh and roster-change reset model.
-- `SumeragiCommitTopologyStateGate_fast.cfg`: CI-friendly commit-topology state check.
+- `SumeragiCommitTopologyStateGate_fast.cfg`: CI-friendly direct commit-topology state check.
 - `SumeragiCommitTopologyStateGate_bug_*.cfg`: expected-failure same-order, order-only, membership-change, reset-surface, proposals-seen, runtime-cache, and on-commit branch mutations.
 - `SumeragiPrecommitSignerHistoryGate.tla`: precommit signer-history roster/QC fallback model.
-- `SumeragiPrecommitSignerHistoryGate_fast.cfg`: CI-friendly precommit signer-history fallback check.
+- `SumeragiPrecommitSignerHistoryGate_fast.cfg`: CI-friendly direct precommit signer-history fallback check.
 - `SumeragiPrecommitSignerHistoryGate_bug_*.cfg`: expected-failure history ordering, exact lookup, roster shape, quorum, stake snapshot, fallback artifact, and cached-QC aggregate mutations.
 - `SumeragiPrecommitVoteGate.tla`: local precommit vote-emission gate model.
 - `SumeragiPrecommitVoteGate_fast.cfg`: CI-friendly precommit vote-emission check.
@@ -7782,10 +7782,10 @@ verification, and full networking details.
 - `SumeragiProposalAssemblyGate_bug_reject_stale_retired.cfg`: expected-failure stale retired vote-history rejection mutation.
 - `SumeragiProposalAssemblyGate_bug_reject_locked_fallback.cfg`: expected-failure locked fallback rejection mutation.
 - `SumeragiEngineInitialStateGate.tla`: pure engine constructor initial-state model.
-- `SumeragiEngineInitialStateGate_fast.cfg`: CI-friendly constructor initial-state check.
+- `SumeragiEngineInitialStateGate_fast.cfg`: CI-friendly direct exactness constructor initial-state check.
 - `SumeragiEngineInitialStateGate_bug_*.cfg`: expected-failure round, quorum-policy, phase, optional-state, collection, and output mutation configs.
 - `SumeragiEngineReadAccessorsGate.tla`: pure engine state/committed read-only accessor model.
-- `SumeragiEngineReadAccessorsGate_fast.cfg`: CI-friendly read-only accessor check.
+- `SumeragiEngineReadAccessorsGate_fast.cfg`: CI-friendly direct read-only accessor check.
 - `SumeragiEngineReadAccessorsGate_bug_*.cfg`: expected-failure state snapshot, committed lookup, mutation, and output configs.
 - `SumeragiEngineTickGate.tla`: pure engine pacemaker tick gate model.
 - `SumeragiEngineTickGate_fast.cfg`: CI-friendly engine tick gate check.
@@ -7803,16 +7803,16 @@ verification, and full networking details.
 - `SumeragiEngineTickStatePreservationGate_fast.cfg`: CI-friendly tick unrelated-state preservation check.
 - `SumeragiEngineTickStatePreservationGate_bug_*.cfg`: expected-failure lock/highest, replay-cache, committed-record, availability-store, pending-map, and reconfiguration mutation configs.
 - `SumeragiEngineNewViewSubjectGate.tla`: pure engine NewView subject projection helper model.
-- `SumeragiEngineNewViewSubjectGate_fast.cfg`: CI-friendly NewView subject projection helper check.
+- `SumeragiEngineNewViewSubjectGate_fast.cfg`: CI-friendly direct NewView subject projection helper check.
 - `SumeragiEngineNewViewSubjectGate_bug_*.cfg`: expected-failure highest-QC, fallback-subject, field-projection, payload, and highest-binding mutations.
 - `SumeragiEngineHandleDispatchGate.tla`: pure engine top-level input dispatch model.
 - `SumeragiEngineHandleDispatchGate_fast.cfg`: CI-friendly top-level input dispatch check.
 - `SumeragiEngineHandleDispatchGate_bug_*.cfg`: expected-failure dropped input, cross-routed input, and double-dispatch mutations.
 - `SumeragiEngineHandleForwardingGate.tla`: pure engine top-level input argument-forwarding model.
-- `SumeragiEngineHandleForwardingGate_fast.cfg`: CI-friendly top-level input argument-forwarding check.
+- `SumeragiEngineHandleForwardingGate_fast.cfg`: CI-friendly direct top-level input argument-forwarding component check.
 - `SumeragiEngineHandleForwardingGate_bug_*.cfg`: expected-failure proposal, certificate, payload, validation, and committed-block argument mutation configs.
 - `SumeragiEngineHandleOutputRelayGate.tla`: pure engine top-level output relay model.
-- `SumeragiEngineHandleOutputRelayGate_fast.cfg`: CI-friendly top-level output relay check.
+- `SumeragiEngineHandleOutputRelayGate_fast.cfg`: CI-friendly direct top-level output relay component check.
 - `SumeragiEngineHandleOutputRelayGate_bug_*.cfg`: expected-failure dropped, invented, truncated, duplicated, reordered, substituted, and cross-handler output mutation configs.
 - `SumeragiEngineCertificateDispatchGate.tla`: pure engine certificate prefilter dispatch model.
 - `SumeragiEngineCertificateDispatchGate_fast.cfg`: CI-friendly certificate prefilter dispatch aggregate check.
@@ -7824,7 +7824,7 @@ verification, and full networking details.
 - `SumeragiEngineCertificatePrefilterStatePreservationGate_fast.cfg`: CI-friendly certificate prefilter unrelated-state preservation aggregate check.
 - `SumeragiEngineCertificatePrefilterStatePreservationGate_bug_*.cfg`: expected-failure accepted-state and rejected-state mutation configs.
 - `SumeragiEngineViewAdvanceSaturationGate.tla`: pure engine view-advance saturation model.
-- `SumeragiEngineViewAdvanceSaturationGate_fast.cfg`: CI-friendly view-advance saturation check.
+- `SumeragiEngineViewAdvanceSaturationGate_fast.cfg`: CI-friendly direct view-advance saturation component check.
 - `SumeragiEngineViewAdvanceSaturationGate_bug_*.cfg`: expected-failure tick, invalid-validation, non-advancing validation, wraparound, and output-binding mutations.
 - `SumeragiEngineNewViewQcGate.tla`: pure engine NewView-QC gate model.
 - `SumeragiEngineNewViewQcGate_fast.cfg`: CI-friendly engine NewView-QC gate check.
@@ -7842,13 +7842,13 @@ verification, and full networking details.
 - `SumeragiEngineNewViewQcGate_bug_overwrite_lower_highest.cfg`: expected-failure lower highest-QC overwrite mutation.
 - `SumeragiEngineNewViewQcGate_bug_skip_highest_record.cfg`: expected-failure missing improving highest-QC record mutation.
 - `SumeragiEngineNewViewHighestQcGate.tla`: pure engine exact NewView-QC highest-QC record model.
-- `SumeragiEngineNewViewHighestQcGate_fast.cfg`: CI-friendly exact NewView highest-QC record check.
+- `SumeragiEngineNewViewHighestQcGate_fast.cfg`: CI-friendly direct exactness NewView highest-QC record check.
 - `SumeragiEngineNewViewHighestQcGate_bug_*.cfg`: expected-failure no-current record, improving record, wrong-QC record, lower overwrite, no-highest mutation, and rejected-certificate record mutations.
 - `SumeragiEngineNewViewStatePreservationGate.tla`: pure engine NewView-QC unrelated-state preservation model.
 - `SumeragiEngineNewViewStatePreservationGate_fast.cfg`: CI-friendly NewView-QC unrelated-state preservation check.
 - `SumeragiEngineNewViewStatePreservationGate_bug_*.cfg`: expected-failure accepted-state and rejected-state mutation configs.
 - `SumeragiEngineNewViewAdvanceGate.tla`: pure engine exact NewView-QC round/output model.
-- `SumeragiEngineNewViewAdvanceGate_fast.cfg`: CI-friendly exact NewView-QC advance check.
+- `SumeragiEngineNewViewAdvanceGate_fast.cfg`: CI-friendly direct exactness NewView-QC advance check.
 - `SumeragiEngineNewViewAdvanceGate_bug_*.cfg`: expected-failure round-field, output-field, cleanup, phase, rejected-round-update, and rejected-output mutations.
 - `SumeragiEngineProposalGate.tla`: pure engine proposal-ingress gate model.
 - `SumeragiEngineProposalGate_fast.cfg`: CI-friendly engine proposal-ingress gate check.
@@ -7865,37 +7865,37 @@ verification, and full networking details.
 - `SumeragiEngineProposalGate_bug_skip_prepare_vote.cfg`: expected-failure missing prepare-vote output mutation.
 - `SumeragiEngineProposalGate_bug_skip_prepare_phase.cfg`: expected-failure missing prepare-phase transition mutation.
 - `SumeragiEngineProposalOutputGate.tla`: pure engine exact proposal output-field model.
-- `SumeragiEngineProposalOutputGate_fast.cfg`: CI-friendly exact proposal output-field check.
+- `SumeragiEngineProposalOutputGate_fast.cfg`: CI-friendly exact proposal output-field component check.
 - `SumeragiEngineProposalOutputGate_bug_*.cfg`: expected-failure missing output, swapped output order, wrong validation subject, wrong prepare-vote field, and rejected-output mutation configs.
 - `SumeragiEngineProposalStateGate.tla`: pure engine exact proposal state-mutation model.
-- `SumeragiEngineProposalStateGate_fast.cfg`: CI-friendly exact proposal state-mutation check.
+- `SumeragiEngineProposalStateGate_fast.cfg`: CI-friendly direct exactness proposal state-mutation check.
 - `SumeragiEngineProposalStateGate_bug_*.cfg`: expected-failure accepted-phase, accepted-state, rejected-phase, and rejected-state mutation configs.
 - `SumeragiEngineProposalStatePreservationGate.tla`: pure engine proposal unrelated-state preservation model.
-- `SumeragiEngineProposalStatePreservationGate_fast.cfg`: CI-friendly proposal unrelated-state preservation check.
+- `SumeragiEngineProposalStatePreservationGate_fast.cfg`: CI-friendly proposal unrelated-state preservation direct component check.
 - `SumeragiEngineProposalStatePreservationGate_bug_*.cfg`: expected-failure accepted-state and rejected-state mutation configs.
 - `SumeragiEngineProposalValidationOwnerGate.tla`: pure engine exact proposal validation-owner model.
-- `SumeragiEngineProposalValidationOwnerGate_fast.cfg`: CI-friendly exact proposal validation-owner check.
+- `SumeragiEngineProposalValidationOwnerGate_fast.cfg`: CI-friendly direct exactness proposal validation-owner check.
 - `SumeragiEngineProposalValidationOwnerGate_bug_*.cfg`: expected-failure missing owner record, stale owner retention, wrong-subject record, locked-subject record, and rejected-owner mutation configs.
 - `SumeragiEngineProposalLockGate.tla`: pure engine proposal lock predicate helper model.
-- `SumeragiEngineProposalLockGate_fast.cfg`: CI-friendly proposal lock predicate helper check.
+- `SumeragiEngineProposalLockGate_fast.cfg`: CI-friendly direct exactness proposal lock predicate helper check.
 - `SumeragiEngineProposalLockGate_bug_*.cfg`: expected-failure unlocked, locked-subject, no-QC, equality, lower-QC, and higher-QC strictness mutations.
 - `SumeragiQcRoundCompatibilityGate.tla`: pure engine QC-round compatibility helper model.
-- `SumeragiQcRoundCompatibilityGate_fast.cfg`: CI-friendly QC-round compatibility helper check.
+- `SumeragiQcRoundCompatibilityGate_fast.cfg`: CI-friendly direct QC-round compatibility helper check.
 - `SumeragiQcRoundCompatibilityGate_bug_*.cfg`: expected-failure epoch, lower-height, same-height view, future-height, and height/view ordering mutations.
 - `SumeragiEngineQcRefProjectionGate.tla`: pure engine certificate-to-QC reference projection helper model.
-- `SumeragiEngineQcRefProjectionGate_fast.cfg`: CI-friendly QC reference projection helper check.
+- `SumeragiEngineQcRefProjectionGate_fast.cfg`: CI-friendly direct exactness QC reference projection helper check.
 - `SumeragiEngineQcRefProjectionGate_bug_*.cfg`: expected-failure height, view, epoch, subject, and phase projection mutations.
 - `SumeragiEngineQcRefComparatorGate.tla`: pure engine QC reference comparator helper model.
-- `SumeragiEngineQcRefComparatorGate_fast.cfg`: CI-friendly QC reference comparator helper check.
+- `SumeragiEngineQcRefComparatorGate_fast.cfg`: CI-friendly direct exactness QC reference comparator helper check.
 - `SumeragiEngineQcRefComparatorGate_bug_*.cfg`: expected-failure height, view, phase-rank, subject tie-break, comparator-law, and field-priority mutations.
 - `SumeragiEngineHighestQcRecordGate.tla`: pure engine highest-QC record helper model.
-- `SumeragiEngineHighestQcRecordGate_fast.cfg`: CI-friendly highest-QC record helper check.
+- `SumeragiEngineHighestQcRecordGate_fast.cfg`: CI-friendly direct exactness highest-QC record helper check.
 - `SumeragiEngineHighestQcRecordGate_bug_*.cfg`: expected-failure empty-state, height, view, phase-rank, subject tie-break, and equal-overwrite mutations.
 - `SumeragiEngineCommitSubjectGate.tla`: pure engine commit-subject finality side-effect helper model.
-- `SumeragiEngineCommitSubjectGate_fast.cfg`: CI-friendly commit-subject helper check.
+- `SumeragiEngineCommitSubjectGate_fast.cfg`: CI-friendly commit-subject direct component check.
 - `SumeragiEngineCommitSubjectGate_bug_*.cfg`: expected-failure fresh-record, matching-commit, cleanup, phase, output, conflict-overwrite, conflict-output, and conflict-mutation mutations.
 - `SumeragiEnginePayloadLookupGate.tla`: pure engine payload lookup helper model.
-- `SumeragiEnginePayloadLookupGate_fast.cfg`: CI-friendly payload lookup helper check.
+- `SumeragiEnginePayloadLookupGate_fast.cfg`: CI-friendly direct exactness payload lookup helper check.
 - `SumeragiEnginePayloadLookupGate_bug_*.cfg`: expected-failure block-hash, payload-hash, any-recorded-payload, empty-store, exact-rejection, and inverted-lookup mutations.
 - `SumeragiEnginePrepareQcGate.tla`: pure engine prepare-QC commit-vote gate model.
 - `SumeragiEnginePrepareQcGate_fast.cfg`: CI-friendly engine prepare-QC gate check.
@@ -7909,16 +7909,16 @@ verification, and full networking details.
 - `SumeragiEnginePrepareQcGate_bug_reject_safe.cfg`: expected-failure safe prepare-QC rejection mutation.
 - `SumeragiEnginePrepareQcGate_bug_missing_lock_record.cfg`: expected-failure missing lock/highest-QC record mutation.
 - `SumeragiEnginePrepareLockHighestGate.tla`: pure engine exact Prepare-QC lock/highest-QC record model.
-- `SumeragiEnginePrepareLockHighestGate_fast.cfg`: CI-friendly exact Prepare-QC lock/highest-QC record check.
+- `SumeragiEnginePrepareLockHighestGate_fast.cfg`: CI-friendly direct exactness Prepare-QC lock/highest-QC record check.
 - `SumeragiEnginePrepareLockHighestGate_bug_*.cfg`: expected-failure lock record, wrong-QC record, rejected-QC mutation, replay/conflict/pending mutation, no-current record, improving record, and lower-overwrite mutations.
 - `SumeragiEnginePreparePhaseGate.tla`: pure engine exact Prepare-QC phase-transition model.
-- `SumeragiEnginePreparePhaseGate_fast.cfg`: CI-friendly exact Prepare-QC phase-transition check.
+- `SumeragiEnginePreparePhaseGate_fast.cfg`: CI-friendly direct exactness Prepare-QC phase-transition check.
 - `SumeragiEnginePreparePhaseGate_bug_*.cfg`: expected-failure accepted-phase, rejected-QC phase, replay/conflict phase, and pending-finality phase mutations.
 - `SumeragiEnginePrepareStatePreservationGate.tla`: pure engine Prepare-QC unrelated-state preservation model.
 - `SumeragiEnginePrepareStatePreservationGate_fast.cfg`: CI-friendly Prepare-QC unrelated-state preservation check.
 - `SumeragiEnginePrepareStatePreservationGate_bug_*.cfg`: expected-failure accepted-state and rejected-state mutation configs.
 - `SumeragiEnginePrepareVoteCacheGate.tla`: pure engine prepare-QC commit-vote cache/output side-effect model.
-- `SumeragiEnginePrepareVoteCacheGate_fast.cfg`: CI-friendly prepare-QC commit-vote cache/output check.
+- `SumeragiEnginePrepareVoteCacheGate_fast.cfg`: CI-friendly direct exactness prepare-QC commit-vote cache/output check.
 - `SumeragiEnginePrepareVoteCacheGate_bug_*.cfg`: expected-failure cache insert, cache field, output field, rejection, replay/conflict output, conflict overwrite, and replay/conflict cleanup mutations.
 - `SumeragiEngineCommitQcGate.tla`: pure engine commit-QC finality gate model.
 - `SumeragiEngineCommitQcGate_fast.cfg`: CI-friendly engine commit-QC gate check.
@@ -7934,25 +7934,25 @@ verification, and full networking details.
 - `SumeragiEngineCommitQcGate_bug_reject_missing_payload.cfg`: expected-failure missing-payload commit-QC rejection mutation.
 - `SumeragiEngineCommitQcGate_bug_missing_highest_record.cfg`: expected-failure missing highest-QC record mutation.
 - `SumeragiEngineCommitQcHighestRecordGate.tla`: pure engine exact Commit-QC highest-QC record model.
-- `SumeragiEngineCommitQcHighestRecordGate_fast.cfg`: CI-friendly exact Commit-QC highest-QC record check.
+- `SumeragiEngineCommitQcHighestRecordGate_fast.cfg`: CI-friendly direct exactness Commit-QC highest-QC record check.
 - `SumeragiEngineCommitQcHighestRecordGate_bug_*.cfg`: expected-failure no-current record, improving record, wrong-QC record, lower overwrite, rejected-QC mutation, and pending replay/conflict mutation.
 - `SumeragiEngineCommitQcPhaseGate.tla`: pure engine exact Commit-QC phase-transition model.
-- `SumeragiEngineCommitQcPhaseGate_fast.cfg`: CI-friendly exact Commit-QC phase-transition check.
+- `SumeragiEngineCommitQcPhaseGate_fast.cfg`: CI-friendly direct exactness Commit-QC phase-transition check.
 - `SumeragiEngineCommitQcPhaseGate_bug_*.cfg`: expected-failure available-payload, missing-payload, rejected-prefilter, and pending replay/conflict phase mutations.
 - `SumeragiEngineCommitQcStatePreservationGate.tla`: pure engine Commit-QC unrelated-state preservation model.
 - `SumeragiEngineCommitQcStatePreservationGate_fast.cfg`: CI-friendly Commit-QC unrelated-state preservation check.
 - `SumeragiEngineCommitQcStatePreservationGate_bug_*.cfg`: expected-failure accepted-state and rejected-state mutation configs.
 - `SumeragiEngineCommitQcAvailableCommitGate.tla`: pure engine payload-available Commit-QC exact finality side-effect model.
-- `SumeragiEngineCommitQcAvailableCommitGate_fast.cfg`: CI-friendly payload-available Commit-QC exact finality check.
+- `SumeragiEngineCommitQcAvailableCommitGate_fast.cfg`: CI-friendly direct exactness payload-available Commit-QC finality check.
 - `SumeragiEngineCommitQcAvailableCommitGate_bug_*.cfg`: expected-failure commit-record, output-field, cleanup, fetch/pending, rejected-QC, replay/conflict, and committed-height overwrite mutations.
 - `SumeragiEngineCommitQcPendingFetchGate.tla`: pure engine missing-payload Commit-QC pending/fetch model.
-- `SumeragiEngineCommitQcPendingFetchGate_fast.cfg`: CI-friendly missing-payload Commit-QC pending/fetch check.
+- `SumeragiEngineCommitQcPendingFetchGate_fast.cfg`: CI-friendly direct exactness missing-payload Commit-QC pending/fetch check.
 - `SumeragiEngineCommitQcPendingFetchGate_bug_*.cfg`: expected-failure pending-state, pending-map key/certificate, fetch-field, payload-available, rejected-QC, and replay/conflict mutations.
 - `SumeragiEngineCommitQcValidationCleanupGate.tla`: pure engine Commit-QC validation cleanup model.
 - `SumeragiEngineCommitQcValidationCleanupGate_fast.cfg`: CI-friendly Commit-QC validation cleanup check.
 - `SumeragiEngineCommitQcValidationCleanupGate_bug_*.cfg`: expected-failure accepted-QC cleanup, pending replay/conflict cleanup, rejected-prefilter cleanup, and late invalid callback mutations.
 - `SumeragiEnginePayloadAvailabilityRecordGate.tla`: pure engine exact payload-availability record model.
-- `SumeragiEnginePayloadAvailabilityRecordGate_fast.cfg`: CI-friendly exact payload-availability record check.
+- `SumeragiEnginePayloadAvailabilityRecordGate_fast.cfg`: CI-friendly direct exactness payload-availability record check.
 - `SumeragiEnginePayloadAvailabilityRecordGate_bug_*.cfg`: expected-failure skipped record, conditional record, wrong-key record, pending-subject substitution, and existing-availability mutation.
 - `SumeragiEnginePayloadAvailabilityGate.tla`: pure engine payload-availability gate model.
 - `SumeragiEnginePayloadAvailabilityGate_fast.cfg`: CI-friendly engine payload-availability gate check.
@@ -7964,7 +7964,7 @@ verification, and full networking details.
 - `SumeragiEnginePayloadAvailabilityGate_bug_keep_pending_after_commit.cfg`: expected-failure stale pending-finality after commit mutation.
 - `SumeragiEnginePayloadAvailabilityGate_bug_wrong_phase_after_commit.cfg`: expected-failure wrong post-commit phase mutation.
 - `SumeragiEnginePayloadStatePreservationGate.tla`: pure engine payload-availability unrelated-state preservation model.
-- `SumeragiEnginePayloadStatePreservationGate_fast.cfg`: CI-friendly payload-availability state-preservation check.
+- `SumeragiEnginePayloadStatePreservationGate_fast.cfg`: CI-friendly payload-availability state-preservation direct component check.
 - `SumeragiEnginePayloadStatePreservationGate_bug_*.cfg`: expected-failure matching-commit and ignored-callback mutations for round, lock, highest-QC, Prepare-QC replay-cache, staged reconfiguration, and ignored-callback ownership/finality state.
 - `SumeragiEngineValidationResultGate.tla`: pure engine validation-result gate model.
 - `SumeragiEngineValidationResultGate_fast.cfg`: CI-friendly engine validation-result gate check.
@@ -7987,7 +7987,7 @@ verification, and full networking details.
 - `SumeragiEngineValidationResultGate_bug_drop_pending_finality.cfg`: expected-failure superseded-callback pending-finality drop mutation.
 - `SumeragiEngineValidationResultGate_bug_overwrite_committed.cfg`: expected-failure superseded-callback committed-state overwrite mutation.
 - `SumeragiEngineValidationStatePreservationGate.tla`: pure engine validation-result unrelated-state preservation model.
-- `SumeragiEngineValidationStatePreservationGate_fast.cfg`: CI-friendly validation-result state-preservation check.
+- `SumeragiEngineValidationStatePreservationGate_fast.cfg`: CI-friendly validation-result state-preservation direct component check.
 - `SumeragiEngineValidationStatePreservationGate_bug_accepted_mutates_lock.cfg`: expected-failure accepted-callback lock mutation.
 - `SumeragiEngineValidationStatePreservationGate_bug_accepted_mutates_highest.cfg`: expected-failure accepted-callback highest-QC mutation.
 - `SumeragiEngineValidationStatePreservationGate_bug_accepted_mutates_commit_vote.cfg`: expected-failure accepted-callback Prepare-QC replay-cache mutation.
@@ -8005,10 +8005,10 @@ verification, and full networking details.
 - `SumeragiEngineValidationStatePreservationGate_bug_ignored_mutates_pending_map.cfg`: expected-failure ignored-callback pending-finality map mutation.
 - `SumeragiEngineValidationStatePreservationGate_bug_ignored_mutates_reconfiguration.cfg`: expected-failure ignored-callback staged-reconfiguration mutation.
 - `SumeragiEngineValidationOwnershipGate.tla`: pure engine exact validation-owner cleanup model.
-- `SumeragiEngineValidationOwnershipGate_fast.cfg`: CI-friendly exact validation-owner cleanup check.
+- `SumeragiEngineValidationOwnershipGate_fast.cfg`: CI-friendly direct exactness validation-owner cleanup check.
 - `SumeragiEngineValidationOwnershipGate_bug_*.cfg`: expected-failure current-owner retention, ignored-callback clear/replace, and no-owner synthesis mutations.
 - `SumeragiEngineValidationInvalidAdvanceGate.tla`: pure engine exact invalid-validation round/output advance model.
-- `SumeragiEngineValidationInvalidAdvanceGate_fast.cfg`: CI-friendly exact invalid-validation round/output advance check.
+- `SumeragiEngineValidationInvalidAdvanceGate_fast.cfg`: CI-friendly direct exactness invalid-validation round/output advance check.
 - `SumeragiEngineValidationInvalidAdvanceGate_bug_*.cfg`: expected-failure state-round, output-round, saturating-view, valid-callback, and ignored-callback advance mutations.
 - `SumeragiEngineCommittedBlockGate.tla`: pure engine committed-block notification gate model.
 - `SumeragiEngineCommittedBlockGate_fast.cfg`: CI-friendly engine committed-block gate check.
@@ -8022,19 +8022,19 @@ verification, and full networking details.
 - `SumeragiEngineCommittedBlockGate_bug_activate_conflict.cfg`: expected-failure conflicting reconfiguration activation mutation.
 - `SumeragiEngineCommittedBlockGate_bug_overwrite_conflict.cfg`: expected-failure conflicting committed-height overwrite mutation.
 - `SumeragiEngineCommittedBlockRecordGate.tla`: pure engine exact committed-map record model.
-- `SumeragiEngineCommittedBlockRecordGate_fast.cfg`: CI-friendly exact committed-map record check.
+- `SumeragiEngineCommittedBlockRecordGate_fast.cfg`: CI-friendly direct exactness committed-map record check.
 - `SumeragiEngineCommittedBlockRecordGate_bug_*.cfg`: expected-failure fresh-record key/value, unrelated-entry preservation, duplicate no-op, conflict no-op, and spurious committed-height mutations.
 - `SumeragiEngineReconfigurationStagingGate.tla`: pure engine committed-block reconfiguration staging model.
 - `SumeragiEngineReconfigurationStagingGate_fast.cfg`: CI-friendly reconfiguration staging check.
 - `SumeragiEngineReconfigurationStagingGate_bug_*.cfg`: expected-failure boundary staging/activation, non-boundary/plain staging or activation, duplicate/conflict mutation, wrong-change, stale-stage preservation, and no-op clearing mutations.
 - `SumeragiEngineReconfigurationDedupGate.tla`: pure engine committed-block reconfiguration deduplication model.
-- `SumeragiEngineReconfigurationDedupGate_fast.cfg`: CI-friendly reconfiguration deduplication check.
+- `SumeragiEngineReconfigurationDedupGate_fast.cfg`: CI-friendly direct reconfiguration deduplication component check.
 - `SumeragiEngineReconfigurationDedupGate_bug_*.cfg`: expected-failure same-hash replay, activation-height dedup, same-height preservation, different-height replacement, non-boundary/plain, and conflict mutations.
 - `SumeragiEngineCommittedBlockCleanupGate.tla`: pure engine committed-block cleanup side-effect model.
-- `SumeragiEngineCommittedBlockCleanupGate_fast.cfg`: CI-friendly committed-block cleanup side-effect check.
+- `SumeragiEngineCommittedBlockCleanupGate_fast.cfg`: CI-friendly committed-block cleanup side-effect direct component check.
 - `SumeragiEngineCommittedBlockCleanupGate_bug_*.cfg`: expected-failure fresh-record, current-cleanup, other-height preservation, duplicate/conflict no-op, and spurious CommitBlock-output mutations.
 - `SumeragiEngineCommittedBlockStatePreservationGate.tla`: pure engine committed-block unrelated-state preservation model.
-- `SumeragiEngineCommittedBlockStatePreservationGate_fast.cfg`: CI-friendly committed-block state-preservation check.
+- `SumeragiEngineCommittedBlockStatePreservationGate_fast.cfg`: CI-friendly committed-block state-preservation direct component check.
 - `SumeragiEngineCommittedBlockStatePreservationGate_bug_*.cfg`: expected-failure fresh-notification and duplicate/conflict no-op mutations for round, lock, highest-QC, Prepare-QC replay-cache, and available-payload state.
 - `SumeragiValidatorSetTransition.tla`: validator-set activation safety model.
 - `SumeragiValidatorSetTransition_fast.cfg`: CI-friendly reconfiguration check.
@@ -8059,82 +8059,82 @@ verification, and full networking details.
 - `SumeragiValidationGate_bug_timeout_inflight.cfg`: expected-failure timeout-retains-in-flight mutation.
 - `SumeragiValidationGate_bug_invalid_replay.cfg`: expected-failure duplicate-invalid-result mutation.
 - `SumeragiValidationPriorityGate.tla`: near-tip validation priority reason helper model.
-- `SumeragiValidationPriorityGate_fast.cfg`: CI-friendly validation priority reason helper check.
+- `SumeragiValidationPriorityGate_fast.cfg`: CI-friendly direct validation priority reason helper check.
 - `SumeragiValidationPriorityGate_bug_*.cfg`: expected-failure tip-gate, missing-evidence, evidence-priority, and proposal-bypass mutations.
 - `SumeragiVoteBackedEvidenceGate.tla`: vote-backed consensus evidence helper model.
-- `SumeragiVoteBackedEvidenceGate_fast.cfg`: CI-friendly vote-backed evidence helper check.
+- `SumeragiVoteBackedEvidenceGate_fast.cfg`: CI-friendly direct vote-backed evidence no-bug check.
 - `SumeragiVoteBackedEvidenceGate_bug_*.cfg`: expected-failure slot vote/QC source, height/view/epoch/phase, locally-known, and height-scoped view handling mutations.
 - `SumeragiVotePayloadActionableGate.tla`: vote payload actionable-for-proposal helper model.
-- `SumeragiVotePayloadActionableGate_fast.cfg`: CI-friendly vote payload actionable-for-proposal check.
+- `SumeragiVotePayloadActionableGate_fast.cfg`: CI-friendly direct vote payload actionable-for-proposal no-bug check.
 - `SumeragiVotePayloadActionableGate_bug_*.cfg`: expected-failure authoritative, validation, pending-processing, deferred identity, no-source, and bad-deferred suppression mutations.
 - `SumeragiActionableVoteBackedProposalGate.tla`: proposal-side actionable vote-backed evidence helper model.
-- `SumeragiActionableVoteBackedProposalGate_fast.cfg`: CI-friendly actionable vote-backed proposal evidence check.
+- `SumeragiActionableVoteBackedProposalGate_fast.cfg`: CI-friendly direct actionable vote-backed proposal evidence check.
 - `SumeragiActionableVoteBackedProposalGate_bug_*.cfg`: expected-failure precommit blocker, slot vote/QC source, wrong-slot, non-vote phase, and non-actionable payload mutations.
 - `SumeragiSlotProposalEvidenceGate.tla`: slot proposal evidence helper model.
-- `SumeragiSlotProposalEvidenceGate_fast.cfg`: CI-friendly slot proposal evidence helper check.
+- `SumeragiSlotProposalEvidenceGate_fast.cfg`: CI-friendly direct slot proposal evidence no-bug check.
 - `SumeragiSlotProposalEvidenceGate_bug_*.cfg`: expected-failure source rejection, wrong-slot acceptance, incomplete owner, no-evidence, and fall-through-blocking mutations.
 - `SumeragiRoundLivenessGate.tla`: round liveness helper model.
-- `SumeragiRoundLivenessGate_fast.cfg`: CI-friendly round liveness helper check.
+- `SumeragiRoundLivenessGate_fast.cfg`: CI-friendly direct round liveness no-bug check.
 - `SumeragiRoundLivenessGate_bug_*.cfg`: expected-failure proposal, frontier-owner, pending-owner, local-vote, exact-view, and fall-through mutations.
 - `SumeragiRosterRecoveryFsmGate.tla`: roster-unavailability recovery FSM model.
-- `SumeragiRosterRecoveryFsmGate_fast.cfg`: CI-friendly roster recovery FSM check.
+- `SumeragiRosterRecoveryFsmGate_fast.cfg`: CI-friendly direct roster recovery FSM no-bug check.
 - `SumeragiRosterRecoveryFsmGate_bug_*.cfg`: expected-failure state-transition, no-change/change reporting, dwell, timing-reset, and transition-counter mutations.
 - `SumeragiConsensusRecoveryPruneGate.tla`: consensus recovery prune/clear helper model.
-- `SumeragiConsensusRecoveryPruneGate_fast.cfg`: CI-friendly consensus recovery prune/clear helper check.
+- `SumeragiConsensusRecoveryPruneGate_fast.cfg`: CI-friendly direct consensus recovery prune/clear helper check.
 - `SumeragiConsensusRecoveryPruneGate_bug_*.cfg`: expected-failure clear-height, status reset, dwell clear, committed-height floor, age boundary, timeout max, retention floor, and short-circuit mutations.
 - `SumeragiFrontierLiveOwnerWorkGate.tla`: frontier live-owner work helper and conflict-adapter model.
-- `SumeragiFrontierLiveOwnerWorkGate_fast.cfg`: CI-friendly frontier live-owner work helper check.
+- `SumeragiFrontierLiveOwnerWorkGate_fast.cfg`: CI-friendly direct frontier live-owner work helper check.
 - `SumeragiFrontierLiveOwnerWorkGate_bug_*.cfg`: expected-failure mode, pending, inflight, validation, slot-QC, competing-quorum, local-lock, local-history, no-work, and conflict-adapter mutations.
 - `SumeragiKeepFrontierPendingActiveGate.tla`: keep-frontier-pending-active helper model.
-- `SumeragiKeepFrontierPendingActiveGate_fast.cfg`: CI-friendly keep-frontier-pending-active helper check.
+- `SumeragiKeepFrontierPendingActiveGate_fast.cfg`: CI-friendly direct keep-frontier-pending-active helper check.
 - `SumeragiKeepFrontierPendingActiveGate_bug_*.cfg`: expected-failure live-owner gate, pending evidence, view bridge, exact-hash inflight, fall-through, and no-source mutations.
 - `SumeragiStaleViewPendingPruneGate.tla`: stale-view pending prune helper model.
-- `SumeragiStaleViewPendingPruneGate_fast.cfg`: CI-friendly stale-view pending prune helper check.
+- `SumeragiStaleViewPendingPruneGate_fast.cfg`: CI-friendly direct stale-view pending prune no-bug check.
 - `SumeragiStaleViewPendingPruneGate_bug_*.cfg`: expected-failure stale-selection, live-owner preservation, DA retention, execution cleanup, retained-branch, and RBC cleanup mutations.
 - `SumeragiStaleMissingBlockRequestPruneGate.tla`: stale missing-block request prune helper model.
-- `SumeragiStaleMissingBlockRequestPruneGate_fast.cfg`: CI-friendly stale missing-block request prune helper check.
+- `SumeragiStaleMissingBlockRequestPruneGate_fast.cfg`: CI-friendly direct stale missing-block request prune no-bug check.
 - `SumeragiStaleMissingBlockRequestPruneGate_bug_*.cfg`: expected-failure stale-selection, DA gate, payload-source, exact-hash availability, and removal-count mutations.
 - `SumeragiSupersededFrontierPayloadRetentionGate.tla`: superseded contiguous-frontier payload retention helper model.
-- `SumeragiSupersededFrontierPayloadRetentionGate_fast.cfg`: CI-friendly superseded contiguous-frontier payload retention helper check.
+- `SumeragiSupersededFrontierPayloadRetentionGate_fast.cfg`: CI-friendly direct superseded contiguous-frontier payload retention helper check.
 - `SumeragiSupersededFrontierPayloadRetentionGate_bug_*.cfg`: expected-failure DA gate, materialized/invalid/committed exclusion, tip-extension, and commit-evidence mutations.
 - `SumeragiStaleMissingCommitQcPruneGate.tla`: stale missing commit-QC request prune helper model.
-- `SumeragiStaleMissingCommitQcPruneGate_fast.cfg`: CI-friendly stale missing commit-QC request prune helper check.
+- `SumeragiStaleMissingCommitQcPruneGate_fast.cfg`: CI-friendly direct stale missing commit-QC request prune no-bug check.
 - `SumeragiStaleMissingCommitQcPruneGate_bug_*.cfg`: expected-failure stale-selection, exact frontier repair, local-payload repair, preservation-source, and removal-count mutations.
 - `SumeragiStaleRbcSessionPruneGate.tla`: stale RBC session prune helper model.
-- `SumeragiStaleRbcSessionPruneGate_fast.cfg`: CI-friendly stale RBC session prune helper check.
+- `SumeragiStaleRbcSessionPruneGate_fast.cfg`: CI-friendly direct stale RBC session prune no-bug check.
 - `SumeragiStaleRbcSessionPruneGate_bug_*.cfg`: expected-failure stale-selection, DA-disabled purge, invalid-session purge, delivery and exact-payload, purge-state, and removal-count mutations.
 - `SumeragiHighestQcDeferMarkerPruneGate.tla`: highest-QC defer marker prune helper model.
-- `SumeragiHighestQcDeferMarkerPruneGate_fast.cfg`: CI-friendly highest-QC defer marker prune helper check.
+- `SumeragiHighestQcDeferMarkerPruneGate_fast.cfg`: CI-friendly direct highest-QC defer marker prune helper check.
 - `SumeragiHighestQcDeferMarkerPruneGate_bug_*.cfg`: expected-failure view-change, recovery clear, committed-height, local-known, non-actionable, unresolved-retention, and predicate short-circuit mutations.
 - `SumeragiFastFinalityInlineValidationGate.tla`: fast-finality inline validation helper model.
-- `SumeragiFastFinalityInlineValidationGate_fast.cfg`: CI-friendly fast-finality inline validation helper check.
+- `SumeragiFastFinalityInlineValidationGate_fast.cfg`: CI-friendly fast-finality inline validation component/anchor check.
 - `SumeragiFastFinalityInlineValidationGate_bug_*.cfg`: expected-failure DA, priority, height, proposal-evidence, inflight, payload, cap, and return-count mutations.
 - `SumeragiObserverSignatureRecoveryGate.tla`: observer signature-mismatch recovery helper model.
-- `SumeragiObserverSignatureRecoveryGate_fast.cfg`: CI-friendly observer signature-mismatch recovery helper check.
+- `SumeragiObserverSignatureRecoveryGate_fast.cfg`: CI-friendly direct observer signature-mismatch recovery helper check.
 - `SumeragiObserverSignatureRecoveryGate_bug_*.cfg`: expected-failure recoverable signature-error, local-validator, unsupported-error, missing-QC, cached-context, and dual-QC-source mutations.
 - `SumeragiValidationFailureFinalizeGate.tla`: validation failure finalization helper model.
-- `SumeragiValidationFailureFinalizeGate_fast.cfg`: CI-friendly validation failure finalization helper check.
+- `SumeragiValidationFailureFinalizeGate_fast.cfg`: CI-friendly direct validation failure finalization helper check.
 - `SumeragiValidationFailureFinalizeGate_bug_*.cfg`: expected-failure deferral, invalid-state cleanup, reason-label, evidence, and previous-roster recovery mutations.
 - `SumeragiValidationRejectReasonLabelGate.tla`: validation-reject reason-label classifier model.
-- `SumeragiValidationRejectReasonLabelGate_fast.cfg`: CI-friendly validation-reject reason-label classifier check.
+- `SumeragiValidationRejectReasonLabelGate_fast.cfg`: CI-friendly direct validation-reject reason-label classifier check.
 - `SumeragiValidationRejectReasonLabelGate_bug_*.cfg`: expected-failure validation-error bucket and vNext label-normalization mutations.
 - `SumeragiValidationRejectStatusGate.tla`: validation-reject status counter and snapshot model.
-- `SumeragiValidationRejectStatusGate_fast.cfg`: CI-friendly validation-reject status counter check.
+- `SumeragiValidationRejectStatusGate_fast.cfg`: CI-friendly validation-reject status counter component/anchor check.
 - `SumeragiValidationRejectStatusGate_bug_*.cfg`: expected-failure reset, bucket, unknown-label, last-field, timestamp, and status-projection mutations.
 - `SumeragiPeerKeyPolicyStatusGate.tla`: peer-key policy status counter and snapshot model.
-- `SumeragiPeerKeyPolicyStatusGate_fast.cfg`: CI-friendly peer-key policy status counter check.
+- `SumeragiPeerKeyPolicyStatusGate_fast.cfg`: CI-friendly peer-key policy status counter/snapshot component/anchor check.
 - `SumeragiPeerKeyPolicyStatusGate_bug_*.cfg`: expected-failure reset, reason buckets, stable labels, last-field, timestamp, snapshot, and top-level projection mutations.
 - `SumeragiViewChangeCauseStatusGate.tla`: view-change cause status counter and snapshot model.
-- `SumeragiViewChangeCauseStatusGate_fast.cfg`: CI-friendly view-change cause status counter check.
+- `SumeragiViewChangeCauseStatusGate_fast.cfg`: CI-friendly view-change cause status counter component/anchor check.
 - `SumeragiViewChangeCauseStatusGate_bug_*.cfg`: expected-failure reset, cause buckets, unknown cause, last-cause/timestamp, per-cause timestamp, snapshot, and top-level projection mutations.
 - `SumeragiViewChangeProofStatusGate.tla`: view-change proof/index status counter model.
-- `SumeragiViewChangeProofStatusGate_fast.cfg`: CI-friendly view-change proof/index status check.
+- `SumeragiViewChangeProofStatusGate_fast.cfg`: CI-friendly view-change proof/index status component/anchor check.
 - `SumeragiViewChangeProofStatusGate_bug_*.cfg`: expected-failure index, proof-counter, suggest/install, snapshot, reset, and overwrite mutations.
 - `SumeragiQcStatusGate.tla`: leader/highest-QC/locked-QC status projection model.
-- `SumeragiQcStatusGate_fast.cfg`: CI-friendly leader/highest-QC/locked-QC status check.
+- `SumeragiQcStatusGate_fast.cfg`: CI-friendly leader/highest-QC/locked-QC status component/anchor check.
 - `SumeragiQcStatusGate_bug_*.cfg`: expected-failure leader, highest-QC tuple/subject, locked-QC monotonicity/reset, subject, getter, snapshot, and overwrite mutations.
 - `SumeragiValidationEvidenceQcGate.tla`: validation evidence QC selector model.
-- `SumeragiValidationEvidenceQcGate_fast.cfg`: CI-friendly validation evidence QC selector check.
+- `SumeragiValidationEvidenceQcGate_fast.cfg`: CI-friendly direct validation evidence QC selector check.
 - `SumeragiValidationEvidenceQcGate_bug_*.cfg`: expected-failure parent, subject, height, precedence, skip, synthesis, and fallback mutations.
 - `SumeragiCertificateAdmission.tla`: fail-closed certificate-admission safety model.
 - `SumeragiCertificateAdmission_fast.cfg`: CI-friendly certificate-admission safety check.
@@ -8149,7 +8149,7 @@ verification, and full networking details.
 - `SumeragiHighestQcSelection_bug_subject_tie.cfg`: expected-failure missing subject tie-break mutation.
 - `SumeragiHighestQcSelection_bug_non_new_view.cfg`: expected-failure non-new-view inclusion mutation.
 - `SumeragiHighestQcOptionalSelectionGate.tla`: optional highest-QC selection filter model.
-- `SumeragiHighestQcOptionalSelectionGate_fast.cfg`: CI-friendly optional highest-QC selection filter check.
+- `SumeragiHighestQcOptionalSelectionGate_fast.cfg`: CI-friendly direct optional highest-QC selection filter check.
 - `SumeragiHighestQcOptionalSelectionGate_bug_*.cfg`: expected-failure optional highest-QC filtering, candidate-source, and ignored-evidence mutations.
 - `SumeragiFrontierRecovery.tla`: focused frontier recovery model.
 - `SumeragiFrontierRecovery_fast.cfg`: smaller CI-friendly frontier parameter set.
@@ -10209,9 +10209,9 @@ surfaces it abstracts:
 | `lockedBranch`, `lockView`, `PrepareQc` | Locked-QC acceptance rules in `crates/iroha_core/src/sumeragi/main_loop/locked_qc.rs` and the pure engine's `proposal_satisfies_lock(...)`. |
 | `commitCerts` | Commit-certificate formation and finality conflict rejection in the collector/receiver path; the pure engine bridge coverage includes `conflicting_blocks_cannot_both_commit_at_same_height` and `committed_block_notifications_do_not_overwrite_conflicting_height`. |
 
-TLC now cross-checks `fork-fast` and the `fork-bug-*` expected-failure
-mutation so the same finite fork-safety state space is covered by both
-Apalache and TLC.
+TLC now cross-checks `fork-fast`, `fork-npos`, and the `fork-bug-*`
+expected-failure mutation so the same finite fork-safety state space is
+covered by both Apalache and TLC.
 
 The quorum-policy model is intentionally finite. These are the implementation
 surfaces it abstracts:
@@ -13224,6 +13224,7 @@ bash scripts/formal/sumeragi_apalache.sh frontier-wide
 bash scripts/formal/sumeragi_tlc.sh frontier-fast
 bash scripts/formal/sumeragi_tlc.sh frontier-small
 bash scripts/formal/sumeragi_tlc.sh fork-fast
+bash scripts/formal/sumeragi_tlc.sh fork-npos
 bash scripts/formal/sumeragi_tlc.sh quorum-fast
 bash scripts/formal/sumeragi_tlc.sh rbc-fast
 bash scripts/formal/sumeragi_tlc.sh rbc-causality-fast
@@ -13733,281 +13734,281 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `fork-npos` | 9 | CI NPoS stake-quorum fork-safety check |
 | `quorum-fast` | 2 | CI quorum-policy arithmetic check |
 | `rbc-fast` | 2 | CI RBC deliver-quorum gate check |
-| `rbc-causality-fast` | 1 | CI RBC causality check |
-| `rbc-deliver-acceptance-fast` | 1 | CI RBC DELIVER acceptance decision check |
-| `rbc-ready-emission-fast` | 1 | CI RBC local READY emission decision check |
-| `rbc-deliver-emission-fast` | 1 | CI RBC local DELIVER emission decision check |
-| `rbc-delivered-rebroadcast-fast` | 1 | CI RBC delivered-session rebroadcast check |
-| `rbc-rebroadcast-cursor-fast` | 1 | CI RBC stalled-rebroadcast cursor/selection check |
-| `rbc-rebroadcast-action-fast` | 1 | CI RBC stalled-rebroadcast non-delivered action check |
-| `rbc-next-due-fast` | 1 | CI RBC next-due scheduler check |
-| `rbc-commit-processing-fast` | 1 | CI RBC commit-pipeline trigger helper check |
-| `rbc-chunk-target-fast` | 1 | CI RBC chunk target helper check |
-| `rbc-chunk-payload-cap-fast` | 1 | CI RBC chunk payload frame-cap check |
-| `rbc-rebroadcast-selection-fast` | 1 | CI RBC rebroadcaster selection helper check |
-| `rbc-chunk-allocation-fast` | 1 | CI RBC weighted chunk allocation helper check |
-| `rbc-payload-chunking-fast` | 1 | CI RBC payload chunking helper check |
-| `rbc-payload-layout-fast` | 1 | CI RBC payload layout count/index/length helper check |
-| `rbc-session-chunk-ingest-fast` | 1 | CI RBC session chunk-ingest and digest-cleanup check |
-| `rbc-session-ready-deliver-fast` | 1 | CI RBC READY/DELIVER session recording check |
-| `rbc-delivered-payload-bytes-fast` | 1 | CI RBC delivered-payload byte telemetry check |
-| `rbc-rs16-initial-fanout-fast` | 1 | CI RBC RS16 initial fanout helper check |
-| `rbc-chunk-broadcast-order-fast` | 1 | CI RBC chunk broadcast order helper check |
-| `pending-rbc-stash-fast` | 1 | CI pending-RBC stash cap/TTL/replay check |
-| `pending-rbc-status-fast` | 1 | CI pending-RBC status snapshot/counter check |
-| `ingress-dedup-cache-fast` | 1 | CI ingress dedup cache and block-payload bucket routing check |
-| `ingress-status-counters-fast` | 1 | CI inbound consensus status counter check |
-| `consensus-message-labels-fast` | 1 | CI consensus message status label check |
-| `phase-latency-status-fast` | 1 | CI phase-latency latest/max/EMA status check |
-| `telemetry-status-fast` | 1 | CI telemetry availability/QC/RBC/pipeline status check |
-| `lane-detail-status-fast` | 1 | CI lane-detail commitment/relay/governance stripping status check |
-| `settlement-status-fast` | 1 | CI DvP/PvP settlement telemetry JSON status check |
-| `nexus-economics-status-fast` | 1 | CI Nexus fee/staking economics status check |
-| `npos-repair-coverage-status-fast` | 1 | CI NPoS repair fanout coverage status check |
-| `mode-status-fast` | 1 | CI mode/PRF/mode-flip status projection check |
-| `consensus-caps-status-fast` | 1 | CI consensus capability status projection check |
-| `effective-timing-status-fast` | 1 | CI effective timing status projection check |
-| `tx-queue-backpressure-status-fast` | 1 | CI transaction queue backpressure status projection check |
-| `history-status-fast` | 1 | CI checkpoint/commit-QC/NPoS/key status history check |
-| `commit-quorum-status-fast` | 1 | CI commit-quorum status tally/projection check |
-| `commit-inflight-status-fast` | 1 | CI commit-inflight status lifecycle/projection check |
-| `rbc-status-lookup-fast` | 1 | CI RBC status lookup helper check |
-| `rbc-status-retention-fast` | 1 | CI RBC status retention/update-pruning helper check |
-| `rbc-status-persistence-fast` | 1 | CI RBC status persistence/fallback helper check |
-| `rbc-status-handle-fast` | 1 | CI RBC status handle lifecycle helper check |
-| `rbc-backlog-status-fast` | 1 | CI RBC backlog summary/status snapshot helper check |
-| `rbc-abort-status-fast` | 1 | CI RBC abort status counter/latest-slot check |
-| `rbc-mismatch-status-fast` | 1 | CI RBC mismatch status counter/label check |
-| `rbc-progress-stage-fast` | 1 | CI RBC progress-stage sync helper check |
-| `rbc-hot-repair-fast` | 1 | CI RBC hot-repair/backpressure helper check |
-| `rbc-repair-request-fast` | 1 | CI RBC repair request helper check |
-| `rbc-targeted-repair-fast` | 1 | CI RBC targeted READY/DELIVER repair helper check |
-| `rbc-outbound-flush-fast` | 1 | CI RBC outbound chunk flush helper check |
-| `rbc-chunk-post-debug-fast` | 1 | CI RBC chunk post scheduling/debug-mask check |
-| `rbc-deferral-throttle-fast` | 1 | CI RBC READY/DELIVER deferral throttle helper check |
-| `rbc-missing-init-rebroadcast-fast` | 1 | CI RBC missing-INIT broad rebroadcast gate check |
-| `rbc-sampling-fast` | 1 | CI RBC persisted chunk sampling/proof helper check |
-| `rbc-store-fast` | 1 | CI RBC persisted session-store guard check |
-| `rbc-store-status-fast` | 1 | CI RBC store pressure/counter/eviction status check |
-| `rbc-store-pressure-log-fast` | 1 | CI RBC store pressure log throttling check |
-| `round-gap-status-fast` | 1 | CI round-gap marker/snapshot/EMA status check |
-| `rbc-recovery-helper-fast` | 1 | CI RBC stale-message/payload-refetch helper check |
-| `rbc-missing-block-recovery-fast` | 1 | CI RBC BlockCreated recovery helper check |
-| `rbc-unverified-roster-fast` | 1 | CI RBC unverified-roster escape-hatch helper check |
-| `rbc-preimage-fast` | 1 | CI RBC signing-preimage check |
+| `rbc-causality-fast` | 1 | CI direct RBC causality component check |
+| `rbc-deliver-acceptance-fast` | 1 | CI direct RBC DELIVER acceptance decision check |
+| `rbc-ready-emission-fast` | 1 | CI direct RBC local READY emission decision check |
+| `rbc-deliver-emission-fast` | 1 | CI direct RBC local DELIVER emission decision check |
+| `rbc-delivered-rebroadcast-fast` | 1 | CI direct RBC delivered-session rebroadcast check |
+| `rbc-rebroadcast-cursor-fast` | 1 | CI direct RBC stalled-rebroadcast cursor/selection check |
+| `rbc-rebroadcast-action-fast` | 1 | CI direct RBC stalled-rebroadcast non-delivered action check |
+| `rbc-next-due-fast` | 1 | CI direct RBC next-due scheduler check |
+| `rbc-commit-processing-fast` | 1 | CI direct RBC commit-pipeline trigger helper check |
+| `rbc-chunk-target-fast` | 1 | CI direct RBC chunk target helper check |
+| `rbc-chunk-payload-cap-fast` | 1 | CI direct RBC chunk payload frame-cap check |
+| `rbc-rebroadcast-selection-fast` | 1 | CI direct RBC rebroadcaster selection helper check |
+| `rbc-chunk-allocation-fast` | 1 | CI direct RBC weighted chunk allocation helper check |
+| `rbc-payload-chunking-fast` | 1 | CI direct RBC payload chunking helper check |
+| `rbc-payload-layout-fast` | 1 | CI direct RBC payload layout count/index/length helper check |
+| `rbc-session-chunk-ingest-fast` | 1 | CI direct RBC session chunk-ingest and digest-cleanup check |
+| `rbc-session-ready-deliver-fast` | 1 | CI direct RBC READY/DELIVER session recording check |
+| `rbc-delivered-payload-bytes-fast` | 1 | CI direct RBC delivered-payload byte telemetry check |
+| `rbc-rs16-initial-fanout-fast` | 1 | CI direct RBC RS16 initial fanout helper check |
+| `rbc-chunk-broadcast-order-fast` | 1 | CI direct RBC chunk broadcast order helper check |
+| `pending-rbc-stash-fast` | 1 | CI direct pending-RBC stash cap/TTL/replay component check |
+| `pending-rbc-status-fast` | 1 | CI pending-RBC status snapshot/counter direct exactness check |
+| `ingress-dedup-cache-fast` | 1 | CI direct ingress dedup cache and block-payload bucket routing check |
+| `ingress-status-counters-fast` | 1 | CI inbound consensus status counter direct exactness check |
+| `consensus-message-labels-fast` | 1 | CI consensus message status label direct exactness check |
+| `phase-latency-status-fast` | 1 | CI phase-latency latest/max/EMA status direct exactness check |
+| `telemetry-status-fast` | 1 | CI telemetry availability/QC/RBC/pipeline status direct exactness check |
+| `lane-detail-status-fast` | 1 | CI lane-detail commitment/relay/governance stripping status direct exactness check |
+| `settlement-status-fast` | 1 | CI DvP/PvP settlement telemetry JSON status direct exactness check |
+| `nexus-economics-status-fast` | 1 | CI Nexus fee/staking economics status direct exactness check |
+| `npos-repair-coverage-status-fast` | 1 | CI NPoS repair fanout coverage status direct exactness check |
+| `mode-status-fast` | 1 | CI mode/PRF/mode-flip status projection direct exactness check |
+| `consensus-caps-status-fast` | 1 | CI consensus capability status projection direct exactness check |
+| `effective-timing-status-fast` | 1 | CI effective timing status projection direct exactness check |
+| `tx-queue-backpressure-status-fast` | 1 | CI transaction queue backpressure status projection direct exactness check |
+| `history-status-fast` | 1 | CI checkpoint/commit-QC/NPoS/key status history component/anchor check |
+| `commit-quorum-status-fast` | 1 | CI commit-quorum status tally/projection component/anchor check |
+| `commit-inflight-status-fast` | 1 | CI commit-inflight status lifecycle/projection component/anchor check |
+| `rbc-status-lookup-fast` | 1 | CI direct RBC status lookup helper check |
+| `rbc-status-retention-fast` | 1 | CI direct RBC status retention/update-pruning helper check |
+| `rbc-status-persistence-fast` | 1 | CI direct RBC status persistence/fallback helper check |
+| `rbc-status-handle-fast` | 1 | CI direct RBC status handle lifecycle helper check |
+| `rbc-backlog-status-fast` | 1 | CI direct RBC backlog summary/status snapshot helper check |
+| `rbc-abort-status-fast` | 1 | CI RBC abort status counter/latest-slot component/anchor check |
+| `rbc-mismatch-status-fast` | 1 | CI RBC mismatch status counter/label component/anchor check |
+| `rbc-progress-stage-fast` | 1 | CI direct RBC progress-stage sync helper check |
+| `rbc-hot-repair-fast` | 1 | CI direct RBC hot-repair/backpressure helper check |
+| `rbc-repair-request-fast` | 1 | CI direct RBC repair request helper check |
+| `rbc-targeted-repair-fast` | 1 | CI direct RBC targeted READY/DELIVER repair helper check |
+| `rbc-outbound-flush-fast` | 1 | CI direct RBC outbound chunk flush helper check |
+| `rbc-chunk-post-debug-fast` | 1 | CI direct RBC chunk post scheduling/debug-mask check |
+| `rbc-deferral-throttle-fast` | 1 | CI direct RBC READY/DELIVER deferral throttle helper check |
+| `rbc-missing-init-rebroadcast-fast` | 1 | CI direct RBC missing-INIT broad rebroadcast gate check |
+| `rbc-sampling-fast` | 1 | CI direct RBC persisted chunk sampling/proof helper check |
+| `rbc-store-fast` | 1 | CI direct RBC persisted session-store guard check |
+| `rbc-store-status-fast` | 1 | CI RBC store pressure/counter/eviction status component/anchor check |
+| `rbc-store-pressure-log-fast` | 1 | CI RBC store pressure log throttling component/anchor check |
+| `round-gap-status-fast` | 1 | CI round-gap marker/snapshot/EMA status component/anchor check |
+| `rbc-recovery-helper-fast` | 1 | CI direct RBC stale-message/payload-refetch helper check |
+| `rbc-missing-block-recovery-fast` | 1 | CI direct RBC BlockCreated recovery helper check |
+| `rbc-unverified-roster-fast` | 1 | CI direct RBC unverified-roster escape-hatch helper check |
+| `rbc-preimage-fast` | 1 | CI RBC signing-preimage component/anchor check |
 | `classic-preimage-fast` | 1 | CI classic Vote/VRF signing-preimage aggregate exactness check |
-| `vrf-material-derivation-fast` | 1 | CI VRF material derivation helper check |
-| `vrf-penalties-report-fast` | 1 | CI VRF penalties report storage helper check |
-| `classic-signature-fast` | 1 | CI classic Vote/QC signature-verification check |
-| `invalid-signature-labels-fast` | 1 | CI invalid-signature kind/outcome label check |
-| `invalid-signature-throttle-fast` | 1 | CI invalid-signature throttle and penalty helper check |
-| `vote-validation-drop-status-fast` | 1 | CI vote-validation drop telemetry status check |
-| `penalty-offender-selection-fast` | 1 | CI evidence penalty offender/epoch/roster selection helper check |
-| `consensus-penalty-action-fast` | 1 | CI consensus-evidence penalty action derivation/application check |
-| `penalty-status-fast` | 1 | CI penalty status projection check |
-| `local-peer-removed-status-fast` | 1 | CI local peer removed flag storage/getter check |
-| `exec-witness-roots-fast` | 1 | CI execution-witness root projection check |
+| `vrf-material-derivation-fast` | 1 | CI direct VRF material derivation helper check |
+| `vrf-penalties-report-fast` | 1 | CI VRF penalties report storage direct exactness check |
+| `classic-signature-fast` | 1 | CI classic Vote/QC signature-verification component/anchor check |
+| `invalid-signature-labels-fast` | 1 | CI direct invalid-signature kind/outcome label check |
+| `invalid-signature-throttle-fast` | 1 | CI invalid-signature throttle and penalty helper component/anchor check |
+| `vote-validation-drop-status-fast` | 1 | CI vote-validation drop telemetry status direct exactness check |
+| `penalty-offender-selection-fast` | 1 | CI direct evidence penalty offender/epoch/roster selection helper check |
+| `consensus-penalty-action-fast` | 1 | CI direct consensus-evidence penalty action derivation/application check |
+| `penalty-status-fast` | 1 | CI penalty status projection component/anchor check |
+| `local-peer-removed-status-fast` | 1 | CI local peer removed flag storage/getter component/anchor check |
+| `exec-witness-roots-fast` | 1 | CI direct execution-witness root projection component/anchor check |
 | `exec-witness-recorder-fast` | 1 | CI execution-witness recorder lifecycle/keying check |
 | `exec-witness-access-key-fast` | 1 | CI execution-witness access-key parser check |
 | `smt-path-hash-fast` | 1 | CI sparse-Merkle path/hash helper check |
-| `block-message-rbc-compact-fast` | 1 | CI RBC chunk compact block-message aggregate exactness check |
-| `block-message-priority-fast` | 1 | CI consensus block-message priority aggregate exactness check |
-| `block-message-height-view-fast` | 1 | CI consensus block-message height/view aggregate exactness check |
-| `block-message-kind-fast` | 1 | CI consensus block-message log/status kind aggregate exactness check |
-| `kura-replica-advert-fast` | 1 | CI Kura replica advert ingress helper check |
-| `message-projection-fast` | 1 | CI consensus message timing/control/native-AMX projection check |
-| `pipeline-event-emission-fast` | 1 | CI pipeline event forwarding envelope check |
-| `block-message-wire-fast` | 1 | CI consensus block-message cached wire-frame aggregate exactness check |
-| `block-created-frontier-wire-fast` | 1 | CI BlockCreated frontier metadata wire/rebuild aggregate exactness check |
-| `block-payload-canonicalization-fast` | 1 | CI canonical proposal payload byte helper check |
-| `cached-proposal-rebroadcast-fast` | 1 | CI cached proposal rebroadcast admission/fanout check |
-| `frontier-block-sync-hint-fast` | 1 | CI frontier block-sync hint and direct-response permit check |
-| `frontier-same-slot-activity-fast` | 1 | CI exact-slot frontier recovery activity helper check |
-| `frontier-reassembly-activity-fast` | 1 | CI frontier reassembly activity helper check |
-| `frontier-quorum-owner-actionable-fast` | 1 | CI frontier quorum-timeout actionable-owner cleanup check |
-| `frontier-sidecar-retarget-fast` | 1 | CI contiguous-frontier sidecar retarget helper check |
-| `frontier-sidecar-expected-hash-fast` | 1 | CI contiguous-frontier sidecar expected-hash helper check |
-| `contiguous-frontier-payload-hint-fast` | 1 | CI contiguous-frontier payload-hint selector check |
-| `frontier-parent-qc-hint-retarget-fast` | 1 | CI contiguous-frontier parent QC-hint retarget check |
-| `live-frontier-idle-missing-qc-fast` | 1 | CI live-frontier idle missing-QC suppression check |
-| `missing-qc-reacquire-admission-fast` | 1 | CI missing-QC reacquire admission check |
-| `missing-qc-reacquire-action-fast` | 1 | CI missing-QC reacquire action orchestration check |
-| `missing-commit-qc-actionable-fast` | 1 | CI missing commit-QC actionable dependency check |
-| `missing-qc-height-stall-fast` | 1 | CI same-height missing-QC stall dampening check |
-| `missing-qc-stall-range-pull-fast` | 1 | CI same-height missing-QC stall range-pull check |
-| `missing-payload-fetch-window-fast` | 1 | CI same-height missing-payload fetch-window and hash-miss cap check |
-| `canonical-frontier-reanchor-fast` | 1 | CI canonical contiguous-frontier reanchor gate check |
-| `frontier-repair-view-change-fast` | 1 | CI contiguous-frontier repair view-change suppression check |
-| `frontier-recovery-advance-fast` | 1 | CI contiguous-frontier recovery advance state-machine check |
-| `same-height-no-proposal-storm-fast` | 1 | CI same-height no-proposal storm recovery check |
+| `block-message-rbc-compact-fast` | 1 | CI direct RBC chunk compact block-message exactness/component check |
+| `block-message-priority-fast` | 1 | CI direct consensus block-message priority exactness/component check |
+| `block-message-height-view-fast` | 1 | CI direct consensus block-message height/view exactness/component check |
+| `block-message-kind-fast` | 1 | CI direct consensus block-message log/status kind exactness/component check |
+| `kura-replica-advert-fast` | 1 | CI direct Kura replica advert ingress helper check |
+| `message-projection-fast` | 1 | CI direct consensus message timing/control/native-AMX projection component/anchor check |
+| `pipeline-event-emission-fast` | 1 | CI direct pipeline event forwarding envelope component/anchor check |
+| `block-message-wire-fast` | 1 | CI direct consensus block-message cached wire-frame component/anchor check |
+| `block-created-frontier-wire-fast` | 1 | CI direct BlockCreated frontier metadata wire/rebuild component/anchor check |
+| `block-payload-canonicalization-fast` | 1 | CI direct canonical proposal payload byte helper check |
+| `cached-proposal-rebroadcast-fast` | 1 | CI direct cached proposal rebroadcast admission/fanout component/anchor check |
+| `frontier-block-sync-hint-fast` | 1 | CI direct frontier block-sync hint/direct-response permit check |
+| `frontier-same-slot-activity-fast` | 1 | CI direct exact-slot frontier recovery activity aggregate exactness check |
+| `frontier-reassembly-activity-fast` | 1 | CI direct frontier reassembly activity aggregate exactness check |
+| `frontier-quorum-owner-actionable-fast` | 1 | CI direct frontier quorum-timeout actionable-owner cleanup aggregate exactness check |
+| `frontier-sidecar-retarget-fast` | 1 | CI direct contiguous-frontier sidecar retarget aggregate exactness check |
+| `frontier-sidecar-expected-hash-fast` | 1 | CI direct contiguous-frontier sidecar expected-hash aggregate exactness check |
+| `contiguous-frontier-payload-hint-fast` | 1 | CI direct contiguous-frontier payload-hint selector aggregate exactness check |
+| `frontier-parent-qc-hint-retarget-fast` | 1 | CI direct contiguous-frontier parent QC-hint retarget aggregate exactness check |
+| `live-frontier-idle-missing-qc-fast` | 1 | CI direct live-frontier idle missing-QC suppression component/anchor check |
+| `missing-qc-reacquire-admission-fast` | 1 | CI direct missing-QC reacquire admission component/anchor check |
+| `missing-qc-reacquire-action-fast` | 1 | CI direct missing-QC reacquire action orchestration component/anchor check |
+| `missing-commit-qc-actionable-fast` | 1 | CI direct missing commit-QC actionable dependency component/anchor check |
+| `missing-qc-height-stall-fast` | 1 | CI direct same-height missing-QC stall dampening component/anchor check |
+| `missing-qc-stall-range-pull-fast` | 1 | CI direct same-height missing-QC stall range-pull component/anchor check |
+| `missing-payload-fetch-window-fast` | 1 | CI direct same-height missing-payload fetch-window and hash-miss cap check |
+| `canonical-frontier-reanchor-fast` | 1 | CI direct canonical contiguous-frontier reanchor gate component/anchor check |
+| `frontier-repair-view-change-fast` | 1 | CI direct contiguous-frontier repair view-change suppression component/anchor check |
+| `frontier-recovery-advance-fast` | 1 | CI direct contiguous-frontier recovery advance state-machine component/anchor check |
+| `same-height-no-proposal-storm-fast` | 1 | CI direct same-height no-proposal storm recovery component/anchor check |
 | `vrf-admission-fast` | 1 | CI VRF commit/reveal admission check |
-| `vrf-epoch-window-fast` | 1 | CI VRF epoch-window arithmetic helper check |
-| `vrf-epoch-boundary-fast` | 1 | CI VRF epoch-boundary finalization helper check |
-| `vrf-epoch-restore-fast` | 1 | CI VRF epoch restore/snapshot/merge helper check |
+| `vrf-epoch-window-fast` | 1 | CI direct VRF epoch-window arithmetic helper check |
+| `vrf-epoch-boundary-fast` | 1 | CI direct VRF epoch-boundary finalization helper check |
+| `vrf-epoch-restore-fast` | 1 | CI direct VRF epoch restore/snapshot/merge helper check |
 | `vrf-local-state-fast` | 1 | CI local VRF emission state helper check |
-| `vote-admission-fast` | 1 | CI classic inbound vote-admission check |
-| `vote-duplicate-key-fast` | 1 | CI vote duplicate raw-key and identity projection helper check |
-| `evidence-horizon-fast` | 1 | CI evidence freshness horizon helper check |
-| `evidence-canonicalization-fast` | 1 | CI evidence canonicalization/deduplication helper check |
-| `evidence-validation-fast` | 1 | CI evidence validation helper check |
-| `double-vote-recording-fast` | 1 | CI double-vote detection/recording helper check |
-| `invalid-qc-shape-fast` | 1 | CI invalid-QC shape helper check |
-| `qc-validation-evidence-fast` | 1 | CI QC validation evidence mapping check |
-| `qc-validation-reason-fast` | 1 | CI QC validation reason label check |
+| `vote-admission-fast` | 1 | CI direct classic inbound vote-admission check |
+| `vote-duplicate-key-fast` | 1 | CI vote duplicate raw-key and identity projection direct exactness check |
+| `evidence-horizon-fast` | 1 | CI direct evidence freshness horizon helper check |
+| `evidence-canonicalization-fast` | 1 | CI direct evidence canonicalization/deduplication helper check |
+| `evidence-validation-fast` | 1 | CI direct evidence validation helper check |
+| `double-vote-recording-fast` | 1 | CI direct double-vote detection/recording helper check |
+| `invalid-qc-shape-fast` | 1 | CI direct invalid-QC shape helper check |
+| `qc-validation-evidence-fast` | 1 | CI direct QC validation evidence mapping check |
+| `qc-validation-reason-fast` | 1 | CI direct QC validation reason label check |
 | `embedded-qc-roster-fast` | 1 | CI embedded-QC roster bootstrap check |
-| `block-sync-qc-fallback-fast` | 1 | CI block-sync QC retry/fallback check |
+| `block-sync-qc-fallback-fast` | 1 | CI direct block-sync QC retry/fallback check |
 | `block-sync-qc-status-fast` | 1 | CI block-sync QC status check |
-| `block-sync-locked-qc-fast` | 1 | CI block-sync locked-QC helper check |
-| `known-block-qc-enqueue-fast` | 1 | CI known-block QC work enqueue check |
-| `known-block-qc-work-fast` | 1 | CI known-block QC work-preparation check |
-| `known-block-qc-drain-fast` | 1 | CI known-block QC work queue drain check |
-| `signed-quorum-fetch-fallback-fast` | 1 | CI committed signed-quorum fetch fallback check |
-| `commit-qc-only-fetch-response-fast` | 1 | CI commit-QC-only fetch response dispatch check |
-| `block-sync-update-targets-fast` | 1 | CI BlockSyncUpdate gossip target-selection helper check |
-| `apply-cached-qcs-fast` | 1 | CI cached BlockSyncUpdate proof/vote attachment helper check |
-| `block-sync-roster-fast` | 1 | CI uncertified block-sync roster admission check |
+| `block-sync-locked-qc-fast` | 1 | CI direct block-sync locked-QC helper check |
+| `known-block-qc-enqueue-fast` | 1 | CI direct known-block QC work enqueue check |
+| `known-block-qc-work-fast` | 1 | CI direct known-block QC work-preparation check |
+| `known-block-qc-drain-fast` | 1 | CI direct known-block QC work queue drain check |
+| `signed-quorum-fetch-fallback-fast` | 1 | CI direct committed signed-quorum fetch fallback check |
+| `commit-qc-only-fetch-response-fast` | 1 | CI direct commit-QC-only fetch response dispatch check |
+| `block-sync-update-targets-fast` | 1 | CI direct BlockSyncUpdate gossip target-selection helper check |
+| `apply-cached-qcs-fast` | 1 | CI direct cached BlockSyncUpdate proof/vote attachment helper check |
+| `block-sync-roster-fast` | 1 | CI direct uncertified block-sync roster admission check |
 | `block-sync-roster-status-fast` | 1 | CI block-sync roster source/drop status check |
-| `block-sync-vote-deferral-fast` | 1 | CI BlockSyncUpdate vote filtering and deferral handoff check |
-| `block-sync-known-hintless-fast` | 1 | CI already-known hintless BlockSyncUpdate check |
-| `block-sync-implicit-recovery-fast` | 1 | CI DA implicit BlockSyncUpdate recovery check |
-| `block-sync-vote-placeholder-fast` | 1 | CI frontier vote-placeholder check |
-| `block-sync-snapshot-hint-fast` | 1 | CI known-block snapshot hint filter check |
-| `block-sync-snapshot-roster-fast` | 1 | CI known-block snapshot roster-selection check |
-| `block-sync-no-roster-fast` | 1 | CI no-verifiable-roster BlockSyncUpdate branch check |
-| `block-sync-known-roster-fast` | 1 | CI selected-roster known-block terminal path check |
-| `block-sync-known-selected-roster-fast` | 1 | CI selected-roster known-block BlockSyncUpdate replay and cleanup check |
-| `block-sync-selected-signatures-fast` | 1 | CI selected-roster BlockSyncUpdate signature gate check |
-| `block-sync-selected-qc-fast` | 1 | CI selected-roster BlockSyncUpdate QC candidate/evidence check |
-| `block-sync-selected-quorum-fast` | 1 | CI selected-roster BlockSyncUpdate quorum and missing-QC repair check |
+| `block-sync-vote-deferral-fast` | 1 | CI direct BlockSyncUpdate vote filtering and deferral handoff check |
+| `block-sync-known-hintless-fast` | 1 | CI direct already-known hintless BlockSyncUpdate check |
+| `block-sync-implicit-recovery-fast` | 1 | CI direct DA implicit BlockSyncUpdate recovery check |
+| `block-sync-vote-placeholder-fast` | 1 | CI direct frontier vote-placeholder check |
+| `block-sync-snapshot-hint-fast` | 1 | CI direct known-block snapshot hint filter check |
+| `block-sync-snapshot-roster-fast` | 1 | CI direct known-block snapshot roster-selection check |
+| `block-sync-no-roster-fast` | 1 | CI direct no-verifiable-roster BlockSyncUpdate branch check |
+| `block-sync-known-roster-fast` | 1 | CI direct selected-roster known-block terminal path check |
+| `block-sync-known-selected-roster-fast` | 1 | CI direct selected-roster known-block BlockSyncUpdate replay and cleanup check |
+| `block-sync-selected-signatures-fast` | 1 | CI direct selected-roster BlockSyncUpdate signature gate check |
+| `block-sync-selected-qc-fast` | 1 | CI direct selected-roster BlockSyncUpdate QC candidate/evidence check |
+| `block-sync-selected-quorum-fast` | 1 | CI direct selected-roster BlockSyncUpdate quorum and missing-QC repair check |
 | `block-sync-recovery-mode-fast` | 1 | CI stale BlockCreated/recovery-mode helper check |
-| `block-sync-selected-apply-fast` | 1 | CI selected-roster BlockSyncUpdate apply and recovery-mode check |
-| `block-sync-selected-qc-prefilter-fast` | 1 | CI selected-roster BlockSyncUpdate post-apply QC prefilter check |
+| `block-sync-selected-apply-fast` | 1 | CI direct selected-roster BlockSyncUpdate apply and recovery-mode check |
+| `block-sync-selected-qc-prefilter-fast` | 1 | CI direct selected-roster BlockSyncUpdate post-apply QC prefilter check |
 | `block-sync-selected-qc-process-fast` | 1 | CI selected-roster BlockSyncUpdate post-prefilter QC process check |
 | `block-sync-selected-qc-cache-fast` | 1 | CI selected-roster BlockSyncUpdate unknown-block QC cache check |
-| `block-sync-stale-view-fast` | 1 | CI BlockSyncUpdate stale-view admission check |
-| `block-sync-commit-conflict-fast` | 1 | CI committed-height BlockSyncUpdate conflict check |
+| `block-sync-stale-view-fast` | 1 | CI direct BlockSyncUpdate stale-view admission check |
+| `block-sync-commit-conflict-fast` | 1 | CI direct committed-height BlockSyncUpdate conflict check |
 | `block-sync-warning-throttle-fast` | 1 | CI block-sync warning throttle check |
-| `qc-insufficient-warning-fast` | 1 | CI QC-insufficient warning throttle check |
-| `fetch-response-deferral-fast` | 1 | CI canonical committed fetch/body response deferral check |
-| `fetch-block-body-handle-fast` | 1 | CI exact block-body fetch handler check |
-| `background-frame-cap-fast` | 1 | CI background consensus frame-cap preparation check |
-| `background-dispatch-fast` | 1 | CI background request dispatch fallback check |
-| `background-bypass-fast` | 1 | CI background scheduler bypass matrix check |
-| `background-fallback-fast` | 1 | CI background fallback network dispatch check |
-| `fetch-pending-response-send-fast` | 1 | CI fetch-pending-block response send check |
-| `fetch-pending-responses-batch-fast` | 1 | CI fetch-pending-block batch response fanout check |
-| `pending-response-flush-fast` | 1 | CI pending fetch/body response readiness flush check |
-| `deferred-block-sync-helper-fast` | 1 | CI deferred BlockSyncUpdate helper check |
-| `deferred-block-sync-cache-fast` | 1 | CI deferred BlockSyncUpdate cache/defer integration check |
-| `deferred-block-sync-replay-fast` | 1 | CI deferred BlockSyncUpdate replay check |
-| `block-sync-future-window-fast` | 1 | CI future BlockSyncUpdate drop/window check |
-| `block-body-repair-fast` | 1 | CI RBC block-body repair admission check |
-| `block-body-request-stash-fast` | 1 | CI exact body requester stash-window check |
-| `same-height-block-body-repair-fast` | 1 | CI same-height block-body repair admission check |
-| `block-body-repair-epoch-fast` | 1 | CI block-body repair observed epoch source check |
+| `qc-insufficient-warning-fast` | 1 | CI QC-insufficient warning throttle direct exactness check |
+| `fetch-response-deferral-fast` | 1 | CI direct canonical committed fetch/body response deferral check |
+| `fetch-block-body-handle-fast` | 1 | CI direct exact block-body fetch handler check |
+| `background-frame-cap-fast` | 1 | CI direct background consensus frame-cap preparation check |
+| `background-dispatch-fast` | 1 | CI direct background request dispatch fallback check |
+| `background-bypass-fast` | 1 | CI direct background scheduler bypass matrix check |
+| `background-fallback-fast` | 1 | CI direct background fallback network dispatch check |
+| `fetch-pending-response-send-fast` | 1 | CI direct fetch-pending-block response send check |
+| `fetch-pending-responses-batch-fast` | 1 | CI direct fetch-pending-block batch response fanout check |
+| `pending-response-flush-fast` | 1 | CI direct pending fetch/body response readiness flush check |
+| `deferred-block-sync-helper-fast` | 1 | CI direct deferred BlockSyncUpdate helper check |
+| `deferred-block-sync-cache-fast` | 1 | CI direct deferred BlockSyncUpdate cache/defer integration check |
+| `deferred-block-sync-replay-fast` | 1 | CI direct deferred BlockSyncUpdate replay check |
+| `block-sync-future-window-fast` | 1 | CI direct future BlockSyncUpdate drop/window check |
+| `block-body-repair-fast` | 1 | CI direct RBC block-body repair admission check |
+| `block-body-request-stash-fast` | 1 | CI direct body requester stash-window check |
+| `same-height-block-body-repair-fast` | 1 | CI direct same-height block-body repair admission check |
+| `block-body-repair-epoch-fast` | 1 | CI direct block-body repair observed epoch source check |
 | `direct-commit-qc-for-block-fast` | 1 | CI direct commit-QC source selection check |
-| `materialize-qc-fast` | 1 | CI QC materialization and Kura recovery check |
-| `block-body-direct-commit-qc-fast` | 1 | CI BlockBodyResponse direct commit-QC extraction check |
-| `block-body-detached-commit-qc-fast` | 1 | CI detached BlockBodyResponse commit-QC handling check |
-| `block-body-response-dispatch-fast` | 1 | CI exact BlockBodyResponse fallback/companion dispatch check |
-| `invalid-proposal-evidence-fast` | 1 | CI invalid-proposal evidence builder helper check |
-| `proposal-mismatch-fast` | 1 | CI proposal mismatch helper check |
-| `proposal-cache-fast` | 1 | CI proposal cache helper check |
-| `proposal-hint-fast` | 1 | CI proposal-hint admission check |
-| `stale-proposal-hint-repair-fast` | 1 | CI stale proposal-hint repair exception check |
-| `stale-rbc-hint-repair-fast` | 1 | CI stale RBC proposal-hint repair check |
-| `proposal-admission-fast` | 1 | CI proposal metadata admission check |
-| `peer-admin-detection-fast` | 1 | CI peer-admin transaction detection helper check |
+| `materialize-qc-fast` | 1 | CI direct QC materialization and Kura recovery check |
+| `block-body-direct-commit-qc-fast` | 1 | CI direct BlockBodyResponse commit-QC extraction check |
+| `block-body-detached-commit-qc-fast` | 1 | CI direct detached BlockBodyResponse commit-QC handling check |
+| `block-body-response-dispatch-fast` | 1 | CI direct BlockBodyResponse fallback/companion dispatch check |
+| `invalid-proposal-evidence-fast` | 1 | CI direct invalid-proposal evidence builder helper check |
+| `proposal-mismatch-fast` | 1 | CI direct proposal mismatch helper check |
+| `proposal-cache-fast` | 1 | CI direct proposal cache helper check |
+| `proposal-hint-fast` | 1 | CI direct proposal-hint admission check |
+| `stale-proposal-hint-repair-fast` | 1 | CI direct stale proposal-hint repair no-bug check |
+| `stale-rbc-hint-repair-fast` | 1 | CI direct stale RBC hint repair no-bug check |
+| `proposal-admission-fast` | 1 | CI direct proposal metadata admission check |
+| `peer-admin-detection-fast` | 1 | CI direct peer-admin transaction detection helper check |
 | `block-created-admission-fast` | 1 | CI direct `BlockCreated` payload admission aggregate exactness check |
-| `empty-block-qc-drop-fast` | 1 | CI empty-block QC drop/cleanup check |
-| `missing-request-clear-fast` | 1 | CI missing-block request clear helper check |
-| `missing-block-clear-fast` | 1 | CI missing-block clear reason helper check |
-| `proposal-budget-fast` | 1 | CI proposal budget/cap helper check |
-| `proposal-backpressure-fast` | 1 | CI proposal backpressure classification helper check |
-| `proposal-defer-warning-fast` | 1 | CI proposal-defer warning throttle check |
-| `non-rbc-payload-budget-fast` | 1 | CI non-RBC payload frame budget helper check |
-| `proposal-batch-fast` | 1 | CI proposal batch trim/canonicalization helper check |
-| `lane-interleave-fast` | 1 | CI lane interleave routing-decision helper check |
-| `commitment-snapshot-builder-fast` | 0 | CI lane/dataspace commitment snapshot builder check |
+| `empty-block-qc-drop-fast` | 1 | CI direct empty-block QC drop/cleanup check |
+| `missing-request-clear-fast` | 1 | CI direct missing-block request clear helper check |
+| `missing-block-clear-fast` | 1 | CI direct missing-block clear reason helper check |
+| `proposal-budget-fast` | 1 | CI direct proposal budget/cap helper check |
+| `proposal-backpressure-fast` | 1 | CI direct proposal backpressure classification helper check |
+| `proposal-defer-warning-fast` | 1 | CI proposal-defer warning throttle direct exactness check |
+| `non-rbc-payload-budget-fast` | 1 | CI direct non-RBC payload frame budget helper check |
+| `proposal-batch-fast` | 1 | CI direct proposal batch trim/canonicalization helper check |
+| `lane-interleave-fast` | 1 | CI direct lane interleave routing-decision helper check |
+| `commitment-snapshot-builder-fast` | 0 | CI direct lane/dataspace commitment snapshot builder check |
 | `collector-plan-fast` | 1 | CI collector retry/gossip state aggregate exactness check |
-| `collector-selection-fast` | 1 | CI collector fanout/selection helper check |
-| `topology-mutation-fast` | 1 | CI topology ordered-roster mutation helper check |
-| `prf-leader-shuffle-fast` | 1 | CI PRF leader/shuffle topology helper check |
-| `topology-fanout-fast` | 1 | CI topology fanout/redundant-send helper check |
-| `topology-role-filter-fast` | 1 | CI topology role/signature filter helper check |
-| `active-topology-selection-fast` | 1 | CI active validator topology selection check |
-| `p2p-topology-trusted-fast` | 1 | CI trusted-peer P2P topology refresh helper check |
-| `p2p-topology-refresh-fast` | 1 | CI P2P topology refresh coordinator check |
-| `quorum-retransmit-fast` | 1 | CI quorum retransmit target-selection helper check |
-| `retransmit-backpressure-fast` | 1 | CI retransmit backpressure pacing helper check |
-| `paced-retransmit-targets-fast` | 1 | CI paced retransmit target selection helper check |
-| `quorum-reschedule-backoff-fast` | 1 | CI quorum reschedule backoff/fast-resend helper check |
-| `rbc-availability-reschedule-fast` | 1 | CI DA/RBC availability reschedule gate check |
-| `vote-backed-reassembly-stall-fast` | 1 | CI vote-backed reassembly stall helper check |
-| `completed-quorum-view-advance-fast` | 1 | CI completed quorum-reschedule view-advance helper check |
-| `quorum-rebroadcast-dispatch-fast` | 1 | CI quorum rebroadcast dispatch helper check |
-| `isolated-vote-backed-handoff-fast` | 1 | CI isolated vote-backed handoff helper check |
-| `preemptive-vote-backed-retransmit-fast` | 1 | CI pre-timeout vote-backed retransmit handoff check |
-| `near-quorum-preemptive-escalation-fast` | 1 | CI near-quorum preemptive escalation coordinator check |
-| `manifest-gate-reschedule-fast` | 1 | CI manifest-gated quorum-reschedule branch check |
+| `collector-selection-fast` | 1 | CI direct collector fanout/selection helper check |
+| `topology-mutation-fast` | 1 | CI direct topology ordered-roster mutation no-bug check |
+| `prf-leader-shuffle-fast` | 1 | CI direct PRF leader/shuffle topology helper check |
+| `topology-fanout-fast` | 1 | CI direct topology fanout/redundant-send helper check |
+| `topology-role-filter-fast` | 1 | CI topology role/signature filter aggregate exactness check |
+| `active-topology-selection-fast` | 1 | CI direct active validator topology selection check |
+| `p2p-topology-trusted-fast` | 1 | CI direct trusted-peer P2P topology refresh helper check |
+| `p2p-topology-refresh-fast` | 1 | CI P2P topology refresh coordinator aggregate exactness check |
+| `quorum-retransmit-fast` | 1 | CI direct quorum retransmit target-selection helper check |
+| `retransmit-backpressure-fast` | 1 | CI direct retransmit backpressure pacing helper check |
+| `paced-retransmit-targets-fast` | 1 | CI direct paced retransmit target selection helper check |
+| `quorum-reschedule-backoff-fast` | 1 | CI direct quorum reschedule backoff/fast-resend helper check |
+| `rbc-availability-reschedule-fast` | 1 | CI direct DA/RBC availability reschedule gate check |
+| `vote-backed-reassembly-stall-fast` | 1 | CI direct vote-backed reassembly stall helper check |
+| `completed-quorum-view-advance-fast` | 1 | CI direct completed quorum-reschedule view-advance helper check |
+| `quorum-rebroadcast-dispatch-fast` | 1 | CI direct quorum rebroadcast dispatch helper check |
+| `isolated-vote-backed-handoff-fast` | 1 | CI direct isolated vote-backed handoff helper check |
+| `preemptive-vote-backed-retransmit-fast` | 1 | CI direct pre-timeout vote-backed retransmit handoff check |
+| `near-quorum-preemptive-escalation-fast` | 1 | CI direct near-quorum preemptive escalation coordinator check |
+| `manifest-gate-reschedule-fast` | 1 | CI direct manifest-gated quorum-reschedule branch check |
 | `qc-signers-fast` | 2 | CI QC signer-bitmap admission check |
-| `qc-signer-count-fast` | 1 | CI raw QC signer-bitmap population-count helper check |
+| `qc-signer-count-fast` | 1 | CI direct raw QC signer-bitmap population-count helper check |
 | `build-signers-bitmap-fast` | 1 | CI signer-bitmap construction aggregate exactness check |
-| `signer-index-normalization-fast` | 1 | CI canonical/view signer-index normalization helper check |
+| `signer-index-normalization-fast` | 1 | CI direct canonical/view signer-index normalization helper check |
 | `commit-roots-fast` | 2 | CI commit-root consistency check |
 | `commit-pipeline-recovery-fast` | 2 | CI commit-pipeline recovery gate check |
-| `known-block-commit-qc-recovery-fast` | 1 | CI known-block commit-QC recovery helper check |
-| `stale-view-commit-qc-fetch-fast` | 1 | CI stale-view commit-QC fetch admission helper check |
-| `commit-anchor-qc-fast` | 1 | CI commit-anchor QC promotion helper check |
-| `committed-height-qc-fast` | 1 | CI committed-height QC admission helper check |
-| `pending-progress-fast` | 1 | CI pending-progress accounting helper check |
-| `pending-block-lifecycle-fast` | 1 | CI pending-block lifecycle helper check |
-| `pending-block-marker-fast` | 1 | CI pending-block marker/cooldown helper check |
-| `kura-retry-fast` | 1 | CI pending-block Kura retry helper check |
-| `commit-pipeline-scheduling-fast` | 1 | CI commit-pipeline scheduling gate check |
-| `precommit-vote-count-fast` | 1 | CI precommit vote-count helper check |
-| `voting-signer-count-fast` | 1 | CI voting signer-count helper check |
-| `distinct-vote-epochs-fast` | 1 | CI cached vote-log epoch replay helper check |
-| `new-view-highest-qc-votes-fast` | 1 | CI NEW_VIEW highest-QC vote-selection helper check |
+| `known-block-commit-qc-recovery-fast` | 1 | CI direct known-block commit-QC recovery helper check |
+| `stale-view-commit-qc-fetch-fast` | 1 | CI stale-view commit-QC fetch admission aggregate exactness check |
+| `commit-anchor-qc-fast` | 1 | CI direct commit-anchor QC promotion helper check |
+| `committed-height-qc-fast` | 1 | CI direct committed-height QC admission helper check |
+| `pending-progress-fast` | 1 | CI direct pending-progress accounting helper check |
+| `pending-block-lifecycle-fast` | 1 | CI direct pending-block lifecycle helper check |
+| `pending-block-marker-fast` | 1 | CI direct pending-block marker/cooldown helper check |
+| `kura-retry-fast` | 1 | CI direct pending-block Kura retry no-bug/aggregate check |
+| `commit-pipeline-scheduling-fast` | 1 | CI direct commit-pipeline scheduling gate check |
+| `precommit-vote-count-fast` | 1 | CI precommit vote-count aggregate/anchor check |
+| `voting-signer-count-fast` | 1 | CI voting signer-count aggregate exactness check |
+| `distinct-vote-epochs-fast` | 1 | CI direct cached vote-log epoch replay helper check |
+| `new-view-highest-qc-votes-fast` | 1 | CI direct NEW_VIEW highest-QC vote-selection helper check |
 | `frontier-new-view-catch-up-fast` | 1 | CI active-frontier NEW_VIEW catch-up emission helper check |
 | `late-new-view-emission-fast` | 1 | CI late NEW_VIEW same-highest near-quorum emission helper check |
 | `near-quorum-new-view-rebroadcast-fast` | 1 | CI near-quorum NEW_VIEW vote rebroadcast helper check |
 | `requester-roster-proof-fast` | 1 | CI requester local roster-proof detection helper check |
-| `online-validator-relay-counters-fast` | 1 | CI online-validator and relay counter helper check |
-| `commit-result-drain-fast` | 1 | CI commit-result drain gate check |
-| `commit-drain-summary-fast` | 1 | CI commit-drain summary aggregation helper check |
-| `commit-pipeline-sample-fast` | 1 | CI commit-pipeline timing sample helper check |
-| `commit-pipeline-status-fast` | 1 | CI commit-pipeline status recorder check |
-| `autoscale-transition-fast` | 1 | CI autoscale transition commit gate check |
-| `commit-quorum-signers-fast` | 1 | CI commit-QC signer quorum helper check |
-| `signature-index-recovery-fast` | 1 | CI commit signature-index recovery helper check |
-| `commit-qc-lookup-fast` | 1 | CI commit-QC cache/history lookup helper check |
-| `precommit-signer-record-fast` | 1 | CI cached-QC precommit signer record helper check |
-| `roster-validation-memo-fast` | 1 | CI roster-validation memo cache helper check |
-| `roster-validation-cached-fast` | 1 | CI cached roster-validation wrapper helper check |
-| `roster-validation-core-fast` | 1 | CI core roster-validation aggregate check |
-| `roster-artifact-selection-fast` | 1 | CI roster artifact selection aggregate check |
+| `online-validator-relay-counters-fast` | 1 | CI online-validator and relay counter direct exactness check |
+| `commit-result-drain-fast` | 1 | CI direct commit-result drain component check |
+| `commit-drain-summary-fast` | 1 | CI direct commit-drain summary aggregation helper check |
+| `commit-pipeline-sample-fast` | 1 | CI direct commit-pipeline timing sample helper check |
+| `commit-pipeline-status-fast` | 1 | CI commit-pipeline status recorder direct exactness check |
+| `autoscale-transition-fast` | 1 | CI direct autoscale transition commit gate check |
+| `commit-quorum-signers-fast` | 1 | CI direct commit-QC signer quorum helper check |
+| `signature-index-recovery-fast` | 1 | CI direct commit signature-index recovery helper check |
+| `commit-qc-lookup-fast` | 1 | CI direct commit-QC cache/history lookup helper check |
+| `precommit-signer-record-fast` | 1 | CI direct cached-QC precommit signer record helper check |
+| `roster-validation-memo-fast` | 1 | CI roster-validation memo cache aggregate exactness check |
+| `roster-validation-cached-fast` | 1 | CI cached roster-validation wrapper aggregate exactness check |
+| `roster-validation-core-fast` | 1 | CI core roster-validation aggregate exactness check |
+| `roster-artifact-selection-fast` | 1 | CI roster artifact selection aggregate exactness check |
 | `block-roster-caches-fast` | 1 | CI block roster cache key/cache aggregate exactness check |
 | `block-sync-roster-evidence-fast` | 1 | CI block-sync roster evidence aggregate exactness check |
 | `block-sync-history-roster-fast` | 1 | CI block-sync history roster aggregate exactness check |
-| `persisted-roster-selection-fast` | 1 | CI persisted block-sync roster selection aggregate check |
+| `persisted-roster-selection-fast` | 1 | CI persisted block-sync roster selection aggregate exactness check |
 | `block-sync-update-roster-fast` | 1 | CI BlockSyncUpdate roster hydration aggregate exactness check |
-| `roster-index-projection-fast` | 1 | CI roster index projection aggregate check |
-| `membership-view-hash-fast` | 1 | CI membership-view hash preimage aggregate check |
+| `roster-index-projection-fast` | 1 | CI direct roster index projection no-bug check |
+| `membership-view-hash-fast` | 1 | CI direct membership-view hash preimage no-bug check |
 | `membership-mismatch-status-fast` | 1 | CI membership snapshot/mismatch status aggregate check |
 | `membership-advert-fast` | 1 | CI membership snapshot advert publication aggregate check |
 | `membership-mismatch-ingress-fast` | 1 | CI membership mismatch advert ingress and fail-closed aggregate check |
 | `consensus-params-ingress-fast` | 1 | CI inbound consensus-params advert handling aggregate check |
-| `prevalidated-commit-artifact-fast` | 1 | CI prevalidated commit artifact trust aggregate check |
+| `prevalidated-commit-artifact-fast` | 1 | CI direct prevalidated commit artifact trust aggregate check |
 | `commit-job-dispatch-fast` | 1 | CI commit-job dispatch aggregate exactness check |
-| `commit-worker-config-fast` | 1 | CI commit-worker channel capacity aggregate check |
+| `commit-worker-config-fast` | 1 | CI direct commit-worker channel capacity check |
 | `commit-stage-timing-threshold-fast` | 1 | CI slow commit-stage timing threshold aggregate check |
 | `commit-inflight-timeout-fast` | 1 | CI commit-inflight timeout aggregate check |
 | `post-commit-pacemaker-kick-fast` | 1 | CI post-commit pacemaker kick aggregate check |
 | `idle-view-proposal-budget-fast` | 1 | CI proposal idle-view budget preservation aggregate check |
-| `pacemaker-core-fast` | 1 | CI Pacemaker state-machine helper check |
-| `pacemaker-evaluation-fast` | 1 | CI pacemaker evaluation gate check |
-| `pacing-governor-fast` | 1 | CI pacing-governor factor evaluation check |
+| `pacemaker-core-fast` | 1 | CI direct Pacemaker state-machine helper check |
+| `pacemaker-evaluation-fast` | 1 | CI direct pacemaker evaluation component check |
+| `pacing-governor-fast` | 1 | CI direct pacing-governor factor evaluation check |
 | `cached-slot-timeout-fast` | 1 | CI cached proposal-slot timeout aggregate check |
 | `pending-fast-path-timeout-fast` | 1 | CI pending fast-path timeout aggregate check |
 | `stalled-pending-timeout-fast` | 1 | CI stalled pending-block timeout decision aggregate check |
@@ -14021,213 +14022,213 @@ The runner sets an explicit Apalache `--length` for each mode:
 | `slot-tracker-state-fast` | 1 | CI slot tracker state aggregate check |
 | `timeout-derivation-fast` | 1 | CI timeout and cooldown derivation aggregate check |
 | `round-view-helpers-fast` | 1 | CI round/view helper aggregate check |
-| `phase-tracker-fast` | 1 | CI PhaseTracker mutable state helper check |
-| `round-trace-status-fast` | 1 | CI round-trace status recorder check |
-| `failure-recovery-helpers-fast` | 1 | CI failed-commit and block-sync helper check |
-| `requeue-transactions-fast` | 1 | CI transaction requeue branch helper check |
-| `tick-deadline-helpers-fast` | 1 | CI tick/deadline scheduling helper check |
-| `worker-tick-gap-fast` | 1 | CI worker tick-gap helper check |
+| `phase-tracker-fast` | 1 | CI PhaseTracker mutable state component/anchor check |
+| `round-trace-status-fast` | 1 | CI round-trace status recorder direct exactness check |
+| `failure-recovery-helpers-fast` | 1 | CI direct failed-commit and block-sync helper check |
+| `requeue-transactions-fast` | 1 | CI direct transaction requeue branch helper check |
+| `tick-deadline-helpers-fast` | 1 | CI direct tick/deadline scheduling helper check |
+| `worker-tick-gap-fast` | 1 | CI direct worker tick-gap helper check |
 | `proposal-parent-resolution-fast` | 1 | CI proposal parent resolution and inline backup transport aggregate check |
 | `highest-qc-dependency-deferral-fast` | 1 | CI highest-QC dependency deferral aggregate check |
 | `precommit-qc-view-change-fast` | 1 | CI precommit-QC view-change selector aggregate check |
 | `commit-evidence-replay-fast` | 2 | CI known-block commit-evidence replay aggregate check |
 | `block-sync-recovery-fast` | 2 | CI block-sync recovery admission aggregate check |
 | `certified-fetch-fast` | 1 | CI direct certified-block fetch aggregate check |
-| `missing-block-ingress-fetch-fast` | 1 | CI missing-block ingress grace fetch gate check |
-| `payload-progress-availability-fast` | 1 | CI actor-local payload progress availability check |
-| `highest-qc-fetch-body-known-fast` | 1 | CI highest-QC body-known fetch suppression check |
-| `local-payload-availability-fast` | 1 | CI broad actor-local payload availability check |
-| `block-known-locally-fast` | 1 | CI actor-local block-known routing check |
-| `block-known-for-lock-fast` | 1 | CI lock-safety block-known routing check |
+| `missing-block-ingress-fetch-fast` | 1 | CI direct missing-block ingress grace fetch gate check |
+| `payload-progress-availability-fast` | 1 | CI direct actor-local payload progress availability check |
+| `highest-qc-fetch-body-known-fast` | 1 | CI direct highest-QC body-known fetch suppression check |
+| `local-payload-availability-fast` | 1 | CI direct broad actor-local payload availability check |
+| `block-known-locally-fast` | 1 | CI direct actor-local block-known routing check |
+| `block-known-for-lock-fast` | 1 | CI direct lock-safety block-known routing check |
 | `missing-locked-qc-recovery-fast` | 1 | CI missing locked-QC payload recovery check |
-| `local-signed-block-lookup-fast` | 1 | CI local signed-block materialization check |
-| `authoritative-payload-progress-fast` | 1 | CI authoritative payload progress lookup check |
-| `authoritative-block-payload-fast` | 1 | CI hash-level authoritative payload availability check |
-| `pending-block-active-for-tip-fast` | 1 | CI pending-block active-for-tip check |
-| `pending-fast-unblock-fast` | 1 | CI pending fast-unblock decision check |
-| `blocking-pending-blocks-fast` | 1 | CI blocking pending-block counter check |
-| `quorum-recovery-vote-drain-fast` | 1 | CI quorum recovery vote-drain urgency check |
-| `frontier-body-gap-payload-drain-fast` | 1 | CI frontier body-gap payload-drain urgency check |
-| `rbc-authoritative-payload-progress-fast` | 1 | CI RBC authoritative payload progress lookup check |
-| `slot-authoritative-payload-fast` | 1 | CI slot-level authoritative payload lookup check |
+| `local-signed-block-lookup-fast` | 1 | CI direct local signed-block materialization check |
+| `authoritative-payload-progress-fast` | 1 | CI direct authoritative payload progress lookup check |
+| `authoritative-block-payload-fast` | 1 | CI direct hash-level authoritative payload availability check |
+| `pending-block-active-for-tip-fast` | 1 | CI direct pending-block active-for-tip check |
+| `pending-fast-unblock-fast` | 1 | CI direct pending fast-unblock decision check |
+| `blocking-pending-blocks-fast` | 1 | CI direct blocking pending-block counter check |
+| `quorum-recovery-vote-drain-fast` | 1 | CI direct quorum recovery vote-drain urgency check |
+| `frontier-body-gap-payload-drain-fast` | 1 | CI direct frontier body-gap payload-drain urgency check |
+| `rbc-authoritative-payload-progress-fast` | 1 | CI direct RBC authoritative payload progress lookup check |
+| `slot-authoritative-payload-fast` | 1 | CI direct slot-level authoritative payload no-bug check |
 | `missing-block-fetch-fast` | 1 | CI missing-block fetch planner aggregate check |
-| `recovery-status-counters-fast` | 1 | CI recovery status counter/snapshot check |
-| `recovery-fsm-reason-fast` | 1 | CI recovery-FSM reason classifier/rank/sort check |
-| `qc-rebuild-status-fast` | 1 | CI QC rebuild status counter/snapshot check |
+| `recovery-status-counters-fast` | 1 | CI recovery status counter/snapshot direct exactness check |
+| `recovery-fsm-reason-fast` | 1 | CI direct recovery-FSM reason classifier/rank/sort check |
+| `qc-rebuild-status-fast` | 1 | CI QC rebuild status counter/snapshot direct exactness check |
 | `qc-rebuild-quorum-fast` | 1 | CI QC rebuild quorum reachability check |
-| `collector-targeting-status-fast` | 1 | CI collector-targeting status counter/snapshot check |
-| `deferred-recovery-status-fast` | 1 | CI deferred recovery status counter/snapshot check |
-| `missing-qc-liveness-status-fast` | 1 | CI missing-QC liveness status counter/snapshot check |
-| `sidecar-no-proposal-status-fast` | 1 | CI sidecar/no-proposal status counter/snapshot check |
-| `deterministic-committee-status-fast` | 1 | CI deterministic-committee status store/snapshot check |
-| `timing-status-counters-fast` | 1 | CI timing/liveness status counter/snapshot check |
-| `roster-recovery-status-fast` | 1 | CI roster-recovery status counter/state/dwell check |
+| `collector-targeting-status-fast` | 1 | CI collector-targeting status counter/snapshot direct exactness check |
+| `deferred-recovery-status-fast` | 1 | CI deferred recovery status counter/snapshot direct exactness check |
+| `missing-qc-liveness-status-fast` | 1 | CI missing-QC liveness status counter/snapshot direct exactness check |
+| `sidecar-no-proposal-status-fast` | 1 | CI sidecar/no-proposal status counter/snapshot direct exactness check |
+| `deterministic-committee-status-fast` | 1 | CI deterministic-committee status store/snapshot direct exactness check |
+| `timing-status-counters-fast` | 1 | CI timing/liveness status counter/snapshot direct exactness check |
+| `roster-recovery-status-fast` | 1 | CI roster-recovery status counter/state/dwell direct exactness check |
 | `range-pull-recovery-fast` | 1 | CI range-pull recovery helper check |
-| `range-pull-status-fast` | 1 | CI range-pull status counter/streak check |
+| `range-pull-status-fast` | 1 | CI range-pull status counter/streak direct exactness check |
 | `round-recovery-bundle-window-fast` | 1 | CI round-recovery bundle window gate check |
-| `committed-edge-conflict-fast` | 1 | CI committed-edge highest-QC conflict suppression check |
-| `lock-rejected-sink-fast` | 1 | CI lock-rejected branch sink lifecycle check |
+| `committed-edge-conflict-fast` | 1 | CI direct committed-edge highest-QC conflict suppression check |
+| `lock-rejected-sink-fast` | 1 | CI direct lock-rejected branch sink lifecycle check |
 | `active-lock-reject-recovery-fast` | 1 | CI active-height lock-reject recovery routing check |
 | `missing-block-hard-cap-fast` | 1 | CI missing-block hard-cap recovery aggregate check |
 | `missing-block-hard-cap-cleanup-fast` | 1 | CI missing-block hard-cap cleanup aggregate check |
 | `missing-block-view-change-fast` | 1 | CI missing-block view-change escalation aggregate check |
 | `native-amx-attestation-fast` | 2 | CI native AMX attestation aggregate check |
-| `native-amx-journal-fast` | 1 | CI native AMX queue-journal replay check |
+| `native-amx-journal-fast` | 1 | CI native AMX queue-journal replay direct component check |
 | `native-amx-routing-plan-fast` | 1 | CI native AMX routing-plan aggregate projection check |
 | `native-amx-receipt-fast` | 1 | CI native AMX receipt validation aggregate check |
 | `native-amx-ingress-fast` | 1 | CI native AMX control-plane ingress aggregate check |
-| `vnext-chain-order-fast` | 1 | CI vNext chain-order helper check |
-| `vnext-stake-weight-fast` | 1 | CI vNext stake-weight lookup and quorum helper check |
-| `vnext-rechain-fast` | 1 | CI quarantined vNext re-chain helper check |
-| `vnext-rechain-error-label-fast` | 1 | CI vNext re-chain error label check |
-| `vnext-signature-fast` | 1 | CI vNext aggregate certificate verification check |
-| `vnext-signing-preimage-fast` | 1 | CI vNext signing-preimage construction check |
-| `vnext-control-ingress-fast` | 1 | CI vNext control-certificate ingress check |
-| `vnext-slot-lifecycle-fast` | 1 | CI vNext slot-lifecycle check |
-| `vnext-validation-fast` | 1 | CI vNext validation ownership check |
-| `vnext-deadline-protection-fast` | 1 | CI vNext deadline/protection helper check |
-| `vnext-performance-config-fast` | 1 | CI vNext performance-fault config conversion check |
-| `validation-worker-config-fast` | 1 | CI pending-block validation worker config helper check |
-| `validation-stall-redrive-fast` | 1 | CI validation stall/freshness/redrive helper check |
-| `validation-redrive-label-fast` | 1 | CI validation redrive reason label check |
-| `validation-ownership-cleanup-fast` | 1 | CI validation ownership cleanup helper check |
-| `verify-cache-key-fast` | 1 | CI vote/QC verification cache-key identity check |
-| `vote-verify-async-fast` | 1 | CI async vote-verification ownership check |
-| `vote-verify-worker-config-fast` | 1 | CI vote-signature verification worker config helper check |
-| `qc-verify-async-fast` | 1 | CI async QC aggregate-verification ownership check |
-| `qc-verify-worker-config-fast` | 1 | CI QC aggregate-verification worker config helper check |
-| `worker-drain-fast` | 1 | CI worker-loop drain scheduler check |
+| `vnext-chain-order-fast` | 1 | CI direct vNext chain-order component check |
+| `vnext-stake-weight-fast` | 1 | CI direct vNext stake-weight lookup and quorum helper check |
+| `vnext-rechain-fast` | 1 | CI direct quarantined vNext re-chain helper check |
+| `vnext-rechain-error-label-fast` | 1 | CI direct vNext re-chain error label check |
+| `vnext-signature-fast` | 1 | CI direct vNext aggregate certificate verification check |
+| `vnext-signing-preimage-fast` | 1 | CI direct vNext signing-preimage construction check |
+| `vnext-control-ingress-fast` | 1 | CI direct vNext control-certificate ingress component check |
+| `vnext-slot-lifecycle-fast` | 1 | CI direct vNext slot-lifecycle component check |
+| `vnext-validation-fast` | 1 | CI direct vNext validation ownership component check |
+| `vnext-deadline-protection-fast` | 1 | CI vNext deadline/protection direct exactness check |
+| `vnext-performance-config-fast` | 1 | CI direct vNext performance-fault config conversion check |
+| `validation-worker-config-fast` | 1 | CI direct pending-block validation worker config helper check |
+| `validation-stall-redrive-fast` | 1 | CI validation stall/freshness/redrive direct exactness check |
+| `validation-redrive-label-fast` | 1 | CI direct validation redrive reason label check |
+| `validation-ownership-cleanup-fast` | 1 | CI validation ownership cleanup direct exactness helper check |
+| `verify-cache-key-fast` | 1 | CI vote/QC verification cache-key identity direct exactness check |
+| `vote-verify-async-fast` | 1 | CI direct async vote-verification ownership check |
+| `vote-verify-worker-config-fast` | 1 | CI direct vote-signature verification worker config helper check |
+| `qc-verify-async-fast` | 1 | CI direct async QC aggregate-verification ownership check |
+| `qc-verify-worker-config-fast` | 1 | CI direct QC aggregate-verification worker config helper check |
+| `worker-drain-fast` | 1 | CI direct worker-loop drain scheduler component check |
 | `actor-gate-fast` | 1 | CI actor-gate priority/fairness aggregate check |
-| `worker-budget-fast` | 1 | CI worker-loop budget/adaptive-cap check |
-| `worker-ingress-fast` | 1 | CI worker ingress routing check |
-| `worker-loop-stage-fast` | 1 | CI worker-loop stage helper check |
-| `worker-queue-status-fast` | 1 | CI worker-queue status accounting check |
+| `worker-budget-fast` | 1 | CI direct worker-loop budget/adaptive-cap component check |
+| `worker-ingress-fast` | 1 | CI direct worker ingress routing component check |
+| `worker-loop-stage-fast` | 1 | CI direct worker-loop stage helper check |
+| `worker-queue-status-fast` | 1 | CI worker-queue status accounting direct exactness check |
 | `npos-vrf-fast` | 1 | CI NPoS VRF epoch-seal aggregate check |
 | `kura-commit-fast` | 1 | CI Kura durability commit retry aggregate check |
-| `kura-store-status-fast` | 1 | CI Kura persistence status counter/snapshot check |
+| `kura-store-status-fast` | 1 | CI Kura persistence status counter/snapshot direct exactness check |
 | `restart-replay-fast` | 1 | CI restarted-peer replay aggregate check |
 | `post-commit-cleanup-fast` | 1 | CI post-commit cleanup aggregate check |
 | `frontier-gap-realign-fast` | 1 | CI frontier-gap realignment aggregate check |
-| `same-height-vote-conflict-fast` | 1 | CI same-height local vote conflict helper check |
-| `same-height-vote-lock-fast` | 1 | CI aggregate same-height vote-lock helper check |
-| `proposal-stale-vote-fast` | 1 | CI proposal stale same-height vote helper check |
-| `same-height-vote-recovery-gap-fast` | 1 | CI same-height vote recovery view-gap helper check |
-| `tip-extension-helpers-fast` | 1 | CI pending-block stale-tip and chain extension helper check |
-| `da-gate-fast` | 1 | CI DA gate helper check |
-| `da-gate-status-fast` | 1 | CI DA gate status counter/snapshot check |
-| `manifest-guard-fast` | 1 | CI DA manifest guard helper check |
-| `consensus-handshake-caps-fast` | 1 | CI consensus handshake capability construction check |
-| `handshake-fast` | 1 | CI consensus p2p handshake helper check |
-| `mode-flip-fast` | 1 | CI runtime consensus-mode flip helper check |
-| `effective-mode-fast` | 1 | CI effective consensus-mode selection helper check |
-| `effective-timing-fast` | 1 | CI effective consensus timing aggregation helper check |
-| `new-view-stats-fast` | 1 | CI NEW_VIEW receipt statistics helper check |
-| `new-view-tracker-fast` | 1 | CI NEW_VIEW tracker quorum/selection helper check |
-| `timing-monitor-fast` | 1 | CI timing/log cooldown monitor check |
-| `hotspot-log-summary-fast` | 1 | CI hotspot summary accumulator check |
-| `adaptive-observability-fast` | 1 | CI adaptive observability timing/fanout check |
-| `pacing-backpressure-fast` | 1 | CI pacing backpressure helper check |
-| `counter-backpressure-cooldown-fast` | 1 | CI counter-driven backpressure cooldown helper check |
-| `pacemaker-backpressure-tracker-fast` | 1 | CI per-reason pacemaker backpressure tracker check |
-| `locked-qc-helper-fast` | 1 | CI locked-QC helper check |
-| `precommit-qc-extends-locked-fast` | 1 | CI precommit-QC locked-chain wrapper check |
-| `drop-precommit-vote-for-lock-fast` | 1 | CI precommit-vote locked-chain filter check |
-| `stake-snapshot-fast` | 1 | CI stake snapshot helper check |
-| `validator-election-fast` | 1 | CI NPoS validator election helper check |
-| `live-vote-roster-fast` | 1 | CI live local-vote roster selection check |
-| `canonical-round-roster-fast` | 1 | CI canonical round-roster selection check |
-| `vote-roster-selection-fast` | 1 | CI block-specific vote-roster selection check |
-| `vote-roster-cache-fast` | 1 | CI vote-roster cache/support helper check |
-| `commit-topology-state-fast` | 1 | CI commit-topology state/reset helper check |
-| `precommit-signer-history-fast` | 1 | CI precommit signer-history fallback check |
+| `same-height-vote-conflict-fast` | 1 | CI direct same-height local vote conflict helper check |
+| `same-height-vote-lock-fast` | 1 | CI aggregate same-height vote-lock direct exactness check |
+| `proposal-stale-vote-fast` | 1 | CI direct proposal stale same-height vote helper check |
+| `same-height-vote-recovery-gap-fast` | 1 | CI direct same-height vote recovery view-gap helper check |
+| `tip-extension-helpers-fast` | 1 | CI direct pending-block stale-tip and chain extension helper check |
+| `da-gate-fast` | 1 | CI direct DA gate helper check |
+| `da-gate-status-fast` | 1 | CI DA gate status counter/snapshot direct exactness check |
+| `manifest-guard-fast` | 1 | CI direct DA manifest guard helper check |
+| `consensus-handshake-caps-fast` | 1 | CI direct consensus handshake capability construction check |
+| `handshake-fast` | 1 | CI direct consensus p2p handshake helper check |
+| `mode-flip-fast` | 1 | CI direct runtime consensus-mode flip helper check |
+| `effective-mode-fast` | 1 | CI direct effective consensus-mode selection helper check |
+| `effective-timing-fast` | 1 | CI effective consensus timing aggregation direct exactness check |
+| `new-view-stats-fast` | 1 | CI direct NEW_VIEW receipt statistics helper check |
+| `new-view-tracker-fast` | 1 | CI direct NEW_VIEW tracker quorum/selection helper check |
+| `timing-monitor-fast` | 1 | CI direct timing/log cooldown monitor no-bug check |
+| `hotspot-log-summary-fast` | 1 | CI direct hotspot summary accumulator check |
+| `adaptive-observability-fast` | 1 | CI direct adaptive observability timing/fanout check |
+| `pacing-backpressure-fast` | 1 | CI direct pacing backpressure helper check |
+| `counter-backpressure-cooldown-fast` | 1 | CI direct counter-driven backpressure cooldown helper check |
+| `pacemaker-backpressure-tracker-fast` | 1 | CI direct per-reason pacemaker backpressure tracker check |
+| `locked-qc-helper-fast` | 1 | CI direct locked-QC helper check |
+| `precommit-qc-extends-locked-fast` | 1 | CI direct precommit-QC locked-chain wrapper check |
+| `drop-precommit-vote-for-lock-fast` | 1 | CI direct precommit-vote locked-chain filter check |
+| `stake-snapshot-fast` | 1 | CI direct stake snapshot no-bug check |
+| `validator-election-fast` | 1 | CI direct NPoS validator election helper check |
+| `live-vote-roster-fast` | 1 | CI direct live local-vote roster selection check |
+| `canonical-round-roster-fast` | 1 | CI direct canonical round-roster selection check |
+| `vote-roster-selection-fast` | 1 | CI direct block-specific vote-roster selection check |
+| `vote-roster-cache-fast` | 1 | CI direct vote-roster cache/support helper check |
+| `commit-topology-state-fast` | 1 | CI direct commit-topology state/reset helper check |
+| `precommit-signer-history-fast` | 1 | CI direct precommit signer-history fallback check |
 | `precommit-fast` | 2 | CI precommit vote-emission gate check |
 | `proposal-fast` | 2 | CI proposal assembly gate check |
-| `engine-initial-state-fast` | 1 | CI pure engine constructor initial-state check |
-| `engine-read-accessors-fast` | 1 | CI pure engine read-only accessor check |
+| `engine-initial-state-fast` | 1 | CI pure engine direct exactness constructor initial-state check |
+| `engine-read-accessors-fast` | 1 | CI pure engine direct read-only accessor check |
 | `engine-tick-fast` | 2 | CI pure engine tick gate check |
 | `engine-tick-state-preservation-fast` | 1 | CI pure engine tick unrelated-state preservation check |
-| `engine-new-view-subject-fast` | 1 | CI pure engine NewView subject projection helper check |
+| `engine-new-view-subject-fast` | 1 | CI pure engine direct NewView subject projection helper check |
 | `engine-handle-dispatch-fast` | 1 | CI pure engine top-level input dispatch check |
-| `engine-handle-forwarding-fast` | 1 | CI pure engine top-level input argument-forwarding check |
-| `engine-handle-output-relay-fast` | 1 | CI pure engine top-level output relay check |
+| `engine-handle-forwarding-fast` | 1 | CI pure engine direct top-level input argument-forwarding component check |
+| `engine-handle-output-relay-fast` | 1 | CI pure engine direct top-level output relay component check |
 | `engine-certificate-dispatch-fast` | 1 | CI pure engine certificate prefilter dispatch aggregate check |
 | `engine-certificate-prefilter-state-fast` | 1 | CI pure engine certificate prefilter state-handoff aggregate check |
 | `engine-certificate-prefilter-state-preservation-fast` | 1 | CI pure engine certificate prefilter unrelated-state preservation aggregate check |
-| `engine-view-advance-saturation-fast` | 1 | CI pure engine view-advance saturation check |
+| `engine-view-advance-saturation-fast` | 1 | CI pure engine direct view-advance saturation component check |
 | `engine-new-view-fast` | 2 | CI pure engine NewView-QC gate check |
-| `engine-new-view-highest-qc-fast` | 1 | CI pure engine exact NewView highest-QC record check |
+| `engine-new-view-highest-qc-fast` | 1 | CI pure engine direct exactness NewView highest-QC record check |
 | `engine-new-view-state-preservation-fast` | 1 | CI pure engine NewView-QC unrelated-state preservation check |
-| `engine-new-view-advance-fast` | 1 | CI pure engine exact NewView-QC advance/output check |
+| `engine-new-view-advance-fast` | 1 | CI pure engine direct exactness NewView-QC advance/output check |
 | `engine-proposal-fast` | 2 | CI pure engine proposal-ingress gate check |
-| `engine-proposal-output-fast` | 1 | CI pure engine exact proposal output-field check |
-| `engine-proposal-state-fast` | 1 | CI pure engine exact proposal state-mutation check |
-| `engine-proposal-state-preservation-fast` | 1 | CI pure engine proposal unrelated-state preservation check |
-| `engine-proposal-validation-owner-fast` | 1 | CI pure engine exact proposal validation-owner check |
-| `engine-proposal-lock-fast` | 1 | CI pure engine proposal-lock helper check |
-| `qc-round-compatibility-fast` | 1 | CI pure engine QC-round compatibility helper check |
-| `engine-qc-ref-projection-fast` | 1 | CI pure engine QC reference projection helper check |
-| `engine-qc-ref-comparator-fast` | 1 | CI pure engine QC reference comparator order check |
-| `engine-highest-qc-record-fast` | 1 | CI pure engine highest-QC record helper check |
-| `engine-commit-subject-fast` | 1 | CI pure engine commit-subject helper check |
-| `engine-payload-lookup-fast` | 1 | CI pure engine payload lookup helper check |
+| `engine-proposal-output-fast` | 1 | CI pure engine exact proposal output-field component check |
+| `engine-proposal-state-fast` | 1 | CI pure engine direct exactness proposal state-mutation check |
+| `engine-proposal-state-preservation-fast` | 1 | CI pure engine proposal unrelated-state preservation direct component check |
+| `engine-proposal-validation-owner-fast` | 1 | CI pure engine direct exactness proposal validation-owner check |
+| `engine-proposal-lock-fast` | 1 | CI pure engine direct exactness proposal-lock helper check |
+| `qc-round-compatibility-fast` | 1 | CI pure engine direct QC-round compatibility helper check |
+| `engine-qc-ref-projection-fast` | 1 | CI pure engine direct exactness QC reference projection helper check |
+| `engine-qc-ref-comparator-fast` | 1 | CI pure engine direct exactness QC reference comparator order check |
+| `engine-highest-qc-record-fast` | 1 | CI pure engine direct exactness highest-QC record helper check |
+| `engine-commit-subject-fast` | 1 | CI pure engine commit-subject direct component check |
+| `engine-payload-lookup-fast` | 1 | CI pure engine direct exactness payload lookup helper check |
 | `engine-prepare-fast` | 2 | CI pure engine prepare-QC gate check |
-| `engine-prepare-lock-highest-fast` | 1 | CI pure engine exact Prepare-QC lock/highest-QC record check |
-| `engine-prepare-phase-fast` | 1 | CI pure engine exact Prepare-QC phase-transition check |
+| `engine-prepare-lock-highest-fast` | 1 | CI pure engine direct exactness Prepare-QC lock/highest-QC record check |
+| `engine-prepare-phase-fast` | 1 | CI pure engine direct exactness Prepare-QC phase-transition check |
 | `engine-prepare-state-preservation-fast` | 1 | CI pure engine Prepare-QC unrelated-state preservation check |
-| `engine-prepare-vote-cache-fast` | 1 | CI pure engine prepare-QC commit-vote cache/output check |
+| `engine-prepare-vote-cache-fast` | 1 | CI pure engine direct exactness prepare-QC commit-vote cache/output check |
 | `engine-commit-fast` | 2 | CI pure engine commit-QC gate check |
-| `engine-commit-highest-qc-fast` | 1 | CI pure engine exact Commit-QC highest-QC record check |
-| `engine-commit-phase-fast` | 1 | CI pure engine exact Commit-QC phase-transition check |
+| `engine-commit-highest-qc-fast` | 1 | CI pure engine direct exactness Commit-QC highest-QC record check |
+| `engine-commit-phase-fast` | 1 | CI pure engine direct exactness Commit-QC phase-transition check |
 | `engine-commit-state-preservation-fast` | 1 | CI pure engine Commit-QC unrelated-state preservation check |
-| `engine-commit-available-commit-fast` | 1 | CI pure engine payload-available Commit-QC exact finality check |
-| `engine-commit-pending-fetch-fast` | 1 | CI pure engine missing-payload Commit-QC pending/fetch check |
+| `engine-commit-available-commit-fast` | 1 | CI pure engine direct exactness payload-available Commit-QC finality check |
+| `engine-commit-pending-fetch-fast` | 1 | CI pure engine direct exactness missing-payload Commit-QC pending/fetch check |
 | `engine-commit-validation-cleanup-fast` | 1 | CI pure engine Commit-QC validation cleanup check |
 | `engine-committed-block-fast` | 2 | CI pure engine committed-block gate check |
-| `engine-committed-block-record-fast` | 1 | CI pure engine exact committed-map record check |
+| `engine-committed-block-record-fast` | 1 | CI pure engine direct exactness committed-map record check |
 | `engine-reconfiguration-staging-fast` | 1 | CI pure engine reconfiguration staging check |
-| `engine-reconfiguration-dedup-fast` | 1 | CI pure engine reconfiguration activation-height dedup check |
-| `engine-committed-block-cleanup-fast` | 1 | CI pure engine committed-block cleanup side-effect check |
-| `engine-committed-block-state-preservation-fast` | 1 | CI pure engine committed-block unrelated-state preservation check |
-| `engine-payload-record-fast` | 1 | CI pure engine exact payload-availability record check |
+| `engine-reconfiguration-dedup-fast` | 1 | CI pure engine direct reconfiguration activation-height dedup component check |
+| `engine-committed-block-cleanup-fast` | 1 | CI pure engine committed-block cleanup side-effect direct component check |
+| `engine-committed-block-state-preservation-fast` | 1 | CI pure engine committed-block unrelated-state preservation direct component check |
+| `engine-payload-record-fast` | 1 | CI pure engine direct exactness payload-availability record check |
 | `engine-payload-fast` | 2 | CI pure engine payload-availability gate check |
-| `engine-payload-state-preservation-fast` | 1 | CI pure engine payload-availability unrelated-state preservation check |
+| `engine-payload-state-preservation-fast` | 1 | CI pure engine payload-availability unrelated-state preservation direct component check |
 | `engine-validation-result-fast` | 2 | CI pure engine validation-result gate check |
-| `engine-validation-state-preservation-fast` | 1 | CI pure engine validation-result unrelated-state preservation check |
-| `engine-validation-ownership-fast` | 1 | CI pure engine exact validation-owner cleanup check |
-| `engine-validation-invalid-advance-fast` | 1 | CI pure engine exact invalid-validation round/output advance check |
+| `engine-validation-state-preservation-fast` | 1 | CI pure engine validation-result unrelated-state preservation direct component check |
+| `engine-validation-ownership-fast` | 1 | CI pure engine direct exactness validation-owner cleanup check |
+| `engine-validation-invalid-advance-fast` | 1 | CI pure engine direct exactness invalid-validation round/output advance check |
 | `reconfig-fast` | 7 | CI validator-set transition safety check |
 | `recovery-fast` | 7 | CI certified payload recovery safety check |
 | `view-change-fast` | 6 | CI view-change and lock-safety check |
 | `validation-fast` | 6 | CI validation-callback ownership check |
-| `validation-priority-fast` | 1 | CI validation priority reason helper check |
-| `vote-backed-evidence-fast` | 1 | CI vote-backed consensus evidence helper check |
-| `vote-payload-actionable-fast` | 1 | CI vote payload actionable-for-proposal helper check |
+| `validation-priority-fast` | 1 | CI direct validation priority reason helper check |
+| `vote-backed-evidence-fast` | 1 | CI direct vote-backed consensus evidence no-bug check |
+| `vote-payload-actionable-fast` | 1 | CI direct vote payload actionable-for-proposal no-bug check |
 | `actionable-vote-backed-proposal-fast` | 1 | CI proposal-side actionable vote-backed evidence helper check |
-| `slot-proposal-evidence-fast` | 1 | CI slot proposal evidence helper check |
-| `round-liveness-fast` | 1 | CI round liveness helper check |
-| `roster-recovery-fsm-fast` | 1 | CI roster recovery FSM check |
-| `consensus-recovery-prune-fast` | 1 | CI consensus recovery prune/clear helper check |
-| `frontier-live-owner-work-fast` | 1 | CI frontier live-owner work helper check |
-| `keep-frontier-pending-active-fast` | 1 | CI keep-frontier-pending-active helper check |
-| `stale-view-pending-prune-fast` | 1 | CI stale-view pending prune helper check |
-| `superseded-frontier-payload-retention-fast` | 1 | CI superseded frontier payload retention helper check |
-| `stale-missing-block-request-prune-fast` | 1 | CI stale missing-block request prune helper check |
-| `stale-missing-commit-qc-prune-fast` | 1 | CI stale missing commit-QC request prune helper check |
-| `stale-rbc-session-prune-fast` | 1 | CI stale RBC session prune helper check |
-| `highest-qc-defer-marker-prune-fast` | 1 | CI highest-QC defer marker prune helper check |
-| `fast-finality-inline-validation-fast` | 1 | CI fast-finality inline validation helper check |
-| `observer-signature-recovery-fast` | 1 | CI observer signature-mismatch recovery helper check |
-| `validation-failure-finalize-fast` | 1 | CI validation failure finalization helper check |
-| `validation-reject-reason-label-fast` | 1 | CI validation-reject reason-label classifier check |
-| `validation-reject-status-fast` | 1 | CI validation-reject status counter/snapshot check |
-| `peer-key-policy-status-fast` | 1 | CI peer-key policy status counter/snapshot check |
-| `view-change-cause-status-fast` | 1 | CI view-change cause status counter/snapshot check |
-| `view-change-proof-status-fast` | 1 | CI view-change proof/index status counter check |
-| `qc-status-fast` | 1 | CI leader/highest-QC/locked-QC status projection check |
-| `validation-evidence-qc-fast` | 1 | CI validation evidence QC selector check |
+| `slot-proposal-evidence-fast` | 1 | CI direct slot proposal evidence no-bug check |
+| `round-liveness-fast` | 1 | CI direct round liveness no-bug check |
+| `roster-recovery-fsm-fast` | 1 | CI direct roster recovery FSM no-bug check |
+| `consensus-recovery-prune-fast` | 1 | CI direct consensus recovery prune/clear helper check |
+| `frontier-live-owner-work-fast` | 1 | CI direct frontier live-owner work helper check |
+| `keep-frontier-pending-active-fast` | 1 | CI direct keep-frontier-pending-active helper check |
+| `stale-view-pending-prune-fast` | 1 | CI direct stale-view pending prune no-bug check |
+| `superseded-frontier-payload-retention-fast` | 1 | CI direct superseded frontier payload retention helper check |
+| `stale-missing-block-request-prune-fast` | 1 | CI direct stale missing-block request prune no-bug check |
+| `stale-missing-commit-qc-prune-fast` | 1 | CI direct stale missing commit-QC request prune no-bug check |
+| `stale-rbc-session-prune-fast` | 1 | CI direct stale RBC session prune no-bug check |
+| `highest-qc-defer-marker-prune-fast` | 1 | CI direct highest-QC defer marker prune helper check |
+| `fast-finality-inline-validation-fast` | 1 | CI fast-finality inline validation component/anchor check |
+| `observer-signature-recovery-fast` | 1 | CI direct observer signature-mismatch recovery helper check |
+| `validation-failure-finalize-fast` | 1 | CI direct validation failure finalization helper check |
+| `validation-reject-reason-label-fast` | 1 | CI direct validation-reject reason-label classifier check |
+| `validation-reject-status-fast` | 1 | CI validation-reject status counter/snapshot component/anchor check |
+| `peer-key-policy-status-fast` | 1 | CI peer-key policy status counter/snapshot component/anchor check |
+| `view-change-cause-status-fast` | 1 | CI view-change cause status counter/snapshot component/anchor check |
+| `view-change-proof-status-fast` | 1 | CI view-change proof/index status counter component/anchor check |
+| `qc-status-fast` | 1 | CI leader/highest-QC/locked-QC status projection component/anchor check |
+| `validation-evidence-qc-fast` | 1 | CI direct validation evidence QC selector check |
 | `admission-fast` | 6 | CI certificate-admission guard check |
 | `highest-fast` | 6 | CI deterministic highest-QC selection check |
-| `highest-optional-fast` | 1 | CI optional highest-QC selection filter check |
+| `highest-optional-fast` | 1 | CI direct optional highest-QC selection filter check |
 | `frontier-fast` | 7 | CI frontier check |
 | `frontier-deep` | 8 | Larger frontier check |
 | `frontier-wide` | 7 | Wider PR formal CI frontier check |
@@ -14794,19 +14795,19 @@ path/hash helpers: empty roots, input leaf hashing, leaf/node domain tags,
 child order, missing children, duplicate-key ordering, truncation, and
 parent/child prefix-bit rules.
 `block-message-rbc-compact-fast` and `block-message-rbc-compact-bug-*`
-cross-check RBC chunk compact block-message aggregate exactness: compact
+cross-check direct RBC chunk compact block-message exactness/component behavior: compact
 boundary admission, payload field preservation, full-message fallback,
 normalization, height/view/epoch widening, and high-priority routing.
 `block-message-priority-fast` and `block-message-priority-bug-*` cross-check
-consensus block-message priority aggregate exactness: block sync, body fetch,
+direct consensus block-message priority exactness/component behavior: block sync, body fetch,
 VRF and execution-witness material, RBC messages, proposal hints, proposals,
 QC votes, and QCs all remain high network priority.
 `block-message-height-view-fast` and `block-message-height-view-bug-*`
-cross-check consensus block-message height/view aggregate exactness: no-slot
+cross-check direct consensus block-message height/view exactness/component behavior: no-slot
 exclusions, slot-bearing future-window eligibility, source selection, compact
 chunk widening, and height/view ordering.
 `block-message-kind-fast` and `block-message-kind-bug-*` cross-check
-block-message log/status kind aggregate exactness: certified-fetch subtype
+direct block-message log/status kind exactness/component behavior: certified-fetch subtype
 labels, NewView vote/certificate labels, compact/full RBC chunk collapse,
 future-window log labels, coarser status telemetry, and Kura status omission.
 `kura-replica-advert-fast` and `kura-replica-advert-bug-*` cross-check Kura
@@ -14822,7 +14823,7 @@ pipeline event forwarding envelopes: empty no-op behavior, single-event
 wrapping, ordered batch wrapping, duplicate preservation, closed-sender failure
 logging, open-sender delivery, and no-panic behavior.
 `block-message-wire-fast` and `block-message-wire-bug-*` cross-check cached
-block-message Norito frame aggregate exactness: cache construction,
+block-message Norito frame component/anchor behavior: cache construction,
 cached/uncached serialization, mutation cache invalidation, header rejection,
 exact prefix consumption, trailing-byte preservation, decode output, and cache
 preservation.
@@ -26401,7 +26402,11 @@ bash scripts/formal/sumeragi_apalache.sh frontier-nightly
   `ci/check_sumeragi_formal_expected_failures.sh`, and mutation modes are kept
   out of the PR baseline script. Every referenced CFG must include at least one
   non-`TypeInvariant` invariant/property check so baseline, scheduled, and
-  expected-failure coverage cannot degrade into type-only checks. Those
+  expected-failure coverage cannot degrade into type-only checks. Fast CFGs
+  must not target the generic `NoBugInvariant`, `Safety`, or `SafetyFast`
+  checks directly; they must use model-specific direct invariant names so PR
+  proof targets stay reviewable even when models retain compatibility aliases
+  for mutation configs. Those
   non-`TypeInvariant` checks must not be top-level TLA definitions with direct
   literal `TRUE` or `FALSE` bodies, single-line or multi-line boolean-only
   `TRUE`/`FALSE` wrappers, or alias chains resolving to

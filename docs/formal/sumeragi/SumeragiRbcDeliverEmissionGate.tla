@@ -402,8 +402,11 @@ GateStable ==
   /\ ActualDecision(DeliverNoReadyRepair).recover_block
   /\ ActualDecision(DeliverNoReadyRepair).process_commit
 
-SafetyFast ==
+RbcDeliverEmissionCoreSafety ==
   /\ DecisionExact
   /\ GateStable
+
+SafetyFast ==
+  RbcDeliverEmissionCoreSafety
 
 ====

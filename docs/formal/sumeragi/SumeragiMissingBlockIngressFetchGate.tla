@@ -214,7 +214,7 @@ ForceOnlyForInitialElapsedGrace ==
       /\ InitialAttempt \in ImplementationActions(c)
       /\ GraceElapsed \in ImplementationActions(c)
 
-NoBugInvariant ==
+MissingBlockIngressFetchCoreSafety ==
   /\ ActionsMatchSpec
   /\ BypassCasesDoNotHoldOrMutateRequests
   /\ InitialFrontierWithinGraceHoldsAndRecords
@@ -223,6 +223,8 @@ NoBugInvariant ==
   /\ HoldNeverFetchesOrForces
   /\ ForceOnlyForInitialElapsedGrace
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == MissingBlockIngressFetchCoreSafety
+
+SafetyFast == MissingBlockIngressFetchCoreSafety
 
 ====

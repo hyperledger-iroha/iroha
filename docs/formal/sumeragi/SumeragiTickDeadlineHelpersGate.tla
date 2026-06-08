@@ -359,7 +359,7 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+TickDeadlineHelpersMatchSpec ==
   /\ \A c \in MergeCases:
        ActualMerge(c) = SpecMerge(c)
   /\ \A c \in WorkCases:
@@ -376,6 +376,9 @@ SafetyFast ==
        ActualNudgeDue(c) = SpecNudgeDue(c)
   /\ \A c \in NextCases:
        ActualNextDeadline(c) = SpecNextDeadline(c)
+
+SafetyFast ==
+  TickDeadlineHelpersMatchSpec
 
 BugMergeUsesLatestDeadline ==
   ActualMerge("merge_both") = SpecMerge("merge_both")

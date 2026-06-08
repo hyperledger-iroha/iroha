@@ -17,6 +17,17 @@ pub(super) struct ProposalCache {
     limit: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProposalCacheShape {
+    pub(super) hint_count: usize,
+    pub(super) proposal_count: usize,
+    pub(super) observed_count: usize,
+    pub(super) hint_limit_enforced: bool,
+    pub(super) proposal_limit_enforced: bool,
+    pub(super) observed_only_for_live_entries: bool,
+    pub(super) live_entries_have_observed: bool,
+}
+
 #[inline]
 pub(super) fn evidence_within_horizon(
     current_height: u64,
@@ -46,6 +57,7 @@ impl ProposalCache {
         self.observed_at.entry(key).or_insert_with(Instant::now);
         self.hints.insert(key, hint);
         self.evict_if_needed();
+        self.debug_assert_shape();
     }
 
     pub(super) fn get_hint(&self, height: u64, view: u64) -> Option<&ProposalHint> {
@@ -64,6 +76,7 @@ impl ProposalCache {
         let key = (height, view);
         let removed = self.hints.remove(&key);
         self.remove_observed_if_empty(key);
+        self.debug_assert_shape();
         removed
     }
 
@@ -72,12 +85,14 @@ impl ProposalCache {
         self.observed_at.entry(key).or_insert_with(Instant::now);
         self.proposals.insert(key, proposal);
         self.evict_if_needed();
+        self.debug_assert_shape();
     }
 
     pub(super) fn pop_proposal(&mut self, height: u64, view: u64) -> Option<Proposal> {
         let key = (height, view);
         let removed = self.proposals.remove(&key);
         self.remove_observed_if_empty(key);
+        self.debug_assert_shape();
         removed
     }
 
@@ -110,12 +125,41 @@ impl ProposalCache {
         if evicted > 0 {
             status::inc_pending_queue_evictions_total(evicted);
         }
+        self.debug_assert_shape();
     }
 
     pub(super) fn prune_height_leq(&mut self, height: u64) {
         self.hints.retain(|(h, _), _| *h > height);
         self.proposals.retain(|(h, _), _| *h > height);
         self.observed_at.retain(|(h, _), _| *h > height);
+        self.debug_assert_shape();
+    }
+
+    pub(super) fn shape(&self) -> ProposalCacheShape {
+        ProposalCacheShape {
+            hint_count: self.hints.len(),
+            proposal_count: self.proposals.len(),
+            observed_count: self.observed_at.len(),
+            hint_limit_enforced: self.hints.len() <= self.limit,
+            proposal_limit_enforced: self.proposals.len() <= self.limit,
+            observed_only_for_live_entries: self
+                .observed_at
+                .keys()
+                .all(|key| self.hints.contains_key(key) || self.proposals.contains_key(key)),
+            live_entries_have_observed: self
+                .hints
+                .keys()
+                .chain(self.proposals.keys())
+                .all(|key| self.observed_at.contains_key(key)),
+        }
+    }
+
+    fn debug_assert_shape(&self) {
+        let shape = self.shape();
+        debug_assert!(shape.hint_limit_enforced);
+        debug_assert!(shape.proposal_limit_enforced);
+        debug_assert!(shape.observed_only_for_live_entries);
+        debug_assert!(shape.live_entries_have_observed);
     }
 
     #[cfg(test)]
@@ -152,7 +196,29 @@ pub(super) enum ProposalMismatch {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ProposalMismatchKind {
+    None,
+    Height,
+    View,
+    Parent,
+    TxRoot,
+    StateRoot,
+    PayloadHash,
+}
+
 impl ProposalMismatch {
+    pub(super) const fn kind(&self) -> ProposalMismatchKind {
+        match self {
+            ProposalMismatch::Height { .. } => ProposalMismatchKind::Height,
+            ProposalMismatch::View { .. } => ProposalMismatchKind::View,
+            ProposalMismatch::Parent { .. } => ProposalMismatchKind::Parent,
+            ProposalMismatch::TxRoot { .. } => ProposalMismatchKind::TxRoot,
+            ProposalMismatch::StateRoot { .. } => ProposalMismatchKind::StateRoot,
+            ProposalMismatch::PayloadHash { .. } => ProposalMismatchKind::PayloadHash,
+        }
+    }
+
     pub(super) fn reason(&self) -> String {
         match self {
             ProposalMismatch::Height { proposal, block } => {
@@ -177,6 +243,40 @@ impl ProposalMismatch {
     }
 }
 
+pub(super) fn proposal_mismatch_kind(
+    proposal: &Proposal,
+    header: &BlockHeader,
+    payload_hash: &Hash,
+) -> ProposalMismatchKind {
+    let block_height = header.height().get();
+    let block_view = header.view_change_index();
+    if proposal.header.height != block_height {
+        return ProposalMismatchKind::Height;
+    }
+    if proposal.header.view != block_view {
+        return ProposalMismatchKind::View;
+    }
+    let expected_parent = parent_hash_from_header(header);
+    if proposal.header.parent_hash != expected_parent {
+        return ProposalMismatchKind::Parent;
+    }
+    let expected_tx_root = tx_root_from_header(header);
+    if proposal.header.tx_root != expected_tx_root {
+        return ProposalMismatchKind::TxRoot;
+    }
+    let expected_state_root = state_root_from_header(header);
+    if proposal.header.state_root != expected_state_root {
+        let zero_hash = Hash::prehashed([0; Hash::LENGTH]);
+        if proposal.header.state_root != zero_hash {
+            return ProposalMismatchKind::StateRoot;
+        }
+    }
+    if &proposal.payload_hash != payload_hash {
+        return ProposalMismatchKind::PayloadHash;
+    }
+    ProposalMismatchKind::None
+}
+
 pub(super) fn detect_proposal_mismatch(
     proposal: &Proposal,
     header: &BlockHeader,
@@ -184,49 +284,50 @@ pub(super) fn detect_proposal_mismatch(
 ) -> Option<ProposalMismatch> {
     let block_height = header.height().get();
     let block_view = header.view_change_index();
-    if proposal.header.height != block_height {
-        return Some(ProposalMismatch::Height {
+    let kind = proposal_mismatch_kind(proposal, header, payload_hash);
+    let mismatch = match kind {
+        ProposalMismatchKind::None => None,
+        ProposalMismatchKind::Height => Some(ProposalMismatch::Height {
             proposal: proposal.header.height,
             block: block_height,
-        });
-    }
-    if proposal.header.view != block_view {
-        return Some(ProposalMismatch::View {
+        }),
+        ProposalMismatchKind::View => Some(ProposalMismatch::View {
             proposal: proposal.header.view,
             block: block_view,
-        });
-    }
-    let expected_parent = parent_hash_from_header(header);
-    if proposal.header.parent_hash != expected_parent {
-        return Some(ProposalMismatch::Parent {
-            expected: expected_parent,
-            observed: proposal.header.parent_hash,
-        });
-    }
-    let expected_tx_root = tx_root_from_header(header);
-    if proposal.header.tx_root != expected_tx_root {
-        return Some(ProposalMismatch::TxRoot {
-            expected: expected_tx_root,
-            observed: proposal.header.tx_root,
-        });
-    }
-    let expected_state_root = state_root_from_header(header);
-    if proposal.header.state_root != expected_state_root {
-        let zero_hash = Hash::prehashed([0; Hash::LENGTH]);
-        if proposal.header.state_root != zero_hash {
-            return Some(ProposalMismatch::StateRoot {
+        }),
+        ProposalMismatchKind::Parent => {
+            let expected_parent = parent_hash_from_header(header);
+            Some(ProposalMismatch::Parent {
+                expected: expected_parent,
+                observed: proposal.header.parent_hash,
+            })
+        }
+        ProposalMismatchKind::TxRoot => {
+            let expected_tx_root = tx_root_from_header(header);
+            Some(ProposalMismatch::TxRoot {
+                expected: expected_tx_root,
+                observed: proposal.header.tx_root,
+            })
+        }
+        ProposalMismatchKind::StateRoot => {
+            let expected_state_root = state_root_from_header(header);
+            Some(ProposalMismatch::StateRoot {
                 expected: expected_state_root,
                 observed: proposal.header.state_root,
-            });
+            })
         }
-    }
-    if &proposal.payload_hash != payload_hash {
-        return Some(ProposalMismatch::PayloadHash {
+        ProposalMismatchKind::PayloadHash => Some(ProposalMismatch::PayloadHash {
             expected: *payload_hash,
             observed: proposal.payload_hash,
-        });
-    }
-    None
+        }),
+    };
+    debug_assert_eq!(
+        mismatch
+            .as_ref()
+            .map_or(ProposalMismatchKind::None, ProposalMismatch::kind),
+        kind
+    );
+    mismatch
 }
 
 /// Canonicalize block payload encoding before hashing to avoid layout drift from Norito’s adaptive

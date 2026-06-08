@@ -317,11 +317,13 @@ AccessorsEmitNoOutputs ==
 AllTriedCasesRemainModeled ==
   tried \subseteq Cases
 
-Safety ==
+EngineReadAccessorsCoreSafety ==
   /\ StateSnapshotMatchesFields
   /\ CommittedAtMatchesQueriedHeight
   /\ AccessorsDoNotMutateState
   /\ AccessorsEmitNoOutputs
   /\ AllTriedCasesRemainModeled
+
+Safety == EngineReadAccessorsCoreSafety
 
 ====

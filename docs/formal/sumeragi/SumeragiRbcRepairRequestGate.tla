@@ -503,7 +503,7 @@ RepairStateStable ==
   /\ ActualChunk(ChunkFallbackBoundary).outcome = Fallback
   /\ ActualChunk(ChunkFutureClockWaits).outcome = Waiting
 
-SafetyFast ==
+RbcRepairRequestCoreSafety ==
   /\ CooldownExact
   /\ TargetsExact
   /\ InitRepairStateMachineExact
@@ -511,6 +511,9 @@ SafetyFast ==
   /\ CooldownBoundaryStable
   /\ TargetSelectionStable
   /\ RepairStateStable
+
+SafetyFast ==
+  RbcRepairRequestCoreSafety
 
 AllDueCasesMatchSpec ==
   \A c \in DueCases:

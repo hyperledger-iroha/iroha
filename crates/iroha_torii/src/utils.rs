@@ -1180,10 +1180,46 @@ pub mod extractors {
         }
     }
 
+    /// Extractor for URL query strings decoded into `JsonDeserialize` types
+    /// without scalar type coercion.
+    #[derive(Clone, Debug)]
+    pub struct NoritoStringQuery<T>(pub T);
+
+    impl<S, T> FromRequestParts<S> for NoritoStringQuery<T>
+    where
+        S: Send + Sync,
+        T: JsonDeserializeOwned + Send,
+    {
+        type Rejection = Response;
+
+        async fn from_request_parts(
+            parts: &mut axum::http::request::Parts,
+            _state: &S,
+        ) -> Result<Self, Self::Rejection> {
+            let query = parts.uri.query().unwrap_or("");
+            match decode_string_query::<T>(query) {
+                Ok(value) => Ok(NoritoStringQuery(value)),
+                Err(e) => Err((
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid query params: {e}"),
+                )
+                    .into_response()),
+            }
+        }
+    }
+
     fn decode_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
         let mut object = json::Map::new();
         for (key, value) in query_pairs(query) {
             object.insert(key, scalar_to_value(&value));
+        }
+        json::from_value(Value::Object(object))
+    }
+
+    fn decode_string_query<T: JsonDeserializeOwned>(query: &str) -> Result<T, json::Error> {
+        let mut object = json::Map::new();
+        for (key, value) in query_pairs(query) {
+            object.insert(key, Value::String(value));
         }
         json::from_value(Value::Object(object))
     }
@@ -1233,6 +1269,7 @@ pub mod extractors {
     mod tests {
         use axum::{
             body::Body,
+            extract::FromRequestParts,
             http::{HeaderValue, Request, StatusCode, header::CONTENT_TYPE},
         };
         use http_body_util::BodyExt as _;
@@ -1243,6 +1280,15 @@ pub mod extractors {
 
         #[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
         struct Dummy(u32);
+
+        #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
+        struct StringQueryForTest {
+            numeric_hex: Option<String>,
+            leading_zero_hex: Option<String>,
+            null_like: Option<String>,
+            bool_like: Option<String>,
+            label: Option<String>,
+        }
 
         impl Version for Dummy {
             fn version(&self) -> u8 {
@@ -1316,6 +1362,33 @@ pub mod extractors {
                 body_text.to_ascii_lowercase().contains("version"),
                 "body should mention versioned decode reason: {body_text}"
             );
+        }
+
+        #[tokio::test]
+        async fn norito_string_query_preserves_numeric_looking_strings() {
+            let numeric_hex = "11".repeat(32);
+            let leading_zero_hex = format!("{}1", "0".repeat(63));
+            let request = Request::builder()
+                .uri(format!(
+                    "/test?numeric_hex={numeric_hex}&leading_zero_hex={leading_zero_hex}&null_like=null&bool_like=true&label=tron+nile"
+                ))
+                .body(())
+                .expect("request");
+            let (mut parts, _) = request.into_parts();
+
+            let NoritoStringQuery(decoded) =
+                NoritoStringQuery::<StringQueryForTest>::from_request_parts(&mut parts, &())
+                    .await
+                    .expect("string query should decode");
+
+            assert_eq!(decoded.numeric_hex.as_deref(), Some(numeric_hex.as_str()));
+            assert_eq!(
+                decoded.leading_zero_hex.as_deref(),
+                Some(leading_zero_hex.as_str())
+            );
+            assert_eq!(decoded.null_like.as_deref(), Some("null"));
+            assert_eq!(decoded.bool_like.as_deref(), Some("true"));
+            assert_eq!(decoded.label.as_deref(), Some("tron nile"));
         }
 
         #[tokio::test]

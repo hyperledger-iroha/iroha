@@ -158,8 +158,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+KnownHintlessMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == KnownHintlessMatchesSpec
 
 KnownHintlessFastPath ==
   Matches("known_no_hint")

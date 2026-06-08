@@ -133,8 +133,10 @@ TypeInvariant ==
   /\ checked = 0
   /\ MaxHeight = 5
 
-SafetyFast ==
+StashWindowMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == StashWindowMatchesSpec
 
 ZeroMarginNextAllowed ==
   Matches("zero_margin_next")

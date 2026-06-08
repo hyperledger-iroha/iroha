@@ -339,7 +339,7 @@ RemovalSideEffectAnchors ==
   /\ ~(PurgeCalled \in
        ImplementationActions(StaleDaUndeliveredExactPayload))
 
-NoBugInvariant ==
+StaleRbcSessionPruneCoreSafety ==
   /\ ActionsMatchSpec
   /\ OnlyStaleSameHeightSessionsPurged
   /\ DaDisabledStaleSessionsAlwaysPurged
@@ -356,6 +356,8 @@ NoBugInvariant ==
   /\ UndeliveredRetentionAnchors
   /\ RemovalSideEffectAnchors
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == StaleRbcSessionPruneCoreSafety
+
+SafetyFast == StaleRbcSessionPruneCoreSafety
 
 ====

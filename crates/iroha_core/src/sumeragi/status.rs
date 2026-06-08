@@ -10024,6 +10024,141 @@ mod tests {
     }
 
     #[test]
+    fn block_sync_roster_status_formal_gate_counter_snapshot_matrix() {
+        let _guard = super::block_sync_test_guard();
+        super::reset_block_sync_counters_for_tests();
+        assert_eq!(
+            super::snapshot().block_sync_roster,
+            super::BlockSyncRosterSnapshot::default()
+        );
+
+        super::inc_block_sync_roster_source("commit_checkpoint_pair_hint");
+        let snapshot = super::snapshot().block_sync_roster;
+        assert_eq!(snapshot.commit_qc_hint_total, 1);
+        assert_eq!(snapshot.checkpoint_hint_total, 1);
+
+        super::inc_block_sync_roster_source("commit_qc_hint");
+        super::inc_block_sync_roster_source("commit_qc_hint");
+        let snapshot = super::snapshot().block_sync_roster;
+        assert_eq!(
+            snapshot.commit_qc_hint_total, 3,
+            "commit-QC hint source should accumulate without overwriting"
+        );
+        assert_eq!(
+            snapshot.checkpoint_hint_total, 1,
+            "commit-QC hint source must not increment checkpoint hints"
+        );
+
+        super::inc_block_sync_roster_source("validator_checkpoint_hint");
+        super::inc_block_sync_roster_source("validator_checkpoint_hint");
+        let snapshot = super::snapshot().block_sync_roster;
+        assert_eq!(
+            snapshot.checkpoint_hint_total, 3,
+            "checkpoint hint source should accumulate without overwriting"
+        );
+        assert_eq!(
+            snapshot.commit_qc_hint_total, 3,
+            "checkpoint hint source must not increment commit-QC hints"
+        );
+
+        super::inc_block_sync_roster_source("commit_qc_history");
+        super::inc_block_sync_roster_source("validator_checkpoint_history");
+        super::inc_block_sync_roster_source("roster_sidecar");
+        super::inc_block_sync_roster_source("commit_roster_journal");
+        super::inc_block_sync_roster_drop_missing();
+        super::inc_block_sync_roster_drop_missing();
+        super::inc_block_sync_roster_drop_unsolicited_share_blocks();
+        let before_unknown = super::snapshot().block_sync_roster;
+        super::inc_block_sync_roster_source("unknown_source");
+        assert_eq!(
+            super::snapshot().block_sync_roster,
+            before_unknown,
+            "unknown roster source labels should be no-ops"
+        );
+
+        let expected = super::BlockSyncRosterSnapshot {
+            commit_qc_hint_total: 3,
+            checkpoint_hint_total: 3,
+            commit_qc_history_total: 1,
+            checkpoint_history_total: 1,
+            roster_sidecar_total: 1,
+            commit_roster_journal_total: 1,
+            drop_missing_total: 2,
+            drop_unsolicited_share_blocks_total: 1,
+        };
+        assert_eq!(
+            super::block_sync_roster_snapshot(),
+            expected,
+            "direct roster snapshot should project every source/drop counter"
+        );
+        assert_eq!(
+            super::snapshot().block_sync_roster,
+            expected,
+            "top-level status snapshot should include the roster snapshot"
+        );
+
+        super::reset_block_sync_counters_for_tests();
+        assert_eq!(
+            super::snapshot().block_sync_roster,
+            super::BlockSyncRosterSnapshot::default(),
+            "reset should clear roster counters after records exist"
+        );
+    }
+
+    #[test]
+    fn block_sync_qc_status_formal_gate_counter_snapshot_matrix() {
+        let _guard = super::block_sync_test_guard();
+        super::reset_block_sync_counters_for_tests();
+
+        let assert_qc_status = |invalid_signatures,
+                                qc_replaced,
+                                qc_derive_failed,
+                                locked_prefilter,
+                                quarantine,
+                                revalidated,
+                                final_drop,
+                                final_reason| {
+            let snapshot = super::snapshot();
+            assert_eq!(
+                snapshot.block_sync_drop_invalid_signatures_total,
+                invalid_signatures
+            );
+            assert_eq!(snapshot.block_sync_qc_replaced_total, qc_replaced);
+            assert_eq!(snapshot.block_sync_qc_derive_failed_total, qc_derive_failed);
+            assert_eq!(
+                snapshot.block_sync_locked_qc_prefilter_drop_total,
+                locked_prefilter
+            );
+            assert_eq!(snapshot.blocksync_qc_quarantine_total, quarantine);
+            assert_eq!(snapshot.blocksync_qc_revalidated_total, revalidated);
+            assert_eq!(snapshot.blocksync_qc_final_drop_total, final_drop);
+            assert_eq!(snapshot.blocksync_qc_final_drop_last_reason, final_reason);
+        };
+
+        assert_qc_status(0, 0, 0, 0, 0, 0, 0, None);
+
+        super::inc_block_sync_drop_invalid_signatures();
+        super::inc_block_sync_qc_replaced();
+        super::inc_block_sync_qc_derive_failed();
+        super::inc_block_sync_locked_qc_prefilter_drop();
+        super::inc_blocksync_qc_quarantine();
+        super::inc_blocksync_qc_revalidated();
+        super::inc_blocksync_qc_final_drop("expired");
+        assert_qc_status(1, 1, 1, 1, 1, 1, 1, Some("expired"));
+
+        super::inc_block_sync_qc_replaced();
+        let snapshot = super::snapshot();
+        assert_eq!(snapshot.block_sync_qc_replaced_total, 2);
+        assert_eq!(snapshot.block_sync_qc_derive_failed_total, 1);
+
+        super::inc_blocksync_qc_final_drop("permanent");
+        assert_qc_status(1, 2, 1, 1, 1, 1, 2, Some("permanent"));
+
+        super::reset_block_sync_counters_for_tests();
+        assert_qc_status(0, 0, 0, 0, 0, 0, 0, None);
+    }
+
+    #[test]
     fn precommit_signer_history_reset_clears_records() {
         let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(UntypedHash::prehashed(
             [9; UntypedHash::LENGTH],

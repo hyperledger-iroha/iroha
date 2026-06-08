@@ -438,13 +438,16 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+ProposalBudgetMatchesSpec ==
   /\ \A c \in QueueCases: ActualQueueOutput(c) = SpecQueueOutput(c)
   /\ \A c \in DaCases: ActualDaOutput(c) = SpecDaOutput(c)
   /\ \A c \in TxCases: ActualTxOutput(c) = SpecTxOutput(c)
   /\ \A c \in FastTxCases: ActualFastTxOutput(c) = SpecFastTxOutput(c)
   /\ \A c \in GasCases: ActualGasOutput(c) = SpecGasOutput(c)
   /\ \A c \in StaleCases: ActualStaleOutput(c) = SpecStaleOutput(c)
+
+SafetyFast ==
+  ProposalBudgetMatchesSpec
 
 BugQueueZeroBlockCapAllows ==
   ActualQueueOutput("queue_block_cap_floor") =

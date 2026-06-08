@@ -268,8 +268,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-Safety ==
+AllCasesMatchSpec ==
   \A c \in Cases: Matches(c)
+
+Safety ==
+  AllCasesMatchSpec
 
 ValidPermissionedBootstraps ==
   Matches("valid_permissioned_active")

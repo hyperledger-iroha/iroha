@@ -147,8 +147,11 @@ ActualOutput ==
     ActualCase("online_order_duplicates"),
     ActualCase("empty_world_trusted")>>
 
-SafetyFast ==
+TrustedP2pTopologyOutputMatchesSpec ==
   ActualOutput = SpecOutput
+
+SafetyFast ==
+  TrustedP2pTopologyOutputMatchesSpec
 
 TrustedTopologyUnionExact ==
   \A c \in Cases:
@@ -167,7 +170,7 @@ OnlineStrayOrderDuplicateExact ==
     SpecCase("online_order_duplicates")
 
 TrustedP2pTopologyExactness ==
-  /\ SafetyFast
+  /\ TrustedP2pTopologyOutputMatchesSpec
   /\ TrustedTopologyUnionExact
   /\ OutsidePeerFilteringExact
   /\ TrustedObserverNonStrayExact

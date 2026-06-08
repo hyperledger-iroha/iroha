@@ -274,10 +274,12 @@ Next == checked' = 1 - checked
 
 TypeInvariant == checked \in 0..1
 
-NoBugInvariant ==
+TopologyMutationCoreSafety ==
   \A c \in Cases: ActualOutput(c) = SpecOutput(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == TopologyMutationCoreSafety
+
+SafetyFast == TopologyMutationCoreSafety
 
 TopologyRotationExact ==
   \A c \in RotateCases:

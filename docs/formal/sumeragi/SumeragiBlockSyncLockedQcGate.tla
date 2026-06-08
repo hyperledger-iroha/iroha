@@ -305,11 +305,13 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+BlockSyncLockedQcCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == BlockSyncLockedQcCoreSafety
+
+SafetyFast == BlockSyncLockedQcCoreSafety
 
 BugExtendsRejectsNoLock == NoBugInvariant
 BugExtendsAllowsSameViewMissingLockPayload == NoBugInvariant

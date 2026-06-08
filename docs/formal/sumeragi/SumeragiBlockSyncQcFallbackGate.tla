@@ -157,9 +157,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+QcFallbackMatchesSpec ==
   /\ \A e \in ClassifierCases: RetryableMatches(e)
   /\ \A c \in FallbackCases: FallbackMatches(c)
+
+SafetyFast == QcFallbackMatchesSpec
 
 BugMissingVotesNotRetryable ==
   RetryableMatches(MissingVotesErr)

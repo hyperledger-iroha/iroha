@@ -309,7 +309,7 @@ TerminalRotateAnchors ==
   /\ ReturnsChanged \in ImplementationActions(RotateCandidatesAvailable)
   /\ DwellRecorded \in ImplementationActions(RotateCandidatesEmpty)
 
-NoBugInvariant ==
+RosterRecoveryFsmCoreSafety ==
   /\ ActionsMatchSpec
   /\ SteadyTransitionsOnlyOnRosterUnavailable
   /\ ReelectTransitionsMatchCandidateAndRoundEvents
@@ -324,6 +324,8 @@ NoBugInvariant ==
   /\ UnchangedBookkeepingExclusive
   /\ TerminalRotateAnchors
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == RosterRecoveryFsmCoreSafety
+
+SafetyFast == RosterRecoveryFsmCoreSafety
 
 ====

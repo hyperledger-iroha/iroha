@@ -324,7 +324,7 @@ LookupShapeMatchesShortCircuit ==
           \/ ~NoStoredVotes(c) \/ ~NoCachedQc(c)) =>
          ~(CheckAge \in ImplementationActions(c))
 
-NoBugInvariant ==
+PendingFastUnblockCoreSafety ==
   /\ ResultMatchesSpec
   /\ ActionsMatchSpec
   /\ DueAgeAllowsFastUnblock
@@ -335,6 +335,8 @@ NoBugInvariant ==
   /\ AgeGateRequiresTimeout
   /\ LookupShapeMatchesShortCircuit
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == PendingFastUnblockCoreSafety
+
+SafetyFast == PendingFastUnblockCoreSafety
 
 ====

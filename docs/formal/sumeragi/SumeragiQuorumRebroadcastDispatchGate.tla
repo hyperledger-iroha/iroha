@@ -577,7 +577,7 @@ QuorumRebroadcastMarkingExact ==
     /\ ActualOutput(c)[6] = BoolToInt(SpecMarkRebroadcast(c))
     /\ ActualOutput(c) = SpecOutput(c)
 
-SafetyFast ==
+QuorumRebroadcastCoreSafety ==
   /\ SelectionExact
   /\ EarlyExitStable
   /\ FanoutAndVoteStable
@@ -585,8 +585,11 @@ SafetyFast ==
   /\ BlockSyncDispatchStable
   /\ MarkingStable
 
+SafetyFast ==
+  QuorumRebroadcastCoreSafety
+
 QuorumRebroadcastDispatchExactness ==
-  /\ SafetyFast
+  /\ QuorumRebroadcastCoreSafety
   /\ QuorumRebroadcastLocalVoteExact
   /\ QuorumRebroadcastFailClosedExitExact
   /\ QuorumRebroadcastForceFanoutExact
@@ -596,7 +599,7 @@ QuorumRebroadcastDispatchExactness ==
   /\ QuorumRebroadcastMarkingExact
 
 Safety ==
-  SafetyFast
+  QuorumRebroadcastCoreSafety
 
 =============================================================================
 ====

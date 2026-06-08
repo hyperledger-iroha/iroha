@@ -305,7 +305,7 @@ NoMismatchOnlyWhenCompatible ==
     /\ (state_root_matches \/ proposal_state_root_zero)
     /\ payload_hash_matches
 
-Safety ==
+ProposalMismatchCoreSafety ==
   /\ MismatchKindMatchesSpec
   /\ MismatchFoundMatchesSpec
   /\ MismatchRankMatchesSpec
@@ -321,5 +321,7 @@ Safety ==
   /\ GenesisParentDefaultZeroAccepted
   /\ MissingTxRootDefaultZeroAccepted
   /\ NoMismatchOnlyWhenCompatible
+
+Safety == ProposalMismatchCoreSafety
 
 ====

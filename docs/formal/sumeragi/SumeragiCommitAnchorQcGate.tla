@@ -193,7 +193,7 @@ StatusMatchesFinalSelections ==
     /\ ActualHighestStatus(c) = SpecHighestStatus(c)
     /\ ActualLockedStatus(c) = SpecLockedStatus(c)
 
-NoBugInvariant ==
+CommitAnchorQcCoreSafety ==
   /\ HighestSelectionMatchesSpec
   /\ LockedSelectionMatchesSpec
   /\ PruneMatchesLockChange
@@ -214,7 +214,9 @@ CommitAnchorQcPromotionExactness ==
   /\ CommitAnchorPruneExact
   /\ CommitAnchorStatusPublicationExact
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == CommitAnchorQcCoreSafety
+
+SafetyFast == CommitAnchorQcCoreSafety
 
 BugHighestRegressesToIncoming == NoBugInvariant
 BugHighestIgnoresIncoming == NoBugInvariant

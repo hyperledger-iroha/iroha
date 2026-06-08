@@ -368,11 +368,13 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+PenaltyOffenderSelectionCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == PenaltyOffenderSelectionCoreSafety
+
+SafetyFast == PenaltyOffenderSelectionCoreSafety
 
 CanonicalizationActionsMatchSpec ==
   \A c \in {
