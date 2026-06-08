@@ -4,7 +4,12 @@ package org.hyperledger.iroha.android.offline;
 public final class RejectingOfflineNoteCertificateVerifier
     implements OfflineNoteCertificateVerifier {
   @Override
-  public boolean verifyCertificate(final OfflineNote.KeyCertificate certificate) {
+  public boolean verifyIssuerCertificate(final OfflineNote.KeyCertificate certificate) {
+    return false;
+  }
+
+  @Override
+  public boolean verifyOwnerCertificate(final OfflineNote.KeyCertificate certificate) {
     return false;
   }
 }

@@ -14,6 +14,7 @@ schema-structural = []
 [dependencies]
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["std", "derive", "json", "json-std-io", "columnar", "strict-safe"] }
 iroha_core = { workspace = true, features = ["zk-halo2-ipa"] }
+iroha_zkp_halo2 = { workspace = true }
 iroha_torii_shared = { workspace = true }
 fastpq_prover = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["std", "bls", "gost", "sm"] }
@@ -37,7 +38,6 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 
 [dev-dependencies]
 iroha_core = { workspace = true, features = ["iroha-core-tests", "zk-halo2-ipa"] }
-iroha_zkp_halo2 = { workspace = true }
 tempfile = { workspace = true }
 sorafs_chunker = { workspace = true }
 

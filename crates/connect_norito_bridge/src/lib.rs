@@ -128,6 +128,7 @@ const ERR_JSON_SERIALIZE: c_int = -304;
 const ERR_OFFLINE_NOTE_PROVE: c_int = -310;
 const ERR_KAGEMUSHA_PROVE: c_int = -311;
 const ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE: c_int = -312;
+const ERR_OFFLINE_NOTE_VERIFY: c_int = -313;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
@@ -159,6 +160,7 @@ enum BridgeError {
     AssetId,
     JsonSerialize,
     OfflineNoteProve,
+    OfflineNoteVerify,
     KagemushaProve,
     KagemushaRecursiveCompactUnavailable,
     UnsupportedAlgorithm,
@@ -201,6 +203,7 @@ impl BridgeError {
             BridgeError::AssetId => ERR_ASSET_ID_PARSE,
             BridgeError::JsonSerialize => ERR_JSON_SERIALIZE,
             BridgeError::OfflineNoteProve => ERR_OFFLINE_NOTE_PROVE,
+            BridgeError::OfflineNoteVerify => ERR_OFFLINE_NOTE_VERIFY,
             BridgeError::KagemushaProve => ERR_KAGEMUSHA_PROVE,
             BridgeError::KagemushaRecursiveCompactUnavailable => {
                 ERR_KAGEMUSHA_RECURSIVE_COMPACT_UNAVAILABLE
@@ -5993,6 +5996,119 @@ pub unsafe extern "C" fn connect_norito_encode_defund_offline_note_signed_transa
     bridge_result_to_code(result)
 }
 
+/// Generate a recursive Halo2/IPA proof for an Offline redemption against a chain-supplied verifying key.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_prove_note_redeem_with_vk(
+    redeem_norito_ptr: *const c_uchar,
+    redeem_norito_len: c_ulong,
+    vk_norito_ptr: *const c_uchar,
+    vk_norito_len: c_ulong,
+    out_recursive_proof_ptr: *mut *mut c_uchar,
+    out_recursive_proof_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if redeem_norito_ptr.is_null()
+            || vk_norito_ptr.is_null()
+            || out_recursive_proof_ptr.is_null()
+            || out_recursive_proof_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let redeem_bytes =
+            unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
+        let vk_bytes = unsafe { slice::from_raw_parts(vk_norito_ptr, vk_norito_len as usize) };
+        let archive = prove_offline_note_redeem_recursive_with_vk(redeem_bytes, vk_bytes)
+            .map_err(|_| BridgeError::OfflineNoteProve)?;
+        unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+/// Generate a recursive Halo2/IPA proof for an Offline audit bundle against a chain-supplied verifying key.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_prove_note_audit_with_vk(
+    audit_norito_ptr: *const c_uchar,
+    audit_norito_len: c_ulong,
+    vk_norito_ptr: *const c_uchar,
+    vk_norito_len: c_ulong,
+    out_recursive_proof_ptr: *mut *mut c_uchar,
+    out_recursive_proof_len: *mut c_ulong,
+) -> c_int {
+    let result = (|| {
+        if audit_norito_ptr.is_null()
+            || vk_norito_ptr.is_null()
+            || out_recursive_proof_ptr.is_null()
+            || out_recursive_proof_len.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let audit_bytes =
+            unsafe { slice::from_raw_parts(audit_norito_ptr, audit_norito_len as usize) };
+        let vk_bytes = unsafe { slice::from_raw_parts(vk_norito_ptr, vk_norito_len as usize) };
+        let archive = prove_offline_note_audit_recursive_with_vk(audit_bytes, vk_bytes)
+            .map_err(|_| BridgeError::OfflineNoteProve)?;
+        unsafe { write_bytes_bridge(out_recursive_proof_ptr, out_recursive_proof_len, &archive) }
+    })();
+
+    bridge_result_to_code(result)
+}
+
+/// Cryptographically verify an Offline redemption's embedded recursive proof against a chain-supplied verifying key.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_verify_note_redeem_with_vk(
+    redeem_norito_ptr: *const c_uchar,
+    redeem_norito_len: c_ulong,
+    vk_norito_ptr: *const c_uchar,
+    vk_norito_len: c_ulong,
+    out_valid: *mut c_int,
+) -> c_int {
+    if out_valid.is_null() {
+        return ERR_NULL_PTR;
+    }
+    unsafe { *out_valid = 0 };
+    if redeem_norito_ptr.is_null() || vk_norito_ptr.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let redeem_bytes =
+        unsafe { slice::from_raw_parts(redeem_norito_ptr, redeem_norito_len as usize) };
+    let vk_bytes = unsafe { slice::from_raw_parts(vk_norito_ptr, vk_norito_len as usize) };
+    match verify_offline_note_redeem_recursive_with_vk(redeem_bytes, vk_bytes) {
+        Ok(valid) => {
+            unsafe { *out_valid = if valid { 1 } else { 0 } };
+            if valid { 1 } else { 0 }
+        }
+        Err(_) => ERR_OFFLINE_NOTE_VERIFY,
+    }
+}
+
+/// Cryptographically verify an Offline audit bundle's embedded recursive proof against a chain-supplied verifying key.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_offline_verify_note_audit_with_vk(
+    audit_norito_ptr: *const c_uchar,
+    audit_norito_len: c_ulong,
+    vk_norito_ptr: *const c_uchar,
+    vk_norito_len: c_ulong,
+    out_valid: *mut c_int,
+) -> c_int {
+    if out_valid.is_null() {
+        return ERR_NULL_PTR;
+    }
+    unsafe { *out_valid = 0 };
+    if audit_norito_ptr.is_null() || vk_norito_ptr.is_null() {
+        return ERR_NULL_PTR;
+    }
+    let audit_bytes = unsafe { slice::from_raw_parts(audit_norito_ptr, audit_norito_len as usize) };
+    let vk_bytes = unsafe { slice::from_raw_parts(vk_norito_ptr, vk_norito_len as usize) };
+    match verify_offline_note_audit_recursive_with_vk(audit_bytes, vk_bytes) {
+        Ok(valid) => {
+            unsafe { *out_valid = if valid { 1 } else { 0 } };
+            if valid { 1 } else { 0 }
+        }
+        Err(_) => ERR_OFFLINE_NOTE_VERIFY,
+    }
+}
+
 fn prove_offline_note_redeem_recursive(
     redeem_archive: &[u8],
 ) -> BridgeResult<iroha_data_model::offline::OfflineNoteRecursiveProof> {
@@ -6057,6 +6173,293 @@ fn prove_offline_note_audit_recursive(
         public_inputs_hash,
         proof: proof_box,
     })
+}
+
+fn prove_offline_note_redeem_recursive_with_vk(
+    redemption_norito: &[u8],
+    vk_box_norito: &[u8],
+) -> Result<Vec<u8>, String> {
+    use iroha_core::zk::{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, prove_offline_note_redeem};
+    use iroha_data_model::{
+        offline::{OfflineNoteRecursiveProof, OfflineNoteRedeem},
+        proof::{VerifyingKeyBox, VerifyingKeyId},
+    };
+
+    let redemption: OfflineNoteRedeem = norito::decode_from_bytes(redemption_norito)
+        .map_err(|err| format!("failed to decode offline note redemption: {err}"))?;
+    let vk_box: VerifyingKeyBox = norito::decode_from_bytes(vk_box_norito)
+        .map_err(|err| format!("failed to decode verifying key box: {err}"))?;
+    let proof_box = prove_offline_note_redeem(
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+        &vk_box,
+        &redemption,
+        None,
+    )
+    .map_err(|err| format!("failed to prove offline note redemption: {err}"))?;
+    let public_inputs_hash = redemption
+        .public_inputs_hash()
+        .map_err(|err| format!("failed to compute offline note redemption public inputs: {err}"))?;
+
+    let recursive = OfflineNoteRecursiveProof {
+        verifier_key_id: VerifyingKeyId::new(
+            vk_box.backend.clone(),
+            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+        ),
+        public_inputs_hash,
+        proof: proof_box,
+    };
+    norito::to_bytes(&recursive)
+        .map_err(|err| format!("failed to encode offline note recursive proof: {err}"))
+}
+
+fn prove_offline_note_audit_recursive_with_vk(
+    audit_norito: &[u8],
+    vk_box_norito: &[u8],
+) -> Result<Vec<u8>, String> {
+    use iroha_core::zk::{OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, prove_offline_note_audit};
+    use iroha_data_model::{
+        offline::{OfflineNoteAuditBundle, OfflineNoteRecursiveProof},
+        proof::{VerifyingKeyBox, VerifyingKeyId},
+    };
+
+    let audit: OfflineNoteAuditBundle = norito::decode_from_bytes(audit_norito)
+        .map_err(|err| format!("failed to decode offline note audit bundle: {err}"))?;
+    let vk_box: VerifyingKeyBox = norito::decode_from_bytes(vk_box_norito)
+        .map_err(|err| format!("failed to decode verifying key box: {err}"))?;
+    let proof_box =
+        prove_offline_note_audit(OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, &vk_box, &audit, None)
+            .map_err(|err| format!("failed to prove offline note audit: {err}"))?;
+    let public_inputs_hash = audit
+        .public_inputs_hash()
+        .map_err(|err| format!("failed to compute offline note audit public inputs: {err}"))?;
+
+    let recursive = OfflineNoteRecursiveProof {
+        verifier_key_id: VerifyingKeyId::new(
+            vk_box.backend.clone(),
+            OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID,
+        ),
+        public_inputs_hash,
+        proof: proof_box,
+    };
+    norito::to_bytes(&recursive)
+        .map_err(|err| format!("failed to encode offline note recursive proof: {err}"))
+}
+
+const ZK1_ENVELOPE_MAGIC: &[u8; 4] = b"ZK1\0";
+const ZK1_MAX_TLV_LEN: usize = 8 * 1024 * 1024;
+const ZK1_MAX_INST_COLS: usize = 64;
+const ZK1_MAX_INST_ROWS: usize = 8192;
+
+fn offline_note_pasta_instance_columns(proof_bytes: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
+    use iroha_zkp_halo2::Halo2ProofEnvelope;
+
+    if let Ok(envelope) = Halo2ProofEnvelope::from_bytes(proof_bytes) {
+        return Some(
+            envelope
+                .public_inputs
+                .into_iter()
+                .map(|input| vec![input])
+                .collect(),
+        );
+    }
+
+    zk1_instance_columns(proof_bytes)
+}
+
+fn zk1_instance_columns(bytes: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
+    if bytes.len() < 4 || &bytes[..4] != ZK1_ENVELOPE_MAGIC {
+        return None;
+    }
+    let mut cursor = &bytes[4..];
+    let mut proof_payload_present = false;
+    let mut instance_columns: Vec<Vec<[u8; 32]>> = Vec::new();
+    while !cursor.is_empty() {
+        let (tag, payload, rest) = zk1_read_tlv(cursor)?;
+        cursor = rest;
+        match &tag {
+            b"PROF" => proof_payload_present = true,
+            b"I10P" => instance_columns = zk1_read_instance_columns(payload)?,
+            _ => {}
+        }
+    }
+    if !proof_payload_present {
+        return None;
+    }
+    Some(instance_columns)
+}
+
+fn zk1_read_tlv(cursor: &[u8]) -> Option<([u8; 4], &[u8], &[u8])> {
+    if cursor.len() < 8 {
+        return None;
+    }
+    let tag: [u8; 4] = cursor[..4].try_into().ok()?;
+    let len = u32::from_le_bytes(cursor[4..8].try_into().ok()?) as usize;
+    if len > ZK1_MAX_TLV_LEN {
+        return None;
+    }
+    let end = 8usize.checked_add(len)?;
+    if end > cursor.len() {
+        return None;
+    }
+    Some((tag, &cursor[8..end], &cursor[end..]))
+}
+
+fn zk1_read_instance_columns(payload: &[u8]) -> Option<Vec<Vec<[u8; 32]>>> {
+    if payload.len() < 8 {
+        return None;
+    }
+    let cols = u32::from_le_bytes(payload[..4].try_into().ok()?) as usize;
+    let rows = u32::from_le_bytes(payload[4..8].try_into().ok()?) as usize;
+    if cols > ZK1_MAX_INST_COLS || rows > ZK1_MAX_INST_ROWS {
+        return None;
+    }
+    let values = &payload[8..];
+    let expected_len = cols.checked_mul(rows)?.checked_mul(32)?;
+    if values.len() < expected_len {
+        return None;
+    }
+    let mut columns = vec![Vec::with_capacity(rows); cols];
+    let mut offset = 0usize;
+    for _ in 0..rows {
+        for column in &mut columns {
+            let mut value = [0u8; 32];
+            value.copy_from_slice(&values[offset..offset + 32]);
+            column.push(value);
+            offset += 32;
+        }
+    }
+    Some(columns)
+}
+
+fn offline_note_vk_box_is_canonical(
+    vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+) -> Result<bool, String> {
+    use iroha_core::zk::{ZK_BACKEND_HALO2_IPA, hash_vk, offline_note_recursive_vk_box};
+
+    if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA || vk_box.bytes.is_empty() {
+        return Ok(false);
+    }
+    let canonical = offline_note_recursive_vk_box()
+        .map_err(|err| format!("failed to derive canonical offline-note verifying key: {err}"))?;
+    Ok(hash_vk(vk_box) == hash_vk(&canonical) && vk_box.bytes == canonical.bytes)
+}
+
+fn verify_offline_note_recursive_proof_with_vk(
+    proof: &iroha_data_model::offline::OfflineNoteRecursiveProof,
+    expected_public_inputs_hash: &iroha_crypto::Hash,
+    expected_public_instances: &[Vec<[u8; 32]>],
+    vk_box: &iroha_data_model::proof::VerifyingKeyBox,
+) -> Result<bool, String> {
+    use iroha_core::zk::{
+        OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID, ZK_BACKEND_HALO2_IPA, hash_vk, verify_backend,
+    };
+    use iroha_data_model::{
+        offline::OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA,
+        zk::{BackendTag, OpenVerifyEnvelope},
+    };
+
+    if &proof.public_inputs_hash != expected_public_inputs_hash {
+        return Ok(false);
+    }
+    if proof.verifier_key_id.backend.as_str() != ZK_BACKEND_HALO2_IPA
+        || proof.verifier_key_id.name != OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID
+        || proof.proof.backend.as_str() != proof.verifier_key_id.backend.as_str()
+    {
+        return Ok(false);
+    }
+    if !offline_note_vk_box_is_canonical(vk_box)? {
+        return Ok(false);
+    }
+
+    let envelope: OpenVerifyEnvelope = match norito::decode_from_bytes(&proof.proof.bytes) {
+        Ok(envelope) => envelope,
+        Err(_) => return Ok(false),
+    };
+    if envelope.backend != BackendTag::Halo2IpaPasta {
+        return Ok(false);
+    }
+    if !envelope.aux.is_empty() {
+        return Ok(false);
+    }
+    if envelope.public_inputs != OFFLINE_NOTE_RECURSIVE_PUBLIC_INPUTS_SCHEMA {
+        return Ok(false);
+    }
+    if envelope.circuit_id != OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID {
+        return Ok(false);
+    }
+    if envelope.vk_hash != hash_vk(vk_box) {
+        return Ok(false);
+    }
+
+    let Some(actual_instances) = offline_note_pasta_instance_columns(&envelope.proof_bytes) else {
+        return Ok(false);
+    };
+    if actual_instances.as_slice() != expected_public_instances {
+        return Ok(false);
+    }
+    Ok(verify_backend(
+        proof.proof.backend.as_str(),
+        &proof.proof,
+        Some(vk_box),
+    ))
+}
+
+fn verify_offline_note_redeem_recursive_with_vk(
+    redeem_norito: &[u8],
+    vk_box_norito: &[u8],
+) -> Result<bool, String> {
+    use iroha_core::zk::offline_note_redeem_instance_values;
+    use iroha_data_model::{offline::OfflineNoteRedeem, proof::VerifyingKeyBox};
+
+    let redemption: OfflineNoteRedeem = norito::decode_from_bytes(redeem_norito)
+        .map_err(|err| format!("failed to decode offline note redemption: {err}"))?;
+    let vk_box: VerifyingKeyBox = norito::decode_from_bytes(vk_box_norito)
+        .map_err(|err| format!("failed to decode verifying key box: {err}"))?;
+
+    let expected_public_inputs_hash = match redemption.public_inputs_hash() {
+        Ok(hash) => hash,
+        Err(_) => return Ok(false),
+    };
+    let expected_public_instances = match offline_note_redeem_instance_values(&redemption) {
+        Ok(values) => values.public_instance_columns(),
+        Err(_) => return Ok(false),
+    };
+
+    verify_offline_note_recursive_proof_with_vk(
+        &redemption.recursive_proof,
+        &expected_public_inputs_hash,
+        &expected_public_instances,
+        &vk_box,
+    )
+}
+
+fn verify_offline_note_audit_recursive_with_vk(
+    audit_norito: &[u8],
+    vk_box_norito: &[u8],
+) -> Result<bool, String> {
+    use iroha_core::zk::offline_note_audit_instance_values;
+    use iroha_data_model::{offline::OfflineNoteAuditBundle, proof::VerifyingKeyBox};
+
+    let audit: OfflineNoteAuditBundle = norito::decode_from_bytes(audit_norito)
+        .map_err(|err| format!("failed to decode offline note audit bundle: {err}"))?;
+    let vk_box: VerifyingKeyBox = norito::decode_from_bytes(vk_box_norito)
+        .map_err(|err| format!("failed to decode verifying key box: {err}"))?;
+
+    let expected_public_inputs_hash = match audit.public_inputs_hash() {
+        Ok(hash) => hash,
+        Err(_) => return Ok(false),
+    };
+    let expected_public_instances = match offline_note_audit_instance_values(&audit) {
+        Ok(values) => values.public_instance_columns(),
+        Err(_) => return Ok(false),
+    };
+
+    verify_offline_note_recursive_proof_with_vk(
+        &audit.recursive_proof,
+        &expected_public_inputs_hash,
+        &expected_public_instances,
+        &vk_box,
+    )
 }
 
 /// Legacy unanchored Kagemusha compact-token prover entry point.
@@ -18720,6 +19123,126 @@ fn java_native_verify_detached(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_native_offline_prove_note_redeem_with_vk(
+    env: &mut jni::JNIEnv<'_>,
+    redeem_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let redeem_bytes = read_java_byte_array(env, &redeem_norito, "redeemNorito")
+            .ok_or_else(|| "invalid offline note redemption bytes".to_string())?;
+        let vk_box_bytes = read_java_byte_array(env, &vk_box_norito, "vkBoxNorito")
+            .ok_or_else(|| "invalid verifying key box bytes".to_string())?;
+        let recursive_archive =
+            prove_offline_note_redeem_recursive_with_vk(&redeem_bytes, &vk_box_bytes)?;
+        let array = env
+            .byte_array_from_slice(&recursive_archive)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_offline_prove_note_audit_with_vk(
+    env: &mut jni::JNIEnv<'_>,
+    audit_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let audit_bytes = read_java_byte_array(env, &audit_norito, "auditNorito")
+            .ok_or_else(|| "invalid offline note audit bundle bytes".to_string())?;
+        let vk_box_bytes = read_java_byte_array(env, &vk_box_norito, "vkBoxNorito")
+            .ok_or_else(|| "invalid verifying key box bytes".to_string())?;
+        let recursive_archive =
+            prove_offline_note_audit_recursive_with_vk(&audit_bytes, &vk_box_bytes)?;
+        let array = env
+            .byte_array_from_slice(&recursive_archive)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_offline_verify_note_redeem_with_vk(
+    env: &mut jni::JNIEnv<'_>,
+    redeem_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    let result = (|| -> Result<jni::sys::jboolean, String> {
+        let redeem_bytes = read_java_byte_array(env, &redeem_norito, "redeemNorito")
+            .ok_or_else(|| "invalid offline note redemption bytes".to_string())?;
+        let vk_box_bytes = read_java_byte_array(env, &vk_box_norito, "vkBoxNorito")
+            .ok_or_else(|| "invalid verifying key box bytes".to_string())?;
+        let valid = verify_offline_note_redeem_recursive_with_vk(&redeem_bytes, &vk_box_bytes)?;
+        Ok(if valid { 1 } else { 0 })
+    })();
+    match result {
+        Ok(valid) => valid,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            0
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_offline_verify_note_audit_with_vk(
+    env: &mut jni::JNIEnv<'_>,
+    audit_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    let result = (|| -> Result<jni::sys::jboolean, String> {
+        let audit_bytes = read_java_byte_array(env, &audit_norito, "auditNorito")
+            .ok_or_else(|| "invalid offline note audit bundle bytes".to_string())?;
+        let vk_box_bytes = read_java_byte_array(env, &vk_box_norito, "vkBoxNorito")
+            .ok_or_else(|| "invalid verifying key box bytes".to_string())?;
+        let valid = verify_offline_note_audit_recursive_with_vk(&audit_bytes, &vk_box_bytes)?;
+        Ok(if valid { 1 } else { 0 })
+    })();
+    match result {
+        Ok(valid) => valid,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            0
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_kagemusha_prove_verified_compact_payment_token_with_records(
     record_bundle_archive: &[u8],
 ) -> Result<Vec<u8>, String> {
@@ -19596,6 +20119,74 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_privacy_Privacy
 ))]
 #[allow(clippy::missing_safety_doc)]
 #[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeProveNoteRedeemWithVk(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    redeem_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_offline_prove_note_redeem_with_vk(&mut env, redeem_norito, vk_box_norito)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeProveNoteAuditWithVk(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    audit_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_offline_prove_note_audit_with_vk(&mut env, audit_norito, vk_box_norito)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeVerifyNoteRedeemWithVk(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    redeem_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_offline_verify_note_redeem_with_vk(&mut env, redeem_norito, vk_box_norito)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_NativeOfflineNoteProver_nativeVerifyNoteAuditWithVk(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    audit_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_offline_verify_note_audit_with_vk(&mut env, audit_norito, vk_box_norito)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
 pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCompactPaymentTokenProver_nativeProveVerifiedCompactPaymentTokenWithRecords(
     mut env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
@@ -19958,6 +20549,74 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRe
         norito::to_bytes(&instruction)
             .map_err(|err| format!("failed to encode redeem instruction: {err}"))
     })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeProveNoteRedeemWithVk(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    redeem_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_offline_prove_note_redeem_with_vk(&mut env, redeem_norito, vk_box_norito)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeProveNoteAuditWithVk(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    audit_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_offline_prove_note_audit_with_vk(&mut env, audit_norito, vk_box_norito)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeVerifyNoteRedeemWithVk(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    redeem_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_offline_verify_note_redeem_with_vk(&mut env, redeem_norito, vk_box_norito)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_offline_NativeOfflineNoteProver_nativeVerifyNoteAuditWithVk(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    audit_norito: jni::objects::JByteArray<'_>,
+    vk_box_norito: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_offline_verify_note_audit_with_vk(&mut env, audit_norito, vk_box_norito)
 }
 
 #[cfg(any(

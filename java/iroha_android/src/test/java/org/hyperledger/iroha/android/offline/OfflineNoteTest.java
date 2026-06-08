@@ -108,7 +108,7 @@ public final class OfflineNoteTest {
         string(certificates, "sender_payload_hash"),
         hex(sender.payloadHash()),
         "sender certificate payload hash");
-    assertTrue(verifier.verifyCertificate(sender), "fixture sender certificate is trusted");
+    assertTrue(verifier.verifyIssuerCertificate(sender), "fixture sender certificate is trusted");
 
     final byte[] tamperedSignature = sender.issuerSignature();
     tamperedSignature[0] = (byte) (tamperedSignature[0] ^ 0x01);
@@ -126,14 +126,15 @@ public final class OfflineNoteTest {
             sender.assertionUsageCountLimit(),
             sender.oneUse(),
             tamperedSignature);
-    assertTrue(!verifier.verifyCertificate(tampered), "tampered certificate signature is rejected");
     assertTrue(
-        !new RejectingOfflineNoteCertificateVerifier().verifyCertificate(sender),
+        !verifier.verifyIssuerCertificate(tampered), "tampered certificate signature is rejected");
+    assertTrue(
+        !new RejectingOfflineNoteCertificateVerifier().verifyIssuerCertificate(sender),
         "default certificate verifier rejects");
     assertTrue(
         !new Ed25519OfflineNoteCertificateVerifier(
                 Collections.singletonList(filledBytes(32, 0x42)))
-            .verifyCertificate(sender),
+            .verifyIssuerCertificate(sender),
         "wrong issuer root rejects");
   }
 
@@ -2551,11 +2552,12 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_001_200L);
+            () -> 1_700_000_001_200L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
     final OfflineNoteReceiveRequest receiveRequest =
         recipientWallet.prepareReceive(
             assetDefinitionFromAssetId(string(obj(chain, "issue"), "asset_id")),
@@ -2605,12 +2607,13 @@ public final class OfflineNoteTest {
             null,
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
             () -> 1_700_000_001_250L,
-            new OfflineBearerCashPolicyV1(1, 32, 2048, 12288, 20, 8, 40));
+            new OfflineBearerCashPolicyV1(1, 32, 2048, 12288, 20, 8, 40),
+            new StaticOwnerCertificateSigner(recipientCertificate));
     final OfflineNoteReceiveRequest receiveRequest =
         recipientWallet.prepareReceive(
             assetDefinitionFromAssetId(string(obj(chain, "issue"), "asset_id")),
@@ -2708,7 +2711,7 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "source_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -2959,7 +2962,7 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "source_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -3031,7 +3034,7 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "source_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -3071,13 +3074,14 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Arrays.asList(
                     hexBytes(string(derivation, "token_nonce_hex")),
                     hexBytes(string(derivation, "change_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> longValue(payment, "created_at_ms"));
+            () -> longValue(payment, "created_at_ms"),
+            new StaticOwnerCertificateSigner(senderCertificate));
     final RecordingTransactionSubmitter recipientSubmitter = new RecordingTransactionSubmitter();
     final OfflineNoteWallet recipientWallet =
         new OfflineNoteWallet(
@@ -3089,11 +3093,12 @@ public final class OfflineNoteTest {
             recipientSubmitter,
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_001_200L);
+            () -> 1_700_000_001_200L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
 
     final OfflineNoteReceiveRequest receiveRequest =
         recipientWallet.prepareReceive(
@@ -3186,13 +3191,14 @@ public final class OfflineNoteTest {
             syncResolver,
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Arrays.asList(
                     hexBytes(string(derivation, "token_nonce_hex")),
                     hexBytes(string(derivation, "change_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_000L);
+            () -> 1_700_000_002_000L,
+            new StaticOwnerCertificateSigner(senderCertificate));
     final OfflineNoteWallet recipientWallet =
         new OfflineNoteWallet(
             string(derivation, "chain_id"),
@@ -3203,11 +3209,12 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_100L);
+            () -> 1_700_000_002_100L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
 
     final OfflineNoteReceiveRequest receiveRequest =
         recipientWallet.prepareReceive(
@@ -3267,13 +3274,14 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Arrays.asList(
                     hexBytes(string(derivation, "token_nonce_hex")),
                     hexBytes(string(derivation, "change_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_200L);
+            () -> 1_700_000_002_200L,
+            new StaticOwnerCertificateSigner(senderCertificate));
     final OfflineNoteWallet recipientWallet =
         new OfflineNoteWallet(
             string(derivation, "chain_id"),
@@ -3284,11 +3292,12 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_300L);
+            () -> 1_700_000_002_300L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
 
     final OfflineNoteReceiveRequest receiveRequest =
         recipientWallet.prepareReceive(
@@ -3344,11 +3353,12 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "token_nonce_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_400L);
+            () -> 1_700_000_002_400L,
+            new StaticOwnerCertificateSigner(senderCertificate));
     final OfflineNoteWallet recipientWallet =
         new OfflineNoteWallet(
             string(derivation, "chain_id"),
@@ -3359,11 +3369,12 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_500L);
+            () -> 1_700_000_002_500L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
 
     final OfflineNoteReceiveRequest receiveRequest =
         recipientWallet.prepareReceive(
@@ -3399,10 +3410,11 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(Collections.emptyList()),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_600L);
+            () -> 1_700_000_002_600L,
+            new StaticOwnerCertificateSigner(senderCertificate));
 
     assertThrows(
         () -> restoredWallet.pay(receiveRequest),
@@ -3439,7 +3451,7 @@ public final class OfflineNoteTest {
             submitter,
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(Collections.emptyList()),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
             () -> 1_700_000_004_000L);
@@ -3500,10 +3512,11 @@ public final class OfflineNoteTest {
             null,
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(Collections.emptyList()),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_710L);
+            () -> 1_700_000_002_710L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
     assertThrows(
         () -> wrongAccountReceiveWallet.prepareReceive(assetDefinitionId, string(chainRedeem, "amount")),
         "valid receive certificate for the wrong account should fail");
@@ -3520,13 +3533,14 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Arrays.asList(
                     hexBytes(string(derivation, "token_nonce_hex")),
                     hexBytes(string(derivation, "change_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> longValue(payment, "created_at_ms"));
+            () -> longValue(payment, "created_at_ms"),
+            new StaticOwnerCertificateSigner(senderCertificate));
     final OfflineNoteWallet recipientWallet =
         new OfflineNoteWallet(
             string(derivation, "chain_id"),
@@ -3537,11 +3551,12 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_800L);
+            () -> 1_700_000_002_800L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
 
     final OfflineNoteReceiveRequest receiveRequest =
         recipientWallet.prepareReceive(assetDefinitionId, string(chainRedeem, "amount"));
@@ -3593,11 +3608,12 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Arrays.asList(filledBytes(32, 0x21), filledBytes(32, 0x22))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> longValue(payment, "created_at_ms") + 3);
+            () -> longValue(payment, "created_at_ms") + 3,
+            new StaticOwnerCertificateSigner(senderCertificate));
     assertThrows(
         () -> assetOwnerSubstitutionSender.pay(assetOwnerSubstitution),
         "receive request asset owner substitution should fail certificate binding");
@@ -3614,7 +3630,7 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(Collections.emptyList()),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
             () -> 1_700_000_002_900L);
@@ -3633,7 +3649,7 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(Collections.emptyList()),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
             () -> 1_700_000_002_910L);
@@ -3652,11 +3668,12 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Arrays.asList(filledBytes(32, 0x31), filledBytes(32, 0x32))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> longValue(payment, "created_at_ms") + 1);
+            () -> longValue(payment, "created_at_ms") + 1,
+            new StaticOwnerCertificateSigner(senderCertificate));
     final OfflineNoteReceiveRequest commitmentSubstitution =
         new OfflineNoteReceiveRequest(
             receiveRequest.chainId(),
@@ -3683,11 +3700,12 @@ public final class OfflineNoteTest {
             new RecordingTransactionSubmitter(),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Arrays.asList(filledBytes(32, 0x41), filledBytes(32, 0x42))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> longValue(payment, "created_at_ms") + 2);
+            () -> longValue(payment, "created_at_ms") + 2,
+            new StaticOwnerCertificateSigner(senderCertificate));
     final OfflineNoteReceiveRequest amountSubstitution =
         new OfflineNoteReceiveRequest(
             receiveRequest.chainId(),
@@ -3792,13 +3810,14 @@ public final class OfflineNoteTest {
             new RecordingSyncResolver(senderResolutions),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Arrays.asList(
                     hexBytes(string(derivation, "token_nonce_hex")),
                     hexBytes(string(derivation, "change_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_400L);
+            () -> 1_700_000_002_400L,
+            new StaticOwnerCertificateSigner(senderCertificate));
     final InMemoryOfflineNoteStore recipientStore = new InMemoryOfflineNoteStore();
     final Map<String, OfflineNoteWalletNoteState> recipientResolutions = new LinkedHashMap<>();
     recipientResolutions.put(
@@ -3814,11 +3833,12 @@ public final class OfflineNoteTest {
             new RecordingSyncResolver(recipientResolutions),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(
                 Collections.singletonList(hexBytes(string(derivation, "recipient_note_secret_hex")))),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
-            () -> 1_700_000_002_500L);
+            () -> 1_700_000_002_500L,
+            new StaticOwnerCertificateSigner(recipientCertificate));
 
     final OfflineNoteReceiveRequest receiveRequest =
         recipientWallet.prepareReceive(
@@ -3870,7 +3890,7 @@ public final class OfflineNoteTest {
             new RecordingSyncResolver(redeemResolutions),
             BindingProofProvider.INSTANCE,
             BindingProofVerifier.INSTANCE,
-            certificateVerifier(fixture),
+            fixtureOwnerCertificateVerifier(fixture),
             new QueueRandomSource(Collections.emptyList()),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
             () -> 1_700_000_002_600L);
@@ -4071,6 +4091,23 @@ public final class OfflineNoteTest {
       final Map<String, Object> fixture) {
     return new Ed25519OfflineNoteCertificateVerifier(
         Collections.singletonList(base64Bytes(string(fixture, "offline_fi_public_key_base64"))));
+  }
+
+  private static OfflineNoteCertificateVerifier fixtureOwnerCertificateVerifier(
+      final Map<String, Object> fixture) {
+    final OfflineNoteCertificateVerifier delegate = certificateVerifier(fixture);
+    return new OfflineNoteCertificateVerifier() {
+      @Override
+      public boolean verifyIssuerCertificate(final OfflineNote.KeyCertificate certificate) {
+        return delegate.verifyIssuerCertificate(certificate);
+      }
+
+      @Override
+      public boolean verifyOwnerCertificate(final OfflineNote.KeyCertificate certificate) {
+        return delegate.verifyOwnerCertificate(certificate)
+            || delegate.verifyIssuerCertificate(certificate);
+      }
+    };
   }
 
   private static OfflineNote.KeyCertificate tamperedSignatureCertificate(
@@ -4475,6 +4512,20 @@ public final class OfflineNoteTest {
 
     @Override
     public OfflineNote.KeyCertificate currentKeyCertificate() {
+      return certificate;
+    }
+  }
+
+  private static final class StaticOwnerCertificateSigner
+      implements OfflineNoteOwnerCertificateSigner {
+    private final OfflineNote.KeyCertificate certificate;
+
+    private StaticOwnerCertificateSigner(final OfflineNote.KeyCertificate certificate) {
+      this.certificate = certificate;
+    }
+
+    @Override
+    public OfflineNote.KeyCertificate freshOwnerCertificate(final String accountId) {
       return certificate;
     }
   }
