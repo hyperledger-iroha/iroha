@@ -26,7 +26,6 @@ and completed history lives in [`status.md`](./status.md).
   unsupported for now.
   Retired platform-family lanes are explicitly outside SCCP launch support for
   now.
-  Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
   Reintroducing any such family requires a new design pass, fresh fixtures, and
   explicit governance approval rather than reviving diagnostic code paths.
 - SCCP active-launch readiness metadata must stay canonical: EVM live source

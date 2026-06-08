@@ -6920,6 +6920,16 @@ impl SoraServiceDeploymentStateV1 {
                 field: "current_service_version",
             });
         }
+        validate_soracloud_digest_hash(
+            "sora service deployment state",
+            "current_service_manifest_hash",
+            self.current_service_manifest_hash,
+        )?;
+        validate_soracloud_digest_hash(
+            "sora service deployment state",
+            "current_container_manifest_hash",
+            self.current_container_manifest_hash,
+        )?;
 
         if self.revision_count == 0 {
             return Err(SoracloudManifestError::InvalidField {
@@ -7535,6 +7545,11 @@ impl SoraServiceStateEntryV1 {
                 reason: "must equal the hash of payload bytes".to_string(),
             });
         }
+        validate_soracloud_digest_hash(
+            "sora service state entry",
+            "governance_tx_hash",
+            self.governance_tx_hash,
+        )?;
         validate_service_state_fhe_bound_metadata(
             self.encryption,
             self.fhe_residual_multiple_bound,
@@ -11578,6 +11593,16 @@ impl SoraAppInfraServiceRefV1 {
                 field: "service_version",
             });
         }
+        validate_soracloud_digest_hash(
+            "sora app infra service ref",
+            "service_manifest_hash",
+            self.service_manifest_hash,
+        )?;
+        validate_soracloud_digest_hash(
+            "sora app infra service ref",
+            "container_manifest_hash",
+            self.container_manifest_hash,
+        )?;
         validate_optional_nonempty("sora app infra service ref", "shard", self.shard.as_deref())?;
         let mut route_paths = BTreeSet::new();
         for route in &self.routes {

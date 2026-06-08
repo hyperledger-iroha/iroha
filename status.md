@@ -2,6 +2,32 @@
 
 Last updated: 2026-06-08
 
+## 2026-06-08 Sumeragi BlockCreated admission aggregate exactness
+
+- Split the direct `BlockCreated` payload admission model into
+  `BlockCreatedAdmissionExactness`, composing admission outcome, state
+  ownership, replay/repair, evidence/proposal-context, and commit-wakeup
+  obligations across the bounded 54-mutation model.
+- Wired `block-created-admission-fast` to the aggregate invariant while keeping
+  `Safety` as the aggregate alias used by expected-failure configs.
+- Updated the formal README and roadmap inventory to document the aggregate
+  exactness fast mode.
+- Validation:
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 target/apalache/toolchains/v0.52.2/bin/apalache-mc typecheck docs/formal/sumeragi/SumeragiBlockCreatedAdmissionGate.tla`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" bash scripts/formal/sumeragi_tlc.sh block-created-admission-fast`
+    (`626` states generated, `25` distinct states)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh block-created-admission-fast`
+    (`BlockCreatedAdmissionExactness` produced `33` verification conditions;
+    the checker inspected `56` state invariants at state `0` and `34` at state
+    `1`)
+  - `bash -n ci/check_sumeragi_formal_expected_failures.sh scripts/formal/sumeragi_apalache.sh scripts/formal/sumeragi_tlc.sh`
+  - `python3 -m py_compile scripts/formal/check_sumeragi_formal_coverage.py pytests/scripts/sumeragi_formal_coverage_test.py`
+  - `python3 -m pytest pytests/scripts/sumeragi_formal_coverage_test.py`
+    (`115` passed)
+  - `python3 scripts/formal/check_sumeragi_formal_coverage.py`
+    (`504` PR modes, `9842` expected-failure modes, `1` scheduled/manual mode,
+    `10347` documented modes, `499` TLC fast modes, `9842` TLC mutation modes)
+
 ## 2026-06-08 SCCP retired platform-family launch-scope note
 
 - Retired platform-family lanes are explicitly outside SCCP launch support for
