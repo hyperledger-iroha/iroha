@@ -2118,6 +2118,40 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("expected '<sha256> <path>'", rendered)
         self.assertNotIn(str(slot), rendered)
 
+    def test_parse_sha256_manifest_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                slot = create_slot(root, "slot-a")
+                manifest_path = slot / "sha256sum.txt"
+                replacement = root / "replacement-sha256sum.txt"
+                write_text(replacement, "not-a-manifest-line\n")
+                swapped = False
+
+                def swapping_stat(path: Path, *args, **kwargs):
+                    nonlocal swapped
+                    result = original_stat(path, *args, **kwargs)
+                    if path == manifest_path and not swapped:
+                        replacement.replace(manifest_path)
+                        swapped = True
+                    return result
+
+                path_type.stat = swapping_stat
+
+                entries, errors = device_lab.parse_sha256_manifest(slot)
+                rendered = "\n".join(errors)
+        finally:
+            path_type.stat = original_stat
+
+        self.assertEqual(entries, {})
+        self.assertEqual(errors, ["sha256sum.txt changed while being read"])
+        self.assertNotIn("expected '<sha256> <path>'", rendered)
+
     def test_verify_sha256_manifest_rejects_secret_slot_path_directly_before_traversal(
         self,
     ) -> None:
@@ -7723,26 +7757,30 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(temp_files, [])
 
     def test_signer_write_json_rejects_readback_mismatch(self) -> None:
-        original_read_text = Path.read_text
+        original_read_output_text = evidence_signer._read_existing_output_text
 
         try:
             with tempfile.TemporaryDirectory() as temp:
                 output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
 
-                def mismatching_read_text(path: Path, *args, **kwargs) -> str:
+                def mismatching_read_output_text(
+                    path: Path,
+                    expected_stat: os.stat_result,
+                    label: str,
+                ) -> tuple[str | None, list[str]]:
                     if path == output:
-                        return "mismatched signed evidence\n"
-                    return original_read_text(path, *args, **kwargs)
+                        return "mismatched signed evidence\n", []
+                    return original_read_output_text(path, expected_stat, label)
 
-                Path.read_text = mismatching_read_text
+                evidence_signer._read_existing_output_text = mismatching_read_output_text
                 errors = evidence_signer._write_json(
                     output,
                     {"schema": "test"},
                     "signed evidence output path",
                 )
-                output_text = original_read_text(output, encoding="utf-8")
+                output_text = output.read_text(encoding="utf-8")
         finally:
-            Path.read_text = original_read_text
+            evidence_signer._read_existing_output_text = original_read_output_text
 
         self.assertEqual(
             errors,
@@ -7751,24 +7789,31 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(output_text, '{\n  "schema": "test"\n}\n')
 
     def test_signer_write_json_rejects_readback_failure(self) -> None:
-        original_read_text = Path.read_text
+        original_read_output_text = evidence_signer._read_existing_output_text
 
-        with tempfile.TemporaryDirectory() as temp:
-            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
 
-            def failing_read_text(path: Path, *args, **kwargs) -> str:
-                if path == output:
-                    raise OSError("simulated signed evidence readback failure")
-                return original_read_text(path, *args, **kwargs)
+                def failing_read_output_text(
+                    path: Path,
+                    _expected_stat: os.stat_result,
+                    label: str,
+                ) -> tuple[str | None, list[str]]:
+                    if path == output:
+                        return None, [f"{label} write verification failed"]
+                    return original_read_output_text(path, _expected_stat, label)
 
-            with mock.patch.object(Path, "read_text", failing_read_text):
+                evidence_signer._read_existing_output_text = failing_read_output_text
                 errors = evidence_signer._write_json(
                     output,
                     {"schema": "test"},
                     "signed evidence output path",
                 )
-            output_text = original_read_text(output, encoding="utf-8")
-            temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
+                output_text = output.read_text(encoding="utf-8")
+                temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
+        finally:
+            evidence_signer._read_existing_output_text = original_read_output_text
 
         self.assertEqual(
             errors,
@@ -7776,6 +7821,39 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertEqual(output_text, '{\n  "schema": "test"\n}\n')
         self.assertEqual(temp_files, [])
+
+    def test_signer_write_json_rejects_regular_file_swap_before_readback(
+        self,
+    ) -> None:
+        original_open = Path.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "slot" / "evidence" / "signed-evidence.json"
+            replacement = root / "replacement-signed-evidence.json"
+            write_text(replacement, '{"schema":"replacement"}\n')
+            swapped = False
+
+            def swapping_open(path: Path, *args, **kwargs):
+                nonlocal swapped
+                if path == output and not swapped:
+                    replacement.replace(output)
+                    swapped = True
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", swapping_open):
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+            output_text = output.read_text(encoding="utf-8")
+
+        self.assertEqual(
+            errors,
+            ["signed evidence output path changed while being read"],
+        )
+        self.assertEqual(output_text, '{"schema":"replacement"}\n')
 
     def test_signer_write_json_rejects_symlink_swap_after_replace(self) -> None:
         original_validate = evidence_signer._validate_existing_json_output_path
@@ -8100,7 +8178,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
             write_text(output, '{"schema":"test"}\n')
 
-            digest, errors = with_read_bytes_failure(
+            digest, errors = with_open_failure(
                 output,
                 lambda: evidence_signer._output_file_sha256(
                     output,
@@ -8110,6 +8188,40 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertIsNone(digest)
         self.assertEqual(errors, ["signed evidence output path could not be read"])
+
+    def test_signer_output_digest_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        original_open = Path.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / "slot" / "evidence" / "signed-evidence.json"
+            replacement = root / "replacement-signed-evidence.json"
+            write_text(output, '{"schema":"test"}\n')
+            write_text(replacement, '{"schema":"replacement"}\n')
+            swapped = False
+
+            def swapping_open(path: Path, *args, **kwargs):
+                nonlocal swapped
+                if path == output and not swapped:
+                    replacement.replace(output)
+                    swapped = True
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", swapping_open):
+                digest, errors = evidence_signer._output_file_sha256(
+                    output,
+                    "signed evidence output path",
+                )
+            output_text = output.read_text(encoding="utf-8")
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            ["signed evidence output path changed while being read"],
+        )
+        self.assertEqual(output_text, '{"schema":"replacement"}\n')
 
     def test_signer_helper_revalidates_output_digest_before_slot_json_update(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -8328,49 +8440,60 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(temp_files, [])
 
     def test_signer_write_text_rejects_readback_mismatch(self) -> None:
-        original_read_text = Path.read_text
+        original_read_output_text = evidence_signer._read_existing_output_text
 
         try:
             with tempfile.TemporaryDirectory() as temp:
                 output = Path(temp) / "slot" / "sha256sum.txt"
 
-                def mismatching_read_text(path: Path, *args, **kwargs) -> str:
+                def mismatching_read_output_text(
+                    path: Path,
+                    expected_stat: os.stat_result,
+                    label: str,
+                ) -> tuple[str | None, list[str]]:
                     if path == output:
-                        return "mismatched manifest\n"
-                    return original_read_text(path, *args, **kwargs)
+                        return "mismatched manifest\n", []
+                    return original_read_output_text(path, expected_stat, label)
 
-                Path.read_text = mismatching_read_text
+                evidence_signer._read_existing_output_text = mismatching_read_output_text
                 errors = evidence_signer._write_text(
                     output,
                     "replacement\n",
                     "sha256sum.txt",
                 )
-                output_text = original_read_text(output, encoding="utf-8")
+                output_text = output.read_text(encoding="utf-8")
         finally:
-            Path.read_text = original_read_text
+            evidence_signer._read_existing_output_text = original_read_output_text
 
         self.assertEqual(errors, ["sha256sum.txt write verification failed"])
         self.assertEqual(output_text, "replacement\n")
 
     def test_signer_write_text_rejects_readback_failure(self) -> None:
-        original_read_text = Path.read_text
+        original_read_output_text = evidence_signer._read_existing_output_text
 
-        with tempfile.TemporaryDirectory() as temp:
-            output = Path(temp) / "slot" / "sha256sum.txt"
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "sha256sum.txt"
 
-            def failing_read_text(path: Path, *args, **kwargs) -> str:
-                if path == output:
-                    raise OSError("simulated sha256sum readback failure")
-                return original_read_text(path, *args, **kwargs)
+                def failing_read_output_text(
+                    path: Path,
+                    _expected_stat: os.stat_result,
+                    label: str,
+                ) -> tuple[str | None, list[str]]:
+                    if path == output:
+                        return None, [f"{label} write verification failed"]
+                    return original_read_output_text(path, _expected_stat, label)
 
-            with mock.patch.object(Path, "read_text", failing_read_text):
+                evidence_signer._read_existing_output_text = failing_read_output_text
                 errors = evidence_signer._write_text(
                     output,
                     "replacement\n",
                     "sha256sum.txt",
                 )
-            output_text = original_read_text(output, encoding="utf-8")
-            temp_files = list(output.parent.glob(".sha256sum.txt.*.tmp"))
+                output_text = output.read_text(encoding="utf-8")
+                temp_files = list(output.parent.glob(".sha256sum.txt.*.tmp"))
+        finally:
+            evidence_signer._read_existing_output_text = original_read_output_text
 
         self.assertEqual(errors, ["sha256sum.txt write verification failed"])
         self.assertEqual(output_text, "replacement\n")

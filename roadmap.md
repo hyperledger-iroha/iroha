@@ -597,7 +597,8 @@ and completed history lives in [`status.md`](./status.md).
 				  digest reads, writes signed-evidence and `sha256sum.txt` outputs
 				  through fsynced same-directory temp files with atomic replace and
 				  readback verification, revalidates signed-evidence output shape before
-				  hashing the written artifact back into `slot.json`, classifies slot directory
+				  hashing the written artifact back into `slot.json` and binds that
+				  digest read to the opened file identity, classifies slot directory
 				  and parent metadata with `lstat()` before parsing slot metadata or rewriting
 				  manifests, preflights slot/artifact shape before parsing slot
 		  metadata, makes lower-level direct symlink/hardlink/regular-file artifact
@@ -625,7 +626,8 @@ and completed history lives in [`status.md`](./status.md).
 		  plus symlinked slot roots and ancestors before direct SHA-256
 		  manifest parser/verifier reads, rejects unreadable-metadata
 		  and hardlinked `sha256sum.txt` manifests before direct manifest parsing
-		  or discovery,
+		  or discovery, binds `sha256sum.txt` parser bytes to the opened file
+		  identity so post-preflight swaps fail closed,
 		  makes scanner and rollup missing-root decisions consume
 		  `lstat()`-classified root presence instead of `Path.exists()`,
 		  makes scanner slot inventory classify expected top-level directories,
@@ -796,7 +798,11 @@ and completed history lives in [`status.md`](./status.md).
 	  returning artifact digests, with the readiness, lineage-helper, and
 	  compact-key helper readers binding each digest/text read to the first
 	  validated `lstat()` identity so post-preflight regular-file replacements
-	  fail closed, and with read-time byte failures reported as
+	  fail closed, and the Reserved-lineage all-zero plus compact-key
+	  placeholder checks consume the prefix captured by the same artifact hash
+	  read instead of reopening the artifact path. The compact key evidence helper
+	  also hashes, sizes, decodes, and parses the generator log from one opened
+	  regular file, with read-time byte failures reported as
 	  structured blockers instead of tracebacks. Ready rollup summaries also publish
 		  sanitized SHA-256 maps for the
 		  accepted Reserved-lineage artifacts and proof log without preserving local
@@ -2376,6 +2382,8 @@ and completed history lives in [`status.md`](./status.md).
 	  ASCII-only rail `message_type` digit validation across direct receipt
 	  verification, evidence replay, readiness replay, and XSD profile catalogs,
 	  ASCII-only XSD profile-catalog `message_def_id` and version validation,
+	  overlong XSD profile-catalog enum values rejected before unknown-value echo,
+	  overlong XSD/XML schema and fixture identifiers rejected before mismatch echo,
 	  plus generic evidence/readiness archive/canary kind, filename, or metadata
 	  mismatch blockers that do not print receipt kind values, receipt leaf names, or invalid metadata tuples,
 	  rail receipt metadata recording for nullable raw receipt fields and retained

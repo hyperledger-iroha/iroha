@@ -774,14 +774,14 @@ def parse_sha256_manifest(slot_path: Path) -> tuple[dict[str, str], list[str]]:
     errors: list[str] = []
     manifest_path = slot_path / "sha256sum.txt"
     try:
-        manifest_mode = manifest_path.lstat().st_mode
+        manifest_stat = manifest_path.lstat()
     except FileNotFoundError:
         return entries, ["missing sha256sum.txt"]
     except OSError:
         return entries, ["sha256sum.txt file metadata could not be read"]
-    if stat.S_ISLNK(manifest_mode):
+    if stat.S_ISLNK(manifest_stat.st_mode):
         return entries, ["sha256sum.txt must not be a symlink"]
-    if not stat.S_ISREG(manifest_mode):
+    if not stat.S_ISREG(manifest_stat.st_mode):
         return entries, ["sha256sum.txt must be a regular file"]
     try:
         if manifest_path.stat().st_nlink > 1:
@@ -790,7 +790,27 @@ def parse_sha256_manifest(slot_path: Path) -> tuple[dict[str, str], list[str]]:
         return entries, ["sha256sum.txt hardlink metadata could not be read"]
 
     try:
-        lines = manifest_path.read_text(encoding="utf-8").splitlines()
+        with manifest_path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = manifest_path.lstat()
+            expected_identity = (manifest_stat.st_dev, manifest_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if stat.S_ISLNK(path_stat.st_mode):
+                return entries, ["sha256sum.txt must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return entries, ["sha256sum.txt must be a regular file"]
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return entries, ["sha256sum.txt changed while being read"]
+            if open_stat.st_nlink > 1:
+                return entries, ["sha256sum.txt must not be hardlinked"]
+            payload = handle.read()
+            final_path_stat = manifest_path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return entries, ["sha256sum.txt changed while being read"]
+        lines = payload.decode("utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
         return entries, ["sha256sum.txt could not be read"]
     for line_no, raw in enumerate(lines, start=1):

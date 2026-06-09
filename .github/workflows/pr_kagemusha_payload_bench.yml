@@ -456,6 +456,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-read-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-relative-ancestor-is-symlink-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-shape-terminal
@@ -543,6 +544,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-file-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-read-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-output-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-write
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-write-failure
@@ -688,6 +690,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-post-write-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-artifact-open-path-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-prefix-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-parent-create-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-file-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-hardlink-metadata-failure
@@ -697,6 +700,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-post-write-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-artifact-open-path-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-prefix-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-dir-create-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-write-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-failure

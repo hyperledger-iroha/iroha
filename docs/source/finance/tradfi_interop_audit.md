@@ -309,7 +309,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `targetNamespace` attributes before schema namespace mismatch diagnostics can
   echo schema-provided attribute values, with the same label-only treatment for
   XSD/fixture payload identifiers, XML fixture namespace/name identifiers, and
-  schema-root attribute names, scans XML fixture contents before optional
+  schema-root attribute names, caps those XSD/XML schema and fixture identifiers
+  before schema/root mismatch diagnostics can print overlong ASCII spellings,
+  scans XML fixture contents before optional
   `xmllint` validation, and redacts secret-looking, control-bearing, or
   non-ASCII validator output before composing XSD preflight diagnostics,
   records manifest, schema, fixture, profile source-file, and embedded catalog
@@ -683,6 +685,11 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   catalogs now use ASCII-only rail message-type digits, and evidence/readiness
   archive/canary kind, filename, or metadata mismatch blockers avoid printing
   receipt kind values, receipt leaf names, or full metadata tuples.
+  XSD profile-catalog enum values such as rails, embedded signature policies,
+  reference datasets, and structured-address modes also reject overlong ASCII
+  spellings before unknown-value diagnostics can print them.
+  XSD/XML schema and fixture identifiers are capped before schema/root mismatch
+  diagnostics can print overlong ASCII payload names or namespace URIs.
   XSD profile-catalog `message_def_id` and version entries also require
   ASCII-only digits before missing-schema or skipped-version classification.
   Receipt verifier, evidence, and readiness `receipt_kind` values reject

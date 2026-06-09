@@ -130,7 +130,9 @@ material and non-ASCII material before schema namespace mismatch diagnostics can
 echo schema-provided attribute values.
 XSD and XML payload identifiers, XML fixture namespace/name identifiers, and
 schema-root attribute names now use label-only secret-looking or printable-ASCII
-diagnostics instead of echoing schema-provided names or namespace URIs.
+diagnostics instead of echoing schema-provided names or namespace URIs. These
+schema and fixture identifiers also reject overlong ASCII spellings before
+schema/root mismatch diagnostics can print them.
 XML fixture contents are scanned before optional `xmllint` validation, and
 secret-looking, control-bearing, or non-ASCII validator output is redacted before
 it can be reflected in XSD preflight diagnostics.
@@ -200,6 +202,9 @@ operator-provided marker strings.
 Rail receipt `message_type` syntax now uses ASCII-only digits and the direct
 receipt verifier, evidence replay, readiness replay, and XSD profile catalog
 all reject Unicode digit confusables before unsupported-type diagnostics.
+XSD profile-catalog enum values such as rails, embedded signature policies,
+reference datasets, and structured-address modes also reject overlong ASCII
+spellings before unknown-value diagnostics can print them.
 XSD profile-catalog `message_def_id` and version entries use the same ASCII-only
 digit policy before missing-schema or skipped-version diagnostics can classify
 Unicode digit confusables as concrete ISO message IDs.

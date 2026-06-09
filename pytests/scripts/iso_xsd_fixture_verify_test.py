@@ -595,6 +595,61 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertIn("secret-looking material", stderr)
             self.assertNotIn("token_xsd_profile_secret", stderr)
 
+    def test_profile_catalog_overlong_id_is_rejected_without_echo(self):
+        hidden = "a" * (VERIFIER.MAX_PROFILE_CATALOG_IDENTIFIER_CHARS + 1)
+        catalog = [
+            {
+                "id": hidden,
+                "rail": "generic-iso20022",
+                "embedded_signature_policy": "record-only",
+                "required_reference_datasets": [],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "structured_address_mode": "permissive",
+                    }
+                ],
+            },
+            {
+                "id": hidden,
+                "rail": "generic-iso20022",
+                "embedded_signature_policy": "record-only",
+                "required_reference_datasets": [],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.002",
+                        "direction": "inbound",
+                        "versions": ["fooo.002.001.01"],
+                        "structured_address_mode": "permissive",
+                    }
+                ],
+            },
+        ]
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = write_profile_catalog(root / "profiles.rs", catalog=catalog)
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "profiles[0].id must be no longer than 128 characters",
+                stderr,
+            )
+            self.assertNotIn(hidden, stderr)
+            self.assertNotIn("duplicates profile id", stderr)
+
     def test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo(self):
         cases = (
             (
@@ -689,6 +744,79 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn("must use printable ASCII", stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn("unknown rail", stderr)
+                    self.assertNotIn("unknown policy", stderr)
+                    self.assertNotIn("unknown dataset", stderr)
+                    self.assertNotIn("unknown mode", stderr)
+
+    def test_profile_catalog_overlong_enum_values_are_rejected_without_echo(self):
+        hidden = "x" * 129
+        cases = (
+            (
+                "rail",
+                lambda catalog: catalog[0].__setitem__("rail", hidden),
+            ),
+            (
+                "embedded-policy",
+                lambda catalog: catalog[0].__setitem__(
+                    "embedded_signature_policy",
+                    hidden,
+                ),
+            ),
+            (
+                "reference-dataset",
+                lambda catalog: catalog[0].__setitem__(
+                    "required_reference_datasets",
+                    [hidden],
+                ),
+            ),
+            (
+                "structured-address-mode",
+                lambda catalog: catalog[0]["message_profiles"][0].__setitem__(
+                    "structured_address_mode",
+                    hidden,
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            for name, mutate in cases:
+                with self.subTest(name=name):
+                    catalog = [
+                        {
+                            "id": "minimal-profile",
+                            "rail": "generic-iso20022",
+                            "embedded_signature_policy": "record-only",
+                            "required_reference_datasets": [],
+                            "message_profiles": [
+                                {
+                                    "message_type": "fooo.001",
+                                    "direction": "inbound",
+                                    "versions": ["fooo.001.001.01"],
+                                    "structured_address_mode": "permissive",
+                                }
+                            ],
+                        }
+                    ]
+                    mutate(catalog)
+                    profile_catalog = write_profile_catalog(
+                        root / f"{name}-overlong.profiles.rs",
+                        catalog=catalog,
+                    )
+
+                    rc, _stdout, stderr = run_verify(
+                        [
+                            "--manifest",
+                            str(manifest_path),
+                            "--profile-catalog",
+                            str(profile_catalog),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("must be no longer than 128 characters", stderr)
                     self.assertNotIn(hidden, stderr)
                     self.assertNotIn("unknown rail", stderr)
                     self.assertNotIn("unknown policy", stderr)
@@ -2667,6 +2795,137 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
                     self.assertNotIn(hidden, stderr)
+
+    def test_overlong_schema_and_fixture_identifiers_are_rejected_without_echo(self):
+        hidden = "A" * (VERIFIER.MAX_XML_IDENTIFIER_CHARS + 1)
+        long_payload_root = f"Foo{hidden}Payload"
+        too_long_message = (
+            f"must be no longer than {VERIFIER.MAX_XML_IDENTIFIER_CHARS} characters"
+        )
+
+        def set_manifest_payload_root(manifest_path, section, value):
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest[section][0]["payload_root"] = value
+            write_json(manifest_path, manifest)
+
+        cases = [
+            (
+                "schema_target_namespace",
+                lambda root, manifest_path: rewrite_schema(
+                    root,
+                    "fooo.001.001.01",
+                    xsd_text("fooo.001.001.01", "FooPayload").replace(
+                        'targetNamespace="urn:iso:std:iso:20022:tech:xsd:fooo.001.001.01"',
+                        (
+                            'targetNamespace="urn:iso:std:iso:20022:tech:xsd:'
+                            f"{hidden}\""
+                        ),
+                        1,
+                    ),
+                    manifest_path=manifest_path,
+                ),
+                "targetNamespace " + too_long_message,
+            ),
+            (
+                "schema_payload_name",
+                lambda root, manifest_path: rewrite_schema(
+                    root,
+                    "fooo.001.001.01",
+                    xsd_text("fooo.001.001.01", "FooPayload").replace(
+                        '<xs:element name="FooPayload" type="FooPayload"/>',
+                        f'<xs:element name="{long_payload_root}" type="FooPayload"/>',
+                        1,
+                    ),
+                    manifest_path=manifest_path,
+                ),
+                "Document payload element name " + too_long_message,
+            ),
+            (
+                "schema_payload_type",
+                lambda root, manifest_path: rewrite_schema(
+                    root,
+                    "fooo.001.001.01",
+                    xsd_text("fooo.001.001.01", "FooPayload")
+                    .replace(
+                        '<xs:element name="FooPayload" type="FooPayload"/>',
+                        f'<xs:element name="FooPayload" type="{long_payload_root}"/>',
+                        1,
+                    )
+                    .replace(
+                        '<xs:complexType name="FooPayload">',
+                        f'<xs:complexType name="{long_payload_root}">',
+                        1,
+                    ),
+                    manifest_path=manifest_path,
+                ),
+                "Document payload element type " + too_long_message,
+            ),
+            (
+                "schema_attribute_name",
+                lambda root, manifest_path: rewrite_schema(
+                    root,
+                    "fooo.001.001.01",
+                    xsd_text("fooo.001.001.01", "FooPayload").replace(
+                        'targetNamespace="urn:iso:std:iso:20022:tech:xsd:fooo.001.001.01">',
+                        (
+                            'targetNamespace="urn:iso:std:iso:20022:tech:xsd:fooo.001.001.01"\n'
+                            f'           {hidden}="value">'
+                        ),
+                        1,
+                    ),
+                    manifest_path=manifest_path,
+                ),
+                "unexpected attributes",
+            ),
+            (
+                "manifest_schema_payload_root",
+                lambda _root, manifest_path: set_manifest_payload_root(
+                    manifest_path,
+                    "schemas",
+                    long_payload_root,
+                ),
+                "schemas[0].payload_root " + too_long_message,
+            ),
+            (
+                "manifest_fixture_payload_root",
+                lambda _root, manifest_path: set_manifest_payload_root(
+                    manifest_path,
+                    "fixtures",
+                    long_payload_root,
+                ),
+                "fixtures[0].payload_root " + too_long_message,
+            ),
+            (
+                "fixture_namespace",
+                lambda root, _manifest_path: (root / "foo_fixture.xml").write_text(
+                    fixture_xml(f"fooo.001.001.01{hidden}", "FooPayload"),
+                    encoding="utf-8",
+                ),
+                "XML fixture namespace " + too_long_message,
+            ),
+            (
+                "fixture_payload_root",
+                lambda root, _manifest_path: (root / "foo_fixture.xml").write_text(
+                    fixture_xml("fooo.001.001.01", long_payload_root),
+                    encoding="utf-8",
+                ),
+                "XML fixture[0] element " + too_long_message,
+            ),
+        ]
+        for case_name, mutate, message in cases:
+            with self.subTest(case=case_name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest_path = write_minimal_tree(root, minimal_manifest())
+                    mutate(root, manifest_path)
+
+                    rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn(long_payload_root, stderr)
 
     def test_xmllint_non_ascii_diagnostics_are_redacted_without_echo(self):
         hidden = "\u00e9"

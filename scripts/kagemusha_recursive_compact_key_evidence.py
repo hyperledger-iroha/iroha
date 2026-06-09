@@ -114,6 +114,61 @@ def _sha256_file_with_size(
     return digest.hexdigest(), size, b"".join(prefix_parts), []
 
 
+def _sha256_text_file_with_size(
+    path: Path,
+    label: str,
+    *,
+    allow_empty: bool = False,
+    max_bytes: int | None = None,
+) -> tuple[str | None, int | None, str | None, list[str]]:
+    expected_stat, file_errors = readiness._validate_lineage_local_file_for_read(
+        path,
+        label,
+    )
+    if file_errors:
+        return None, None, None, file_errors
+    digest = hashlib.sha256()
+    chunks: list[bytes] = []
+    size = 0
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, None, None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, None, None, [f"{label} must be a regular file"]
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return None, None, None, [f"{label} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, None, None, [f"{label} must not be hardlinked"]
+            if max_bytes is not None and open_stat.st_size > max_bytes:
+                return None, None, None, [f"{label} exceeds maximum size"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if max_bytes is not None and size > max_bytes:
+                    return None, None, None, [f"{label} exceeds maximum size"]
+                chunks.append(chunk)
+                digest.update(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return None, None, None, [f"{label} changed while being read"]
+    except OSError:
+        return None, None, None, [f"{label} could not be read"]
+    if size <= 0 and not allow_empty:
+        return None, None, None, [f"{label} must be non-empty"]
+    try:
+        text = b"".join(chunks).decode("utf-8")
+    except UnicodeDecodeError:
+        return None, None, None, [f"{label} could not be read"]
+    return digest.hexdigest(), size, text, []
+
+
 def _validate_generated_at_utc(value: str) -> list[str]:
     if device_lab.SIGNED_AT_UTC_RE.fullmatch(value) is None:
         return ["--generated-at-utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ"]
@@ -208,12 +263,13 @@ def build_evidence(
         (
             generator_log_digest,
             generator_log_size,
-            _generator_log_prefix,
+            generator_log_text,
             generator_log_errors,
-        ) = _sha256_file_with_size(
+        ) = _sha256_text_file_with_size(
             generator_log_path,
             "recursive compact key generator log",
             allow_empty=True,
+            max_bytes=readiness.MAX_COMPACT_KEY_GENERATOR_LOG_BYTES,
         )
         if generator_log_errors:
             if generator_log_errors == ["recursive compact key generator log is missing"]:
@@ -221,35 +277,23 @@ def build_evidence(
             else:
                 errors.extend(generator_log_errors)
         else:
-            assert generator_log_size is not None
-            if generator_log_size > readiness.MAX_COMPACT_KEY_GENERATOR_LOG_BYTES:
-                errors.append("recursive compact key generator log exceeds maximum size")
-            try:
-                with generator_log_path.open(
-                    "r",
-                    encoding="utf-8",
-                    newline="",
-                ) as handle:
-                    generator_log_text = handle.read()
-            except (OSError, UnicodeDecodeError):
-                errors.append("recursive compact key generator log could not be read")
-            else:
-                generator_sizes, generator_digests, generator_parse_errors = (
-                    readiness.parse_compact_key_generator_log(generator_log_text)
+            assert generator_log_size is not None and generator_log_text is not None
+            generator_sizes, generator_digests, generator_parse_errors = (
+                readiness.parse_compact_key_generator_log(generator_log_text)
+            )
+            errors.extend(generator_parse_errors)
+            for artifact, local_size in artifact_sizes.items():
+                logged_size = generator_sizes.get(artifact)
+                if logged_size is not None and logged_size != local_size:
+                    errors.append(
+                        f"recursive compact key generator log size does not match local artifact {artifact}"
+                    )
+            for artifact, local_digest in artifact_digests.items():
+                logged_digest = generator_digests.get(artifact)
+                if logged_digest is not None and logged_digest != local_digest:
+                    errors.append(
+                        f"recursive compact key generator log digest does not match local artifact {artifact}"
                 )
-                errors.extend(generator_parse_errors)
-                for artifact, local_size in artifact_sizes.items():
-                    logged_size = generator_sizes.get(artifact)
-                    if logged_size is not None and logged_size != local_size:
-                        errors.append(
-                            f"recursive compact key generator log size does not match local artifact {artifact}"
-                        )
-                for artifact, local_digest in artifact_digests.items():
-                    logged_digest = generator_digests.get(artifact)
-                    if logged_digest is not None and logged_digest != local_digest:
-                        errors.append(
-                            f"recursive compact key generator log digest does not match local artifact {artifact}"
-                        )
 
     if errors:
         return None, errors

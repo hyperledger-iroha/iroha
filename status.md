@@ -2,6 +2,106 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 Kagemusha signer output digest open-file binding
+
+- Hardened `scripts/sign_android_device_lab_evidence.py` so
+  `_output_file_sha256(...)` revalidates signer-controlled output metadata, then
+  hashes bytes from one opened regular file bound to the immediate `lstat()`
+  identity. Post-preflight signed-evidence output swaps now fail as
+  `signed evidence output path changed while being read` before `slot.json` can
+  be updated with a digest of replaced bytes.
+- Added the signer output regular-file-swap regression and promoted the signer
+  output digest open-path binding into the production-readiness guard and
+  workflow. Retargeted the signer output digest read-failure negative control to
+  the opened-byte read path.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_output_digest_rejects_read_failure_after_preflight scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_output_digest_rejects_regular_file_swap_after_preflight scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_helper_revalidates_output_digest_before_slot_json_update`
+    (`3` tests passed, latest run 0.012s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`359` tests passed, latest run 8.405s)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 32.178s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha Android manifest parser open-file binding
+
+- Hardened `parse_sha256_manifest(...)` so `sha256sum.txt` is opened once as a
+  regular non-symlink, non-hardlinked file, then the parser compares the opened
+  descriptor identity and post-read path identity against the validation-time
+  `lstat()` identity before decoding manifest bytes. Post-preflight regular-file
+  swaps now fail as `sha256sum.txt changed while being read`.
+- Added the parser regular-file-swap regression and promoted the manifest
+  open-path binding into the production-readiness guard and workflow. Retargeted
+  the read/decode failure guard to the current opened-byte read path.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`358` tests passed, latest run 8.971s)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 36.993s)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-open-path-binding`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha compact helper generator-log bound text read
+
+- Hardened `scripts/kagemusha_recursive_compact_key_evidence.py` so the helper
+  hashes, sizes, decodes, and parses `recursive-compact-key-artifacts.log` from
+  one opened regular file bound to the validated path identity. The helper no
+  longer reopens the generator log after hashing it.
+- Retargeted the generator-log strict-read guard to the new text-bound helper
+  and kept strict UTF-8 decode failures as structured helper errors.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_generates_validator_accepted_json scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_size_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_digest_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_trailing_whitespace scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_crlf_line_endings scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_without_final_lf scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_invalid_utf8_bytes`
+    (`7` tests passed, latest run 0.020s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-generator-log-strict-read`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 37.659s)
+  - `git diff --check -- scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md status.md roadmap.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md status.md roadmap.md`
+    (no matches)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha artifact content prefix binding
+
+- Bound Reserved-lineage all-zero checks and ABI-7 compact-key placeholder/all-zero
+  checks to the prefix captured during the same opened artifact read that
+  computes SHA-256 and byte size. A path replacement between hashing and content
+  validation can no longer make placeholder bytes look production-generated.
+- Added readiness and helper regressions that replace placeholder/all-zero
+  artifacts after the hash read and still require the captured prefix to block,
+  plus guard/workflow negative controls for lineage and compact prefix binding.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_rejects_placeholder_local_artifact_file scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_placeholder_check_uses_hashed_prefix scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_rejects_all_zero_local_artifact_file scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_placeholder_check_uses_hashed_prefix scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_placeholder_artifact scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_placeholder_check_uses_hashed_prefix scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_helper_rejects_all_zero_artifact scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_helper_placeholder_check_uses_hashed_prefix`
+    (`8` tests passed, latest run 0.032s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-prefix-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-prefix-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-is-file-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-placeholder-artifacts`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 29.708s)
+  - `git diff --check -- scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md status.md roadmap.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md status.md roadmap.md`
+    (no matches)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
 ## 2026-06-09 Kagemusha lineage/compact local read validation-time binding
 
 - Strengthened the Reserved-lineage and ABI-7 compact-key local file readers so
@@ -366,16 +466,21 @@ Last updated: 2026-06-09
 - Started a smaller diagnostic
   `lineage-key-artifacts --profile init --opening-len 2` run under
   `target/kagemusha-diagnostic/`; as of the latest check it was still CPU-bound
-  after more than 100 minutes, had emitted no output after startup, and had not
+  after more than 135 minutes, had emitted no output after startup, and had not
   created partial artifact files.
 - Fixed the production-readiness guard after the source moved evidence artifact
   hashing to `_sha256_file_with_size(...)`: the stale direct `_sha256_file(...)`
   requirement was removed, and the Reserved-lineage artifact negative control now
   rejects inserted `artifact_path.is_file()` preflights explicitly.
+- Corrected the SDK parity guard's archived-instruction schema assertions to
+  match the implemented Norito wire-name validation in Swift, Kotlin/JVM,
+  Android Java, and C# instead of the shorter archive display names.
 - Validation:
   - `CARGO_BUILD_JOBS=1 cargo build -p iroha_cli --bin iroha`
   - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-instruction-transaction-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-kagemusha-instruction-transaction-builder`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-instruction-transaction-builder`
   - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-is-file-preflight`
   - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
     (`38` tests passed, latest run 2217.9745ms)
@@ -972,13 +1077,15 @@ Last updated: 2026-06-09
 - XSD profile-catalog enum and list values, including rails, embedded signature
   policies, required reference datasets, structured-address modes, and business
   services, must now remain printable ASCII before unknown-value diagnostics or
-  summary recording can preserve Unicode-confusable spellings.
+  summary recording can preserve Unicode-confusable spellings. Core
+  profile-catalog enum values also reject overlong ASCII spellings before
+  unknown-value diagnostics can print them.
 - XSD manifest `payload_root` values, checked-in schema `targetNamespace`
   attributes, schema payload element names/types, XML fixture namespace/name
   identifiers, and schema-root attribute names must now remain printable ASCII
-  before mismatch diagnostics can quote schema or fixture material. Optional
-  `xmllint` diagnostics now redact non-ASCII output as well as secret-looking and
-  control-bearing output.
+  and no longer than 256 characters before mismatch diagnostics can quote schema
+  or fixture material. Optional `xmllint` diagnostics now redact non-ASCII output
+  as well as secret-looking and control-bearing output.
 - Reviewed XSD gap reasons and blocked-source review reasons must now remain
   printable ASCII, secret-looking-free, and capped at 1024 characters in direct
   XSD verification and production-readiness replay, so Unicode-confusable,
@@ -1064,12 +1171,14 @@ Last updated: 2026-06-09
     (`2` tests passed, latest focused runs 0.002s and 0.018s)
   - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
     (`72` tests passed, latest run 0.395s)
-  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_shape_is_fail_closed`
-    (`2` tests passed, latest focused runs 0.007s and 0.319s)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_shape_is_fail_closed`
+    (`3` tests passed, latest run 0.364s)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_overlong_schema_and_fixture_identifiers_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_non_ascii_schema_and_fixture_identifiers_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_secret_looking_schema_and_fixture_payload_roots_are_rejected_without_echo`
+    (`3` tests passed, latest run 0.030s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
-    (`75` tests passed, latest run 1.775s)
-  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_non_ascii_sidecar_message_type_is_rejected_without_echo`
-    (`1` test passed, latest run 0.002s)
+    (`80` tests passed, latest run 1.763s)
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_non_ascii_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_malformed_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_secret_material_in_sidecar_fields_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_unknown_sidecar_fields_are_rejected_before_network_delivery`
+    (`4` tests passed, latest run 0.520s)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
     (`70` tests passed, latest run 45.558s)
   - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_non_ascii_rail_message_type_values_are_rejected_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_receipt_verifier_stdout_requires_kind_specific_metadata pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_entries_must_preserve_kind_metadata pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo`
@@ -1093,7 +1202,7 @@ Last updated: 2026-06-09
     (`3` tests passed, latest run 2.321s)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
   - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
-    (`740` tests passed, latest run 299.282s)
+    (`743` tests passed, latest run 299.131s)
 
 ## 2026-06-09 Kagemusha Reserved-lineage proof-log exactness guard
 

@@ -5834,9 +5834,13 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             artifact = evidence_path.parent / "recursive-compact-len4.pk"
             placeholder = b"recursive compact key artifact recursive-compact-len4.pk\n"
             artifact.write_bytes(placeholder)
+            generator_log = write_compact_key_generator_log(evidence_path.parent)
             evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
             evidence["artifacts"][artifact.name] = hashlib.sha256(placeholder).hexdigest()
             evidence["artifact_size_bytes"][artifact.name] = len(placeholder)
+            evidence["generator_log_sha256"] = hashlib.sha256(
+                generator_log.read_bytes()
+            ).hexdigest()
             write_json(evidence_path, evidence)
 
             result = readiness.check_compact_key_evidence(evidence_path)
@@ -5848,6 +5852,54 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn(artifact.name, result["artifact_sha256"])
         self.assertNotIn(artifact.name, result["artifact_size_bytes"])
+
+    def test_compact_key_evidence_placeholder_check_uses_hashed_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+            artifact = evidence_path.parent / "recursive-compact-len4.pk"
+            placeholder = b"recursive compact key artifact recursive-compact-len4.pk\n"
+            artifact.write_bytes(placeholder)
+            generator_log = write_compact_key_generator_log(evidence_path.parent)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifacts"][artifact.name] = hashlib.sha256(placeholder).hexdigest()
+            evidence["artifact_size_bytes"][artifact.name] = len(placeholder)
+            evidence["generator_log_sha256"] = hashlib.sha256(
+                generator_log.read_bytes()
+            ).hexdigest()
+            write_json(evidence_path, evidence)
+            replacement = evidence_path.parent / "replacement-recursive-compact-len4.pk"
+            replacement.write_bytes(b"KCGK\x00\x01" + b"3" * 64)
+            original_hash_with_prefix = readiness._sha256_file_with_size_and_prefix
+
+            def swapping_hash_with_prefix(
+                path: Path,
+                label: str,
+                *,
+                allow_empty: bool = False,
+                prefix_len: int = 4096,
+            ) -> tuple[str | None, int | None, bytes | None, list[str]]:
+                result = original_hash_with_prefix(
+                    path,
+                    label,
+                    allow_empty=allow_empty,
+                    prefix_len=prefix_len,
+                )
+                if path == artifact and result[3] == []:
+                    replacement.replace(artifact)
+                return result
+
+            with mock.patch.object(
+                readiness,
+                "_sha256_file_with_size_and_prefix",
+                swapping_hash_with_prefix,
+            ):
+                result = readiness.check_compact_key_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_artifact_placeholder",
+            {item["code"] for item in result["blockers"]},
+        )
 
     def test_compact_key_evidence_rejects_all_placeholder_prefixes(self) -> None:
         for marker in readiness.COMPACT_KEY_PLACEHOLDER_PREFIXES:
@@ -6064,6 +6116,56 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 command=readiness.expected_compact_key_command(),
                 generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
             )
+
+        self.assertIsNone(evidence)
+        self.assertIn(
+            (
+                "recursive compact key artifact recursive-compact-len4.pk must be "
+                "generated key material, not a placeholder fixture"
+            ),
+            errors,
+        )
+
+    def test_compact_key_evidence_helper_placeholder_check_uses_hashed_prefix(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+            create_compact_key_artifact_files(artifact_dir)
+            artifact = artifact_dir / "recursive-compact-len4.pk"
+            artifact.write_bytes(
+                b"recursive compact key artifact recursive-compact-len4.pk\n"
+            )
+            write_compact_key_generator_log(artifact_dir)
+            replacement = artifact_dir / "replacement-recursive-compact-len4.pk"
+            replacement.write_bytes(b"KCGK\x00\x01" + b"4" * 64)
+            original_hash_with_size = compact_key_helper._sha256_file_with_size
+
+            def swapping_hash_with_size(
+                path: Path,
+                label: str,
+                *,
+                allow_empty: bool = False,
+            ) -> tuple[str | None, int | None, bytes | None, list[str]]:
+                result = original_hash_with_size(
+                    path,
+                    label,
+                    allow_empty=allow_empty,
+                )
+                if path == artifact and result[3] == []:
+                    replacement.replace(artifact)
+                return result
+
+            with mock.patch.object(
+                compact_key_helper,
+                "_sha256_file_with_size",
+                swapping_hash_with_size,
+            ):
+                evidence, errors = compact_key_helper.build_evidence(
+                    artifact_dir=artifact_dir,
+                    command=readiness.expected_compact_key_command(),
+                    generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                )
 
         self.assertIsNone(evidence)
         self.assertIn(
@@ -7510,6 +7612,50 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(artifact.name, result["artifact_sha256"])
         self.assertNotIn(artifact.name, result["artifact_size_bytes"])
 
+    def test_lineage_proof_evidence_placeholder_check_uses_hashed_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+            artifact = evidence_path.parent / "lineage-init-len128.pk"
+            zero_artifact = b"\x00" * 64
+            artifact.write_bytes(zero_artifact)
+            evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+            evidence["artifacts"][artifact.name] = hashlib.sha256(zero_artifact).hexdigest()
+            evidence["artifact_size_bytes"][artifact.name] = len(zero_artifact)
+            write_json(evidence_path, evidence)
+            replacement = evidence_path.parent / "replacement-lineage-init-len128.pk"
+            replacement.write_bytes(b"lineage artifact replacement\n")
+            original_hash_with_prefix = readiness._sha256_file_with_size_and_prefix
+
+            def swapping_hash_with_prefix(
+                path: Path,
+                label: str,
+                *,
+                allow_empty: bool = False,
+                prefix_len: int = 4096,
+            ) -> tuple[str | None, int | None, bytes | None, list[str]]:
+                result = original_hash_with_prefix(
+                    path,
+                    label,
+                    allow_empty=allow_empty,
+                    prefix_len=prefix_len,
+                )
+                if path == artifact and result[3] == []:
+                    replacement.replace(artifact)
+                return result
+
+            with mock.patch.object(
+                readiness,
+                "_sha256_file_with_size_and_prefix",
+                swapping_hash_with_prefix,
+            ):
+                result = readiness.check_lineage_proof_evidence(evidence_path)
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "lineage_proof_evidence_artifact_placeholder",
+            {item["code"] for item in result["blockers"]},
+        )
+
     def test_lineage_proof_evidence_uses_local_file_validation_before_artifact_is_file_preflight(
         self,
     ) -> None:
@@ -8921,6 +9067,53 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertFalse(out.exists())
         self.assertIn(readiness.LINEAGE_ARTIFACT_ALL_ZERO_ERROR, stderr.getvalue())
+
+    def test_lineage_proof_evidence_helper_placeholder_check_uses_hashed_prefix(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+            create_lineage_artifact_files(artifact_dir)
+            artifact = artifact_dir / "lineage-append-len128.pk"
+            artifact.write_bytes(b"\x00" * 64)
+            proof_log = artifact_dir / readiness.LINEAGE_PROOF_REQUIRED_TEST_LOGS[
+                "record_archive_proof"
+            ]
+            write_passing_lineage_proof_log(proof_log)
+            replacement = artifact_dir / "replacement-lineage-append-len128.pk"
+            replacement.write_bytes(b"lineage artifact replacement\n")
+            original_hash_with_size = evidence_helper._sha256_file_with_size
+
+            def swapping_hash_with_size(
+                path: Path,
+                label: str,
+            ) -> tuple[str | None, int | None, bytes | None, list[str]]:
+                result = original_hash_with_size(path, label)
+                if path == artifact and result[3] == []:
+                    replacement.replace(artifact)
+                return result
+
+            with mock.patch.object(
+                evidence_helper,
+                "_sha256_file_with_size",
+                swapping_hash_with_size,
+            ):
+                evidence, errors = evidence_helper.build_evidence(
+                    artifact_dir=artifact_dir,
+                    proof_log=proof_log,
+                    command=evidence_helper.DEFAULT_RECORD_ARCHIVE_PROOF_COMMAND,
+                    elapsed_seconds=14400.0,
+                    generated_at_utc=readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                )
+
+        self.assertIsNone(evidence)
+        self.assertIn(
+            (
+                "lineage artifact lineage-append-len128.pk "
+                f"{readiness.LINEAGE_ARTIFACT_ALL_ZERO_ERROR}"
+            ),
+            errors,
+        )
 
     def test_lineage_proof_evidence_helper_rejects_symlinked_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
