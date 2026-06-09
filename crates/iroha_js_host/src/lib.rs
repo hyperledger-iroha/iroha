@@ -10764,10 +10764,7 @@ enum PrivacyProofOperationV1 {
     Verify,
 }
 
-fn privacy_production_gate_requirement_is_waived(
-    entry: &PrivacyAlgorithmEntry,
-    key: &str,
-) -> bool {
+fn privacy_production_gate_requirement_is_waived(entry: &PrivacyAlgorithmEntry, key: &str) -> bool {
     entry.id == "transparent-transfer"
         && PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS.contains(&key)
 }
@@ -11199,8 +11196,7 @@ fn privacy_gate_missing_reasons_match_requirements(
             .zip(required_requirements)
             .all(|(missing, (_, label))| missing.as_str() == *label)
         && missing[required_count].as_str() == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE
-        && missing[required_count + 1].as_str()
-            == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
+        && missing[required_count + 1].as_str() == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
 }
 
 fn privacy_production_gate_invariants_hold(

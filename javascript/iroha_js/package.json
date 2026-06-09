@@ -29,6 +29,10 @@
       "types": "./index.d.ts"
     },
     "./norito": "./dist/norito.js",
+    "./offline-cash": {
+      "import": "./dist/offlineCashLifecycle.js",
+      "types": "./index.d.ts"
+    },
     "./canonical-request": {
       "import": "./dist/canonicalRequest.js",
       "types": "./index.d.ts"
@@ -71,6 +75,9 @@
         "./index.d.ts"
       ],
       "norito": [
+        "./index.d.ts"
+      ],
+      "offline-cash": [
         "./index.d.ts"
       ],
       "canonical-request": [

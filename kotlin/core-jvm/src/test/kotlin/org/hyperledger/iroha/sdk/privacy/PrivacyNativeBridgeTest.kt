@@ -44,6 +44,10 @@ class PrivacyNativeBridgeTest {
         }
         assertFailsWith<UnsupportedOperationException> {
             @Suppress("UNCHECKED_CAST")
+            (bridgeAvailable.productionGate.requiredGates as MutableList<String>).add("tampered")
+        }
+        assertFailsWith<UnsupportedOperationException> {
+            @Suppress("UNCHECKED_CAST")
             (bridgeAvailable.productionGate.auditReferences as MutableList<String>).add(
                 "https://audit.example/forged-signoff",
             )
@@ -51,6 +55,7 @@ class PrivacyNativeBridgeTest {
 
         val fresh = PrivacyNativeBridge.privacyCapabilities(bridgeAvailable = true)
         assertFalse(fresh.productionGate.missing.contains("tampered"))
+        assertFalse(fresh.productionGate.requiredGates.contains("tampered"))
         assertFalse(
             fresh.productionGate.auditReferences.contains(
                 "https://audit.example/forged-signoff",
@@ -59,6 +64,10 @@ class PrivacyNativeBridgeTest {
         assertEquals(
             PrivacyNativeBridge.PrivacyProductionGate.MISSING_REASONS,
             fresh.productionGate.missing,
+        )
+        assertEquals(
+            PrivacyNativeBridge.PrivacyProductionGate.REQUIRED_GATES,
+            fresh.productionGate.requiredGates,
         )
     }
 
@@ -734,6 +743,10 @@ class PrivacyNativeBridgeTest {
         assertFalse(capabilities.productionGate.performanceGates)
         assertFalse(capabilities.productionGate.externalAudit)
         assertEquals(emptyList(), capabilities.productionGate.auditReferences)
+        assertEquals(
+            PrivacyNativeBridge.PrivacyProductionGate.REQUIRED_GATES,
+            capabilities.productionGate.requiredGates,
+        )
         assertEquals(
             PrivacyNativeBridge.PrivacyProductionGate.MISSING_REASONS,
             capabilities.productionGate.missing,

@@ -47,6 +47,9 @@ SUMMARY_DIGEST_FIELD = "summary_sha256"
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
 MAX_RAIL_MESSAGE_ID_CHARS = 128
+MAX_PROFILE_ID_CHARS = 128
+MAX_TRUST_POLICY_CHARS = 128
+MAX_TRUST_SOURCE_TEXT_CHARS = 256
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_URL_CHARS = 2048
 MAX_SOURCE_REPOSITORY_CHARS = 2048
@@ -1162,10 +1165,28 @@ def _require_message_def_id(value: dict[str, Any], key: str, label: str) -> str:
 
 def _require_profile_id(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
+    if len(raw) > MAX_PROFILE_ID_CHARS:
+        raise ReadinessError(
+            f"{label}.{key} must be no longer than {MAX_PROFILE_ID_CHARS} characters"
+        )
     if PROFILE_ID_RE.fullmatch(raw) is None:
         raise ReadinessError(f"{label}.{key} must be a canonical lowercase profile id")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
+
+
+def _reject_overlong_trust_policy(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_POLICY_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_TRUST_POLICY_CHARS} characters"
+        )
+
+
+def _reject_overlong_trust_source_text(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_SOURCE_TEXT_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
+        )
 
 
 def _require_rail(value: dict[str, Any], key: str, label: str) -> str:
@@ -3494,6 +3515,7 @@ def _verify_trust_profile(
     environment = _require_context_string(profile, "environment", label)
     bundle_sha256 = _require_sha256(profile, "bundle_sha256", label)
     policy = _require_string(profile, "embedded_signature_policy", label)
+    _reject_overlong_trust_policy(policy, f"{label}.embedded_signature_policy")
     _reject_non_ascii_context(policy, f"{label}.embedded_signature_policy")
     _reject_secret_looking_identifier(policy, f"{label}.embedded_signature_policy")
     signature_pin_count = _require_nonnegative_int(
@@ -3571,6 +3593,8 @@ def _verify_trust_profile(
         _reject_unknown_keys(source, TRUST_SOURCE_KEYS, f"{label}.source")
         source_authority = _require_string(source, "authority", f"{label}.source")
         source_version = _require_string(source, "version", f"{label}.source")
+        _reject_overlong_trust_source_text(source_authority, f"{label}.source.authority")
+        _reject_overlong_trust_source_text(source_version, f"{label}.source.version")
         _reject_non_ascii_context(source_authority, f"{label}.source.authority")
         _reject_non_ascii_context(source_version, f"{label}.source.version")
         _reject_secret_looking_identifier(source_authority, f"{label}.source.authority")

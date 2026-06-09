@@ -6094,6 +6094,78 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_overlong_trust_profile_identity_values_are_rejected_without_echo(self):
+        overlong_profile = "a" * 129
+        overlong_policy = "require-verified-" + ("a" * 129)
+        cases = (
+            (
+                "bundle-profile-id",
+                lambda summary: summary["bundles"][0].__setitem__(
+                    "profile_id",
+                    overlong_profile,
+                ),
+                "profile_id must be no longer than 128 characters",
+                overlong_profile,
+                "profile_id must be a canonical lowercase profile id",
+            ),
+            (
+                "override-profile-id",
+                lambda summary: summary["bundles"][0]["profile_overrides"].__setitem__(
+                    "id",
+                    overlong_profile,
+                ),
+                "profile_overrides.id must be no longer than 128 characters",
+                overlong_profile,
+                "profile_overrides.id does not match profile_id",
+            ),
+            (
+                "bundle-policy",
+                lambda summary: summary["bundles"][0].__setitem__(
+                    "embedded_signature_policy",
+                    overlong_policy,
+                ),
+                "embedded_signature_policy must be no longer than 128 characters",
+                overlong_policy,
+                "embedded_signature_policy is unsupported",
+            ),
+            (
+                "override-policy",
+                lambda summary: summary["bundles"][0]["profile_overrides"].__setitem__(
+                    "embedded_signature_policy",
+                    overlong_policy,
+                ),
+                (
+                    "profile_overrides.embedded_signature_policy must be no longer "
+                    "than 128 characters"
+                ),
+                overlong_policy,
+                "profile_overrides.embedded_signature_policy does not match",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root, valid_canary_summary())
+            for name, mutate, message, hidden, bypassed_message in cases:
+                with self.subTest(name=name):
+                    trust_path = write_trust_summary(root / name)
+                    rewrite_trust_summary(trust_path, mutate)
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                            "--allow-record-only-trust",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn(bypassed_message, stderr)
+
     def test_secret_looking_trust_identity_values_are_rejected_without_echo(self):
         cases = (
             (
@@ -6451,6 +6523,48 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn("must use printable ASCII", stderr)
+                    self.assertNotIn(hidden, stderr)
+
+    def test_overlong_trust_source_identity_values_are_rejected_without_echo(self):
+        hidden = "A" * (EVIDENCE.MAX_TRUST_SOURCE_TEXT_CHARS + 1)
+        cases = (
+            (
+                "source-authority",
+                lambda summary: summary["bundles"][0]["source"].__setitem__(
+                    "authority",
+                    hidden,
+                ),
+                "source.authority must be no longer than 256 characters",
+            ),
+            (
+                "source-version",
+                lambda summary: summary["bundles"][0]["source"].__setitem__(
+                    "version",
+                    hidden,
+                ),
+                "source.version must be no longer than 256 characters",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root, valid_canary_summary())
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    trust_path = write_trust_summary(root / name)
+                    rewrite_trust_summary(trust_path, mutate)
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
                     self.assertNotIn(hidden, stderr)
 
     def test_trust_source_identity_fields_are_required_and_must_be_strings(self):

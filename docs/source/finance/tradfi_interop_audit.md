@@ -702,6 +702,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   unsupported-kind diagnostics or blockers can preserve forged archive values,
   and archived canary stage names reject those markers plus non-ASCII confusable
   spellings before unsupported-stage, ordering, or stage-window diagnostics.
+  Trust-bundle preflight, evidence replay, and production-readiness compact
+  trust profile IDs, override IDs, embedded signature policy strings, and
+  trust-source authority/version provenance are capped before trust diagnostics
+  can print or archive them.
   Live rail/notary adapter timeouts must be
   positive finite numbers, and their response/payload byte caps must be positive
   integers rather than JSON/Python boolean aliases before any local read or

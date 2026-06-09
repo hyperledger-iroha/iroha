@@ -570,11 +570,14 @@ def validate_release_local_json_file(path: Path, label: str) -> list[str]:
     return []
 
 
-def validate_repo_source_marker_file(path: Path, label: str) -> list[str]:
+def _validate_repo_source_marker_file_for_read(
+    path: Path,
+    label: str,
+) -> tuple[os.stat_result | None, list[str]]:
     """Reject checked-in marker files that could alias external bytes."""
 
     if device_lab.SECRET_RE.search(str(path)):
-        return [f"{label} path must not contain secret-looking material"]
+        return None, [f"{label} path must not contain secret-looking material"]
     errors = [
         *device_lab.validate_no_symlink_ancestors(
             path,
@@ -582,26 +585,35 @@ def validate_repo_source_marker_file(path: Path, label: str) -> list[str]:
         )
     ]
     try:
-        mode = path.lstat().st_mode
+        file_stat = path.lstat()
     except FileNotFoundError:
         errors.append(f"{label} is missing")
-        return errors
+        return None, errors
     except OSError:
         errors.append(f"{label} file metadata could not be read")
-        return errors
-    if stat.S_ISLNK(mode):
+        return None, errors
+    if stat.S_ISLNK(file_stat.st_mode):
         errors.append(f"{label} must not be a symlink")
-        return errors
-    if not stat.S_ISREG(mode):
+        return None, errors
+    if not stat.S_ISREG(file_stat.st_mode):
         errors.append(f"{label} must be a regular file")
-        return errors
+        return None, errors
     try:
         link_count = path.stat().st_nlink
     except OSError:
         errors.append(f"{label} hardlink metadata could not be read")
-        return errors
+        return None, errors
     if link_count > 1:
         errors.append(f"{label} must not be hardlinked")
+    if errors:
+        return None, errors
+    return file_stat, []
+
+
+def validate_repo_source_marker_file(path: Path, label: str) -> list[str]:
+    """Reject checked-in marker files that could alias external bytes."""
+
+    _file_stat, errors = _validate_repo_source_marker_file_for_read(path, label)
     return errors
 
 
@@ -612,9 +624,11 @@ def _repo_source_marker_text(
 ) -> tuple[str | None, list[str]]:
     """Validate a checked-in source marker immediately before reading text."""
 
-    file_errors = validate_repo_source_marker_file(path, label)
+    expected_stat, file_errors = _validate_repo_source_marker_file_for_read(path, label)
     if file_errors:
         return None, file_errors
+    assert expected_stat is not None
+    expected_marker_identity = (expected_stat.st_dev, expected_stat.st_ino)
     chunks: list[bytes] = []
     try:
         with path.open("rb") as handle:
@@ -626,10 +640,11 @@ def _repo_source_marker_text(
                 open_stat.st_mode
             ):
                 return None, [f"{label} must be a regular file"]
-            if (marker_path_stat.st_dev, marker_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
+            open_marker_identity = (open_stat.st_dev, open_stat.st_ino)
+            if open_marker_identity != expected_marker_identity or (
+                marker_path_stat.st_dev,
+                marker_path_stat.st_ino,
+            ) != expected_marker_identity:
                 return None, [f"{label} changed while being read"]
             if open_stat.st_nlink > 1:
                 return None, [f"{label} must not be hardlinked"]
@@ -637,8 +652,7 @@ def _repo_source_marker_text(
                 chunks.append(chunk)
             marker_final_path_stat = path.lstat()
             if (marker_final_path_stat.st_dev, marker_final_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
+                expected_marker_identity
             ):
                 return None, [f"{label} changed while being read"]
     except OSError:
@@ -3362,6 +3376,60 @@ def _validate_summary_output_parent(
     return True, []
 
 
+def _summary_out_blocker(message: str) -> dict[str, Any]:
+    return blocker(SUMMARY_OUT_PATH_INVALID_CODE, message)
+
+
+def _read_summary_output_text(
+    path: Path,
+    expected_stat: os.stat_result,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Read readiness summary output text without trusting a stale path."""
+
+    chunks: list[bytes] = []
+    summary_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [_summary_out_blocker("--summary-out must not be a symlink")]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                return None, [_summary_out_blocker("--summary-out must be a regular file")]
+            summary_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if summary_open_identity != summary_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != summary_expected_identity:
+                return None, [
+                    _summary_out_blocker("--summary-out changed while being read")
+                ]
+            if open_stat.st_nlink > 1:
+                return None, [_summary_out_blocker("--summary-out must not be hardlinked")]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != summary_expected_identity:
+                return None, [
+                    _summary_out_blocker("--summary-out changed while being read")
+                ]
+    except OSError:
+        return None, [
+            _summary_out_blocker("--summary-out write verification failed")
+        ]
+    try:
+        return b"".join(chunks).decode("utf-8"), []
+    except UnicodeDecodeError:
+        return None, [
+            _summary_out_blocker("--summary-out write verification failed")
+        ]
+
+
 def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
     """Write a readiness summary JSON file."""
 
@@ -3416,20 +3484,26 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
     if errors:
         return errors
     try:
-        if path.read_text(encoding="utf-8") != summary_text:
-            return [
-                blocker(
-                    SUMMARY_OUT_PATH_INVALID_CODE,
-                    "--summary-out write verification failed",
-                )
-            ]
-    except (OSError, UnicodeDecodeError):
+        expected_stat = path.lstat()
+    except (FileNotFoundError, OSError):
+        return [_summary_out_blocker("--summary-out write verification failed")]
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return [_summary_out_blocker("--summary-out must not be a symlink")]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return [_summary_out_blocker("--summary-out must be a regular file")]
+    try:
+        link_count = path.stat().st_nlink
+    except OSError:
         return [
-            blocker(
-                SUMMARY_OUT_PATH_INVALID_CODE,
-                "--summary-out write verification failed",
-            )
+            _summary_out_blocker("--summary-out hardlink metadata could not be read")
         ]
+    if link_count > 1:
+        return [_summary_out_blocker("--summary-out must not be hardlinked")]
+    readback_text, readback_errors = _read_summary_output_text(path, expected_stat)
+    if readback_errors:
+        return readback_errors
+    if readback_text != summary_text:
+        return [_summary_out_blocker("--summary-out write verification failed")]
     return []
 
 

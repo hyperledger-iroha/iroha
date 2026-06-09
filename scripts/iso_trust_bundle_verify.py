@@ -45,6 +45,9 @@ MAX_DER_BYTES = 1024 * 1024
 MAX_DER_BASE64_CHARS = ((MAX_DER_BYTES + 2) // 3) * 4
 MAX_BUNDLE_JSON_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_URL_CHARS = 2048
+MAX_PROFILE_ID_CHARS = 128
+MAX_TRUST_POLICY_CHARS = 128
+MAX_TRUST_SOURCE_TEXT_CHARS = 256
 PLACEHOLDER_TRUST_SOURCE_MARKERS = (
     "dummy",
     "fake",
@@ -618,6 +621,20 @@ def _reject_non_ascii_context(value: str, label: str) -> None:
         raise TrustBundleError(f"{label} must use printable ASCII")
 
 
+def _reject_overlong_trust_policy(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_POLICY_CHARS:
+        raise TrustBundleError(
+            f"{label} must be no longer than {MAX_TRUST_POLICY_CHARS} characters"
+        )
+
+
+def _reject_overlong_trust_source_text(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_SOURCE_TEXT_CHARS:
+        raise TrustBundleError(
+            f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
+        )
+
+
 def _required_context_string(bundle: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(bundle, key, label)
     _reject_non_ascii_context(raw, f"{label}.{key}")
@@ -712,6 +729,10 @@ def _required_string(bundle: dict[str, Any], key: str, label: str) -> str:
 
 def _required_profile_id(bundle: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(bundle, key, label)
+    if len(raw) > MAX_PROFILE_ID_CHARS:
+        raise TrustBundleError(
+            f"{label}.{key} must be no longer than {MAX_PROFILE_ID_CHARS} characters"
+        )
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if PROFILE_ID_RE.fullmatch(raw) is None:
         raise TrustBundleError(f"{label}.{key} must be a canonical lowercase profile id")
@@ -1116,9 +1137,11 @@ def _source(
     source = _require_object(raw, f"{label}.source")
     _reject_unknown_keys(source, SOURCE_KEYS, f"{label}.source")
     authority = _required_string(source, "authority", f"{label}.source")
+    _reject_overlong_trust_source_text(authority, f"{label}.source.authority")
     _reject_non_ascii_context(authority, f"{label}.source.authority")
     _reject_secret_looking_identifier(authority, f"{label}.source.authority")
     version = _required_string(source, "version", f"{label}.source")
+    _reject_overlong_trust_source_text(version, f"{label}.source.version")
     _reject_non_ascii_context(version, f"{label}.source.version")
     _reject_secret_looking_identifier(version, f"{label}.source.version")
     normalized: dict[str, Any] = {
@@ -1544,6 +1567,7 @@ def verify_bundle(
     if "embedded_signature_policy" not in bundle:
         raise TrustBundleError(f"{path}.embedded_signature_policy must be recorded")
     policy = _required_string(bundle, "embedded_signature_policy", str(path))
+    _reject_overlong_trust_policy(policy, f"{path}.embedded_signature_policy")
     _reject_non_ascii_context(policy, f"{path}.embedded_signature_policy")
     _reject_secret_looking_identifier(policy, f"{path}.embedded_signature_policy")
     if not isinstance(policy, str) or policy not in POLICIES:

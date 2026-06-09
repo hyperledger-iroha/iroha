@@ -1041,6 +1041,40 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["test json must not be a symlink"])
         self.assertEqual(target_status, "aliased")
 
+    def test_load_json_rejects_regular_file_swap_after_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                payload = root / "payload.json"
+                replacement = root / "replacement-payload.json"
+                write_json(payload, {"status": "ok"})
+                write_json(replacement, {"status": "replacement"})
+                errors: list[str] = []
+                swapped = False
+
+                def swapping_stat(path: Path, *args, **kwargs):
+                    nonlocal swapped
+                    result = original_stat(path, *args, **kwargs)
+                    if path == payload and not swapped:
+                        replacement.replace(payload)
+                        swapped = True
+                    return result
+
+                path_type.stat = swapping_stat
+
+                data = device_lab._load_json(payload, "test json", errors)
+                final_status = json.loads(payload.read_text(encoding="utf-8"))["status"]
+        finally:
+            path_type.stat = original_stat
+
+        self.assertTrue(swapped)
+        self.assertIsNone(data)
+        self.assertEqual(errors, ["test json changed while being read"])
+        self.assertEqual(final_status, "replacement")
+
     def test_validate_no_symlink_ancestors_rejects_cwd_failure(self) -> None:
         with mock.patch.object(
             Path,

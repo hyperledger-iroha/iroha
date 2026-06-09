@@ -168,6 +168,39 @@ import { noritoEncodeInstruction } from "@iroha/iroha-js/norito";
 import { generateKeyPair } from "@iroha/iroha-js/crypto";
 ```
 
+For offline cash screens and headless wallet flows, use the dedicated
+`offline-cash` subpath. It validates cached setup for local exchange, syncs
+pending audit receipts before loading more cash, and hides NFC unless the app
+reports explicit support.
+
+```js
+import {
+  OfflineCashLifecycleController,
+  assertOfflineCashConfigurationSnapshotUsable,
+  offlineCashAvailableTransportKinds,
+} from "@iroha/iroha-js/offline-cash";
+
+assertOfflineCashConfigurationSnapshotUsable(cachedSnapshot, {
+  nowMs: Date.now(),
+  requiredBridgeAbiVersion: 7,
+});
+
+const controller = new OfflineCashLifecycleController({
+  wallet: offlineWallet,
+  auditReceiptSynchronizer,
+});
+
+await controller.load("pkr#sbp", "500"); // syncs pending audit receipts first
+
+const transportKinds = offlineCashAvailableTransportKinds({
+  qrStreaming: true,
+  nfc: deviceSupportsNfc && appHasHceEntitlement
+    ? { supported: true }
+    : { supported: false, reason: "NFC requires device and app HCE support." },
+  nearby: true,
+});
+```
+
 For browser-safe Kotodama contract compilation, use the dedicated compiler
 subpath. It emits the same `.to` artifact bytes and manifest metadata used by
 Torii contract deployment without importing the Node-first SDK surface:

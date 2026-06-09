@@ -1072,7 +1072,7 @@ const BRIDGE_MISSING_REASON_SOURCES = Object.freeze([
     label: "Kotlin JVM",
     path: "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
     start: "val MISSING_REASONS: List<String> =",
-    end: "@JvmStatic",
+    end: "val REQUIRED_GATES: List<String> =",
   }),
   Object.freeze({
     label: "Swift",
@@ -2170,6 +2170,42 @@ function assertZkAceCapabilitySurfaceFailClosed(label, capabilities) {
   return zkAceCapability;
 }
 
+function assertTransparentTransferBaselineGate(label, capabilities) {
+  const transparent = capabilities.privacyAlgorithms.find(
+    (descriptor) => descriptor.id === "transparent-transfer",
+  );
+  assert.ok(transparent, `${label} transparent transfer capability descriptor must exist`);
+  assert.deepEqual(
+    Object.entries(transparent.productionGate.gates),
+    PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, false]),
+    `${label} transparent transfer must still expose every production gate flag`,
+  );
+  assert.deepEqual(
+    transparent.productionGate.requiredGates,
+    expectedRequiredProductionGateKeys("transparent-transfer"),
+    `${label} transparent transfer must require only baseline transfer gates`,
+  );
+  for (const waived of TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS) {
+    assert.equal(
+      transparent.productionGate.requiredGates.includes(waived),
+      false,
+      `${label} transparent transfer must not require waived proof gate ${waived}`,
+    );
+  }
+  for (const waivedReason of [
+    "real proving engine is not registered",
+    "real verifier is not registered",
+    "witness privacy checks are incomplete",
+    "verifier fuzzing gate is incomplete",
+  ]) {
+    assert.equal(
+      transparent.productionGate.missing.includes(waivedReason),
+      false,
+      `${label} transparent transfer must not report waived proof missing reason ${waivedReason}`,
+    );
+  }
+}
+
 function extractJsBackendFamilyEntries(text, label) {
   const block = requireMatch(
     text,
@@ -2402,7 +2438,7 @@ function extractRustPrivacyProductionGateContract(text, label) {
     (match) => [match[1], match[2]],
   );
 
-  const gateStart = text.indexOf("fn privacy_production_gate()");
+  const gateStart = text.indexOf("fn privacy_production_gate(");
   assert.notEqual(gateStart, -1, `${label} missing privacy_production_gate`);
   const gateEnd = text.indexOf("fn privacy_capabilities()", gateStart);
   assert.notEqual(gateEnd, -1, `${label} missing privacy_capabilities marker`);
@@ -2437,12 +2473,7 @@ function assertRustNativeProductionGateParity(pythonCatalog) {
   );
   const expectedGateEntries = PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, false]);
   for (const descriptor of pythonCatalog.descriptors) {
-    const expectedMissingReasons = [
-      ...PRODUCTION_GATE_REQUIRED_REASONS,
-      ...SUPPLEMENTAL_FAIL_CLOSED_REASONS.filter((reason) =>
-        descriptor.production_gate.missing.includes(reason),
-      ),
-    ];
+    const expectedMissingReasons = expectedProductionGateMissingReasons(descriptor);
 
     assert.equal(
       descriptor.production_gate.version,
@@ -2458,6 +2489,11 @@ function assertRustNativeProductionGateParity(pythonCatalog) {
       Object.entries(descriptor.production_gate.gates),
       expectedGateEntries,
       `Python catalog ${descriptor.id} production gate key order drifted`,
+    );
+    assert.deepEqual(
+      descriptor.production_gate.required_gates,
+      expectedRequiredProductionGateKeys(descriptor.id),
+      `Python catalog ${descriptor.id} required production gates drifted`,
     );
     assert.equal(
       new Set(descriptor.production_gate.missing).size,
@@ -2491,6 +2527,7 @@ function assertRustNativeProductionGateParity(pythonCatalog) {
     for (const requiredSnippet of [
       "ready: false",
       "passed: false",
+      "required_gates: privacy_required_production_gate_keys(entry)",
       "audit_references: Vec::new()",
     ]) {
       assert.ok(
@@ -2502,7 +2539,7 @@ function assertRustNativeProductionGateParity(pythonCatalog) {
       "version: PRIVACY_FFI_VERSION_V1",
       "gate_version: PRIVACY_PRODUCTION_GATE_VERSION.to_owned()",
       "production_ready: false",
-      "production_gate: privacy_production_gate()",
+      "production_gate: privacy_production_gate(entry)",
     ]) {
       assert.ok(
         contract.capabilitiesBlock.includes(requiredSnippet),
@@ -3313,6 +3350,7 @@ test("privacy algorithm JS getters return immutable fail-closed production metad
   ]) {
     const capabilities = getCapabilities();
     assertZkAceCapabilitySurfaceFailClosed(label, capabilities);
+    assertTransparentTransferBaselineGate(label, capabilities);
     const descriptors = getDescriptors();
     const descriptor = descriptors.find((entry) => entry.plannedSdkEntrypoints.length > 0);
     assert.ok(descriptor, `${label} must expose a planned fail-closed privacy row`);
@@ -3366,6 +3404,11 @@ test("privacy algorithm JS getters return immutable fail-closed production metad
         `${label} descriptor ${frozenDescriptor.id} productionGate.gates must be frozen`,
       );
       assert.equal(
+        Object.isFrozen(frozenDescriptor.productionGate.requiredGates),
+        true,
+        `${label} descriptor ${frozenDescriptor.id} productionGate.requiredGates must be frozen`,
+      );
+      assert.equal(
         Object.isFrozen(frozenDescriptor.productionGate.missing),
         true,
         `${label} descriptor ${frozenDescriptor.id} productionGate.missing must be frozen`,
@@ -3391,6 +3434,9 @@ test("privacy algorithm JS getters return immutable fail-closed production metad
       });
       assert.throws(() => {
         frozenDescriptor.productionGate.gates.external_audit = true;
+      });
+      assert.throws(() => {
+        frozenDescriptor.productionGate.requiredGates.push("real_proving");
       });
       assert.throws(() => {
         frozenDescriptor.productionGate.missing.length = 0;

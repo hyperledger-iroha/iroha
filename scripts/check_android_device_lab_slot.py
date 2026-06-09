@@ -1354,17 +1354,17 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
         errors.extend(json_ancestor_errors)
         return None
     try:
-        mode = path.lstat().st_mode
+        expected_stat = path.lstat()
     except FileNotFoundError:
         errors.append(f"missing {label}")
         return None
     except OSError:
         errors.append(f"{label} file metadata could not be read")
         return None
-    if stat.S_ISLNK(mode):
+    if stat.S_ISLNK(expected_stat.st_mode):
         errors.append(f"{label} must not be a symlink")
         return None
-    if not stat.S_ISREG(mode):
+    if not stat.S_ISREG(expected_stat.st_mode):
         errors.append(f"{label} must be a regular file")
         return None
     try:
@@ -1377,6 +1377,7 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
         return None
     try:
         chunks: list[bytes] = []
+        json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
         with path.open("rb") as handle:
             open_stat = os.fstat(handle.fileno())
             json_path_stat = path.lstat()
@@ -1388,10 +1389,11 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
             ):
                 errors.append(f"{label} must be a regular file")
                 return None
-            if (json_path_stat.st_dev, json_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
+            json_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if json_open_identity != json_expected_identity or (
+                json_path_stat.st_dev,
+                json_path_stat.st_ino,
+            ) != json_expected_identity:
                 errors.append(f"{label} changed while being read")
                 return None
             if open_stat.st_nlink > 1:
@@ -1401,8 +1403,7 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
                 chunks.append(chunk)
             json_final_path_stat = path.lstat()
             if (json_final_path_stat.st_dev, json_final_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
+                json_expected_identity
             ):
                 errors.append(f"{label} changed while being read")
                 return None

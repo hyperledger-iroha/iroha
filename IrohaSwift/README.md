@@ -139,6 +139,67 @@ canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
 `IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs are Ed25519-only while native-backed algorithms use `NoritoBridge`.
 
+### Offline cash lifecycle and UI
+
+Use `OfflineCashLifecycleController` around `OfflineNoteWallet` instead of
+calling `load` directly from app screens. The controller syncs pending audit
+receipts before issuing more cash, while local offline send/receive flows stay
+on cached setup data and do not fetch `/v1/capabilities`.
+
+```swift
+import IrohaSwift
+import IrohaSwiftTransferUI
+
+let snapshot = OfflineCashConfigurationSnapshot(
+    chainId: "00000042",
+    assetDefinitionId: "pkr#sbp",
+    offlinePaymentsEnabled: true,
+    issuerPublicKeyBase64: cachedIssuerKeyBase64,
+    bridgeAbiVersion: 7,
+    createdAtMs: cachedAtMs,
+    expiresAtMs: expiresAtMs
+)
+try snapshot.requireUsableForOfflineExchange(
+    nowMs: currentTimeMs,
+    requiredBridgeAbiVersion: 7
+)
+
+let controller = OfflineCashLifecycleController(
+    wallet: offlineNoteWallet,
+    auditReceiptSynchronizer: appAuditSynchronizer
+)
+let issuedNote = try await controller.load(assetDefinitionId: "pkr#sbp", amount: "500")
+```
+
+For SwiftUI screens, use `IrohaOfflineCashFlowView` or
+`IrohaOfflineTransferTransportPicker` and pass platform capabilities. NFC is
+included only when the device and app build support it; apps without HCE or
+non-NFC devices should pass `.unavailable(...)` and the control is omitted.
+
+```swift
+let transports = OfflineNoteTransferCapabilities(
+    qrStreaming: true,
+    nfc: appHasHceEntitlement && deviceSupportsNfc
+        ? .supported
+        : .unavailable("NFC requires device and app HCE support."),
+    nearby: true
+)
+
+IrohaOfflineCashFlowView(
+    state: IrohaOfflineCashFlowState(
+        phase: .ready,
+        totalBalance: "1000",
+        spendableBalance: "900",
+        pendingBalance: "100",
+        pendingReceiptCount: 1
+    ),
+    capabilities: transports,
+    selectedTransport: .qr
+) { action in
+    // Route setup/load/send/receive/redeem/sync actions through app services.
+}
+```
+
 ### Push Devices
 
 `ToriiClient.registerPushDevice` and `unregisterPushDevice` wrap `/v1/notify/devices`. Apps obtain their FCM/APNs token from the platform SDK, then submit the token with canonical request auth for the owning account:

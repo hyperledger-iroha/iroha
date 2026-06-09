@@ -68,6 +68,53 @@ readiness = client.get_offline_readiness()
 print("offline notes", readiness.offline_note)
 ```
 
+For app-facing offline cash flows, use `iroha_python.offline_cash` to keep the
+online load lifecycle separate from local exchange. The lifecycle controller
+syncs pending audit receipts before loading more cash, and the transport helper
+omits NFC unless the app provides an explicit supported capability.
+
+```python
+from iroha_python.offline_cash import (
+    OfflineCashConfigurationSnapshot,
+    OfflineCashLifecycleController,
+    OfflineCashNfcCapability,
+    OfflineCashTransportCapabilities,
+    offline_cash_available_transport_kinds,
+)
+
+snapshot = OfflineCashConfigurationSnapshot(
+    chain_id="00000042",
+    asset_definition_id="pkr#sbp",
+    offline_payments_enabled=True,
+    issuer_public_key_base64=cached_issuer_key_base64,
+    bridge_abi_version=7,
+    created_at_ms=cached_at_ms,
+    expires_at_ms=expires_at_ms,
+)
+snapshot.require_usable_for_offline_exchange(
+    now_ms=current_time_ms,
+    required_bridge_abi_version=7,
+)
+
+controller = OfflineCashLifecycleController(
+    offline_wallet,
+    has_pending_audit_receipts=has_pending_audit_receipts,
+    sync_pending_audit_receipts=sync_pending_audit_receipts,
+)
+await controller.load("pkr#sbp", "500")
+
+transports = offline_cash_available_transport_kinds(
+    OfflineCashTransportCapabilities(
+        qr_streaming=True,
+        nfc=OfflineCashNfcCapability(
+            supported=device_supports_nfc and app_has_hce_entitlement,
+            reason=None if device_supports_nfc and app_has_hce_entitlement else "missing HCE",
+        ),
+        nearby=True,
+    )
+)
+```
+
 ## Native Recursive Kagemusha Spend
 
 The `iroha_python.kagemusha` module exposes ABI-6 recursive Kagemusha

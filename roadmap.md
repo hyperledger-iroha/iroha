@@ -702,7 +702,8 @@ and completed history lives in [`status.md`](./status.md).
 	  rejection of secret-looking paths and unreadable root metadata before slot
 	  discovery, direct summary-writer rejection of secret-looking output paths and
 	  unreadable output leaf metadata before JSON writes, scanner `--json-out`
-	  fsynced temp-file writes with atomic replace and readback verification,
+	  fsynced temp-file writes with atomic replace and opened-file identity-bound
+	  readback verification,
 	  discovered slot-name rejection/redaction before artifact traversal or summary serialization,
 	  signer-helper rejection
 	  of secret-looking `--slot`, `--output`, and `--signer-key-id` runtime
@@ -772,12 +773,13 @@ and completed history lives in [`status.md`](./status.md).
 		  `artifact_digests` and binds each digest read to the opened file
 		  identity. Slot-metadata digest checks now also revalidate
 			  `slot.json`-referenced attestation-chain, offline-wallet APK, and
-			  signed-evidence artifact paths immediately before SHA-256 reads, then
-			  bind bytes to the opened regular-file identity. D2D handoff,
-			  wallet-integrity, and `queue/pending_queue.json` transcript
-			  digest checks now use the same pre-read path revalidation and
-			  opened-file binding. Required status/runtime marker text reads now also revalidate the slot-relative
-			  artifacts immediately before decoding and marker checks.
+				  signed-evidence artifact paths immediately before SHA-256 reads, then
+				  bind bytes to the opened regular-file identity. D2D handoff,
+				  wallet-integrity, and `queue/pending_queue.json` transcript
+				  digest checks now use the same pre-read path revalidation and
+				  opened-file binding. Shared Android slot JSON loads bind parsed bytes
+				  to the preflight `lstat()` identity. Required status/runtime marker text reads now also revalidate the slot-relative
+				  artifacts immediately before decoding and marker checks.
 			  Direct slot-file discovery reports unreadable slot-root and
 		  artifact-directory metadata through caller error lists, returns no
 		  artifacts for secret-looking slot paths, symlinked slot ancestors,
@@ -852,15 +854,15 @@ and completed history lives in [`status.md`](./status.md).
 	  key generation; old-shape commands remain release evidence blockers until
 	  a fresh canonical artifact run replaces the currently
 	  running old-shape generator. The evidence file preserves the canonical
-	  `recursive-compact-key-evidence.json` filename and validates the canonical
-	  release command instead of runtime key generation, while release
-	  key-artifact writers, evidence JSON helper outputs, and readiness
-	  summary output now use same-directory temporary files, byte fsync, atomic
-	  rename, readback verification pinned by helper-level, readiness-summary,
-	  and Android scanner/signer mismatch/read-failure regressions, post-rename output
-	  revalidation pinned by symlink-swap regressions, and parent-directory sync
-	  to avoid trusting partial lineage, compact package, evidence, or summary
-	  artifacts after interrupted generator runs.
+		  `recursive-compact-key-evidence.json` filename and validates the canonical
+		  release command instead of runtime key generation, while release
+		  key-artifact writers, evidence JSON helper outputs, and readiness
+		  summary output now use same-directory temporary files, byte fsync, atomic
+		  rename, opened-file identity-bound readback verification pinned by helper-level, readiness-summary,
+		  release-bundle, and Android scanner/signer mismatch/read-failure/open-path/regular-file-swap regressions, post-rename output
+		  revalidation pinned by symlink-swap regressions, and parent-directory sync
+		  to avoid trusting partial lineage, compact package, evidence, or summary
+		  artifacts after interrupted generator runs.
 	  The Kagemusha release
 	  bundle manifest now uses
 	  `iroha.kagemusha.production_release_bundle.v1` to recompute the checked-in
@@ -872,8 +874,9 @@ and completed history lives in [`status.md`](./status.md).
 	  compact key artifacts, the compact key generator log, production proof logs,
 	  release APKs, D2D handoff transcripts, wallet-integrity transcripts, and
 	  attestation certificate-chain files with
-	  bundle-relative paths, SHA-256 digests, and byte sizes computed from the
-	  same open regular file after path-identity revalidation, then revalidating each slot name while rejecting summary drift
+	  bundle-relative paths, SHA-256 digests, and byte sizes computed from bytes
+	  whose opened file identity matches the preflight `lstat()` identity and
+	  remains path-bound after the read, then revalidating each slot name while rejecting summary drift
 	  across repo-trust and external-evidence sections, duplicate JSON keys,
 	  unexpected top-level, section-level, or per-slot Android signed-evidence
 	  summary fields, missing Android signed-evidence summary fields, malformed
@@ -889,8 +892,9 @@ and completed history lives in [`status.md`](./status.md).
 	  atomic replacement, final output-path revalidation, parent-directory sync,
 	  and readback verification pinned by read-failure and post-replace
 	  symlink-swap regressions. The same helper can verify existing manifests
-	  by parsing readiness summaries and existing manifests from the same opened
-	  regular JSON file after path-identity revalidation, preflighting the
+	  by parsing readiness summaries and existing manifests from opened regular
+	  JSON files whose identities match their preflight `lstat()` checks,
+	  preflighting the
 	  manifest path before local evidence scanners run, and
 	  then validating nested evidence inventory path, digest, and required-size shape before using a
 	  stable manifest comparison that ignores only the verifier run
@@ -938,10 +942,11 @@ and completed history lives in [`status.md`](./status.md).
 			  relative evidence paths are expanded, and make shared Android ancestor
 			  validation fail closed on cwd metadata failures for relative helper
 			  inputs,
-			  reject secret-looking direct ABI-6 release JSON and ABI/source marker file
-		  paths plus unreadable ABI-6 release JSON and source-marker leaf metadata
-		  before content parsing,
-		  redact and block any secret-looking string that reaches an Android scanner
+				  reject secret-looking direct ABI-6 release JSON and ABI/source marker file
+			  paths plus unreadable ABI-6 release JSON and source-marker leaf metadata
+			  before content parsing, bind ABI/source marker reads to the preflight
+			  `lstat()` identity so post-preflight source swaps fail closed,
+			  redact and block any secret-looking string that reaches an Android scanner
 		  report before summary serialization,
 			  reject symlinked rollup summary output ancestors plus symlinked or
 			  hardlinked summary output aliases, reject dangling symlink summary
@@ -2513,6 +2518,9 @@ and completed history lives in [`status.md`](./status.md).
 	  business-service entries rejected before duplicate-ID, missing-schema-version,
 	  unknown-value, or summary echo,
 	  overlong XSD/XML schema and fixture identifiers rejected before mismatch echo,
+	  overlong trust-bundle/evidence/readiness compact trust profile IDs,
+	  override IDs, policies, and trust-source authority/version provenance
+	  rejected before trust replay, summary archive, or blocker echo,
 	  plus generic evidence/readiness archive/canary kind, filename, or metadata
 	  mismatch blockers that do not print receipt kind values, receipt leaf names, or invalid metadata tuples,
 	  rail receipt metadata recording for nullable raw receipt fields and retained

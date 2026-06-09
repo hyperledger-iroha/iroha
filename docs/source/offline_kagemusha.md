@@ -381,10 +381,11 @@ reject secret-looking direct file paths and unreadable ABI-6 release JSON leaf
 metadata before content parsing.
 ABI-7 and Reserved-lineage
 source marker text reads also rerun the source-marker file validator immediately
-before loading marker text, so symlink, hardlink, non-regular, or secret-bearing
-source aliases cannot satisfy readiness markers after an earlier check. Unreadable
-source-marker leaf metadata, unreadable marker bytes, or non-UTF-8 ABI-7 and
-Reserved-lineage marker files return
+before loading marker text and bind the opened read to that preflight `lstat()`
+identity, so symlink, hardlink, non-regular, secret-bearing, or post-preflight
+regular-file source aliases cannot satisfy readiness markers after an earlier
+check. Unreadable source-marker leaf metadata, unreadable marker bytes, or
+non-UTF-8 ABI-7 and Reserved-lineage marker files return
 structured blockers instead of raw decode errors. The
 ABI-7 compact section also extracts the relevant Rust function bodies before
 trusting the checked-in source: compact record preflight must reject malformed
@@ -397,8 +398,9 @@ readiness summary writer also rejects symlinked `--summary-out` ancestors and
 symlinked, hardlinked, non-regular, dangling-symlink, or unreadable-metadata
 output leaves, plus secret-looking direct output paths, before creating missing
 output parent directories, then rechecks the output parent and ancestors before
-writing, keeping local rollup artifacts from being emitted through secret or
-aliased paths. The
+writing and binds post-write readback to the opened summary file identity,
+keeping local rollup artifacts from being emitted through secret or aliased
+paths. The
 Android signing helper runs the slot/artifact symlink, hardlink, and
 regular-file preflight before parsing `slot.json`, and classifies the slot
 directory plus its parent with `lstat()` so unreadable slot or parent metadata
@@ -492,8 +494,8 @@ secret-looking output paths plus unreadable output parent or leaf metadata,
 classifies summary output parents with `lstat()` before any `Path.is_dir()`
 preflight, rechecks created output parents before writing JSON, writes
 `--json-out` through a fsynced same-directory temporary file, atomically replaces
-the final summary, reads it back before success, and preserves an existing
-summary if replacement fails. The signed-evidence helper also
+the final summary, reads it back through opened-file identity binding before
+success, and preserves an existing summary if replacement fails. The signed-evidence helper also
 classifies signer-controlled output parents with `lstat()` before write or
 read-back digest preflight, so unreadable parent metadata stays a structured
 signer blocker instead of being hidden by `Path.is_dir()`.
@@ -526,7 +528,7 @@ files, and secret-looking names immediately before text decoding, with the same
 opened-file identity binding. The shared Android device-lab JSON loader
 also rejects secret-looking
 direct file paths and symlinked ancestor directories before parsing JSON, then
-decodes JSON bytes from one opened regular file after path-identity
+decodes JSON bytes from one opened regular file after preflight path-identity
 revalidation, so direct metadata, attestation, handoff, wallet-integrity, or
 signed-evidence validation cannot read through secret-bearing directories,
 aliased directories, or post-preflight leaf aliases; unreadable leaf metadata,
@@ -606,16 +608,17 @@ The release bundle manifest uses
 ABI-7, and lineage release-tooling trust roots plus the readiness summary,
 Reserved-lineage proof evidence, ABI-7 compact key evidence, and Android
 signed-evidence inventory, and parses readiness summaries and existing release
-manifests from the same opened regular JSON file after path-identity
-revalidation. The emitted manifest records bundle-relative
+manifests from opened regular JSON files whose identities match their preflight
+`lstat()` checks. The emitted manifest records bundle-relative
 per-slot Android signed-evidence artifact paths and SHA-256 digests for every
 validated device-lab slot, keeps the Reserved-lineage and ABI-7 compact
 artifact digest and size maps from the recomputed readiness summary, records every packaged lineage artifact,
 compact key artifact, compact key generator log, production proof log, release
 APK, D2D handoff transcript, wallet-integrity transcript, and attestation
 certificate-chain file with
-bundle-relative path, SHA-256 digest, and byte size computed from the same
-opened regular file after path-identity revalidation, and revalidates each slot
+bundle-relative path, SHA-256 digest, and byte size computed from bytes whose
+opened file identity matches the preflight `lstat()` identity and remains
+path-bound after the read, and revalidates each slot
 name, signed-evidence summary field set, signed-evidence timestamp, summary
 digest, and slot-relative artifact path before
 constructing manifest paths. The verifier rejects summary drift,
@@ -646,7 +649,7 @@ Newly-created release-bundle output parents are revalidated before writing so a
 symlinked parent cannot be introduced during output creation. The manifest is
 written through a fsynced temporary file in the target directory, atomically
 replaced into place, synced at the parent directory where supported, and read
-back before success is reported, and `--out` cannot
+back through opened-file identity binding before success is reported, and `--out` cannot
 overwrite any readiness summary, evidence JSON, proof log, key artifact, or
 Android signed-evidence file already hash-bound into the manifest.
 
@@ -663,10 +666,14 @@ local `.vk`, `.pk`, key-artifacts package, verifier-keys package, and
 `.record.norito` files.
 Both helpers create missing output parents only after these preflights,
 classify `--out` parents with `lstat()` before any `Path.is_dir()` preflight,
-and recheck created output parents before direct helper preflight returns. Input
-and output corridor resolution failures return structured `--proof-log parent`,
-`--out parent`, or `--artifact-dir` blockers instead of raw resolver errors. The shared
-evidence builder also rejects secret-looking `--artifact-dir`/`--proof-log`
+and recheck created output parents before direct helper preflight returns. After
+atomic replacement, both helper outputs revalidate final path shape, capture the
+output `lstat()` identity, read back through the opened regular file, and reject
+post-replace symlink or regular-file swaps as `--out changed while being read`.
+Input and output corridor resolution failures return structured `--proof-log
+parent`, `--out parent`, or `--artifact-dir` blockers instead of raw resolver
+errors. The shared evidence builder also rejects secret-looking
+`--artifact-dir`/`--proof-log`
 paths and detached proof logs that are not the canonical
 `record-archive-proof.log` directly under `--artifact-dir` before hashing
 artifacts or reading the proof log. Direct validation and output-writer helpers

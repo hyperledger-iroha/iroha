@@ -388,6 +388,7 @@ class PrivacyNativeBridge private constructor() {
         val verifierFuzzing: Boolean,
         val performanceGates: Boolean,
         val externalAudit: Boolean,
+        val requiredGates: List<String>,
         val missing: List<String>,
         val auditReferences: List<String>,
     ) {
@@ -416,6 +417,26 @@ class PrivacyNativeBridge private constructor() {
                         "Iroha production allowlist is not enabled for this audited row",
                     ),
                 )
+            @JvmField
+            val REQUIRED_GATES: List<String> =
+                Collections.unmodifiableList(
+                    listOf(
+                        "real_proving",
+                        "real_verification",
+                        "chain_admission",
+                        "sdk_parity",
+                        "wallet_state",
+                        "witness_privacy_checks",
+                        "deterministic_tests",
+                        "negative_adversarial_tests",
+                        "replay_nullifier_tests",
+                        "fuzzing",
+                        "parser_fuzzing",
+                        "verifier_fuzzing",
+                        "performance_gates",
+                        "external_audit",
+                    ),
+                )
             private val EMPTY_AUDIT_REFERENCES: List<String> =
                 Collections.unmodifiableList(emptyList())
 
@@ -438,6 +459,7 @@ class PrivacyNativeBridge private constructor() {
                     verifierFuzzing = false,
                     performanceGates = false,
                     externalAudit = false,
+                    requiredGates = REQUIRED_GATES,
                     missing = MISSING_REASONS,
                     auditReferences = EMPTY_AUDIT_REFERENCES,
                 )
