@@ -227,6 +227,9 @@ export {
   buildRegisterDomainTransaction,
   buildTransaction,
   buildIvmProvedTransaction,
+  buildKagemushaInstructionArchiveInstruction,
+  buildKagemushaInstructionTransaction,
+  buildKagemushaRecursiveRedeemTransaction,
   buildMintAssetTransaction,
   buildBurnAssetTransaction,
   buildBurnTriggerTransaction,
@@ -312,6 +315,18 @@ export {
   sakuraQrStreamReducedMotionSkin,
   sakuraQrStreamLowPowerSkin,
 } from "./offlineQrStream.js";
+export {
+  KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME,
+  KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME,
+  KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME,
+  OFFLINE_CASH_TRANSPORT_QR,
+  OFFLINE_CASH_TRANSPORT_NFC,
+  OFFLINE_CASH_TRANSPORT_NEARBY,
+  OfflineCashConfigurationSnapshotError,
+  assertOfflineCashConfigurationSnapshotUsable,
+  offlineCashAvailableTransportKinds,
+  OfflineCashLifecycleController,
+} from "./offlineCashLifecycle.js";
 export {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,

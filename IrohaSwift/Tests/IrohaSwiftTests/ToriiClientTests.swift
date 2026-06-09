@@ -3461,7 +3461,9 @@ final class ToriiClientTests: XCTestCase {
             "accumulator_digest_hex",
             "proof_public_input_schema_digest_hex",
             "prover_key_digest_hex",
+            "prover_key_material_commitment_hex",
             "verifier_key_digest_hex",
+            "verifier_key_material_commitment_hex",
             "vk_commitment_hex",
             "expected_material_digest_hex",
             "expected_statement_digest_hex",
@@ -3477,9 +3479,14 @@ final class ToriiClientTests: XCTestCase {
             "full-bootstrap RNS digest"
         )
         try assertBfvEqual(
-            try string(material, "verifier_key_digest_hex"),
+            try string(material, "verifier_key_material_commitment_hex"),
             try string(material, "vk_commitment_hex"),
             "full-bootstrap verifier-key commitment"
+        )
+        XCTAssertNotEqual(
+            try string(material, "verifier_key_digest_hex"),
+            try string(material, "vk_commitment_hex"),
+            "full-bootstrap verifier-key commitment must be distinct from the artifact digest"
         )
         var uniqueDigestValues: [String] = []
         for (field, value) in zip(digestFields, digestValues) where field != "vk_commitment_hex" {

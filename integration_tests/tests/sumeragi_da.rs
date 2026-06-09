@@ -2,6 +2,7 @@
 //! Data availability + RBC integration scenario exercising large payload distribution.
 
 use std::{
+    collections::BTreeMap,
     fmt::Write as _,
     fs,
     io::ErrorKind,
@@ -31,9 +32,12 @@ use iroha::{
     },
 };
 use iroha_config_base::toml::Writer as TomlWriter;
-use iroha_core::sumeragi::{network_topology::Topology, rbc_status, rbc_store};
+use iroha_core::sumeragi::{
+    network_topology::{Topology, commit_quorum_from_len},
+    rbc_status, rbc_store,
+};
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer};
-use norito::json::{self, Value};
+use norito::json::{self, Map, Value};
 use rand::{Rng, SeedableRng, distr::Alphanumeric};
 use rand_chacha::ChaCha8Rng;
 use tokio::time::{sleep, timeout};
@@ -60,6 +64,7 @@ struct PeerMetrics {
     snapshot: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct RbcObservation {
     delivered_at: Duration,
     height: u64,
@@ -95,21 +100,26 @@ struct SumeragiSnapshot {
     view_change_proof_stale_total: u64,
     view_change_proof_rejected_total: u64,
     da_reschedule_total: u64,
-    rbc_deliver_defer_ready_total: u64,
-    rbc_deliver_defer_chunks_total: u64,
 }
 
 impl SumeragiSnapshot {
-    fn from_json(value: &Value) -> Self {
-        Self {
-            index: json_u64(value, "view_change_index"),
-            view_change_proof_accepted_total: json_u64(value, "view_change_proof_accepted_total"),
-            view_change_proof_stale_total: json_u64(value, "view_change_proof_stale_total"),
-            view_change_proof_rejected_total: json_u64(value, "view_change_proof_rejected_total"),
-            da_reschedule_total: json_u64(value, "da_reschedule_total"),
-            rbc_deliver_defer_ready_total: json_u64(value, "rbc_deliver_defer_ready_total"),
-            rbc_deliver_defer_chunks_total: json_u64(value, "rbc_deliver_defer_chunks_total"),
-        }
+    fn from_json(value: &Value) -> Result<Self> {
+        Ok(Self {
+            index: require_json_u64(value, "view_change_index")?,
+            view_change_proof_accepted_total: require_json_u64(
+                value,
+                "view_change_proof_accepted_total",
+            )?,
+            view_change_proof_stale_total: require_json_u64(
+                value,
+                "view_change_proof_stale_total",
+            )?,
+            view_change_proof_rejected_total: require_json_u64(
+                value,
+                "view_change_proof_rejected_total",
+            )?,
+            da_reschedule_total: require_json_u64(value, "da_reschedule_total")?,
+        })
     }
 }
 
@@ -237,70 +247,70 @@ async fn fetch_sumeragi_snapshot(
         .await
         .wrap_err("read sumeragi status body")?;
     let value: Value = json::from_str(&body).wrap_err("parse sumeragi status JSON payload")?;
-    Ok(SumeragiSnapshot::from_json(&value))
+    SumeragiSnapshot::from_json(&value)
 }
 
-fn json_u64(root: &Value, key: &str) -> u64 {
-    root.as_object()
-        .and_then(|obj| obj.get(key))
-        .and_then(Value::as_u64)
-        .unwrap_or_default()
+fn require_json_u64(root: &Value, key: &str) -> Result<u64> {
+    let obj = root
+        .as_object()
+        .ok_or_else(|| eyre!("status payload is not an object while reading `{key}`: {root:?}"))?;
+    let raw = obj
+        .get(key)
+        .ok_or_else(|| eyre!("status payload is missing required `{key}` field: {root:?}"))?;
+    raw.as_u64()
+        .ok_or_else(|| eyre!("status field `{key}` is not a u64: {raw:?}"))
 }
 
-fn parse_pending_rbc_stash_counters(root: &Value) -> PendingRbcStashCounters {
+fn pending_rbc_u64(pending: &Map, key: &str) -> Result<u64> {
+    let raw = pending
+        .get(key)
+        .ok_or_else(|| eyre!("pending_rbc is missing required `{key}` field: {pending:?}"))?;
+    raw.as_u64()
+        .ok_or_else(|| eyre!("pending_rbc field `{key}` is not a u64: {raw:?}"))
+}
+
+fn parse_pending_rbc_stash_counters(root: &Value) -> Result<PendingRbcStashCounters> {
     let pending = root
         .as_object()
         .and_then(|obj| obj.get("pending_rbc"))
-        .and_then(Value::as_object);
-    let Some(pending) = pending else {
-        return PendingRbcStashCounters::default();
-    };
-    PendingRbcStashCounters {
-        stash_ready_total: pending
-            .get("stash_ready_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        stash_ready_init_missing_total: pending
-            .get("stash_ready_init_missing_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        stash_ready_roster_missing_total: pending
-            .get("stash_ready_roster_missing_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        stash_ready_roster_hash_mismatch_total: pending
-            .get("stash_ready_roster_hash_mismatch_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        stash_ready_roster_unverified_total: pending
-            .get("stash_ready_roster_unverified_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        stash_deliver_total: pending
-            .get("stash_deliver_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        stash_deliver_init_missing_total: pending
-            .get("stash_deliver_init_missing_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        stash_deliver_roster_missing_total: pending
-            .get("stash_deliver_roster_missing_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        stash_deliver_roster_hash_mismatch_total: pending
-            .get("stash_deliver_roster_hash_mismatch_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        stash_deliver_roster_unverified_total: pending
-            .get("stash_deliver_roster_unverified_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-        stash_chunk_total: pending
-            .get("stash_chunk_total")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-    }
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            eyre!("status payload is missing required `pending_rbc` object: {root:?}")
+        })?;
+    Ok(PendingRbcStashCounters {
+        stash_ready_total: pending_rbc_u64(pending, "stash_ready_total")?,
+        stash_ready_init_missing_total: pending_rbc_u64(pending, "stash_ready_init_missing_total")?,
+        stash_ready_roster_missing_total: pending_rbc_u64(
+            pending,
+            "stash_ready_roster_missing_total",
+        )?,
+        stash_ready_roster_hash_mismatch_total: pending_rbc_u64(
+            pending,
+            "stash_ready_roster_hash_mismatch_total",
+        )?,
+        stash_ready_roster_unverified_total: pending_rbc_u64(
+            pending,
+            "stash_ready_roster_unverified_total",
+        )?,
+        stash_deliver_total: pending_rbc_u64(pending, "stash_deliver_total")?,
+        stash_deliver_init_missing_total: pending_rbc_u64(
+            pending,
+            "stash_deliver_init_missing_total",
+        )?,
+        stash_deliver_roster_missing_total: pending_rbc_u64(
+            pending,
+            "stash_deliver_roster_missing_total",
+        )?,
+        stash_deliver_roster_hash_mismatch_total: pending_rbc_u64(
+            pending,
+            "stash_deliver_roster_hash_mismatch_total",
+        )?,
+        stash_deliver_roster_unverified_total: pending_rbc_u64(
+            pending,
+            "stash_deliver_roster_unverified_total",
+        )?,
+        stash_chunk_total: pending_rbc_u64(pending, "stash_chunk_total")?,
+    })
 }
 
 fn truncate_for_error(input: &str, max_chars: usize) -> String {
@@ -541,7 +551,12 @@ fn best_persisted_rbc_summary_for_height(
 ) -> Option<&rbc_status::Summary> {
     persisted
         .iter()
-        .filter(|summary| summary.height == expected_height && !summary.invalid)
+        .filter(|summary| {
+            summary.height == expected_height
+                && !summary.invalid
+                && session_summary_chunk_shape_valid(summary)
+                && (!summary.delivered || delivered_summary_chunk_shape_valid(summary))
+        })
         .max_by_key(|summary| {
             (
                 summary.delivered,
@@ -561,7 +576,6 @@ async fn sumeragi_rbc_da_large_payload_four_peers() -> Result<()> {
         LARGE_PAYLOAD_BYTES,
         RBC_SCENARIO_PLAIN,
         false,
-        true,
         |layer| {
             layer.write(
                 ["sumeragi", "advanced", "rbc", "encoding"],
@@ -585,7 +599,6 @@ async fn sumeragi_rbc_da_large_payload_four_peers_rs16() -> Result<()> {
         LARGE_PAYLOAD_BYTES,
         RBC_SCENARIO_RS16,
         false,
-        true,
         |layer| {
             let _ = layer
                 .write(
@@ -622,7 +635,6 @@ async fn sumeragi_da_commit_certificate_history_four_peers() -> Result<()> {
         LARGE_PAYLOAD_BYTES,
         RBC_SCENARIO_PLAIN,
         true,
-        true,
         |_| {},
         |_| Ok(()),
     )
@@ -643,7 +655,6 @@ async fn sumeragi_rbc_da_large_payload_six_peers() -> Result<()> {
         LARGE_PAYLOAD_BYTES,
         RBC_SCENARIO_PLAIN,
         false,
-        true,
         |layer| {
             layer.write(
                 ["sumeragi", "advanced", "rbc", "encoding"],
@@ -667,7 +678,6 @@ async fn sumeragi_rbc_da_large_payload_six_peers_rs16() -> Result<()> {
         LARGE_PAYLOAD_BYTES,
         RBC_SCENARIO_RS16,
         false,
-        true,
         |layer| {
             let _ = layer
                 .write(
@@ -704,7 +714,6 @@ async fn sumeragi_commit_qc_with_tight_block_queue_four_peers() -> Result<()> {
         LARGE_PAYLOAD_BYTES,
         RBC_SCENARIO_PLAIN,
         false,
-        false,
         |layer| {
             layer.write(["sumeragi", "advanced", "queues", "blocks"], 2i64);
         },
@@ -730,7 +739,6 @@ async fn sumeragi_rbc_background_queue_synchronous() -> Result<()> {
         LARGE_PAYLOAD_BYTES,
         RBC_SCENARIO_PLAIN,
         false,
-        true,
         |layer| {
             layer.write(["sumeragi", "debug", "disable_background_worker"], true);
         },
@@ -821,10 +829,6 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
             .write(
                 ["sumeragi", "advanced", "rbc", "chunk_max_bytes"],
                 rbc_chunk_max_bytes,
-            )
-            .write(
-                ["sumeragi", "debug", "rbc", "force_deliver_quorum_one"],
-                true,
             )
             .write(
                 ["torii", "max_content_len"],
@@ -1140,38 +1144,17 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
         submit_handle.await.wrap_err("submit join")??;
 
         let restart_store_dir = restart_peer.kura_store_dir().join("rbc_sessions");
-        let persisted = match wait_for_persisted_inflight_rbc_session(
+        let persisted = wait_for_persisted_inflight_rbc_session(
             &restart_store_dir,
             expected_height,
             Instant::now(),
         )
         .await
-        {
-            Ok(summary) => Some(summary),
-            Err(err) => {
-                eprintln!(
-                    "RBC in-flight persistence not observed before restart at height {expected_height}; validating the committed block without forcing recovery assertions: {err:?}"
-                );
-                None
-            }
-        };
-        let Some(persisted) = persisted else {
-            timeout(
-                da_commit_wait_timeout(),
-                restart_peer.once_block(expected_height),
+        .wrap_err_with(|| {
+            format!(
+                "RBC in-flight persistence must be observed before restart at height {expected_height}"
             )
-            .await
-            .map_err(|_| {
-                eyre!(
-                    "restart peer failed to reach height {expected_height} before timeout {:?}",
-                    da_commit_wait_timeout()
-                )
-            })?;
-            let _commit_elapsed =
-                wait_for_height(http.clone(), status_url, expected_height, Instant::now()).await?;
-            network.shutdown().await;
-            return Ok(());
-        };
+        })?;
         let block_hash_hex = hex::encode(persisted.block_hash.as_ref());
 
         restart_peer.shutdown().await;
@@ -1416,39 +1399,13 @@ async fn sumeragi_rbc_recovers_after_restart_with_roster_change() -> Result<()> 
             .wrap_err_with(|| format!("submit initial log through leader {initial_leader_id}"))?;
 
         let restart_store_dir = restart_peer.kura_store_dir().join("rbc_sessions");
-        let persisted =
-            match wait_for_persisted_rbc_session(&restart_store_dir, expected_height, start).await
-            {
-                Ok(summary) => Some(summary),
-                Err(err) => {
-                    eprintln!(
-                        "Persisted RBC session not observed before roster-change restart at height {expected_height}; validating the committed block without forcing recovery assertions: {err:?}"
-                    );
-                    None
-                }
-            };
-        let Some(persisted) = persisted else {
-            timeout(
-                da_commit_wait_timeout(),
-                restart_peer.once_block(expected_height),
-            )
+        let persisted = wait_for_persisted_rbc_session(&restart_store_dir, expected_height, start)
             .await
-            .map_err(|_| {
-                eyre!(
-                    "restart peer failed to reach height {expected_height} before timeout {:?}",
-                    da_commit_wait_timeout()
+            .wrap_err_with(|| {
+                format!(
+                    "persisted RBC session must be observed before roster-change restart at height {expected_height}"
                 )
             })?;
-            let _commit_elapsed = wait_for_height(
-                http.clone(),
-                status_url,
-                expected_height,
-                Instant::now(),
-            )
-            .await?;
-            network.shutdown().await;
-            return Ok(());
-        };
         let block_hash_hex = hex::encode(persisted.block_hash.as_ref());
 
         restart_peer.shutdown().await;
@@ -1633,9 +1590,7 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
         let client = network.client();
         let http = http_client_with_client_auth(&client)?;
         let peers = network.peers();
-        let peer_count = u64::try_from(peers.len()).unwrap_or(0);
-        let max_faults = peer_count.saturating_sub(1) / 3;
-        let commit_quorum = (2 * max_faults + 1).max(1);
+        let commit_quorum = commit_quorum_from_len(peers.len()).max(1);
 
         let mut baseline_blocks = Vec::new();
         let mut baseline_sumeragi_snapshots = Vec::new();
@@ -1660,17 +1615,19 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
         .await
         .wrap_err("submit log instruction")??;
 
-        let sessions_url = client
-            .torii_url
-            .join("v1/sumeragi/rbc/sessions")
-            .wrap_err("compose sessions URL")?;
-        if let Err(err) =
-            wait_for_rbc_session(&http, sessions_url.clone(), da_rbc_session_timeout()).await
-        {
-            eprintln!(
-                "RBC session not observed before commit (continuing): {err:?}"
-            );
-        }
+        let rbc_evidence = wait_for_rbc_session_height_quorum(
+            &http,
+            peers,
+            expected_height,
+            commit_quorum,
+            da_rbc_session_timeout(),
+        )
+        .await
+        .wrap_err_with(|| {
+            format!(
+                "payload-loss scenario must observe RBC session evidence before accepting commit at height {expected_height}"
+            )
+        })?;
 
         let mut status_after = Vec::new();
         let mut after_sumeragi_snapshots = Vec::new();
@@ -1679,7 +1636,7 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
         loop {
             status_after.clear();
             after_sumeragi_snapshots.clear();
-            let mut ready_count = 0u64;
+            let mut ready_count = 0usize;
             let mut status_errors = Vec::new();
             for (idx, peer) in peers.iter().enumerate() {
                 if !peer.is_running() {
@@ -1704,8 +1661,18 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
                 }
             }
 
+            let committed_snapshot_count = status_after
+                .iter()
+                .filter(|(idx, status)| {
+                    status.blocks >= expected_height
+                        && after_sumeragi_snapshots
+                            .iter()
+                            .any(|(snapshot_idx, _)| snapshot_idx == idx)
+                })
+                .count();
             let commits_ready = ready_count >= commit_quorum;
-            if commits_ready {
+            let snapshots_ready = committed_snapshot_count >= commit_quorum;
+            if commits_ready && snapshots_ready {
                 break;
             }
 
@@ -1719,30 +1686,48 @@ async fn sumeragi_da_payload_loss_does_not_block_commit() -> Result<()> {
                     .map(|(idx, err)| (idx, format!("{err:#}")))
                     .collect();
                 return Err(eyre!(
-                    "timed out waiting for commit under payload loss: blocks={blocks:?}, expected={expected_height}, quorum={commit_quorum}, errors={errors:?}"
+                    "timed out waiting for commit and Sumeragi snapshots under payload loss: blocks={blocks:?}, expected={expected_height}, quorum={commit_quorum}, committed_statuses={ready_count}, committed_snapshots={committed_snapshot_count}, errors={errors:?}"
                 ));
             }
 
             sleep(Duration::from_millis(200)).await;
         }
 
+        let committed_snapshot_count = status_after
+            .iter()
+            .filter(|(idx, status)| {
+                status.blocks >= expected_height
+                    && after_sumeragi_snapshots
+                        .iter()
+                        .any(|(snapshot_idx, _)| snapshot_idx == idx)
+            })
+            .count();
         ensure!(
-            !after_sumeragi_snapshots.is_empty(),
-            "missing Sumeragi snapshots after payload loss run"
+            committed_snapshot_count >= commit_quorum,
+            "expected Sumeragi snapshots from commit quorum after payload loss run; got {committed_snapshot_count}/{commit_quorum}"
         );
 
         ensure!(
-            after_sumeragi_snapshots.iter().all(|(idx, after)| {
-                baseline_sumeragi_snapshots
-                    .get(*idx)
-                    .is_some_and(|baseline| {
-                        after.da_reschedule_total == baseline.da_reschedule_total
+            after_sumeragi_snapshots
+                .iter()
+                .filter(|(idx, _)| {
+                    status_after.iter().any(|(status_idx, status)| {
+                        status_idx == idx && status.blocks >= expected_height
                     })
-            }),
-            "expected da_reschedule_total to remain unchanged when DA is advisory"
+                })
+                .all(|(idx, after)| {
+                    baseline_sumeragi_snapshots
+                        .get(*idx)
+                        .is_some_and(|baseline| {
+                            after.da_reschedule_total == baseline.da_reschedule_total
+                        })
+                }),
+            "expected da_reschedule_total to remain unchanged on peers that committed under payload loss"
         );
-        // RBC DELIVER deferrals are optional here: DA is advisory and availability may be satisfied
-        // via local payloads or never emit DELIVER in loss scenarios.
+        ensure!(
+            rbc_evidence.peers_with_nonterminal_session > 0,
+            "payload-loss scenario should retain nonterminal/incomplete RBC evidence before commit; evidence={rbc_evidence:?}"
+        );
 
         network.shutdown().await;
         Ok(())
@@ -1921,7 +1906,7 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                 let body = response.text().await.wrap_err("baseline sumeragi status body")?;
                 let status_value: Value =
                     json::from_str(&body).wrap_err("parse baseline sumeragi status JSON")?;
-                baseline_stash = parse_pending_rbc_stash_counters(&status_value);
+                baseline_stash = parse_pending_rbc_stash_counters(&status_value)?;
             }
 
             let response = http
@@ -1999,7 +1984,7 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                 let body = response.text().await.wrap_err("sumeragi status body")?;
                 let status_value: Value =
                     json::from_str(&body).wrap_err("parse sumeragi status JSON")?;
-                let counters = parse_pending_rbc_stash_counters(&status_value);
+                let counters = parse_pending_rbc_stash_counters(&status_value)?;
                 let unverified_total = counters
                     .stash_ready_roster_unverified_total
                     .saturating_add(counters.stash_deliver_roster_unverified_total);
@@ -2427,20 +2412,9 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
         .await
         .wrap_err("submit join")??;
 
-        let inflight = match wait_for_inflight_rbc(http.clone(), probes, Instant::now()).await {
-            Ok(observation) => observation,
-            Err(err) => {
-                eprintln!(
-                    "RBC in-flight session not observed before cold restart; validating the committed block without forcing recovery assertions: {err:?}"
-                );
-                let status_url = torii.join("status").wrap_err("compose status URL")?;
-                let _commit_elapsed =
-                    wait_for_height(http.clone(), status_url, expected_height, Instant::now())
-                        .await?;
-                network.shutdown().await;
-                return Ok(());
-            }
-        };
+        let inflight = wait_for_inflight_rbc(http.clone(), probes, Instant::now())
+            .await
+            .wrap_err("RBC in-flight session must be observed before cold restart")?;
 
         ensure!(
             inflight.height >= expected_height,
@@ -2583,17 +2557,47 @@ async fn sumeragi_rbc_session_recovers_after_cold_restart() -> Result<()> {
             "total chunk count should remain {expected_total_chunks}, got {}",
             snapshot_after.total_chunks
         );
-        let _terminal_observation = wait_for_terminal_rbc_state(
+        let recovered_summary_start = Instant::now();
+        loop {
+            if let Some(summary) = rbc_status::read_persisted_snapshot(&store_dir)
+                .into_iter()
+                .find(|summary| {
+                    summary.block_hash == session_key.0
+                        && summary.height == session_key.1
+                        && summary.view == session_key.2
+                        && summary.recovered_from_disk
+                        && !summary.invalid
+                })
+            {
+                ensure!(
+                    u64::from(summary.received_chunks) >= snapshot_before_received_chunks,
+                    "recovered persisted summary should preserve received chunks (before={}, after={})",
+                    snapshot_before_received_chunks,
+                    summary.received_chunks
+                );
+                break;
+            }
+            if recovered_summary_start.elapsed() > da_rbc_recovery_timeout() {
+                return Err(eyre!(
+                    "timed out waiting for persisted recovered_from_disk summary for block {block_hash_hex} at height {session_height} view {session_view}"
+                ));
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+        let _terminal_observation = wait_for_rbc_delivery(
             http.clone(),
-            &peers,
             restart_sessions_url.clone(),
             session_height,
-            &block_hash_hex,
-            None,
             recovery_start,
         )
         .await
-        .wrap_err("wait for recovered session terminal state after restart")?;
+        .wrap_err("wait for terminal RBC delivery after cold restart")?;
+        network
+            .ensure_blocks_with(|height| height.total >= session_height)
+            .await
+            .wrap_err_with(|| {
+                format!("wait for restarted network to expose height {session_height}")
+            })?;
 
         let resume_height = fetch_status(&restarted_client)
             .await
@@ -2657,7 +2661,6 @@ async fn run_sumeragi_da_scenario_with<F, G>(
     payload_bytes: usize,
     rbc_scenario: RbcEncodingScenario,
     check_commit_certificates: bool,
-    require_rbc_observation: bool,
     configure: F,
     inspect: G,
 ) -> Result<()>
@@ -2730,10 +2733,6 @@ where
             .write(
                 ["sumeragi", "advanced", "rbc", "session_ttl_ms"],
                 600_000i64,
-            )
-            .write(
-                ["sumeragi", "debug", "rbc", "force_deliver_quorum_one"],
-                true,
             )
             .write(
                 ["torii", "max_content_len"],
@@ -2831,14 +2830,12 @@ where
     let http = http_client_with_client_auth(&client)?;
     let start = Instant::now();
 
-    let rbc_handle = require_rbc_observation.then(|| {
-        tokio::spawn(wait_for_rbc_delivery(
-            http.clone(),
-            sessions_url,
-            expected_height,
-            start,
-        ))
-    });
+    let mut rbc_handle = tokio::spawn(wait_for_rbc_delivery(
+        http.clone(),
+        sessions_url,
+        expected_height,
+        start,
+    ));
     let commit_handle = tokio::spawn(wait_for_height(
         http.clone(),
         status_url,
@@ -2857,50 +2854,30 @@ where
     );
 
     let commit_elapsed = commit_handle.await.wrap_err("commit join")??;
-    let rbc_observation = if let Some(mut rbc_handle) = rbc_handle {
-        match timeout(Duration::from_millis(RBC_DELIVER_GRACE_MS), &mut rbc_handle).await {
-            Ok(joined) => joined.wrap_err("rbc join")??,
-            Err(_) => {
-                rbc_handle.abort();
-                if let Some(observation) = rbc_observation_from_persisted_snapshot(
-                    network.peers(),
-                    expected_height,
-                    None,
-                    None,
-                    commit_elapsed,
-                ) {
-                    eprintln!(
-                        "RBC session endpoint observation timed out at height {expected_height}; using persisted snapshot fallback"
-                    );
-                    observation
-                } else {
-                    eprintln!(
-                        "RBC session observation timed out at height {expected_height}; using commit timing fallback"
-                    );
-                    RbcObservation {
-                        delivered_at: commit_elapsed,
-                        height: expected_height,
-                        view: 0,
-                        total_chunks: 0,
-                        received_chunks: 0,
-                        ready_count: 0,
-                        block_hash: String::new(),
-                    }
-                }
+    let rbc_observation = match timeout(
+        Duration::from_millis(RBC_DELIVER_GRACE_MS),
+        &mut rbc_handle,
+    )
+    .await
+    {
+        Ok(joined) => joined.wrap_err("rbc join")??,
+        Err(_) => {
+            rbc_handle.abort();
+            let persisted_quorum = commit_quorum_from_len(network.peers().len()).max(1);
+            let persisted_observation = rbc_observation_from_persisted_snapshot_quorum(
+                network.peers(),
+                expected_height,
+                None,
+                None,
+                commit_elapsed,
+                persisted_quorum,
+            );
+            if persisted_observation.is_some() {
+                eprintln!(
+                    "RBC session endpoint observation timed out at height {expected_height}; using quorum-visible persisted snapshot fallback"
+                );
             }
-        }
-    } else {
-        eprintln!(
-            "RBC session observation disabled for {scenario_name}; using commit timing fallback"
-        );
-        RbcObservation {
-            delivered_at: commit_elapsed,
-            height: expected_height,
-            view: 0,
-            total_chunks: 0,
-            received_chunks: 0,
-            ready_count: 0,
-            block_hash: String::new(),
+            required_rbc_observation_after_endpoint_timeout(expected_height, persisted_observation)?
         }
     };
     let ready_required = rbc_observation.ready_count > 0;
@@ -3333,7 +3310,6 @@ async fn run_sumeragi_da_scenario(
         payload_bytes,
         RBC_SCENARIO_PLAIN,
         false,
-        true,
         |_| {},
         |_| Ok(()),
     )
@@ -3456,7 +3432,7 @@ fn parse_pending_rbc_stash_counters_reads_fields() {
         }
     }"#;
     let value: Value = json::from_str(raw).expect("parse JSON");
-    let counters = parse_pending_rbc_stash_counters(&value);
+    let counters = parse_pending_rbc_stash_counters(&value).expect("parse pending RBC counters");
     assert_eq!(counters.stash_ready_total, 2);
     assert_eq!(counters.stash_ready_init_missing_total, 1);
     assert_eq!(counters.stash_ready_roster_missing_total, 0);
@@ -3469,6 +3445,79 @@ fn parse_pending_rbc_stash_counters_reads_fields() {
     assert_eq!(counters.stash_deliver_roster_unverified_total, 1);
     assert_eq!(counters.stash_chunk_total, 4);
     assert_eq!(counters.total(), 9);
+}
+
+#[test]
+fn sumeragi_snapshot_parser_rejects_missing_or_malformed_fields() {
+    let valid = norito::json!({
+        "view_change_index": 2,
+        "view_change_proof_accepted_total": 3,
+        "view_change_proof_stale_total": 4,
+        "view_change_proof_rejected_total": 5,
+        "da_reschedule_total": 6
+    });
+    let snapshot = SumeragiSnapshot::from_json(&valid).expect("parse Sumeragi snapshot");
+    assert_eq!(snapshot.index, 2);
+    assert_eq!(snapshot.view_change_proof_accepted_total, 3);
+    assert_eq!(snapshot.view_change_proof_stale_total, 4);
+    assert_eq!(snapshot.view_change_proof_rejected_total, 5);
+    assert_eq!(snapshot.da_reschedule_total, 6);
+
+    let missing = norito::json!({
+        "view_change_index": 2,
+        "view_change_proof_accepted_total": 3,
+        "view_change_proof_stale_total": 4,
+        "view_change_proof_rejected_total": 5
+    });
+    assert!(SumeragiSnapshot::from_json(&missing).is_err());
+
+    let malformed = norito::json!({
+        "view_change_index": 2,
+        "view_change_proof_accepted_total": 3,
+        "view_change_proof_stale_total": "4",
+        "view_change_proof_rejected_total": 5,
+        "da_reschedule_total": 6
+    });
+    assert!(SumeragiSnapshot::from_json(&malformed).is_err());
+}
+
+#[test]
+fn parse_pending_rbc_stash_counters_rejects_missing_or_malformed_fields() {
+    let missing_object = norito::json!({});
+    assert!(parse_pending_rbc_stash_counters(&missing_object).is_err());
+
+    let missing_field = norito::json!({
+        "pending_rbc": {
+            "stash_ready_total": 2,
+            "stash_ready_init_missing_total": 1,
+            "stash_ready_roster_missing_total": 0,
+            "stash_ready_roster_hash_mismatch_total": 1,
+            "stash_ready_roster_unverified_total": 0,
+            "stash_deliver_total": 3,
+            "stash_deliver_init_missing_total": 1,
+            "stash_deliver_roster_missing_total": 1,
+            "stash_deliver_roster_hash_mismatch_total": 0,
+            "stash_deliver_roster_unverified_total": 1
+        }
+    });
+    assert!(parse_pending_rbc_stash_counters(&missing_field).is_err());
+
+    let malformed_field = norito::json!({
+        "pending_rbc": {
+            "stash_ready_total": 2,
+            "stash_ready_init_missing_total": "1",
+            "stash_ready_roster_missing_total": 0,
+            "stash_ready_roster_hash_mismatch_total": 1,
+            "stash_ready_roster_unverified_total": 0,
+            "stash_deliver_total": 3,
+            "stash_deliver_init_missing_total": 1,
+            "stash_deliver_roster_missing_total": 1,
+            "stash_deliver_roster_hash_mismatch_total": 0,
+            "stash_deliver_roster_unverified_total": 1,
+            "stash_chunk_total": 4
+        }
+    });
+    assert!(parse_pending_rbc_stash_counters(&malformed_field).is_err());
 }
 
 #[test]
@@ -3538,6 +3587,574 @@ fn runtime_da_configuration_required_only_when_da_is_disabled() {
         runtime_da_configuration_required(&disabled_parameters),
         "runtime DA reconfiguration should only be required when DA is disabled"
     );
+}
+
+#[test]
+fn required_rbc_observation_timeout_rejects_commit_timing_only() {
+    let err = required_rbc_observation_after_endpoint_timeout(7, None)
+        .expect_err("missing RBC evidence must fail closed");
+
+    assert!(
+        err.to_string()
+            .contains("must not fall back to commit timing only"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn required_rbc_observation_timeout_accepts_persisted_delivery_evidence() {
+    let observation = RbcObservation {
+        delivered_at: Duration::from_millis(42),
+        height: 7,
+        view: 2,
+        total_chunks: 9,
+        received_chunks: 9,
+        ready_count: 3,
+        block_hash: "persisted-delivery".to_string(),
+    };
+
+    assert_eq!(
+        required_rbc_observation_after_endpoint_timeout(7, Some(observation.clone()))
+            .expect("persisted delivered observation should satisfy required RBC evidence"),
+        observation
+    );
+}
+
+fn sample_persisted_rbc_summary(
+    hash_byte: u8,
+    height: u64,
+    view: u64,
+    delivered: bool,
+    invalid: bool,
+    ready_count: u64,
+) -> rbc_status::Summary {
+    sample_persisted_rbc_summary_with_chunks(
+        hash_byte,
+        height,
+        view,
+        delivered,
+        invalid,
+        ready_count,
+        7,
+        7,
+    )
+}
+
+fn sample_persisted_rbc_summary_with_chunks(
+    hash_byte: u8,
+    height: u64,
+    view: u64,
+    delivered: bool,
+    invalid: bool,
+    ready_count: u64,
+    total_chunks: u32,
+    received_chunks: u32,
+) -> rbc_status::Summary {
+    let block_hash = HashOf::<iroha::data_model::block::BlockHeader>::from_untyped_unchecked(
+        iroha_crypto::Hash::prehashed([hash_byte; iroha_crypto::Hash::LENGTH]),
+    );
+    rbc_status::Summary {
+        block_hash,
+        height,
+        view,
+        total_chunks,
+        encoding: iroha::data_model::block::consensus::RbcEncoding::Plain,
+        data_shards: 0,
+        parity_shards: 0,
+        received_chunks,
+        ready_count,
+        delivered,
+        payload_hash: None,
+        recovered_from_disk: false,
+        invalid,
+        reconstructed_stripes: 0,
+        reconstructable_stripes: 0,
+        lane_backlog: Vec::new(),
+        dataspace_backlog: Vec::new(),
+    }
+}
+
+fn persisted_hash_hex(hash_byte: u8) -> String {
+    hex::encode([hash_byte; iroha_crypto::Hash::LENGTH])
+}
+
+#[test]
+fn parse_rbc_summary_rejects_invalid_delivered_session() {
+    let value: Value = json::from_str(
+        r#"{
+            "items": [
+                {
+                    "height": 7,
+                    "block_hash": "bad",
+                    "delivered": true,
+                    "invalid": true,
+                    "view": 1,
+                    "total_chunks": 4,
+                    "received_chunks": 4,
+                    "ready_count": 3
+                }
+            ]
+        }"#,
+    )
+    .expect("valid test JSON");
+
+    let parsed =
+        parse_rbc_summary(&value, 7, None, None, Instant::now()).expect("RBC summary should parse");
+
+    assert!(
+        parsed.is_none(),
+        "invalid delivered endpoint summaries must not satisfy RBC delivery evidence"
+    );
+}
+
+#[test]
+fn parse_rbc_summary_rejects_malformed_delivered_chunk_counts() {
+    let value: Value = json::from_str(
+        r#"{
+            "items": [
+                {
+                    "height": 7,
+                    "block_hash": "zero",
+                    "delivered": true,
+                    "invalid": false,
+                    "view": 1,
+                    "total_chunks": 0,
+                    "received_chunks": 0,
+                    "ready_count": 3
+                },
+                {
+                    "height": 7,
+                    "block_hash": "over",
+                    "delivered": true,
+                    "invalid": false,
+                    "view": 1,
+                    "total_chunks": 4,
+                    "received_chunks": 5,
+                    "ready_count": 3
+                }
+            ]
+        }"#,
+    )
+    .expect("valid test JSON");
+
+    let parsed =
+        parse_rbc_summary(&value, 7, None, None, Instant::now()).expect("RBC summary should parse");
+
+    assert!(
+        parsed.is_none(),
+        "zero-chunk or over-counted delivered endpoint summaries must fail closed"
+    );
+}
+
+#[test]
+fn rbc_session_height_evidence_detects_nonterminal_expected_height() {
+    let value: Value = json::from_str(
+        r#"{
+            "items": [
+                {
+                    "height": 6,
+                    "total_chunks": 4,
+                    "received_chunks": 4,
+                    "delivered": true,
+                    "invalid": false
+                },
+                {
+                    "height": 7,
+                    "total_chunks": 8,
+                    "received_chunks": 3,
+                    "delivered": false,
+                    "invalid": false
+                }
+            ]
+        }"#,
+    )
+    .expect("valid test JSON");
+
+    let evidence =
+        rbc_session_height_evidence_from_value(&value, 7).expect("session evidence should parse");
+
+    assert_eq!(
+        evidence,
+        RbcSessionHeightEvidence {
+            has_session: true,
+            has_valid_session: true,
+            has_nonterminal_session: true,
+            has_delivered_session: false,
+            has_invalid_session: false,
+        }
+    );
+}
+
+#[test]
+fn rbc_session_height_evidence_ignores_zero_chunk_and_wrong_height_sessions() {
+    let value: Value = json::from_str(
+        r#"{
+            "items": [
+                {
+                    "height": 7,
+                    "total_chunks": 0,
+                    "received_chunks": 0,
+                    "delivered": false,
+                    "invalid": false
+                },
+                {
+                    "height": 8,
+                    "total_chunks": 4,
+                    "received_chunks": 1,
+                    "delivered": false,
+                    "invalid": false
+                }
+            ]
+        }"#,
+    )
+    .expect("valid test JSON");
+
+    let evidence =
+        rbc_session_height_evidence_from_value(&value, 7).expect("session evidence should parse");
+
+    assert_eq!(evidence, RbcSessionHeightEvidence::default());
+}
+
+#[test]
+fn rbc_session_height_evidence_ignores_malformed_chunk_counts() {
+    let value: Value = json::from_str(
+        r#"{
+            "items": [
+                {
+                    "height": 7,
+                    "total_chunks": 4,
+                    "received_chunks": 5,
+                    "delivered": false,
+                    "invalid": false
+                },
+                {
+                    "height": 7,
+                    "total_chunks": 4,
+                    "received_chunks": 0,
+                    "delivered": true,
+                    "invalid": false
+                }
+            ]
+        }"#,
+    )
+    .expect("valid test JSON");
+
+    let evidence =
+        rbc_session_height_evidence_from_value(&value, 7).expect("session evidence should parse");
+
+    assert_eq!(
+        evidence,
+        RbcSessionHeightEvidence::default(),
+        "over-counted sessions and zero-received delivered sessions must not count as RBC evidence"
+    );
+}
+
+#[test]
+fn rbc_session_height_evidence_keeps_valid_zero_received_inflight_session() {
+    let value: Value = json::from_str(
+        r#"{
+            "items": [
+                {
+                    "height": 7,
+                    "total_chunks": 4,
+                    "received_chunks": 0,
+                    "delivered": false,
+                    "invalid": false
+                }
+            ]
+        }"#,
+    )
+    .expect("valid test JSON");
+
+    let evidence =
+        rbc_session_height_evidence_from_value(&value, 7).expect("session evidence should parse");
+
+    assert_eq!(
+        evidence,
+        RbcSessionHeightEvidence {
+            has_session: true,
+            has_valid_session: true,
+            has_nonterminal_session: true,
+            has_delivered_session: false,
+            has_invalid_session: false,
+        }
+    );
+}
+
+#[test]
+fn persisted_rbc_session_height_evidence_marks_delivered_and_invalid_separately() {
+    let delivered = sample_persisted_rbc_summary(0x51, 7, 1, true, false, 3);
+    let invalid = sample_persisted_rbc_summary(0x52, 7, 2, false, true, 0);
+    let wrong_height = sample_persisted_rbc_summary(0x53, 8, 1, false, false, 0);
+
+    let evidence = rbc_session_height_evidence_from_persisted_summaries(
+        &[delivered, invalid, wrong_height],
+        7,
+    );
+
+    assert_eq!(
+        evidence,
+        RbcSessionHeightEvidence {
+            has_session: true,
+            has_valid_session: true,
+            has_nonterminal_session: false,
+            has_delivered_session: true,
+            has_invalid_session: true,
+        }
+    );
+}
+
+#[test]
+fn persisted_rbc_session_height_evidence_ignores_malformed_chunk_counts() {
+    let over_counted = sample_persisted_rbc_summary_with_chunks(0x54, 7, 1, false, false, 0, 4, 5);
+    let zero_received_delivered =
+        sample_persisted_rbc_summary_with_chunks(0x55, 7, 1, true, false, 3, 4, 0);
+
+    let evidence = rbc_session_height_evidence_from_persisted_summaries(
+        &[over_counted, zero_received_delivered],
+        7,
+    );
+
+    assert_eq!(
+        evidence,
+        RbcSessionHeightEvidence::default(),
+        "malformed persisted chunk counts must not count as height evidence"
+    );
+}
+
+#[test]
+fn best_persisted_rbc_summary_ignores_malformed_chunk_counts() {
+    let malformed_delivered =
+        sample_persisted_rbc_summary_with_chunks(0x56, 7, 3, true, false, 9, 4, 0);
+    let over_counted = sample_persisted_rbc_summary_with_chunks(0x57, 7, 2, true, false, 8, 4, 5);
+    let valid = sample_persisted_rbc_summary_with_chunks(0x58, 7, 1, false, false, 1, 4, 0);
+
+    let summaries = [malformed_delivered, over_counted, valid.clone()];
+    let selected = best_persisted_rbc_summary_for_height(&summaries, 7)
+        .expect("valid in-flight summary should remain selectable");
+
+    assert_eq!(selected.block_hash, valid.block_hash);
+    assert_eq!(selected.view, valid.view);
+}
+
+#[test]
+fn rbc_session_quorum_evidence_rejects_invalid_only_quorum() {
+    let evidence = RbcSessionQuorumEvidence {
+        peers_with_session: 3,
+        peers_with_valid_session: 1,
+        peers_with_nonterminal_session: 1,
+        peers_with_delivered_session: 0,
+        peers_with_invalid_session: 2,
+    };
+
+    assert!(
+        !rbc_session_quorum_evidence_satisfies(&evidence, 3),
+        "invalid sessions must not satisfy the quorum portion of session-height evidence"
+    );
+}
+
+#[test]
+fn rbc_session_quorum_evidence_accepts_valid_quorum_with_one_nonterminal() {
+    let evidence = RbcSessionQuorumEvidence {
+        peers_with_session: 3,
+        peers_with_valid_session: 3,
+        peers_with_nonterminal_session: 1,
+        peers_with_delivered_session: 2,
+        peers_with_invalid_session: 0,
+    };
+
+    assert!(
+        rbc_session_quorum_evidence_satisfies(&evidence, 3),
+        "payload-loss evidence still allows a valid delivered quorum with one nonterminal witness"
+    );
+}
+
+#[test]
+fn persisted_rbc_quorum_selector_rejects_single_peer_delivery() {
+    let peer0 = vec![
+        sample_persisted_rbc_summary(0x31, 7, 1, true, false, 1),
+        sample_persisted_rbc_summary(0x31, 7, 2, true, false, 3),
+    ];
+    let peer1: Vec<rbc_status::Summary> = Vec::new();
+    let peer2: Vec<rbc_status::Summary> = Vec::new();
+
+    assert!(
+        rbc_observation_from_persisted_summary_quorum(
+            [peer0.as_slice(), peer1.as_slice(), peer2.as_slice()],
+            7,
+            None,
+            None,
+            Duration::from_millis(5),
+            2,
+        )
+        .is_none(),
+        "multiple delivered summaries on one peer must not satisfy a peer quorum"
+    );
+}
+
+#[test]
+fn persisted_rbc_quorum_selector_rejects_single_peer_for_expected_hash() {
+    let peer0 = vec![sample_persisted_rbc_summary(0x35, 7, 1, true, false, 3)];
+    let peer1: Vec<rbc_status::Summary> = Vec::new();
+    let peer2: Vec<rbc_status::Summary> = Vec::new();
+    let expected_hash = hex::encode(peer0[0].block_hash.as_ref());
+
+    assert!(
+        rbc_observation_from_persisted_summary_quorum(
+            [peer0.as_slice(), peer1.as_slice(), peer2.as_slice()],
+            7,
+            Some(&expected_hash),
+            None,
+            Duration::from_millis(5),
+            2,
+        )
+        .is_none(),
+        "exact hash filtering must still require a peer quorum"
+    );
+}
+
+#[test]
+fn persisted_rbc_quorum_selector_accepts_expected_hash_quorum_ignoring_conflicts() {
+    let peer0 = vec![sample_persisted_rbc_summary(0x36, 7, 1, true, false, 2)];
+    let peer1 = vec![sample_persisted_rbc_summary(0x36, 7, 2, true, false, 3)];
+    let peer2 = vec![sample_persisted_rbc_summary(0x37, 7, 3, true, false, 9)];
+    let expected_hash = hex::encode(peer0[0].block_hash.as_ref());
+
+    let observation = rbc_observation_from_persisted_summary_quorum(
+        [peer0.as_slice(), peer1.as_slice(), peer2.as_slice()],
+        7,
+        Some(&expected_hash),
+        None,
+        Duration::from_millis(5),
+        2,
+    )
+    .expect("same expected-hash peer quorum should satisfy persisted fallback");
+
+    assert_eq!(observation.block_hash, expected_hash);
+    assert_eq!(observation.view, 2);
+    assert_eq!(observation.ready_count, 3);
+}
+
+#[test]
+fn persisted_rbc_quorum_selector_rejects_malformed_delivered_chunks() {
+    let peer0 = vec![sample_persisted_rbc_summary_with_chunks(
+        0x91, 7, 1, true, false, 3, 0, 0,
+    )];
+    let peer1 = vec![sample_persisted_rbc_summary_with_chunks(
+        0x91, 7, 2, true, false, 3, 4, 5,
+    )];
+    let peer2 = vec![sample_persisted_rbc_summary_with_chunks(
+        0x91, 7, 3, true, false, 3, 4, 0,
+    )];
+
+    assert!(
+        rbc_observation_from_persisted_summary_quorum(
+            [peer0.as_slice(), peer1.as_slice(), peer2.as_slice()],
+            7,
+            None,
+            None,
+            Duration::from_millis(5),
+            2,
+        )
+        .is_none(),
+        "malformed delivered persisted chunk counts must not satisfy fallback quorum"
+    );
+}
+
+#[test]
+fn persisted_rbc_quorum_selector_rejects_mixed_block_hash_delivery() {
+    let peer0 = vec![sample_persisted_rbc_summary(0x61, 7, 1, true, false, 3)];
+    let peer1 = vec![sample_persisted_rbc_summary(0x62, 7, 1, true, false, 3)];
+    let peer2 = vec![sample_persisted_rbc_summary(0x63, 7, 1, true, false, 3)];
+
+    assert!(
+        rbc_observation_from_persisted_summary_quorum(
+            [peer0.as_slice(), peer1.as_slice(), peer2.as_slice()],
+            7,
+            None,
+            None,
+            Duration::from_millis(5),
+            2,
+        )
+        .is_none(),
+        "delivered persisted snapshots for different block hashes must not combine into quorum"
+    );
+}
+
+#[test]
+fn persisted_rbc_quorum_selector_uses_same_hash_quorum_not_highest_conflict() {
+    let peer0 = vec![sample_persisted_rbc_summary(0x71, 7, 1, true, false, 2)];
+    let peer1 = vec![sample_persisted_rbc_summary(0x71, 7, 2, true, false, 3)];
+    let peer2 = vec![sample_persisted_rbc_summary(0x72, 7, 9, true, false, 9)];
+
+    let observation = rbc_observation_from_persisted_summary_quorum(
+        [peer0.as_slice(), peer1.as_slice(), peer2.as_slice()],
+        7,
+        None,
+        None,
+        Duration::from_millis(5),
+        2,
+    )
+    .expect("same-hash delivered peer quorum should satisfy fallback evidence");
+
+    assert_eq!(observation.block_hash, persisted_hash_hex(0x71));
+    assert_eq!(observation.view, 2);
+    assert_eq!(observation.ready_count, 3);
+}
+
+#[test]
+fn persisted_rbc_quorum_selector_rejects_ambiguous_delivered_hash_quorums() {
+    let peer0 = vec![sample_persisted_rbc_summary(0x81, 7, 1, true, false, 2)];
+    let peer1 = vec![sample_persisted_rbc_summary(0x81, 7, 2, true, false, 3)];
+    let peer2 = vec![sample_persisted_rbc_summary(0x82, 7, 1, true, false, 2)];
+    let peer3 = vec![sample_persisted_rbc_summary(0x82, 7, 2, true, false, 3)];
+
+    assert!(
+        rbc_observation_from_persisted_summary_quorum(
+            [
+                peer0.as_slice(),
+                peer1.as_slice(),
+                peer2.as_slice(),
+                peer3.as_slice(),
+            ],
+            7,
+            None,
+            None,
+            Duration::from_millis(5),
+            2,
+        )
+        .is_none(),
+        "conflicting delivered block-hash quorums should fail closed when no expected hash is supplied"
+    );
+}
+
+#[test]
+fn persisted_rbc_quorum_selector_accepts_distinct_peer_delivery_quorum() {
+    let peer0 = vec![sample_persisted_rbc_summary(0x41, 7, 1, true, false, 1)];
+    let peer1 = vec![sample_persisted_rbc_summary(0x41, 7, 2, true, false, 4)];
+    let peer2 = vec![
+        sample_persisted_rbc_summary(0x41, 6, 9, true, false, 9),
+        sample_persisted_rbc_summary(0x41, 7, 3, true, false, 2),
+    ];
+    let peer3 = vec![sample_persisted_rbc_summary(0x41, 7, 4, false, false, 8)];
+
+    let observation = rbc_observation_from_persisted_summary_quorum(
+        [
+            peer0.as_slice(),
+            peer1.as_slice(),
+            peer2.as_slice(),
+            peer3.as_slice(),
+        ],
+        7,
+        None,
+        None,
+        Duration::from_millis(5),
+        3,
+    )
+    .expect("three distinct delivered peer snapshots should satisfy quorum");
+
+    assert_eq!(observation.view, 2);
+    assert_eq!(observation.ready_count, 4);
 }
 
 #[test]
@@ -4429,10 +5046,6 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
                 600_000i64,
             )
             .write(
-                ["sumeragi", "debug", "rbc", "force_deliver_quorum_one"],
-                true,
-            )
-            .write(
                 ["kura", "blocks_in_memory"],
                 DA_KURA_SOURCE_BLOCKS_IN_MEMORY,
             );
@@ -4751,6 +5364,17 @@ async fn restart_all_peers(network: &Network, config_layers: &[ConfigLayer]) -> 
     Ok(())
 }
 
+fn required_rbc_observation_after_endpoint_timeout(
+    expected_height: u64,
+    persisted_observation: Option<RbcObservation>,
+) -> Result<RbcObservation> {
+    persisted_observation.ok_or_else(|| {
+        eyre!(
+            "RBC session observation timed out at height {expected_height} and no quorum-visible delivered persisted snapshot was available; required-observation DA/RBC scenario must not fall back to commit timing only"
+        )
+    })
+}
+
 async fn wait_for_rbc_delivery(
     http: reqwest::Client,
     sessions_url: reqwest::Url,
@@ -4813,12 +5437,14 @@ async fn wait_for_terminal_rbc_state(
                 return Ok(observation);
             }
         }
-        if let Some(observation) = rbc_observation_from_persisted_snapshot(
+        let persisted_quorum = commit_quorum_from_len(peers.len()).max(1);
+        if let Some(observation) = rbc_observation_from_persisted_snapshot_quorum(
             peers,
             expected_height,
             Some(block_hash_hex),
             expected_view,
             start.elapsed(),
+            persisted_quorum,
         ) {
             return Ok(observation);
         }
@@ -4841,36 +5467,219 @@ async fn wait_for_terminal_rbc_state(
     }
 }
 
-async fn wait_for_rbc_session(
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RbcSessionHeightEvidence {
+    has_session: bool,
+    has_valid_session: bool,
+    has_nonterminal_session: bool,
+    has_delivered_session: bool,
+    has_invalid_session: bool,
+}
+
+impl RbcSessionHeightEvidence {
+    fn merge(&mut self, other: Self) {
+        self.has_session |= other.has_session;
+        self.has_valid_session |= other.has_valid_session;
+        self.has_nonterminal_session |= other.has_nonterminal_session;
+        self.has_delivered_session |= other.has_delivered_session;
+        self.has_invalid_session |= other.has_invalid_session;
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct RbcSessionQuorumEvidence {
+    peers_with_session: usize,
+    peers_with_valid_session: usize,
+    peers_with_nonterminal_session: usize,
+    peers_with_delivered_session: usize,
+    peers_with_invalid_session: usize,
+}
+
+fn rbc_session_quorum_evidence_satisfies(
+    evidence: &RbcSessionQuorumEvidence,
+    required_peer_count: usize,
+) -> bool {
+    evidence.peers_with_valid_session >= required_peer_count.max(1)
+        && evidence.peers_with_nonterminal_session > 0
+}
+
+async fn wait_for_rbc_session_height_quorum(
     http: &reqwest::Client,
-    url: reqwest::Url,
+    peers: &[NetworkPeer],
+    expected_height: u64,
+    required_peer_count: usize,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<RbcSessionQuorumEvidence> {
+    let probes: Vec<_> = peers
+        .iter()
+        .enumerate()
+        .map(|(idx, peer)| {
+            let sessions_url = peer
+                .client()
+                .torii_url
+                .join("v1/sumeragi/rbc/sessions")
+                .wrap_err("compose peer RBC sessions URL")?;
+            let store_dir = peer.kura_store_dir().join("rbc_sessions");
+            Ok((idx, sessions_url, store_dir))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let deadline = Instant::now() + timeout;
     loop {
-        let response = http
-            .get(url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await
-            .wrap_err("fetch RBC sessions snapshot")?;
-        if response.status().is_success() {
-            let body = response.text().await.wrap_err("sessions body")?;
-            let value: Value = json::from_str(&body).wrap_err("parse sessions JSON")?;
-            let has_session = value
-                .as_object()
-                .and_then(|root| root.get("items"))
-                .and_then(Value::as_array)
-                .is_some_and(|items| !items.is_empty());
-            if has_session {
-                return Ok(());
+        let mut quorum_evidence = RbcSessionQuorumEvidence::default();
+        let mut errors = Vec::new();
+
+        for (idx, sessions_url, store_dir) in &probes {
+            let mut peer_evidence = RbcSessionHeightEvidence::default();
+
+            match http
+                .get(sessions_url.clone())
+                .header("Accept", "application/json")
+                .send()
+                .await
+            {
+                Ok(response) if response.status().is_success() => {
+                    let body = response.text().await.wrap_err("sessions body")?;
+                    let value: Value = json::from_str(&body).wrap_err("parse sessions JSON")?;
+                    peer_evidence.merge(rbc_session_height_evidence_from_value(
+                        &value,
+                        expected_height,
+                    )?);
+                }
+                Ok(response) => {
+                    errors.push(format!("peer[{idx}] endpoint status {}", response.status()));
+                }
+                Err(err) => {
+                    errors.push(format!("peer[{idx}] endpoint error: {err}"));
+                }
+            }
+
+            peer_evidence.merge(rbc_session_height_evidence_from_persisted_summaries(
+                &rbc_status::read_persisted_snapshot(store_dir),
+                expected_height,
+            ));
+
+            if peer_evidence.has_session {
+                quorum_evidence.peers_with_session =
+                    quorum_evidence.peers_with_session.saturating_add(1);
+            }
+            if peer_evidence.has_valid_session {
+                quorum_evidence.peers_with_valid_session =
+                    quorum_evidence.peers_with_valid_session.saturating_add(1);
+            }
+            if peer_evidence.has_nonterminal_session {
+                quorum_evidence.peers_with_nonterminal_session = quorum_evidence
+                    .peers_with_nonterminal_session
+                    .saturating_add(1);
+            }
+            if peer_evidence.has_delivered_session {
+                quorum_evidence.peers_with_delivered_session = quorum_evidence
+                    .peers_with_delivered_session
+                    .saturating_add(1);
+            }
+            if peer_evidence.has_invalid_session {
+                quorum_evidence.peers_with_invalid_session =
+                    quorum_evidence.peers_with_invalid_session.saturating_add(1);
             }
         }
+
+        if rbc_session_quorum_evidence_satisfies(&quorum_evidence, required_peer_count) {
+            return Ok(quorum_evidence);
+        }
+
         if Instant::now() > deadline {
-            return Err(eyre!("timed out waiting for RBC session to appear"));
+            return Err(eyre!(
+                "timed out waiting for RBC session evidence at height {expected_height} on quorum {required_peer_count}; evidence={quorum_evidence:?}; errors={errors:?}"
+            ));
         }
         sleep(Duration::from_millis(100)).await;
     }
+}
+
+fn rbc_session_height_evidence_from_value(
+    root: &Value,
+    expected_height: u64,
+) -> Result<RbcSessionHeightEvidence> {
+    let Some(items) = root
+        .as_object()
+        .and_then(|obj| obj.get("items"))
+        .and_then(Value::as_array)
+    else {
+        return Ok(RbcSessionHeightEvidence::default());
+    };
+
+    let mut evidence = RbcSessionHeightEvidence::default();
+    for item in items {
+        let Some(obj) = item.as_object() else {
+            continue;
+        };
+        let height = extract_u64(obj.get("height").ok_or_else(|| eyre!("missing height"))?)?;
+        if height != expected_height {
+            continue;
+        }
+        let total_chunks = extract_u64(
+            obj.get("total_chunks")
+                .ok_or_else(|| eyre!("missing total_chunks"))?,
+        )?;
+        if total_chunks == 0 {
+            continue;
+        }
+        let received_chunks = extract_u64(
+            obj.get("received_chunks")
+                .ok_or_else(|| eyre!("missing received_chunks"))?,
+        )?;
+        if !session_chunk_shape_valid(total_chunks, received_chunks) {
+            continue;
+        }
+        let delivered = obj
+            .get("delivered")
+            .map(extract_bool)
+            .transpose()?
+            .unwrap_or(false);
+        let invalid = obj
+            .get("invalid")
+            .map(extract_bool)
+            .transpose()?
+            .unwrap_or(false);
+        if !invalid && delivered && !delivered_chunk_shape_valid(total_chunks, received_chunks) {
+            continue;
+        }
+
+        evidence.has_session = true;
+        evidence.has_valid_session |= !invalid;
+        evidence.has_invalid_session |= invalid;
+        evidence.has_delivered_session |=
+            delivered && !invalid && delivered_chunk_shape_valid(total_chunks, received_chunks);
+        evidence.has_nonterminal_session |=
+            !invalid && (!delivered || received_chunks < total_chunks);
+    }
+
+    Ok(evidence)
+}
+
+fn rbc_session_height_evidence_from_persisted_summaries(
+    summaries: &[rbc_status::Summary],
+    expected_height: u64,
+) -> RbcSessionHeightEvidence {
+    let mut evidence = RbcSessionHeightEvidence::default();
+    for summary in summaries {
+        if summary.height != expected_height
+            || !session_summary_chunk_shape_valid(summary)
+            || (!summary.invalid
+                && summary.delivered
+                && !delivered_summary_chunk_shape_valid(summary))
+        {
+            continue;
+        }
+        evidence.has_session = true;
+        evidence.has_valid_session |= !summary.invalid;
+        evidence.has_invalid_session |= summary.invalid;
+        evidence.has_delivered_session |=
+            summary.delivered && !summary.invalid && delivered_summary_chunk_shape_valid(summary);
+        evidence.has_nonterminal_session |= !summary.invalid
+            && (!summary.delivered || summary.received_chunks < summary.total_chunks);
+    }
+
+    evidence
 }
 
 fn parse_rbc_summary(
@@ -4909,6 +5718,14 @@ fn parse_rbc_summary(
         if !delivered {
             continue;
         }
+        let invalid = obj
+            .get("invalid")
+            .map(extract_bool)
+            .transpose()?
+            .unwrap_or(false);
+        if invalid {
+            continue;
+        }
         let view = extract_u64(obj.get("view").ok_or_else(|| eyre!("missing view"))?)?;
         if expected_view.is_some_and(|expected| view != expected) {
             continue;
@@ -4921,6 +5738,9 @@ fn parse_rbc_summary(
             obj.get("received_chunks")
                 .ok_or_else(|| eyre!("missing received_chunks"))?,
         )?;
+        if !delivered_chunk_shape_valid(total_chunks, received_chunks) {
+            continue;
+        }
         let ready_count = extract_u64(
             obj.get("ready_count")
                 .ok_or_else(|| eyre!("missing ready_count"))?,
@@ -4942,43 +5762,128 @@ fn parse_rbc_summary(
     Ok(None)
 }
 
-fn rbc_observation_from_persisted_snapshot(
+fn rbc_observation_from_persisted_snapshot_quorum(
     peers: &[NetworkPeer],
     expected_height: u64,
     expected_block_hash: Option<&str>,
     expected_view: Option<u64>,
     delivered_at: Duration,
+    required_peer_count: usize,
 ) -> Option<RbcObservation> {
-    peers
+    let persisted_by_peer: Vec<Vec<rbc_status::Summary>> = peers
         .iter()
-        .flat_map(|peer| {
+        .map(|peer| {
             let store_dir = peer.kura_store_dir().join("rbc_sessions");
             rbc_status::read_persisted_snapshot(store_dir)
         })
-        .filter(|summary| {
-            summary.height == expected_height
-                && expected_block_hash
-                    .is_none_or(|expected| hex::encode(summary.block_hash.as_ref()) == expected)
+        .collect();
+    rbc_observation_from_persisted_summary_quorum(
+        persisted_by_peer.iter().map(Vec::as_slice),
+        expected_height,
+        expected_block_hash,
+        expected_view,
+        delivered_at,
+        required_peer_count,
+    )
+}
+
+fn rbc_observation_from_persisted_summary_quorum<'a, I>(
+    persisted_by_peer: I,
+    expected_height: u64,
+    expected_block_hash: Option<&str>,
+    expected_view: Option<u64>,
+    delivered_at: Duration,
+    required_peer_count: usize,
+) -> Option<RbcObservation>
+where
+    I: IntoIterator<Item = &'a [rbc_status::Summary]>,
+{
+    let required_peer_count = required_peer_count.max(1);
+    let mut by_hash: BTreeMap<String, (usize, &rbc_status::Summary)> = BTreeMap::new();
+
+    for summaries in persisted_by_peer {
+        let mut peer_best_by_hash: BTreeMap<String, &rbc_status::Summary> = BTreeMap::new();
+        for summary in summaries {
+            let block_hash = hex::encode(summary.block_hash.as_ref());
+            if summary.height == expected_height
+                && expected_block_hash.is_none_or(|expected| block_hash.as_str() == expected)
                 && expected_view.is_none_or(|expected| summary.view == expected)
                 && summary.delivered
                 && !summary.invalid
-        })
-        .max_by_key(|summary| {
-            (
-                summary.ready_count,
-                u64::from(summary.received_chunks),
-                u64::from(summary.total_chunks),
-            )
-        })
-        .map(|summary| RbcObservation {
-            delivered_at,
-            height: summary.height,
-            view: summary.view,
-            total_chunks: summary.total_chunks,
-            received_chunks: summary.received_chunks,
-            ready_count: summary.ready_count,
-            block_hash: hex::encode(summary.block_hash.as_ref()),
-        })
+                && delivered_summary_chunk_shape_valid(summary)
+            {
+                let entry = peer_best_by_hash.entry(block_hash).or_insert(summary);
+                if persisted_summary_priority(summary) > persisted_summary_priority(*entry) {
+                    *entry = summary;
+                }
+            }
+        }
+
+        for (block_hash, summary) in peer_best_by_hash {
+            by_hash
+                .entry(block_hash)
+                .and_modify(|(count, best)| {
+                    *count = count.saturating_add(1);
+                    if persisted_summary_priority(summary) > persisted_summary_priority(*best) {
+                        *best = summary;
+                    }
+                })
+                .or_insert((1, summary));
+        }
+    }
+
+    let mut quorum_groups = by_hash
+        .into_iter()
+        .filter_map(|(block_hash, (count, best))| {
+            (count >= required_peer_count).then_some((block_hash, best))
+        });
+    let Some((block_hash, summary)) = quorum_groups.next() else {
+        return None;
+    };
+    if quorum_groups.next().is_some() {
+        return None;
+    }
+
+    Some(RbcObservation {
+        delivered_at,
+        height: summary.height,
+        view: summary.view,
+        total_chunks: summary.total_chunks,
+        received_chunks: summary.received_chunks,
+        ready_count: summary.ready_count,
+        block_hash,
+    })
+}
+
+fn delivered_summary_chunk_shape_valid(summary: &rbc_status::Summary) -> bool {
+    delivered_chunk_shape_valid(
+        u64::from(summary.total_chunks),
+        u64::from(summary.received_chunks),
+    )
+}
+
+fn session_summary_chunk_shape_valid(summary: &rbc_status::Summary) -> bool {
+    session_chunk_shape_valid(
+        u64::from(summary.total_chunks),
+        u64::from(summary.received_chunks),
+    )
+}
+
+fn session_chunk_shape_valid(total_chunks: u64, received_chunks: u64) -> bool {
+    total_chunks > 0 && received_chunks <= total_chunks
+}
+
+fn delivered_chunk_shape_valid(total_chunks: u64, received_chunks: u64) -> bool {
+    total_chunks > 0 && received_chunks > 0 && received_chunks <= total_chunks
+}
+
+fn persisted_summary_priority(summary: &rbc_status::Summary) -> (u64, u64, u64, u64) {
+    (
+        summary.ready_count,
+        u64::from(summary.received_chunks),
+        u64::from(summary.total_chunks),
+        summary.view,
+    )
 }
 
 async fn collect_rbc_failure_context(

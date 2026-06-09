@@ -45,6 +45,9 @@ MAX_DER_BYTES = 1024 * 1024
 MAX_DER_BASE64_CHARS = ((MAX_DER_BYTES + 2) // 3) * 4
 MAX_BUNDLE_JSON_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_URL_CHARS = 2048
+MAX_PROFILE_ID_CHARS = 128
+MAX_TRUST_POLICY_CHARS = 128
+MAX_TRUST_SOURCE_TEXT_CHARS = 256
 PLACEHOLDER_TRUST_SOURCE_MARKERS = (
     "dummy",
     "fake",
@@ -307,6 +310,10 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+            raise TrustBundleError("CLI argument must not contain control characters")
+        if any(ord(ch) > 0x7E for ch in arg):
+            raise TrustBundleError("CLI argument must use printable ASCII")
         if _contains_secret_material(arg) or _contains_secret_identifier_material(arg):
             raise TrustBundleError("CLI argument must not contain secret-looking material")
         index += 1
@@ -334,6 +341,8 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
 def _reject_raw_positive_int_cli_value(raw: str, flag: str) -> None:
     if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise TrustBundleError(f"{flag} must be a positive integer")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise TrustBundleError(f"{flag} must use printable ASCII")
     try:
         value = int(raw, 10)
     except ValueError as error:
@@ -550,7 +559,13 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
+        if any(
+            _is_secret_looking_key(key)
+            or _is_control_bearing_key(key)
+            or len(str(key)) > 128
+            or any(ord(ch) > 0x7E for ch in str(key))
+            for key in unknown
+        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
             raise TrustBundleError(f"{label} contains unknown keys")
         raise TrustBundleError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -599,6 +614,32 @@ def _contains_unsafe_json_control(value: str) -> bool:
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
     if _contains_secret_material(value) or _is_secret_looking_key(value):
         raise TrustBundleError(f"{label} must not contain secret-looking material")
+
+
+def _reject_non_ascii_context(value: str, label: str) -> None:
+    if any(ord(ch) > 0x7E for ch in value):
+        raise TrustBundleError(f"{label} must use printable ASCII")
+
+
+def _reject_overlong_trust_policy(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_POLICY_CHARS:
+        raise TrustBundleError(
+            f"{label} must be no longer than {MAX_TRUST_POLICY_CHARS} characters"
+        )
+
+
+def _reject_overlong_trust_source_text(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_SOURCE_TEXT_CHARS:
+        raise TrustBundleError(
+            f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
+        )
+
+
+def _required_context_string(bundle: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(bundle, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
 
 
 def _check_no_secret_material(value: Any, path: str = "$") -> None:
@@ -688,6 +729,10 @@ def _required_string(bundle: dict[str, Any], key: str, label: str) -> str:
 
 def _required_profile_id(bundle: dict[str, Any], key: str, label: str) -> str:
     raw = _required_string(bundle, key, label)
+    if len(raw) > MAX_PROFILE_ID_CHARS:
+        raise TrustBundleError(
+            f"{label}.{key} must be no longer than {MAX_PROFILE_ID_CHARS} characters"
+        )
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if PROFILE_ID_RE.fullmatch(raw) is None:
         raise TrustBundleError(f"{label}.{key} must be a canonical lowercase profile id")
@@ -724,6 +769,8 @@ def _optional_positive_cli_int(value: Any, label: str) -> int | None:
     if isinstance(value, int):
         parsed = value
     elif isinstance(value, str):
+        if any(ord(ch) > 0x7E for ch in value):
+            raise TrustBundleError(f"{label} must use printable ASCII")
         if value != value.strip() or not value.isdecimal():
             raise TrustBundleError(f"{label} must be a positive integer")
         parsed = int(value)
@@ -1033,6 +1080,10 @@ def _der_objects(
         _reject_unknown_keys(obj, DER_OBJECT_KEYS, f"{label}.{key}[{offset}]")
         name = _optional_string(obj, "label", f"{label}.{key}[{offset}]")
         if name is not None:
+            _reject_non_ascii_context(
+                name,
+                f"{label}.{key}[{offset}].label",
+            )
             _reject_secret_looking_identifier(
                 name,
                 f"{label}.{key}[{offset}].label",
@@ -1086,8 +1137,12 @@ def _source(
     source = _require_object(raw, f"{label}.source")
     _reject_unknown_keys(source, SOURCE_KEYS, f"{label}.source")
     authority = _required_string(source, "authority", f"{label}.source")
+    _reject_overlong_trust_source_text(authority, f"{label}.source.authority")
+    _reject_non_ascii_context(authority, f"{label}.source.authority")
     _reject_secret_looking_identifier(authority, f"{label}.source.authority")
     version = _required_string(source, "version", f"{label}.source")
+    _reject_overlong_trust_source_text(version, f"{label}.source.version")
+    _reject_non_ascii_context(version, f"{label}.source.version")
     _reject_secret_looking_identifier(version, f"{label}.source.version")
     normalized: dict[str, Any] = {
         "authority": authority,
@@ -1171,6 +1226,8 @@ def _validate_source_url(
         raise TrustBundleError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise TrustBundleError(f"{label} host must not end with a dot")
+    if any(ord(ch) > 0x7E for ch in raw_host):
+        raise TrustBundleError(f"{label} host must use printable ASCII")
     _reject_secret_looking_identifier(raw_host, f"{label} host")
     _validate_host_labels(raw_host, label)
     if parsed.params or parsed.query or parsed.fragment:
@@ -1506,11 +1563,12 @@ def verify_bundle(
 
     profile_id = _required_profile_id(bundle, "profile_id", str(path))
     rail = _required_rail(bundle, "rail", str(path))
-    environment = _required_string(bundle, "environment", str(path))
-    _reject_secret_looking_identifier(environment, f"{path}.environment")
+    environment = _required_context_string(bundle, "environment", str(path))
     if "embedded_signature_policy" not in bundle:
         raise TrustBundleError(f"{path}.embedded_signature_policy must be recorded")
     policy = _required_string(bundle, "embedded_signature_policy", str(path))
+    _reject_overlong_trust_policy(policy, f"{path}.embedded_signature_policy")
+    _reject_non_ascii_context(policy, f"{path}.embedded_signature_policy")
     _reject_secret_looking_identifier(policy, f"{path}.embedded_signature_policy")
     if not isinstance(policy, str) or policy not in POLICIES:
         raise TrustBundleError(f"{path}.embedded_signature_policy is unsupported")

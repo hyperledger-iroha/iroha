@@ -62,8 +62,10 @@ public final class PrivacyNativeBridgeTest {
     final PrivacyNativeBridge.PrivacyCapabilities fresh =
         PrivacyNativeBridge.privacyCapabilities(true);
     assert !fresh.missingProductionGates().contains("tampered");
+    assert !fresh.requiredProductionGates().contains("tampered");
     assert !fresh.auditReferences().contains("https://audit.example/forged-signoff");
     assert fresh.missingProductionGates().equals(bridgeAvailable.missingProductionGates());
+    assert fresh.requiredProductionGates().equals(bridgeAvailable.requiredProductionGates());
     assert fresh.auditReferences().equals(bridgeAvailable.auditReferences());
   }
 
@@ -87,6 +89,7 @@ public final class PrivacyNativeBridgeTest {
     assert !capabilities.hasPerformanceGates();
     assert !capabilities.hasExternalAudit();
     assert capabilities.auditReferences().isEmpty();
+    assert capabilities.requiredProductionGates().equals(expectedProductionGateRequiredKeys());
     assert capabilities.missingProductionGates().equals(expectedProductionGateMissingReasons());
     assert capabilities.missingProductionGates().contains(
         "real proving engine is not registered");
@@ -115,7 +118,27 @@ public final class PrivacyNativeBridgeTest {
     assertUnsupportedOperation(
         () -> capabilities.missingProductionGates().add("tampered"));
     assertUnsupportedOperation(
+        () -> capabilities.requiredProductionGates().add("tampered"));
+    assertUnsupportedOperation(
         () -> capabilities.auditReferences().add("https://audit.example/forged-signoff"));
+  }
+
+  private static List<String> expectedProductionGateRequiredKeys() {
+    return Arrays.asList(
+        "real_proving",
+        "real_verification",
+        "chain_admission",
+        "sdk_parity",
+        "wallet_state",
+        "witness_privacy_checks",
+        "deterministic_tests",
+        "negative_adversarial_tests",
+        "replay_nullifier_tests",
+        "fuzzing",
+        "parser_fuzzing",
+        "verifier_fuzzing",
+        "performance_gates",
+        "external_audit");
   }
 
   private static List<String> expectedProductionGateMissingReasons() {
@@ -141,15 +164,21 @@ public final class PrivacyNativeBridgeTest {
   }
 
   private static void rejectsEmptyRequestsBeforeNativeDispatch() {
-    assertThrows(() -> PrivacyNativeBridge.buildProof(new byte[0]));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(new byte[0]));
-    assertThrows(() -> PrivacyNativeBridge.buildProof(null));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(null));
+    final PrivacyNativeBridge.NativeCall[] helpers = new PrivacyNativeBridge.NativeCall[] {
+      PrivacyNativeBridge::buildProof,
+      PrivacyNativeBridge::buildConfidentialTransferProofV2,
+      PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
+      PrivacyNativeBridge::verifyProof
+    };
+    for (final PrivacyNativeBridge.NativeCall helper : helpers) {
+      assertThrows(() -> helper.run(new byte[0]));
+      assertThrows(() -> helper.run(null));
+    }
     final byte[] oversized = new byte[PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1];
-    assertThrows(() -> PrivacyNativeBridge.buildProof(oversized));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(oversized));
-    assertThrows(() -> PrivacyNativeBridge.buildProof(privacyNoritoFrame(0x52)));
-    assertThrows(() -> PrivacyNativeBridge.verifyProof(privacyNoritoFrame(0x52)));
+    for (final PrivacyNativeBridge.NativeCall helper : helpers) {
+      assertThrows(() -> helper.run(oversized));
+      assertThrows(() -> helper.run(privacyNoritoFrame(0x52)));
+    }
   }
 
   private static void nativeAvailabilityProbeArchiveIsStableAndDefensive() {

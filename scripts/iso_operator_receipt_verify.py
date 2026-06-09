@@ -62,7 +62,7 @@ SUPPORTED_RAIL_MESSAGE_TYPES = {
     "colr.012",
 }
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
-MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.\d{3}$")
+MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 MAX_RECEIPT_JSON_BYTES = 4 * 1024 * 1024
 MAX_AUDIT_EXPORT_JSON_BYTES = 64 * 1024 * 1024
 MAX_PERSISTED_RECORD_JSON_BYTES = 1024 * 1024
@@ -420,6 +420,10 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+            raise ReceiptError("CLI argument must not contain control characters")
+        if any(ord(ch) > 0x7E for ch in arg):
+            raise ReceiptError("CLI argument must use printable ASCII")
         if _contains_secret_material(arg) or _contains_secret_identifier_material(arg):
             raise ReceiptError("CLI argument must not contain secret-looking material")
         index += 1
@@ -543,7 +547,13 @@ def _load_json(path: Path, *, max_bytes: int | None = None) -> Any:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
+        if any(
+            _is_secret_looking_key(key)
+            or _is_control_bearing_key(key)
+            or len(str(key)) > 128
+            or any(ord(ch) > 0x7E for ch in str(key))
+            for key in unknown
+        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
             raise ReceiptError(f"{label} contains unknown keys")
         raise ReceiptError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -599,6 +609,11 @@ def _contains_unsafe_json_control(value: str) -> bool:
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
     if _contains_secret_material(value) or _is_secret_looking_key(value):
         raise ReceiptError(f"{label} must not contain secret-looking material")
+
+
+def _reject_non_ascii_identifier(value: str, label: str) -> None:
+    if any(ord(ch) > 0x7E for ch in value):
+        raise ReceiptError(f"{label} must use printable ASCII")
 
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -723,6 +738,8 @@ def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise ReceiptError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise ReceiptError(f"{label} host must not end with a dot")
+    if any(ord(ch) > 0x7E for ch in raw_host):
+        raise ReceiptError(f"{label} host must use printable ASCII")
     _reject_secret_looking_identifier(raw_host, f"{label} host")
     if len(raw_host) > 253:
         raise ReceiptError(f"{label} host must be at most 253 characters")
@@ -1699,7 +1716,17 @@ def _verify_rail_sidecar(
     _reject_unknown_keys(sidecar, RAIL_SIDECAR_KEYS, str(sidecar_path))
     if sidecar.get("payload_sha256") != payload_sha256:
         raise ReceiptError(f"{path} payload_sha256 does not match source sidecar")
-    if sidecar.get("message_type") != message_type:
+    sidecar_message_type = sidecar.get("message_type")
+    if isinstance(sidecar_message_type, str):
+        _reject_non_ascii_identifier(
+            sidecar_message_type,
+            f"{sidecar_path} message_type",
+        )
+        _reject_secret_looking_identifier(
+            sidecar_message_type,
+            f"{sidecar_path} message_type",
+        )
+    if sidecar_message_type != message_type:
         raise ReceiptError(f"{path} message_type does not match source sidecar")
     sidecar_profile = _normalize_sidecar_profile(sidecar, f"{sidecar_path} profile")
     if sidecar_profile != profile:
@@ -1724,6 +1751,7 @@ def _verify_rail_source(
     if not _is_lower_hex_sha256(payload_sha256):
         raise ReceiptError(f"{path} has invalid payload_sha256")
     message_type = _require_clean_string(receipt.get("message_type"), f"{path} message_type")
+    _reject_non_ascii_identifier(message_type, f"{path} message_type")
     _reject_secret_looking_identifier(message_type, f"{path} message_type")
     if MESSAGE_TYPE_RE.fullmatch(message_type) is None:
         raise ReceiptError(f"{path} message_type must be lowercase ISO family id")
@@ -1809,6 +1837,7 @@ def verify_receipt_file(
         raise ReceiptError(f"{path} has unsupported receipt version")
     kind = receipt.get("receipt_kind")
     if isinstance(kind, str):
+        _reject_non_ascii_identifier(kind, f"{path} receipt_kind")
         _reject_secret_looking_identifier(kind, f"{path} receipt_kind")
     if kind not in SUPPORTED_KINDS:
         raise ReceiptError(f"{path} has unsupported receipt_kind {kind!r}")

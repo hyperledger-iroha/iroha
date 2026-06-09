@@ -40,6 +40,7 @@ export interface PrivacyProductionGate {
   readonly version: string;
   readonly ready: boolean;
   readonly gates: Readonly<Record<string, boolean>>;
+  readonly requiredGates: readonly string[];
   readonly missing: readonly string[];
   readonly auditReferences: readonly Readonly<{ label: string; url: string }>[];
 }
@@ -13650,6 +13651,138 @@ export interface TransactionAssemblyInput {
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
 }
 
+export type KagemushaInstructionArchiveType =
+  | "KagemushaTransfer"
+  | "RedeemKagemushaRecursive";
+
+export const KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME:
+  "iroha_data_model::isi::offline::KagemushaTransfer";
+export const KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME:
+  "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
+export const KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME:
+  "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
+
+export const OFFLINE_CASH_TRANSPORT_QR: "qr";
+export const OFFLINE_CASH_TRANSPORT_NFC: "nfc";
+export const OFFLINE_CASH_TRANSPORT_NEARBY: "nearby";
+
+export type OfflineCashTransportKind = "qr" | "nfc" | "nearby";
+
+export interface OfflineCashNfcCapability {
+  readonly supported: boolean;
+  readonly reason?: string | null;
+}
+
+export interface OfflineCashTransportCapabilities {
+  readonly qr?: boolean;
+  readonly qrStreaming?: boolean;
+  readonly nfc?: boolean | OfflineCashNfcCapability;
+  readonly nearby?: boolean;
+}
+
+export interface OfflineCashConfigurationSnapshot {
+  readonly chainId: string;
+  readonly assetDefinitionId: string;
+  readonly offlinePaymentsEnabled: boolean;
+  readonly issuerPublicKeyBase64?: string | null;
+  readonly bridgeAbiVersion?: number | null;
+  readonly artifactSetId?: string | null;
+  readonly circuitId?: string | null;
+  readonly createdAtMs: number;
+  readonly expiresAtMs?: number | null;
+}
+
+export class OfflineCashConfigurationSnapshotError extends Error {
+  readonly code:
+    | "offline_payments_disabled"
+    | "missing_issuer_public_key"
+    | "expired"
+    | "unsupported_bridge_abi";
+}
+
+export function assertOfflineCashConfigurationSnapshotUsable(
+  snapshot: OfflineCashConfigurationSnapshot,
+  options?: {
+    nowMs?: number;
+    requiredBridgeAbiVersion?: number | null;
+  },
+): true;
+
+export function offlineCashAvailableTransportKinds(
+  capabilities?: OfflineCashTransportCapabilities,
+): OfflineCashTransportKind[];
+
+export interface OfflineCashAuditReceiptSynchronizer {
+  readonly hasPendingAuditReceipts?: boolean | (() => boolean | Promise<boolean>);
+  syncPendingAuditReceipts(): void | Promise<void>;
+}
+
+export class OfflineCashLifecycleController {
+  constructor(input: {
+    wallet: object;
+    auditReceiptSynchronizer?: OfflineCashAuditReceiptSynchronizer | null;
+  });
+  syncPendingAuditReceiptsIfNeeded(): Promise<boolean>;
+  load(assetDefinitionId: string, amount: string): Promise<unknown>;
+  prepareReceive(assetDefinitionId: string, amount: string): unknown;
+  createPayment(receiveRequest: unknown): unknown;
+  acceptPayment(paymentToken: unknown): unknown;
+  redeem(note: unknown, recipient?: string | null): unknown;
+}
+
+export interface KagemushaInstructionArchiveInput {
+  type?: KagemushaInstructionArchiveType;
+  instructionType?: KagemushaInstructionArchiveType;
+  instruction_type?: KagemushaInstructionArchiveType;
+  instructionArchive?: BinaryLike;
+  instruction_archive?: BinaryLike;
+  archive?: BinaryLike;
+  bytes?: BinaryLike;
+  bytesBase64?: string;
+  bytes_base64?: string;
+}
+
+export interface KagemushaInstructionTransactionInput
+  extends KagemushaInstructionArchiveInput {
+  chainId: string;
+  authority: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export interface KagemushaRecursiveRedeemTransactionBaseInput {
+  chainId: string;
+  authority: string;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+}
+
+export type KagemushaRecursiveRedeemArchiveInput =
+  | {
+      redeemRequestArchive: BinaryLike;
+      redeem_request_archive?: never;
+      requestArchive?: never;
+    }
+  | {
+      redeemRequestArchive?: never;
+      redeem_request_archive: BinaryLike;
+      requestArchive?: never;
+    }
+  | {
+      redeemRequestArchive?: never;
+      redeem_request_archive?: never;
+      requestArchive: BinaryLike;
+    };
+
+export type KagemushaRecursiveRedeemTransactionInput =
+  KagemushaRecursiveRedeemTransactionBaseInput & KagemushaRecursiveRedeemArchiveInput;
+
 export interface IvmProvedTransactionAssemblyInput {
   chainId: string;
   authority: string;
@@ -18056,6 +18189,23 @@ export function buildTransaction(
  */
 export function buildIvmProvedTransaction(
   input: IvmProvedTransactionAssemblyInput,
+): SignedTransactionResult;
+
+export function buildKagemushaInstructionArchiveInstruction(
+  input: KagemushaInstructionArchiveInput,
+): {
+  KagemushaInstructionArchive: {
+    type: KagemushaInstructionArchiveType;
+    bytes_base64: string;
+  };
+};
+
+export function buildKagemushaInstructionTransaction(
+  input: KagemushaInstructionTransactionInput,
+): SignedTransactionResult;
+
+export function buildKagemushaRecursiveRedeemTransaction(
+  input: KagemushaRecursiveRedeemTransactionInput,
 ): SignedTransactionResult;
 
 /**

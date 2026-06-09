@@ -69,7 +69,7 @@ use iroha_data_model::{
     peer::PeerId,
     permission::Permission,
     prelude::{AccountId, ChainId},
-    proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
+    proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
     transaction::{
@@ -4060,6 +4060,365 @@ fn zk_ace_build_transfer_authorization_v1_py(
     )
 }
 
+fn py_sequence_items<'py>(
+    value: &Bound<'py, PyAny>,
+    context: &str,
+) -> PyResult<Vec<Bound<'py, PyAny>>> {
+    if let Ok(items) = value.cast::<PyList>() {
+        return Ok(items.iter().collect());
+    }
+    if let Ok(items) = value.cast::<PyTuple>() {
+        return Ok(items.iter().collect());
+    }
+    Err(PyTypeError::new_err(format!(
+        "{context} must be a list or tuple"
+    )))
+}
+
+fn dict_require_alias<'py>(
+    dict: &Bound<'py, PyDict>,
+    aliases: &[&str],
+    context: &str,
+) -> PyResult<Bound<'py, PyAny>> {
+    dict_get_alias(dict, aliases)?
+        .ok_or_else(|| PyValueError::new_err(format!("{context} is required")))
+}
+
+fn parse_confidential_amount_py(value: &Bound<'_, PyAny>, context: &str) -> PyResult<u128> {
+    if let Ok(text) = value.extract::<String>() {
+        return parse_u128_text(&text, context);
+    }
+    value
+        .extract::<u128>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be a whole-number amount")))
+}
+
+fn parse_optional_confidential_diversifier_py(
+    value: Option<Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<[u8; 32]> {
+    match value {
+        Some(value) => py_fixed_array::<32>(&value, context),
+        None => Ok(iroha_core::zk::confidential_v2::default_confidential_diversifier_v2()),
+    }
+}
+
+fn parse_confidential_leaf_index_py(
+    value: Option<Bound<'_, PyAny>>,
+    context: &str,
+) -> PyResult<usize> {
+    let Some(value) = value else {
+        return Ok(0);
+    };
+    value
+        .extract::<usize>()
+        .map_err(|_| PyTypeError::new_err(format!("{context} must be an unsigned integer")))
+}
+
+fn parse_confidential_transfer_input_py(
+    item: &Bound<'_, PyAny>,
+    index: usize,
+) -> PyResult<iroha_core::zk::confidential_v2::ConfidentialTransferInputV2> {
+    let dict = item
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err(format!("inputs[{index}] must be a mapping")))?;
+    let amount = dict_require_alias(dict, &["amount"], &format!("inputs[{index}].amount"))?;
+    let rho = dict_require_alias(
+        dict,
+        &["rho", "rho_hex", "rhoHex"],
+        &format!("inputs[{index}].rho"),
+    )?;
+    let diversifier = dict_get_alias(dict, &["diversifier", "diversifier_hex", "diversifierHex"])?;
+    let leaf_index = dict_get_alias(dict, &["leaf_index", "leafIndex"])?;
+    Ok(
+        iroha_core::zk::confidential_v2::ConfidentialTransferInputV2 {
+            amount: parse_confidential_amount_py(&amount, &format!("inputs[{index}].amount"))?,
+            rho: py_fixed_array::<32>(&rho, &format!("inputs[{index}].rho"))?,
+            diversifier: parse_optional_confidential_diversifier_py(
+                diversifier,
+                &format!("inputs[{index}].diversifier"),
+            )?,
+            leaf_index: parse_confidential_leaf_index_py(
+                leaf_index,
+                &format!("inputs[{index}].leaf_index"),
+            )?,
+        },
+    )
+}
+
+fn parse_confidential_transfer_inputs_py(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialTransferInputV2>> {
+    py_sequence_items(value, "inputs")?
+        .iter()
+        .enumerate()
+        .map(|(index, item)| parse_confidential_transfer_input_py(item, index))
+        .collect()
+}
+
+fn parse_confidential_unshield_inputs_py(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialUnshieldInputV2>> {
+    parse_confidential_transfer_inputs_py(value).map(|inputs| {
+        inputs
+            .into_iter()
+            .map(
+                |input| iroha_core::zk::confidential_v2::ConfidentialUnshieldInputV2 {
+                    amount: input.amount,
+                    rho: input.rho,
+                    diversifier: input.diversifier,
+                    leaf_index: input.leaf_index,
+                },
+            )
+            .collect()
+    })
+}
+
+fn parse_confidential_transfer_output_py(
+    item: &Bound<'_, PyAny>,
+    index: usize,
+) -> PyResult<iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2> {
+    let dict = item
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err(format!("outputs[{index}] must be a mapping")))?;
+    let amount = dict_require_alias(dict, &["amount"], &format!("outputs[{index}].amount"))?;
+    let rho = dict_require_alias(
+        dict,
+        &["rho", "rho_hex", "rhoHex"],
+        &format!("outputs[{index}].rho"),
+    )?;
+    let owner_tag = dict_require_alias(
+        dict,
+        &["owner_tag", "owner_tag_hex", "ownerTag", "ownerTagHex"],
+        &format!("outputs[{index}].owner_tag"),
+    )?;
+    Ok(
+        iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2 {
+            amount: parse_confidential_amount_py(&amount, &format!("outputs[{index}].amount"))?,
+            rho: py_fixed_array::<32>(&rho, &format!("outputs[{index}].rho"))?,
+            owner_tag: py_fixed_array::<32>(&owner_tag, &format!("outputs[{index}].owner_tag"))?,
+        },
+    )
+}
+
+fn parse_confidential_transfer_outputs_py(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialTransferOutputV2>> {
+    py_sequence_items(value, "outputs")?
+        .iter()
+        .enumerate()
+        .map(|(index, item)| parse_confidential_transfer_output_py(item, index))
+        .collect()
+}
+
+fn parse_confidential_unshield_output_py(
+    item: &Bound<'_, PyAny>,
+    index: usize,
+) -> PyResult<iroha_core::zk::confidential_v2::ConfidentialUnshieldOutputV3> {
+    let dict = item
+        .cast::<PyDict>()
+        .map_err(|_| PyTypeError::new_err(format!("outputs[{index}] must be a mapping")))?;
+    let amount = dict_require_alias(dict, &["amount"], &format!("outputs[{index}].amount"))?;
+    let rho = dict_require_alias(
+        dict,
+        &["rho", "rho_hex", "rhoHex"],
+        &format!("outputs[{index}].rho"),
+    )?;
+    Ok(
+        iroha_core::zk::confidential_v2::ConfidentialUnshieldOutputV3 {
+            amount: parse_confidential_amount_py(&amount, &format!("outputs[{index}].amount"))?,
+            rho: py_fixed_array::<32>(&rho, &format!("outputs[{index}].rho"))?,
+        },
+    )
+}
+
+fn parse_confidential_unshield_outputs_py(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<iroha_core::zk::confidential_v2::ConfidentialUnshieldOutputV3>> {
+    py_sequence_items(value, "outputs")?
+        .iter()
+        .enumerate()
+        .map(|(index, item)| parse_confidential_unshield_output_py(item, index))
+        .collect()
+}
+
+fn confidential_bytes_list_py<const N: usize>(
+    py: Python<'_>,
+    items: &[[u8; N]],
+) -> PyResult<Py<PyList>> {
+    let list = PyList::empty(py);
+    for item in items {
+        list.append(PyBytes::new(py, item))?;
+    }
+    Ok(list.unbind())
+}
+
+fn confidential_transfer_proof_v2_py_dict(
+    py: Python<'_>,
+    proof: iroha_core::zk::confidential_v2::ConfidentialTransferProofV2,
+) -> PyResult<Py<PyDict>> {
+    let result = PyDict::new(py);
+    result.set_item(
+        "nullifiers",
+        confidential_bytes_list_py(py, &proof.nullifiers)?,
+    )?;
+    result.set_item(
+        "output_commitments",
+        confidential_bytes_list_py(py, &proof.output_commitments)?,
+    )?;
+    result.set_item("root", PyBytes::new(py, &proof.root))?;
+    result.set_item("proof", PyBytes::new(py, &proof.proof.bytes))?;
+    Ok(result.unbind())
+}
+
+fn confidential_unshield_proof_v3_py_dict(
+    py: Python<'_>,
+    proof: iroha_core::zk::confidential_v2::ConfidentialUnshieldProofV3,
+) -> PyResult<Py<PyDict>> {
+    let result = PyDict::new(py);
+    result.set_item(
+        "nullifiers",
+        confidential_bytes_list_py(py, &proof.nullifiers)?,
+    )?;
+    result.set_item(
+        "output_commitments",
+        confidential_bytes_list_py(py, &proof.output_commitments)?,
+    )?;
+    result.set_item("root", PyBytes::new(py, &proof.root))?;
+    result.set_item("proof", PyBytes::new(py, &proof.proof.bytes))?;
+    Ok(result.unbind())
+}
+
+#[pyfunction]
+#[pyo3(name = "build_confidential_transfer_proof_v2", signature = (
+    chain_id,
+    asset_definition_id,
+    spend_key,
+    tree_commitments,
+    inputs,
+    outputs,
+    root_hint,
+    vk_backend,
+    vk_circuit_id,
+    vk_bytes
+))]
+#[allow(clippy::too_many_arguments)]
+fn build_confidential_transfer_proof_v2_py(
+    py: Python<'_>,
+    chain_id: &str,
+    asset_definition_id: &str,
+    spend_key: &Bound<'_, PyAny>,
+    tree_commitments: &Bound<'_, PyAny>,
+    inputs: &Bound<'_, PyAny>,
+    outputs: &Bound<'_, PyAny>,
+    root_hint: &Bound<'_, PyAny>,
+    vk_backend: &str,
+    vk_circuit_id: &str,
+    vk_bytes: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyDict>> {
+    let chain_id = parse_chain_id(chain_id)?;
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        PyValueError::new_err(format!(
+            "invalid asset definition id `{asset_definition_id}`: {err}"
+        ))
+    })?;
+    let spend_key = py_fixed_array::<32>(spend_key, "spend_key")?;
+    let tree_commitments = py_fixed_array_list(tree_commitments, "tree_commitments")?;
+    let inputs = parse_confidential_transfer_inputs_py(inputs)?;
+    let outputs = parse_confidential_transfer_outputs_py(outputs)?;
+    let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
+    let vk_backend = vk_backend.trim();
+    if vk_backend.is_empty() {
+        return Err(PyValueError::new_err("vk_backend must be non-empty"));
+    }
+    let vk_circuit_id = vk_circuit_id.trim();
+    if vk_circuit_id.is_empty() {
+        return Err(PyValueError::new_err("vk_circuit_id must be non-empty"));
+    }
+    let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
+    let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
+    let proof = iroha_core::zk::confidential_v2::build_confidential_transfer_proof_v2(
+        &chain_id,
+        &asset_definition_id.to_string(),
+        &spend_key,
+        &tree_commitments,
+        &inputs,
+        &outputs,
+        root_hint,
+        vk_circuit_id,
+        &vk_box,
+    )
+    .map_err(PyValueError::new_err)?;
+    confidential_transfer_proof_v2_py_dict(py, proof)
+}
+
+#[pyfunction]
+#[pyo3(name = "build_confidential_unshield_proof_v3", signature = (
+    chain_id,
+    asset_definition_id,
+    spend_key,
+    tree_commitments,
+    inputs,
+    outputs,
+    public_amount,
+    root_hint,
+    vk_backend,
+    vk_circuit_id,
+    vk_bytes
+))]
+#[allow(clippy::too_many_arguments)]
+fn build_confidential_unshield_proof_v3_py(
+    py: Python<'_>,
+    chain_id: &str,
+    asset_definition_id: &str,
+    spend_key: &Bound<'_, PyAny>,
+    tree_commitments: &Bound<'_, PyAny>,
+    inputs: &Bound<'_, PyAny>,
+    outputs: &Bound<'_, PyAny>,
+    public_amount: &Bound<'_, PyAny>,
+    root_hint: &Bound<'_, PyAny>,
+    vk_backend: &str,
+    vk_circuit_id: &str,
+    vk_bytes: &Bound<'_, PyAny>,
+) -> PyResult<Py<PyDict>> {
+    let chain_id = parse_chain_id(chain_id)?;
+    let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
+        PyValueError::new_err(format!(
+            "invalid asset definition id `{asset_definition_id}`: {err}"
+        ))
+    })?;
+    let spend_key = py_fixed_array::<32>(spend_key, "spend_key")?;
+    let tree_commitments = py_fixed_array_list(tree_commitments, "tree_commitments")?;
+    let inputs = parse_confidential_unshield_inputs_py(inputs)?;
+    let outputs = parse_confidential_unshield_outputs_py(outputs)?;
+    let public_amount = parse_confidential_amount_py(public_amount, "public_amount")?;
+    let root_hint = py_fixed_array::<32>(root_hint, "root_hint")?;
+    let vk_backend = vk_backend.trim();
+    if vk_backend.is_empty() {
+        return Err(PyValueError::new_err("vk_backend must be non-empty"));
+    }
+    let vk_circuit_id = vk_circuit_id.trim();
+    if vk_circuit_id.is_empty() {
+        return Err(PyValueError::new_err("vk_circuit_id must be non-empty"));
+    }
+    let vk_bytes = py_bytes_or_base64(vk_bytes, "vk_bytes")?;
+    let vk_box = VerifyingKeyBox::new(vk_backend.to_owned(), vk_bytes);
+    let proof = iroha_core::zk::confidential_v2::build_confidential_unshield_proof_v3(
+        &chain_id,
+        &asset_definition_id.to_string(),
+        &spend_key,
+        &tree_commitments,
+        &inputs,
+        &outputs,
+        public_amount,
+        root_hint,
+        vk_circuit_id,
+        &vk_box,
+    )
+    .map_err(PyValueError::new_err)?;
+    confidential_unshield_proof_v3_py_dict(py, proof)
+}
+
 const KAGEMUSHA_NATIVE_ARCHIVE_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 fn ensure_kagemusha_recursive_archive_len(archive_len: usize, archive_name: &str) -> PyResult<()> {
@@ -5077,7 +5436,7 @@ mod tests {
     use once_cell::sync::OnceCell;
     use pyo3::{
         Python,
-        types::{PyBytes, PyDict, PyList},
+        types::{PyBytes, PyDict, PyList, PyString},
     };
     use sha2::{Digest, Sha256};
     use sorafs_car::{CarWriter, multi_fetch::PolicyBlockEvidence};
@@ -5099,6 +5458,11 @@ mod tests {
         });
     }
 
+    fn py_err_message(err: pyo3::PyErr) -> String {
+        ensure_python();
+        Python::attach(|py| err.value(py).to_string())
+    }
+
     fn canonical_i105_from_seed(seed: u8) -> String {
         AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
             .canonical_i105()
@@ -5108,6 +5472,101 @@ mod tests {
     fn sample_account(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         AccountId::new(keypair.public_key().clone())
+    }
+
+    fn sample_kagemusha_transfer_instruction() -> iroha_data_model::isi::offline::KagemushaTransfer
+    {
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgmpy".parse().expect("asset definition name"),
+        );
+        iroha_data_model::isi::offline::KagemushaTransfer::new(
+            asset,
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "python-kagemusha-transfer"),
+            ),
+            Some([0x33; 32]),
+        )
+    }
+
+    #[test]
+    fn kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives() {
+        let transfer = sample_kagemusha_transfer_instruction();
+        let transfer_archive = to_bytes(&transfer).expect("encode KagemushaTransfer");
+        let transfer_box =
+            kagemusha_instruction_archive_box("KagemushaTransfer", &transfer_archive)
+                .expect("transfer archive accepted");
+        let decoded_transfer = transfer_box
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::offline::KagemushaTransfer>()
+            .expect("KagemushaTransfer instruction box");
+        assert_eq!(decoded_transfer.asset, transfer.asset);
+        assert_eq!(decoded_transfer.inputs, transfer.inputs);
+        assert_eq!(decoded_transfer.outputs, transfer.outputs);
+
+        let fixture = committed_recursive_spend_abi7_fixture_value();
+        let redeem_archive = shared_recursive_spend_abi7_fixture_archive_bytes(
+            &fixture,
+            "redeem_instruction",
+            "redeem",
+            "RedeemKagemushaRecursive",
+        );
+        let redeem_instruction: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
+            norito::decode_from_bytes(&redeem_archive).expect("decode redeem instruction fixture");
+        let redeem_box =
+            kagemusha_instruction_archive_box("RedeemKagemushaRecursive", &redeem_archive)
+                .expect("redeem archive accepted");
+        let decoded_redeem = redeem_box
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>()
+            .expect("RedeemKagemushaRecursive instruction box");
+        assert_eq!(
+            decoded_redeem.public_amount,
+            redeem_instruction.public_amount
+        );
+        assert_eq!(decoded_redeem.recipient, redeem_instruction.recipient);
+    }
+
+    #[test]
+    fn kagemusha_instruction_archive_box_rejects_adversarial_archives() {
+        let transfer = sample_kagemusha_transfer_instruction();
+        let transfer_archive = to_bytes(&transfer).expect("encode KagemushaTransfer");
+
+        let err = kagemusha_instruction_archive_box("RedeemKagemushaRecursive", &transfer_archive)
+            .expect_err("wrong Kagemusha instruction type must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("invalid RedeemKagemushaRecursive instruction archive"),
+            "unexpected wrong-type error: {message}"
+        );
+
+        let err = kagemusha_instruction_archive_box("KagemushaTransfer", &[])
+            .expect_err("empty archive must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("Kagemusha instruction archive must not be empty"),
+            "unexpected empty-archive error: {message}"
+        );
+
+        let err = kagemusha_instruction_archive_box("KagemushaTransfer", &[0])
+            .expect_err("malformed archive must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("invalid KagemushaTransfer instruction archive"),
+            "unexpected malformed-archive error: {message}"
+        );
+
+        let err = kagemusha_instruction_archive_box("Unsupported", &transfer_archive)
+            .expect_err("unsupported type must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("unsupported Kagemusha instruction archive type"),
+            "unexpected unsupported-type error: {message}"
+        );
     }
 
     fn fixed_bytes(label: &[u8]) -> [u8; Hash::LENGTH] {
@@ -6344,6 +6803,36 @@ mod tests {
                 .iter()
                 .any(|entry| entry.algorithm_id == "orchard-halo2-actions-v1"),
         );
+        let transparent = decoded
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.algorithm_id == "transparent-transfer")
+            .expect("transparent transfer native capability must be advertised");
+        let transparent_entry = privacy_algorithm_entry("transparent-transfer")
+            .expect("transparent transfer catalog row");
+        assert_eq!(
+            transparent.production_gate.required_gates,
+            privacy_required_production_gate_keys(transparent_entry),
+            "transparent transfer must advertise only baseline transfer production gates",
+        );
+        assert!(
+            !transparent
+                .production_gate
+                .required_gates
+                .iter()
+                .any(|key| PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS
+                    .contains(&key.as_str())),
+            "transparent transfer must not require proof-only gates",
+        );
+        assert!(
+            !transparent.production_gate.missing.iter().any(|missing| {
+                missing == "real proving engine is not registered"
+                    || missing == "real verifier is not registered"
+                    || missing == "witness privacy checks are incomplete"
+                    || missing == "verifier fuzzing gate is incomplete"
+            }),
+            "transparent transfer must not report waived proof-only gates as missing",
+        );
         let zk_ace = decoded
             .algorithms
             .iter()
@@ -6358,6 +6847,13 @@ mod tests {
         assert!(!zk_ace.production_gate.ready);
         assert!(zk_ace.production_gate.audit_references.is_empty());
         assert!(zk_ace.production_gate.gates.iter().all(|gate| !gate.passed));
+        let zk_ace_entry =
+            privacy_algorithm_entry("zk-ace-pq-authorization-v0").expect("ZK-ACE catalog row");
+        assert_eq!(
+            zk_ace.production_gate.required_gates,
+            privacy_required_production_gate_keys(zk_ace_entry),
+            "ZK-ACE must require the full production proof gate set",
+        );
         assert!(
             zk_ace
                 .production_gate
@@ -6389,6 +6885,14 @@ mod tests {
                     .gates
                     .iter()
                     .all(|gate| !gate.passed),
+            );
+            let entry = privacy_algorithm_entry(&algorithm.algorithm_id)
+                .expect("privacy capability row must be cataloged");
+            assert_eq!(
+                algorithm.production_gate.required_gates,
+                privacy_required_production_gate_keys(entry),
+                "native privacy required production gates drifted for {}",
+                algorithm.algorithm_id,
             );
         }
     }
@@ -6485,6 +6989,64 @@ mod tests {
             verify_result.error_code,
             PRIVACY_FFI_ERROR_PRODUCTION_DISABLED
         );
+    }
+
+    #[test]
+    fn python_confidential_native_builders_reject_empty_vk_backend_before_proving() {
+        Python::initialize();
+        Python::attach(|py| {
+            let spend_key = PyBytes::new(py, &[0x11; Hash::LENGTH]);
+            let empty_list = PyList::empty(py);
+            let root_hint = PyBytes::new(py, &[0x22; Hash::LENGTH]);
+            let vk_bytes = PyBytes::new(py, &[0x33; Hash::LENGTH]);
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("domain id"),
+                "xor".parse().expect("asset definition name"),
+            )
+            .to_string();
+
+            let transfer_err = build_confidential_transfer_proof_v2_py(
+                py,
+                "wonderland",
+                &asset_definition_id,
+                spend_key.as_any(),
+                empty_list.as_any(),
+                empty_list.as_any(),
+                empty_list.as_any(),
+                root_hint.as_any(),
+                " ",
+                "confidential_transfer_v2",
+                vk_bytes.as_any(),
+            )
+            .expect_err("empty transfer vk backend must reject before proving");
+            let transfer_message = py_err_message(transfer_err);
+            assert!(
+                transfer_message.contains("vk_backend must be non-empty"),
+                "unexpected transfer error: {transfer_message}",
+            );
+
+            let public_amount = PyString::new(py, "0");
+            let unshield_err = build_confidential_unshield_proof_v3_py(
+                py,
+                "wonderland",
+                &asset_definition_id,
+                spend_key.as_any(),
+                empty_list.as_any(),
+                empty_list.as_any(),
+                empty_list.as_any(),
+                public_amount.as_any(),
+                root_hint.as_any(),
+                " ",
+                "confidential_unshield_v3",
+                vk_bytes.as_any(),
+            )
+            .expect_err("empty unshield vk backend must reject before proving");
+            let unshield_message = py_err_message(unshield_err);
+            assert!(
+                unshield_message.contains("vk_backend must be non-empty"),
+                "unexpected unshield error: {unshield_message}",
+            );
+        });
     }
 
     #[test]
@@ -6606,8 +7168,10 @@ mod tests {
 
         assert!(privacy_capabilities_invariants_hold(&capabilities));
         assert!(capabilities.algorithms.iter().all(|algorithm| {
+            let entry = privacy_algorithm_entry(&algorithm.algorithm_id)
+                .expect("privacy capability row must be cataloged");
             !algorithm.production_ready
-                && privacy_production_gate_invariants_hold(&algorithm.production_gate)
+                && privacy_production_gate_invariants_hold(&algorithm.production_gate, entry)
         }));
     }
 
@@ -6726,6 +7290,47 @@ mod tests {
         assert!(
             !privacy_capability_invariants_hold(&duplicate_gate),
             "duplicate production gate keys must be rejected",
+        );
+
+        let mut missing_required_gate = base.clone();
+        missing_required_gate.production_gate.required_gates.clear();
+        assert!(
+            !privacy_capability_invariants_hold(&missing_required_gate),
+            "missing required production gate keys must be rejected",
+        );
+
+        let mut duplicate_required_gate = base.clone();
+        duplicate_required_gate
+            .production_gate
+            .required_gates
+            .push(duplicate_required_gate.production_gate.required_gates[0].clone());
+        assert!(
+            !privacy_capability_invariants_hold(&duplicate_required_gate),
+            "duplicate required production gate keys must be rejected",
+        );
+
+        let mut unknown_required_gate = base.clone();
+        unknown_required_gate.production_gate.required_gates[0] = "shadow_gate".to_owned();
+        assert!(
+            !privacy_capability_invariants_hold(&unknown_required_gate),
+            "unknown required production gate keys must be rejected",
+        );
+
+        let mut unportable_required_gate = base.clone();
+        unportable_required_gate.production_gate.required_gates[0] = "shadow gate".to_owned();
+        assert!(
+            !privacy_capability_invariants_hold(&unportable_required_gate),
+            "unportable required production gate keys must be rejected",
+        );
+
+        let mut forged_waived_required_gate = base.clone();
+        forged_waived_required_gate
+            .production_gate
+            .required_gates
+            .insert(0, "real_proving".to_owned());
+        assert!(
+            !privacy_capability_invariants_hold(&forged_waived_required_gate),
+            "transparent-transfer waived proof gates must not be reintroduced as required",
         );
 
         let mut extra_entrypoint = base.clone();
@@ -14901,6 +15506,39 @@ struct Instruction {
     inner: InstructionBox,
 }
 
+fn kagemusha_instruction_archive_box(
+    instruction_type: &str,
+    instruction_archive: &[u8],
+) -> PyResult<InstructionBox> {
+    ensure_kagemusha_recursive_archive_len(
+        instruction_archive.len(),
+        "Kagemusha instruction archive",
+    )?;
+    match instruction_type.trim() {
+        "KagemushaTransfer" => {
+            let instruction: iroha_data_model::isi::offline::KagemushaTransfer =
+                decode_from_bytes(instruction_archive).map_err(|err| {
+                    PyValueError::new_err(format!(
+                        "invalid KagemushaTransfer instruction archive: {err}"
+                    ))
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
+        "RedeemKagemushaRecursive" => {
+            let instruction: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
+                decode_from_bytes(instruction_archive).map_err(|err| {
+                    PyValueError::new_err(format!(
+                        "invalid RedeemKagemushaRecursive instruction archive: {err}"
+                    ))
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unsupported Kagemusha instruction archive type `{other}`; expected KagemushaTransfer or RedeemKagemushaRecursive"
+        ))),
+    }
+}
+
 impl Instruction {
     fn new(inner: InstructionBox) -> Self {
         Self { inner }
@@ -14929,6 +15567,37 @@ impl Instruction {
         let value = loads.call1((json_str,))?;
         let dict: Py<PyDict> = value.extract()?;
         Ok(dict)
+    }
+
+    #[classmethod]
+    fn kagemusha_instruction_archive(
+        _cls: &Bound<'_, PyType>,
+        instruction_type: &str,
+        instruction_archive: &[u8],
+    ) -> PyResult<Self> {
+        Ok(Instruction::new(kagemusha_instruction_archive_box(
+            instruction_type,
+            instruction_archive,
+        )?))
+    }
+
+    #[classmethod]
+    fn kagemusha_recursive_redeem(
+        _cls: &Bound<'_, PyType>,
+        request_archive: &[u8],
+    ) -> PyResult<Self> {
+        let request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1 =
+            decode_kagemusha_recursive_archive(
+                request_archive,
+                "Kagemusha recursive spend redeem",
+            )?;
+        let instruction = kagemusha_recursive_spend_redeem_instruction_from_request(request)
+            .map_err(|err| {
+                PyValueError::new_err(format!(
+                    "invalid Kagemusha recursive spend redeem request: {err}"
+                ))
+            })?;
+        Ok(Instruction::new(InstructionBox::from(instruction)))
     }
 
     #[classmethod]
@@ -17346,6 +18015,12 @@ const PRIVACY_PRODUCTION_GATE_REQUIREMENTS: &[(&str, &str)] = &[
         "internal cryptographic review signoff is missing",
     ),
 ];
+const PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS: &[&str] = &[
+    "real_proving",
+    "real_verification",
+    "witness_privacy_checks",
+    "verifier_fuzzing",
+];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
     (
@@ -17760,6 +18435,7 @@ struct PrivacyProductionGateV1 {
     version: String,
     ready: bool,
     gates: Vec<PrivacyProductionGateStatusV1>,
+    required_gates: Vec<String>,
     missing: Vec<String>,
     audit_references: Vec<String>,
 }
@@ -17812,7 +18488,20 @@ enum PrivacyProofOperationV1 {
     Verify,
 }
 
-fn privacy_production_gate() -> PrivacyProductionGateV1 {
+fn privacy_production_gate_requirement_is_waived(entry: &PrivacyAlgorithmEntry, key: &str) -> bool {
+    entry.id == "transparent-transfer"
+        && PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS.contains(&key)
+}
+
+fn privacy_required_production_gate_keys(entry: &PrivacyAlgorithmEntry) -> Vec<String> {
+    PRIVACY_PRODUCTION_GATE_REQUIREMENTS
+        .iter()
+        .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
+        .map(|(key, _)| (*key).to_owned())
+        .collect()
+}
+
+fn privacy_production_gate(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionGateV1 {
     PrivacyProductionGateV1 {
         version: PRIVACY_PRODUCTION_GATE_VERSION.to_owned(),
         ready: false,
@@ -17823,8 +18512,10 @@ fn privacy_production_gate() -> PrivacyProductionGateV1 {
                 passed: false,
             })
             .collect(),
+        required_gates: privacy_required_production_gate_keys(entry),
         missing: PRIVACY_PRODUCTION_GATE_REQUIREMENTS
             .iter()
+            .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
             .map(|(_, label)| (*label).to_owned())
             .chain(
                 [
@@ -17861,7 +18552,7 @@ fn privacy_capabilities() -> PrivacyCapabilitiesV1 {
                     .map(|entrypoint| (*entrypoint).to_owned())
                     .collect(),
                 production_ready: false,
-                production_gate: privacy_production_gate(),
+                production_gate: privacy_production_gate(entry),
             })
             .collect(),
     };
@@ -18201,33 +18892,63 @@ fn privacy_gate_statuses_match_requirements(gates: &[PrivacyProductionGateStatus
             .all(|(status, (key, _))| status.key.as_str() == *key && !status.passed)
 }
 
-fn privacy_gate_missing_reasons_match_requirements(missing: &[String]) -> bool {
-    missing.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len() + 2
-        && missing
+fn privacy_required_gate_keys_match_entry(
+    required_gates: &[String],
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let expected = privacy_required_production_gate_keys(entry);
+    required_gates.len() == expected.len()
+        && required_gates
             .iter()
-            .take(PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len())
-            .zip(PRIVACY_PRODUCTION_GATE_REQUIREMENTS.iter())
-            .all(|(missing, (_, label))| missing.as_str() == *label)
-        && missing[PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len()].as_str()
-            == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE
-        && missing[PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len() + 1].as_str()
-            == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
+            .zip(expected.iter())
+            .all(|(required, expected)| required == expected)
 }
 
-fn privacy_production_gate_invariants_hold(gate: &PrivacyProductionGateV1) -> bool {
+fn privacy_gate_missing_reasons_match_requirements(
+    missing: &[String],
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let required_requirements = PRIVACY_PRODUCTION_GATE_REQUIREMENTS
+        .iter()
+        .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key));
+    let required_count = required_requirements.clone().count();
+
+    missing.len() == required_count + 2
+        && missing
+            .iter()
+            .take(required_count)
+            .zip(required_requirements)
+            .all(|(missing, (_, label))| missing.as_str() == *label)
+        && missing[required_count].as_str() == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE
+        && missing[required_count + 1].as_str() == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
+}
+
+fn privacy_production_gate_invariants_hold(
+    gate: &PrivacyProductionGateV1,
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let required_gate_count = privacy_required_production_gate_keys(entry).len();
+
     gate.version == PRIVACY_PRODUCTION_GATE_VERSION
         && !gate.ready
         && gate.audit_references.is_empty()
         && gate.gates.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len()
-        && gate.missing.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len() + 2
+        && gate.required_gates.len() == required_gate_count
+        && gate.missing.len() == required_gate_count + 2
         && privacy_gate_statuses_match_requirements(&gate.gates)
-        && privacy_gate_missing_reasons_match_requirements(&gate.missing)
+        && privacy_required_gate_keys_match_entry(&gate.required_gates, entry)
+        && privacy_gate_missing_reasons_match_requirements(&gate.missing, entry)
         && !privacy_gate_status_keys_have_duplicates(&gate.gates)
+        && !privacy_string_vec_has_duplicates(&gate.required_gates)
         && !privacy_string_vec_has_duplicates(&gate.missing)
         && gate.gates.iter().all(|status| {
             privacy_text_field_is_portable_identifier(&status.key)
                 && privacy_production_gate_key_is_required(&status.key)
                 && !status.passed
+        })
+        && gate.required_gates.iter().all(|key| {
+            privacy_text_field_is_portable_identifier(key)
+                && privacy_production_gate_key_is_required(key)
         })
         && gate
             .missing
@@ -18235,10 +18956,15 @@ fn privacy_production_gate_invariants_hold(gate: &PrivacyProductionGateV1) -> bo
             .all(|missing| privacy_production_gate_missing_reason_is_required(missing))
         && PRIVACY_PRODUCTION_GATE_REQUIREMENTS
             .iter()
+            .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
             .all(|(key, label)| {
                 gate.gates
                     .iter()
                     .any(|status| status.key.as_str() == *key && !status.passed)
+                    && gate
+                        .required_gates
+                        .iter()
+                        .any(|required| required.as_str() == *key)
                     && gate
                         .missing
                         .iter()
@@ -18303,7 +19029,7 @@ fn privacy_capability_invariants_hold(capability: &PrivacyCapabilityV1) -> bool 
             &capability.planned_entrypoints,
         )
         && !capability.production_ready
-        && privacy_production_gate_invariants_hold(&capability.production_gate)
+        && privacy_production_gate_invariants_hold(&capability.production_gate, entry)
 }
 
 fn privacy_capabilities_invariants_hold(capabilities: &PrivacyCapabilitiesV1) -> bool {
@@ -18941,6 +19667,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         zk_ace_build_transfer_authorization_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        build_confidential_transfer_proof_v2_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        build_confidential_unshield_proof_v3_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

@@ -324,6 +324,10 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+            raise CanaryError("CLI argument must not contain control characters")
+        if any(ord(ch) > 0x7E for ch in arg):
+            raise CanaryError("CLI argument must use printable ASCII")
         if _contains_secret_material(arg) or _contains_secret_identifier_material(arg):
             raise CanaryError("CLI argument must not contain secret-looking material")
         index += 1
@@ -383,6 +387,8 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
 def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
     if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise CanaryError(f"{flag} must be a numeric value")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise CanaryError(f"{flag} must use printable ASCII")
     try:
         int(raw, 10) if integer else float(raw)
     except ValueError as error:
@@ -572,7 +578,13 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
+        if any(
+            _is_secret_looking_key(key)
+            or _is_control_bearing_key(key)
+            or len(str(key)) > 128
+            or any(ord(ch) > 0x7E for ch in str(key))
+            for key in unknown
+        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
             raise CanaryError(f"{label} contains unknown keys")
         raise CanaryError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -621,6 +633,18 @@ def _is_secret_looking_identifier(value: Any) -> bool:
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
     if _contains_secret_material(value) or _is_secret_looking_identifier(value):
         raise CanaryError(f"{label} must not contain secret-looking material")
+
+
+def _reject_non_ascii_context(value: str, label: str) -> None:
+    if any(ord(ch) > 0x7E for ch in value):
+        raise CanaryError(f"{label} must use printable ASCII")
+
+
+def _required_context_string(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _required_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
 
 
 def _required_string(value: dict[str, Any], key: str, label: str) -> str:
@@ -795,6 +819,8 @@ def _validate_path_string(
     allow_runtime_secret_path: bool = False,
 ) -> None:
     _reject_control_chars(raw, label)
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise CanaryError(f"{label} must use printable ASCII")
     if any(ch.isspace() for ch in raw):
         raise CanaryError(f"{label} must not contain whitespace")
     if "\\" in raw:
@@ -889,6 +915,8 @@ def _validate_endpoint_url(
         raise CanaryError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise CanaryError(f"{label} host must not end with a dot")
+    if any(ord(ch) > 0x7E for ch in raw_host):
+        raise CanaryError(f"{label} host must use printable ASCII")
     _reject_secret_looking_identifier(raw_host, f"{label} host")
     _validate_host_labels(raw_host, label)
     _reject_local_url_host(parsed, label, allow_insecure_http=allow_insecure_http)
@@ -1676,10 +1704,8 @@ def build_stage_plans(
     """Validate a runbook and return provider metadata plus non-verify stages."""
 
     _reject_unknown_keys(config, TOP_LEVEL_KEYS, "config")
-    provider = _required_string(config, "provider", "config")
-    environment = _required_string(config, "environment", "config")
-    _reject_secret_looking_identifier(provider, "config.provider")
-    _reject_secret_looking_identifier(environment, "config.environment")
+    provider = _required_context_string(config, "provider", "config")
+    environment = _required_context_string(config, "environment", "config")
     config_dir = config_path.resolve().parent
 
     stages: list[StagePlan] = []

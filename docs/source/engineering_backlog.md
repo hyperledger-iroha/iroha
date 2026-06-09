@@ -10,12 +10,12 @@ track detailed unfinished engineering work.
 
 The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
 runtime-network families outside that launch scope are not supported for now.
-Retired platform-family lanes are explicitly outside SCCP launch support for now.
-Retired platform-family networks are explicitly outside SCCP launch support for now.
-Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
+SCCP active-launch route-canary evidence source metadata is canonical release
+evidence: missing, empty, non-string, or whitespace-padded values must block
+before semantic source matching.
 
 Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
 trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
@@ -28,22 +28,42 @@ aliases before filesystem metadata is inspected.
 Archived child-command evidence rejects value-taking flags whose separate or
 equals-form values are empty or another flag token, keeping canary command
 evidence unambiguous before production archiving.
+Archived child-command floating timeout values also reject Unicode digit
+confusables before Python numeric parsing can accept them.
+Canary runbook path strings and archived child-command local path values must
+remain printable ASCII, and production-readiness compact summary/config/receipt
+path strings replay the same guard, so Unicode-confusable path evidence cannot
+be planned or replayed into release archives.
 Archived canary child commands now also must keep the runner-emitted shape:
 Python interpreter, expected stage script path, then supported flags and their
-values. The archived interpreter/script paths use the same local-path smuggling
-preflight as other artifacts, and extra positional command tokens are rejected
-before evidence can be accepted.
+values. Interpreter version suffixes are ASCII-only, so Unicode digit
+confusables cannot satisfy replay as Python versions. The archived
+interpreter/script paths use the same local-path smuggling preflight as other
+artifacts, and extra positional command tokens are rejected before evidence can
+be accepted. Unsupported archived command flags that carry secret-looking
+material or non-ASCII spellings fail with label-only diagnostics before the
+flag spelling can be echoed.
 Direct ISO CLI path preflights now also treat missing, empty, following
 `--flag`, or `--path-flag=--flag` path values as missing before any file or
 network work.
 Live rail-gateway `--torii-base-url` and audit-notary `--endpoint` flags now
 also reject missing, empty, or flag-looking URL values before argparse parsing.
+Those URL value preflights also reject raw control characters, Unicode
+characters, surrounding whitespace, and non-URL-shaped secret-looking material
+before unrelated required file or directory inputs can mask the bad URL.
 Direct ISO numeric CLI preflights now reject malformed, empty, flag-looking, or
 secret-looking numeric values before argparse can echo operator-provided input.
+They also require printable ASCII before Python's numeric parsers can accept
+Unicode digit confusables as operator budgets, timeouts, or byte limits.
 All ISO operator entry points now also reject secret-looking raw CLI tokens
 before argparse can echo unknown arguments; the scanner covers bearer tokens,
 private keys, passwords/passphrases, API/access/session keys, client secrets,
 cookies, and Iroha signatures.
+Unknown raw CLI tokens with ASCII control characters are rejected by the same
+preflight layer with label-only diagnostics before argparse can echo terminal
+control bytes.
+Unknown raw CLI tokens must also be printable ASCII, preventing Unicode
+confusable option spellings from reaching argparse diagnostics.
 Those entry points also reject the `--` argument terminator because the ISO
 operator CLIs do not accept positional operands; raw secret, boolean, path,
 context, and numeric preflights all fail closed before trailing tokens after
@@ -79,8 +99,8 @@ secret-file references and are redacted in planned commands.
 Canary child stdout/stderr previews now also reject identifier-style
 secret-looking material and unsafe control characters before summary emission.
 XSD `xmllint` diagnostics now redact identifier-style secret-looking validator
-output, key/value secret material, and unsafe control characters before
-schema-validation errors are reported.
+output, key/value secret material, unsafe control characters, and non-ASCII
+material before schema-validation errors are reported.
 Direct evidence receipt-verifier diagnostics now redact key/value and
 identifier-style secret-looking stderr plus unsafe control characters before
 reporting child verifier failures. ISO JSON unknown-key scanners now also hide
@@ -91,25 +111,31 @@ before field-specific replay.
 ISO URL port parser failures now report only label-level invalid-port
 diagnostics instead of including parser exception text that may contain the raw
 operator-provided port string.
-ISO URL host validators now reject secret-looking hostname labels, and non-port
-URL parser failures use label-only diagnostics before malformed URL text can be
-echoed by parser exceptions.
+ISO URL host validators now reject secret-looking hostname labels and
+non-ASCII raw host labels, and non-port URL parser failures use label-only
+diagnostics before malformed URL text can be echoed by parser exceptions.
 XSD profile-catalog validation now recursively rejects secret-looking strings
 and identifier-style values before rail, signature-policy, reference-dataset,
 address-mode, profile-id, or version diagnostics can echo catalog-provided
 values.
+Profile-catalog enum and list values such as rails, embedded signature
+policies, required reference datasets, structured-address modes, and business
+services must also be printable ASCII before unknown-value diagnostics or
+summary recording can preserve Unicode-confusable spellings.
 XSD manifest schema and fixture `payload_root` values now reject secret-looking
-material before namespace/root mismatch diagnostics can echo manifest-provided
-payload names.
+material and non-ASCII confusable spelling before namespace/root mismatch
+diagnostics can echo manifest-provided payload names.
 Checked-in XSD `targetNamespace` attributes now also reject secret-looking
-material before schema namespace mismatch diagnostics can echo schema-provided
-attribute values.
-XSD and XML payload identifiers, schema-root attribute names, and unsupported
-foreign child namespaces now use label-only secret-looking diagnostics instead
-of echoing schema-provided names or namespace URIs.
+material and non-ASCII material before schema namespace mismatch diagnostics can
+echo schema-provided attribute values.
+XSD and XML payload identifiers, XML fixture namespace/name identifiers, and
+schema-root attribute names now use label-only secret-looking or printable-ASCII
+diagnostics instead of echoing schema-provided names or namespace URIs. These
+schema and fixture identifiers also reject overlong ASCII spellings before
+schema/root mismatch diagnostics can print them.
 XML fixture contents are scanned before optional `xmllint` validation, and
-secret-looking validator output is redacted before it can be reflected in
-XSD preflight diagnostics.
+secret-looking, control-bearing, or non-ASCII validator output is redacted before
+it can be reflected in XSD preflight diagnostics.
 Secret-looking field-name markers now also normalize hyphenated
 `private-key` and underscore-form `x_iroha_signature` spellings across ISO
 validators, and receipt JSON secret-field checks recurse through nested objects
@@ -119,21 +145,29 @@ without echoing the repeated key name.
 Secret-looking unknown JSON field names are also rejected with label-only
 unknown-key diagnostics while ordinary unknown-field typos still list the
 field names for operator ergonomics.
+Non-ASCII, overlong, too numerous, or collectively oversized unknown JSON field
+names now use the same label-only unknown-key diagnostic, preventing
+Unicode-confusable or oversized schema keys from being reflected in operator
+errors.
 Direct ISO boolean CLI flags reject attached `--flag=value` spellings and
 separate non-option values before argparse can echo the value or reinterpret
 the option.
 Evidence and production-readiness context flags reject missing, empty,
-flag-looking, or secret-looking provider/environment values before argparse,
-summary loading, or mismatch diagnostics can reflect them.
-Canary runbook provider/environment labels now reject secret-looking
-identifier-style strings before plan-only output or executed summaries can
-preserve them.
+flag-looking, secret-looking, or non-ASCII provider/environment values before
+argparse, summary loading, or mismatch diagnostics can reflect them. Expected
+provider/environment mismatch diagnostics now stay label-only and do not print
+observed or expected context values.
+Canary runbook provider/environment labels now reject non-ASCII and
+secret-looking identifier-style strings before plan-only output or executed
+summaries can preserve them.
 Trust-bundle `--max-source-age-days` now rejects missing, empty, flag-looking,
 malformed, or secret-looking freshness budgets before argparse or bundle reads.
 Trust-bundle profile IDs, rails, environments, embedded signature policies,
 source authority/version strings, DER labels, and recursively scanned field
 names reject secret-looking identifiers before trust summaries or profile
-overrides can persist them.
+overrides can persist them, and trust-bundle environment context, embedded
+signature policies, and source authority/version provenance must be printable
+ASCII before summary emission.
 Trust-bundle SHA-256 pins, declared DER digests, and certificate policy OIDs
 also reject secret-looking marker strings before canonical SHA/OID diagnostics.
 Trust-bundle local-audit overrides now reject unused
@@ -145,7 +179,12 @@ Archived evidence and readiness rollups apply the same no-echo identifier check
 to compact canary provider/environment fields, evidence policy context, trust
 profile IDs/rails/environments, trust embedded-signature policies,
 profile-override policies, trust source authority/version strings, and archived
-trust DER labels before release summaries can preserve those values.
+trust DER labels before release summaries can preserve those values. Archived
+trust embedded-signature policies and source authority/version provenance also
+reject non-ASCII confusable spellings before readiness blockers or evidence
+summaries can preserve forged policy or provenance values.
+Direct trust-bundle material and archived evidence replay also require DER labels
+to be printable ASCII before summaries can preserve Unicode-confusable material.
 Archived evidence and readiness SHA-256 fields, including trust bundle digests,
 profile-override pins, and receipt payload/anchor/index digests, reject the same
 markers before digest-shape diagnostics or blockers can preserve them.
@@ -153,16 +192,41 @@ Rail sidecar `profile` and `rail_message_id` identifiers, plus archived rail
 receipt `profile` and `rail_message_id` values, now reject secret-looking
 identifier-style strings before network delivery, receipt emission, receipt
 verification, or receipt-summary rollup.
-Rail sidecar `message_type` and `payload_sha256` values, and archived rail
-receipt `message_type` values, also apply no-echo secret-looking checks before
+Rail sidecar `message_type` values must also remain printable ASCII and match
+the canonical lowercase ISO family-id shape before unsupported-type diagnostics
+can print a short unsupported family value. Rail sidecar
+`message_type`/`payload_sha256` values plus archived rail receipt
+`message_type` values apply no-echo secret-looking checks before
 unsupported-type, digest-mismatch, or receipt-summary diagnostics can preserve
 operator-provided marker strings.
+Rail receipt `message_type` syntax now uses ASCII-only digits and the direct
+receipt verifier, evidence replay, readiness replay, and XSD profile catalog
+all reject Unicode digit confusables before unsupported-type diagnostics.
+XSD profile-catalog enum values such as rails, embedded signature policies,
+reference datasets, and structured-address modes also reject overlong ASCII
+spellings before unknown-value diagnostics can print them.
+Profile-catalog profile IDs are capped before duplicate-ID or
+missing-schema-version diagnostics can echo catalog-provided IDs.
+Profile-catalog business-service entries are capped before the catalog can
+emit or archive overlong service identifiers.
+XSD profile-catalog `message_def_id` and version entries use the same ASCII-only
+digit policy before missing-schema or skipped-version diagnostics can classify
+Unicode digit confusables as concrete ISO message IDs.
+Evidence and readiness archive/canary receipt kind, filename, and metadata
+mismatch blockers no longer print receipt kind values, receipt leaf names, or
+full metadata tuples, so invalid marker material is not reflected by follow-on
+consistency diagnostics.
+Trust-bundle preflight, evidence replay, and production-readiness compact trust
+profile IDs, override IDs, embedded signature policy strings, and trust-source
+authority/version provenance are capped before trust diagnostics can print or
+archive them.
 Receipt verifier, evidence, and readiness `receipt_kind` values reject
-secret-looking identifier-style markers before unsupported-kind diagnostics or
-blockers can preserve forged archive values.
+secret-looking identifier-style markers and non-ASCII confusable spellings before
+unsupported-kind diagnostics or blockers can preserve forged archive values.
 Archived canary stage names in evidence and readiness rollups also reject
-secret-looking identifier-style markers before unsupported-stage, ordering, or
-stage-window diagnostics can preserve forged values.
+secret-looking identifier-style markers and non-ASCII confusable spellings before
+unsupported-stage, ordering, or stage-window diagnostics can preserve forged
+values.
 The live rail-gateway, audit-notary, canary, and XSD fixture tools also reject
 secret-looking key/value material in local output paths before those paths can
 be persisted into receipts or archived summaries.
@@ -414,19 +478,33 @@ redistributable schemas, and official trust/revocation bundles.
   `OpenVerifyEnvelope` admission now also reject all-zero native STARK
   envelope bytes for Soracloud FHE input, bootstrap-key, full-bootstrap
   material, and full-bootstrap execution proofs.
-  Under `zk-stark`, Core also decodes full-bootstrap execution native
-  `StarkVerifyEnvelopeV1` payloads before backend verification and adversarially
-  rejects drift across transcript label, domain tag, AIR section presence,
-  circuit id, trace width, opening count, composition root, and public digest.
-  A `zk-stark` positive fixture now installs the governed artifact-backed
-  STARK verifier key, generates backend-verified `OpenVerifyEnvelope` proofs
-  over each full-bootstrap execution statement, and proves the active-verifier
-  gate accepts them when STARK verification is enabled at runtime.
-  Matching `zk-stark` positive fixtures cover the bootstrap-key and
-  full-bootstrap material proof gates with active verifier records and
-  backend-verified `OpenVerifyEnvelope` proofs.
-  A `zk-preverify` positive fixture now proves the active-verifier gate accepts
-  a preverified proof batch for every production identifier slot.
+  Under `zk-stark`, Core also decodes Soracloud FHE input-admission,
+  bootstrap-key, full-bootstrap material, and full-bootstrap execution native
+  `StarkVerifyEnvelopeV1` payloads before backend verification and
+  adversarially rejects drift across transcript label, domain tag, AIR section
+  presence, circuit id, trace width, opening count, composition root, and public
+  digest. For full-bootstrap material and execution proofs, generic binding-AIR
+  fixtures are fully validated before they are rejected at the dedicated
+  arithmetic-AIR boundary, while non-generic AIR labels stay fail-closed until
+  the production arithmetic verifier is available. The `zk-preverify` path is
+  covered with poisoned-cache regressions for input-admission and bootstrap-key
+  native AIR drift plus full-bootstrap material/execution generic AIR drift, so
+  cache hits cannot bypass native envelope binding or the dedicated
+  arithmetic-AIR boundary.
+  `zk-stark` full-bootstrap fixtures now install governed artifact-backed
+  STARK verifier keys and generate backend-verified binding-AIR
+  `OpenVerifyEnvelope` payloads only as rejection fixtures: the active
+  full-bootstrap material and execution verifier gates reject them before
+  backend dispatch because they do not prove the BFV bootstrap arithmetic.
+  The bootstrap-key proof gate still has positive active-verifier coverage for
+  the shared binding-AIR verifier path.
+  Full-bootstrap material proof verification now also preflights the active
+  record's stored STARK/FRI verifier-key payload against the canonical material
+  circuit before backend dispatch, so corrupted state cannot retarget the
+  material verifier key to the execution circuit.
+  `zk-preverify` full-bootstrap regressions now prove that preverified cache
+  hits cannot bypass the dedicated arithmetic-AIR boundary for material or
+  execution proof batches.
   The confidential verifier-call defaults now admit one such Soracloud
   full-bootstrap execution batch without an operator override.
   Core regressions now also prove that correctly shaped full-bootstrap
@@ -434,9 +512,16 @@ redistributable schemas, and official trust/revocation bundles.
   governed verifier record is missing or withdrawn.
   The Core proof helper now also reruns local job-shape validation, requires
   input-bound metadata to match the input envelope count, and rejects missing or
-  surplus output slots before deriving proof statements, so stale bound
-  sidecars, stale output sidecars, and multi-input bootstrap drift cannot reach
-  proof verification.
+  surplus output slots before deriving proof statements. The execution proof
+  helper also derives the governed verifier key from the supplied evaluation
+  keys and circuit artifacts and rejects caller-supplied verifier keys that do
+  not match it before reaching the dedicated-prover boundary, so stale bound
+  sidecars, stale output sidecars, wrong verifier keys, and multi-input
+  bootstrap drift cannot reach proof verification.
+  The lower-level `zk-stark` material and execution proof constructors also
+  preflight the supplied verifier-key backend, circuit id, production-floor
+  STARK/FRI shape, and SHA-256 selector before returning the
+  dedicated-prover-unavailable error.
   It also rejects full-bootstrap execution circuit artifacts outside
   full-bootstrap proof context even when no execution-proof attachments are
   supplied, so artifact-only bypass attempts fail at the proof boundary.
@@ -460,9 +545,56 @@ redistributable schemas, and official trust/revocation bundles.
   key-material commitments before Galois-key availability or final output
   execution.
   Full-bootstrap proof-key payloads now also bind the canonical execution
-  public-input layout and a generated prover/verifier pair commitment; governed
-  material stores that pair commitment and Core/Torii recompute it from decoded
-  proof-key artifacts before accepting signed material.
+  public-input layout, a generated prover/verifier pair commitment, and a
+  deterministic native proof-circuit fingerprint for the typed STARK/FRI
+  material; generated pair validation rejects prover/verifier native-circuit
+  mismatch, and governed material stores the pair commitment while Core/Torii
+  recompute it from decoded proof-key artifacts before accepting signed
+  material. Native proof-key material now also rejects noncanonical native
+  payload circuit ids outright, so proof-key artifacts cannot be generated for
+  or retargeted to any circuit other than `iroha_bfv_full_bootstrap_v1`.
+  Native verifier payloads now mirror the transparent prover payload profile by
+  binding their field count, backend, key format, proof system, and field
+  labels before material admission or Core canonicalization. Core's fallback
+  native-verifier canonicalization now independently rejects field-count drift,
+  so relabeled STARK/FRI verifier payloads cannot be smuggled through the
+  governed artifact path.
+  The first-release arithmetic trace layout is now exposed as typed
+  `BfvFullBootstrapArithmeticTraceProfileV1` material with a canonical digest
+  bound by the proof public-input schema, proof-key material envelope, native
+  prover/verifier payloads, native proof-key material, and native
+  proof-circuit fingerprint; crypto and Core reject trace-profile digest drift
+  before governed artifact admission or verifier-key canonicalization. The
+  profile now also binds the active coefficient rows as private witness rows,
+  public deterministic padding rows, and the rule that transparent native
+  proofs must not open unmasked private rows.
+  Release prover input now has a typed
+  `BfvFullBootstrapMaterialProofInputMaterialV1` boundary for governed
+  full-bootstrap material proofs and a typed
+  `BfvFullBootstrapExecutionProofInputMaterialV1` boundary that carries the
+  public key, validated execution witness material, and canonical statement
+  hash together; validation rejects stale input layouts, forged statement
+  hashes, stale public keys, stale evaluation-key material, and stale embedded
+  witnesses before a dedicated arithmetic prover can consume the material.
+  Release execution prover input now also has a typed
+  `BfvFullBootstrapExecutionProverInputMaterialV1` package that binds the proof
+  input, canonical row-major arithmetic trace material/digest, and governed
+  generated prover/verifier proof-key pair before the dedicated prover boundary.
+  Crypto and Core reject stale trace digests, stale trace rows, and unrelated
+  proof-key material or pair commitments before proof generation is attempted.
+  Core material and execution proof helpers now derive and validate typed input
+  material before crossing the current fail-closed dedicated-prover boundary.
+  The typed execution proof helper also derives and validates the canonical
+  row-major arithmetic trace material from proof input, so stale governed
+  material, witness, statement material, or native trace rows are rejected
+  before proof generation is attempted.
+  Release tooling can now derive governed full-bootstrap circuit material
+  directly from a concrete artifact bundle; the crypto helper recomputes every
+  artifact digest, proof-key material commitment, and generated pair commitment
+  before validating the bundle against the derived material. Derivation now also
+  rejects stale proof-key pair commitments even when the individual proof-key
+  material commitments have been refreshed, and the crypto/Core fixture helpers
+  no longer synthesize malformed sample pair commitments.
   Torii signed-request preflight coverage now also rejects full-bootstrap
   artifact attachments outside full-bootstrap context and binds a matching
   signed material digest to a role-swapped artifact envelope before rejecting
@@ -473,9 +605,41 @@ redistributable schemas, and official trust/revocation bundles.
   no-artifact residual-bound wrapper is also test-only, keeping the non-test
   Core path on artifact-aware execution and bound propagation.
   Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-  Remaining production work is the audited full-bootstrap arithmetic
-  proof-producing backend plus release-grade prover/verifier artifacts, not the
-  Core verifier gate or statement-recomputation policy path.
+  Core full-bootstrap proof constructors now also reject zero statement hashes
+  after verifier-key profile admission and before the dedicated arithmetic
+  prover boundary, so release prover tooling cannot request a proof for an
+	  empty public statement. The material and execution proof statement materials
+	  now also carry their advertised layout versions and field counts inside the
+	  canonical hashed bytes, and the Soracloud public-input schemas advertise
+	  those self-describing headers. Public proof input material validation also
+	  rejects zero statement hashes, malformed public-key shapes, and material
+	  prover artifact bundles that do not match governed material before release
+	  prover tooling can hand typed material to the future arithmetic backend, and
+	  Core now pins those typed-material rejection cases at the runtime prover
+	  boundary. The full-bootstrap execution public-input schema and stable hash
+	  now also advertise the arithmetic trace private/public row policy and the
+	  proof-key-bound release prover input package.
+	  Full-mode bootstrap keys now also carry a domain-separated BFV public-key
+	  digest, and material/execution statement derivation rejects governed
+	  public-key drift before material hashing, witness hashing, or Core
+	  proof-helper execution.
+	  BFV-shaped native AIR envelopes now also preflight the canonical
+	  transcript label, statement-bound domain tag, STARK/FRI parameters, public
+	  digest binding, opened row/path shape, and the no-unmasked-private-row
+	  policy before Core reports the current dedicated verifier boundary.
+	  Remaining production work is the audited full-bootstrap arithmetic
+	  proof-producing backend plus release-grade prover/verifier artifacts, not the
+	  Core verifier gate, arithmetic trace-profile digest binding,
+	  native proof-circuit fingerprint/pair binding, execution
+	  helper and constructor verifier-key/statement-hash preflights, material runtime verifier-key
+  payload preflight, canonical native proof-key circuit enforcement, governed
+  material derivation from release artifacts, artifact-bound public typed
+  material prover input validation, public typed execution prover input and
+  proof-key-bound prover package validation, canonical row-major arithmetic
+  trace material/digest validation, native BFV AIR metadata/privacy-boundary
+  preflight, public typed execution witness material reconstruction,
+  validation, hashing, self-describing material and execution statement
+  material, or statement-recomputation policy path.
   Direct crypto
   refresh-transcript validation/digesting and Soracloud transcript digesting
   now also preflight the advertised BFV public-key shape
@@ -3014,7 +3178,8 @@ redistributable schemas, and official trust/revocation bundles.
   label-only diagnostics, rejects non-canonical archived trust profile IDs or unknown
   rail IDs, requires each canary rail receipt profile to have matching compact
   trust material for the same profile ID and environment, with same-rail binding
-  for built-in rail-named profiles, rejects forged trust profile overrides whose id/rail/policy,
+  for built-in rail-named profiles, and reports missing trust coverage without
+  printing the compact profile ID or canary environment label, rejects forged trust profile overrides whose id/rail/policy,
   pin/OID/CRL/OCSP counts, canonical OIDs, DER summary digests, DER byte
   lengths, bounded canonical base64 DER SEQUENCE blobs, or trusted/revoked pin
   overlap no longer match the trust-bundle verifier output,
@@ -3111,9 +3276,12 @@ redistributable schemas, and official trust/revocation bundles.
   booleans, numeric caps, business-service arrays, or amount minor-unit arrays
   fail before a digest-bound XSD summary can be emitted. Required and optional
   manifest/profile-catalog strings now reject ASCII control characters before
-	  summary emission, including reviewed gap reasons. Readiness also rejects
-	  archived reviewed gap reasons that are present but empty or non-string
-	  instead of treating them as absent, blocks schema-backed archived fixtures
+	  summary emission, including reviewed gap reasons. Reviewed gap reasons and
+	  blocked-source review reasons must also remain printable ASCII,
+	  secret-looking-free, and capped at 1024 characters in direct XSD summaries
+	  and readiness replay.
+	  Readiness also rejects archived reviewed gap reasons that are present but
+	  empty or non-string instead of treating them as absent, blocks schema-backed archived fixtures
 		  that still carry a missing-schema reason, and checked-in XSD source
 		  provenance, manifest schema, fixture, fixture schema-reference, and
 		  archived profile-catalog paths reject embedded whitespace, leading-dash

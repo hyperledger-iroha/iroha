@@ -53,6 +53,23 @@ public final class PrivacyNativeBridge {
               "planned SDK entrypoints remain",
               "dev fixture entrypoints are not production entrypoints",
               "Iroha production allowlist is not enabled for this audited row"));
+  private static final List<String> PRODUCTION_GATE_REQUIRED =
+      Collections.unmodifiableList(
+          Arrays.asList(
+              "real_proving",
+              "real_verification",
+              "chain_admission",
+              "sdk_parity",
+              "wallet_state",
+              "witness_privacy_checks",
+              "deterministic_tests",
+              "negative_adversarial_tests",
+              "replay_nullifier_tests",
+              "fuzzing",
+              "parser_fuzzing",
+              "verifier_fuzzing",
+              "performance_gates",
+              "external_audit"));
   private static final List<String> PRODUCTION_GATE_AUDIT_REFERENCES = Collections.emptyList();
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
@@ -76,6 +93,14 @@ public final class PrivacyNativeBridge {
 
   public static byte[] buildProof(final byte[] requestArchive) {
     return call("build proof", requestArchive, PrivacyNativeBridge::nativeBuildProof);
+  }
+
+  public static byte[] buildConfidentialTransferProofV2(final byte[] requestArchive) {
+    return buildProof(requestArchive);
+  }
+
+  public static byte[] buildConfidentialUnshieldProofV3(final byte[] requestArchive) {
+    return buildProof(requestArchive);
   }
 
   public static byte[] verifyProof(final byte[] requestArchive) {
@@ -528,6 +553,10 @@ public final class PrivacyNativeBridge {
 
     public List<String> missingProductionGates() {
       return missingProductionGates;
+    }
+
+    public List<String> requiredProductionGates() {
+      return PRODUCTION_GATE_REQUIRED;
     }
 
     public List<String> auditReferences() {

@@ -44,6 +44,10 @@ class PrivacyNativeBridgeTest {
         }
         assertFailsWith<UnsupportedOperationException> {
             @Suppress("UNCHECKED_CAST")
+            (bridgeAvailable.productionGate.requiredGates as MutableList<String>).add("tampered")
+        }
+        assertFailsWith<UnsupportedOperationException> {
+            @Suppress("UNCHECKED_CAST")
             (bridgeAvailable.productionGate.auditReferences as MutableList<String>).add(
                 "https://audit.example/forged-signoff",
             )
@@ -51,6 +55,7 @@ class PrivacyNativeBridgeTest {
 
         val fresh = PrivacyNativeBridge.privacyCapabilities(bridgeAvailable = true)
         assertFalse(fresh.productionGate.missing.contains("tampered"))
+        assertFalse(fresh.productionGate.requiredGates.contains("tampered"))
         assertFalse(
             fresh.productionGate.auditReferences.contains(
                 "https://audit.example/forged-signoff",
@@ -60,34 +65,37 @@ class PrivacyNativeBridgeTest {
             PrivacyNativeBridge.PrivacyProductionGate.MISSING_REASONS,
             fresh.productionGate.missing,
         )
+        assertEquals(
+            PrivacyNativeBridge.PrivacyProductionGate.REQUIRED_GATES,
+            fresh.productionGate.requiredGates,
+        )
     }
 
     @Test
     fun rejectsEmptyRequestsBeforeNativeDispatch() {
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.buildProof(ByteArray(0))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.verifyProof(ByteArray(0))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.buildProof(null)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.verifyProof(null)
+        val helpers = listOf<(ByteArray?) -> ByteArray>(
+            PrivacyNativeBridge::buildProof,
+            PrivacyNativeBridge::buildConfidentialTransferProofV2,
+            PrivacyNativeBridge::buildConfidentialUnshieldProofV3,
+            PrivacyNativeBridge::verifyProof,
+        )
+
+        for (helper in helpers) {
+            assertFailsWith<IllegalArgumentException> {
+                helper(ByteArray(0))
+            }
+            assertFailsWith<IllegalArgumentException> {
+                helper(null)
+            }
         }
         val oversized = ByteArray(PrivacyNativeBridge.PRIVACY_NATIVE_ARCHIVE_MAX_BYTES + 1)
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.buildProof(oversized)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.verifyProof(oversized)
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.buildProof(privacyNoritoFrame(0x52))
-        }
-        assertFailsWith<IllegalArgumentException> {
-            PrivacyNativeBridge.verifyProof(privacyNoritoFrame(0x52))
+        for (helper in helpers) {
+            assertFailsWith<IllegalArgumentException> {
+                helper(oversized)
+            }
+            assertFailsWith<IllegalArgumentException> {
+                helper(privacyNoritoFrame(0x52))
+            }
         }
     }
 
@@ -735,6 +743,10 @@ class PrivacyNativeBridgeTest {
         assertFalse(capabilities.productionGate.performanceGates)
         assertFalse(capabilities.productionGate.externalAudit)
         assertEquals(emptyList(), capabilities.productionGate.auditReferences)
+        assertEquals(
+            PrivacyNativeBridge.PrivacyProductionGate.REQUIRED_GATES,
+            capabilities.productionGate.requiredGates,
+        )
         assertEquals(
             PrivacyNativeBridge.PrivacyProductionGate.MISSING_REASONS,
             capabilities.productionGate.missing,

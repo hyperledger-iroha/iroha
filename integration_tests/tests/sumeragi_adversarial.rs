@@ -17,6 +17,7 @@ use iroha::{
         parameter::{Parameter, Parameters, SumeragiParameter},
     },
 };
+use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::NetworkBuilder;
 use norito::json::{self, Map, Value};
 use tokio::time::sleep;
@@ -135,7 +136,18 @@ async fn run_chunk_drop_scenario() -> Result<()> {
     .await
     .wrap_err("fetch RBC sessions after chunk-drop wait")??;
 
-    let status_after_all = collect_client_statuses_best_effort(&cluster_clients)?;
+    let progress_quorum = commit_quorum_from_len(cluster_clients.len()).max(1);
+    let status_after_all = match try_wait_for_cluster_height_quorum(
+        &cluster_clients,
+        expected_height,
+        progress_quorum,
+        Duration::from_secs(20),
+    )
+    .await?
+    {
+        Some(statuses) => statuses,
+        None => collect_client_statuses_best_effort(&cluster_clients)?,
+    };
     let min_blocks = status_after_all
         .iter()
         .map(|status| status.blocks)
@@ -146,11 +158,17 @@ async fn run_chunk_drop_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(status_after.blocks);
-    let delivered = get_bool(&session, "delivered").unwrap_or(false)
+    let delivered = require_bool(&session, "delivered")?
         || any_delivered_session_for_height(&sessions_after, session_height);
     let incomplete = session_has_missing_chunks(&session)
         || any_incomplete_session_for_height(&sessions_after, session_height);
+    let progress_quorum_blocks =
+        count_statuses_at_or_above_height(&status_after_all, expected_height);
     if max_blocks >= expected_height {
+        ensure!(
+            progress_quorum_blocks >= progress_quorum,
+            "chunk drop recovery should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
+        );
         ensure!(
             max_blocks.saturating_sub(min_blocks) <= 1,
             "chunk drop recovery should not cause unbounded cluster divergence (min={min_blocks}, max={max_blocks})"
@@ -172,6 +190,11 @@ async fn run_chunk_drop_scenario() -> Result<()> {
     );
     summary_map.insert("status_after_blocks".into(), Value::from(max_blocks));
     summary_map.insert("status_after_min_blocks".into(), Value::from(min_blocks));
+    summary_map.insert("progress_quorum".into(), Value::from(progress_quorum));
+    summary_map.insert(
+        "progress_quorum_blocks".into(),
+        Value::from(progress_quorum_blocks),
+    );
     summary_map.insert("delivered".into(), Value::from(delivered));
     summary_map.insert("incomplete".into(), Value::from(incomplete));
     summary_map.insert("rbc_session".into(), session.clone());
@@ -221,9 +244,11 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
         .as_ref()
         .and_then(session_height)
         .unwrap_or(expected_height);
-    let status_after_all = match try_wait_for_cluster_height(
+    let progress_quorum = commit_quorum_from_len(cluster_clients.len()).max(1);
+    let status_after_all = match try_wait_for_cluster_height_quorum(
         &cluster_clients,
         expected_height,
+        progress_quorum,
         Duration::from_secs(180),
     )
     .await?
@@ -241,6 +266,8 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(status_before.blocks);
+    let progress_quorum_blocks =
+        count_statuses_at_or_above_height(&status_after_all, expected_height);
     let sessions_after = tokio::task::spawn_blocking({
         let client = client.clone();
         move || client.get_sumeragi_rbc_sessions_json()
@@ -248,13 +275,14 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
     .await
     .wrap_err("fetch RBC sessions after reorder wait")??;
 
-    let delivered = session
-        .as_ref()
-        .and_then(|value| get_bool(value, "delivered"))
-        .unwrap_or(false)
+    let delivered = optional_session_bool(session.as_ref(), "delivered")?
         || any_delivered_session_for_height(&sessions_after, session_height);
     let complete = any_complete_session_for_height(&sessions_after, session_height);
     if max_blocks >= expected_height {
+        ensure!(
+            progress_quorum_blocks >= progress_quorum,
+            "reorder scenario should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
+        );
         ensure!(
             max_blocks.saturating_sub(min_blocks) <= 1,
             "reorder scenario should not cause unbounded cluster divergence (min={min_blocks}, max={max_blocks})"
@@ -282,6 +310,11 @@ async fn run_chunk_reorder_scenario() -> Result<()> {
     );
     summary_map.insert("status_after_blocks".into(), Value::from(max_blocks));
     summary_map.insert("status_after_min_blocks".into(), Value::from(min_blocks));
+    summary_map.insert("progress_quorum".into(), Value::from(progress_quorum));
+    summary_map.insert(
+        "progress_quorum_blocks".into(),
+        Value::from(progress_quorum_blocks),
+    );
     summary_map.insert("rbc_session".into(), session.unwrap_or(Value::Null));
     emit_summary("chunk_reorder", &Value::Object(summary_map))?;
 
@@ -333,10 +366,7 @@ async fn run_witness_corruption_scenario() -> Result<()> {
         })
         .await
         .wrap_err("fetch RBC sessions after witness corruption wait")??;
-        let delivered = session
-            .as_ref()
-            .and_then(|value| get_bool(value, "delivered"))
-            .unwrap_or(false)
+        let delivered = optional_session_bool(session.as_ref(), "delivered")?
             || any_delivered_session_for_height(&sessions_after, session_height);
         let complete = any_complete_session_for_height(&sessions_after, session_height);
         let retired = extract_sessions_for_height(&sessions_after, session_height).is_empty();
@@ -426,9 +456,11 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
                 .filter_map(|value| value.as_object()?.get("view")?.as_u64()),
         );
     }
-    let status_after_all = match try_wait_for_cluster_height(
+    let progress_quorum = commit_quorum_from_len(cluster_clients.len()).max(1);
+    let status_after_all = match try_wait_for_cluster_height_quorum(
         &cluster_clients,
         expected_height,
+        progress_quorum,
         Duration::from_secs(180),
     )
     .await?
@@ -446,6 +478,8 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(status_before.blocks);
+    let progress_quorum_blocks =
+        count_statuses_at_or_above_height(&status_after_all, expected_height);
 
     let base_view = session
         .as_ref()
@@ -476,6 +510,10 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
     }
     if max_blocks >= expected_height {
         ensure!(
+            progress_quorum_blocks >= progress_quorum,
+            "duplicate-init scenario should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
+        );
+        ensure!(
             max_blocks.saturating_sub(min_blocks) <= 1,
             "duplicate-init scenario should not cause unbounded cluster divergence (min={min_blocks}, max={max_blocks})"
         );
@@ -496,6 +534,11 @@ async fn run_duplicate_inits_scenario() -> Result<()> {
     );
     summary_map.insert("status_after_blocks".into(), Value::from(max_blocks));
     summary_map.insert("status_after_min_blocks".into(), Value::from(min_blocks));
+    summary_map.insert("progress_quorum".into(), Value::from(progress_quorum));
+    summary_map.insert(
+        "progress_quorum_blocks".into(),
+        Value::from(progress_quorum_blocks),
+    );
     summary_map.insert("rbc_session".into(), session.unwrap_or(Value::Null));
     emit_summary("duplicate_inits", &Value::Object(summary_map))?;
 
@@ -538,10 +581,7 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
         try_wait_for_rbc_session(&drop_client, expected_height, Duration::from_secs(40)).await?;
     sleep(Duration::from_secs(2)).await;
     let status_after_drop = blocking_status(&drop_client)?;
-    let drop_delivered = drop_session
-        .as_ref()
-        .and_then(|value| get_bool(value, "delivered"))
-        .unwrap_or(false);
+    let drop_delivered = optional_session_bool(drop_session.as_ref(), "delivered")?;
     if drop_delivered || status_after_drop.blocks >= expected_height {
         ensure!(
             status_after_drop.blocks >= expected_height,
@@ -580,6 +620,7 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
         .iter()
         .map(|peer| peer.client())
         .collect();
+    let recovery_quorum = commit_quorum_from_len(recovery_clients.len()).max(1);
     configure_runtime_rbc(&recovery_client).await?;
     let status_before_recovery = blocking_status(&recovery_client)?;
     let recovery_height = status_before_recovery.blocks + 1;
@@ -588,9 +629,10 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
     let recovery_session =
         try_wait_for_rbc_session(&recovery_client, recovery_height, Duration::from_secs(60))
             .await?;
-    let status_after_recovery_all = match try_wait_for_cluster_height(
+    let status_after_recovery_all = match try_wait_for_cluster_height_quorum(
         &recovery_clients,
         recovery_height,
+        recovery_quorum,
         Duration::from_secs(180),
     )
     .await?
@@ -608,10 +650,17 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(status_before_recovery.blocks);
+    let recovery_quorum_blocks =
+        count_statuses_at_or_above_height(&status_after_recovery_all, recovery_height);
     ensure!(
         recovery_max_blocks >= recovery_height,
         "recovery phase should make post-drop progress to height {recovery_height} (before={}, min={recovery_min_blocks}, max={recovery_max_blocks})",
         status_before_recovery.blocks
+    );
+    ensure!(
+        recovery_quorum_blocks >= recovery_quorum,
+        "recovery phase should expose height {recovery_height} on commit quorum {recovery_quorum}; observed {recovery_quorum_blocks} peers at/above target out of {} status responses (min={recovery_min_blocks}, max={recovery_max_blocks})",
+        status_after_recovery_all.len()
     );
     ensure!(
         recovery_max_blocks.saturating_sub(recovery_min_blocks) <= 1,
@@ -640,6 +689,11 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
     summary_map.insert(
         "recovery_status_after_min".into(),
         Value::from(recovery_min_blocks),
+    );
+    summary_map.insert("recovery_quorum".into(), Value::from(recovery_quorum));
+    summary_map.insert(
+        "recovery_quorum_blocks".into(),
+        Value::from(recovery_quorum_blocks),
     );
     summary_map.insert(
         "recovery_session".into(),
@@ -708,8 +762,7 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
             missing += 1;
             continue;
         };
-        let total = get_u64(&session, "total_chunks").unwrap_or_default();
-        let received = get_u64(&session, "received_chunks").unwrap_or_default();
+        let (total, received) = require_session_chunk_counts(&session)?;
         if total == 0 {
             continue;
         }
@@ -718,18 +771,26 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
             Ordering::Equal => complete += 1,
             Ordering::Greater => {}
         }
-        if get_bool(&session, "delivered").unwrap_or(false) {
+        if require_bool(&session, "delivered")? {
             delivered += 1;
         }
     }
 
     let peer_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
+    let progress_quorum = commit_quorum_from_len(peer_clients.len()).max(1);
     let status_after_all = if delivered > 0 {
-        try_wait_for_cluster_height(&peer_clients, expected_height, Duration::from_secs(20))
-            .await?
-            .unwrap_or_else(|| {
-                collect_client_statuses_best_effort(&peer_clients).unwrap_or_default()
-            })
+        match try_wait_for_cluster_height_quorum(
+            &peer_clients,
+            expected_height,
+            progress_quorum,
+            Duration::from_secs(20),
+        )
+        .await?
+        {
+            Some(statuses) => statuses,
+            None => collect_client_statuses_best_effort(&peer_clients)
+                .wrap_err("collect selective-drop statuses after quorum wait")?,
+        }
     } else {
         collect_client_statuses_best_effort(&peer_clients)?
     };
@@ -742,6 +803,8 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
                 .map(|status| status.blocks)
                 .unwrap_or(0)
         });
+    let progress_quorum_blocks =
+        count_statuses_at_or_above_height(&status_after_all, expected_height);
     let status_after = blocking_status(&base_client)?;
     if max_blocks < expected_height {
         ensure!(
@@ -763,8 +826,8 @@ async fn run_validator_selective_drop_scenario() -> Result<()> {
             network.peers().len()
         );
         ensure!(
-            max_blocks >= expected_height,
-            "when selective drop is healed by local payload recovery, commit height should advance"
+            progress_quorum_blocks >= progress_quorum,
+            "when selective drop is healed by local payload recovery, commit height should advance on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above height {expected_height} (max={max_blocks})"
         );
     }
 
@@ -835,8 +898,8 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
             missing_sessions += 1;
             continue;
         };
-        let invalid = get_bool(&session, "invalid").unwrap_or(false);
-        let delivered = get_bool(&session, "delivered").unwrap_or(false);
+        let invalid = require_bool(&session, "invalid")?;
+        let delivered = require_bool(&session, "delivered")?;
         if invalid {
             invalid_total += 1;
             ensure!(
@@ -876,12 +939,19 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(status_before.blocks);
+    let progress_quorum = commit_quorum_from_len(status_after_all.len()).max(1);
+    let progress_quorum_blocks =
+        count_statuses_at_or_above_height(&status_after_all, expected_height);
 
     if max_blocks >= expected_height {
         // Grouped and exact runs can recover from isolated chunk equivocation before
         // every peer surfaces explicit invalidation counters or a retained
         // `delivered=true` RBC session snapshot. Once the cluster commits, bounded
         // convergence is the authoritative signal that the honest validators recovered.
+        ensure!(
+            progress_quorum_blocks >= progress_quorum,
+            "equivocation recovery should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
+        );
         ensure!(
             max_blocks.saturating_sub(min_blocks) <= 1,
             "equivocation should not cause unbounded height divergence (min={min_blocks}, max={max_blocks})"
@@ -959,21 +1029,23 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
 
     sleep(Duration::from_secs(3)).await;
 
-    let invalid_total = sessions
-        .iter()
-        .filter(|session| get_bool(session, "invalid").unwrap_or(false))
-        .count();
-    let delivered_total = sessions
-        .iter()
-        .filter(|session| get_bool(session, "delivered").unwrap_or(false))
-        .count();
-    let stalled_total = sessions
-        .iter()
-        .filter(|session| {
-            !get_bool(session, "invalid").unwrap_or(false)
-                && !get_bool(session, "delivered").unwrap_or(false)
-        })
-        .count();
+    let cluster_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
+    let mut invalid_total = 0usize;
+    let mut delivered_total = 0usize;
+    let mut stalled_total = 0usize;
+    for session in &sessions {
+        let invalid = require_bool(session, "invalid")?;
+        let delivered = require_bool(session, "delivered")?;
+        if invalid {
+            invalid_total += 1;
+        }
+        if delivered {
+            delivered_total += 1;
+        }
+        if !invalid && !delivered {
+            stalled_total += 1;
+        }
+    }
 
     let mut mismatch_detected = false;
     let mut status_after = Vec::with_capacity(PEER_COUNT);
@@ -990,6 +1062,23 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         .first()
         .map(|status| status.blocks)
         .unwrap_or(0);
+    let progress_quorum = commit_quorum_from_len(cluster_clients.len()).max(1);
+    if count_statuses_at_or_above_height(&status_after, expected_height) < progress_quorum
+        && status_after
+            .iter()
+            .any(|status| status.blocks >= expected_height)
+    {
+        if let Some(quorum_statuses) = try_wait_for_cluster_height_quorum(
+            &cluster_clients,
+            expected_height,
+            progress_quorum,
+            Duration::from_secs(60),
+        )
+        .await?
+        {
+            status_after = quorum_statuses;
+        }
+    }
     let mismatch_before_total = status_before
         .iter()
         .filter_map(|status| {
@@ -1019,10 +1108,15 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         })
         .sum::<u64>();
     let mismatch_counter_advanced = mismatch_after_total > mismatch_before_total;
+    let progress_quorum_blocks = count_statuses_at_or_above_height(&status_after, expected_height);
 
     if max_blocks >= expected_height {
         // A fully converged commit is the durable signal here. Exact/grouped runs can rotate or
         // clear the local `delivered=true` snapshot before the assertions inspect telemetry.
+        ensure!(
+            progress_quorum_blocks >= progress_quorum,
+            "uniform corruption recovery should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
+        );
         ensure!(
             max_blocks.saturating_sub(min_blocks) <= 1,
             "heights diverged under uniform corruption (min={min_blocks}, max={max_blocks})"
@@ -1063,6 +1157,11 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
     summary_map.insert("base_height".into(), Value::from(base_height));
     summary_map.insert("min_blocks".into(), Value::from(min_blocks));
     summary_map.insert("max_blocks".into(), Value::from(max_blocks));
+    summary_map.insert("progress_quorum".into(), Value::from(progress_quorum));
+    summary_map.insert(
+        "progress_quorum_blocks".into(),
+        Value::from(progress_quorum_blocks),
+    );
     summary_map.insert(
         "mismatch_before_total".into(),
         Value::from(mismatch_before_total),
@@ -1158,10 +1257,10 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
             missing_sessions += 1;
             continue;
         };
-        if get_bool(&session, "invalid").unwrap_or(false) {
+        if require_bool(&session, "invalid")? {
             invalid_sessions += 1;
         }
-        if get_bool(&session, "delivered").unwrap_or(false) {
+        if require_bool(&session, "delivered")? {
             delivered_sessions += 1;
         } else {
             retained_nondelivered_sessions += 1;
@@ -1179,10 +1278,12 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     let detection_observed =
         invalid_sessions >= 1 || invalid_ready_after_cluster > invalid_ready_before_cluster;
 
+    let progress_quorum = commit_quorum_from_len(cluster_clients.len()).max(1);
     let status_after_all = if delivered_sessions > 0 {
-        match try_wait_for_cluster_height(
+        match try_wait_for_cluster_height_quorum(
             &cluster_clients,
             expected_height,
+            progress_quorum,
             Duration::from_secs(60),
         )
         .await?
@@ -1203,10 +1304,16 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(status_before.blocks);
+    let progress_quorum_blocks =
+        count_statuses_at_or_above_height(&status_after_all, expected_height);
 
     if max_blocks >= expected_height {
         // Honest validators can recover and commit before invalidation counters or retained
         // `delivered=true` snapshots remain queryable on every peer.
+        ensure!(
+            progress_quorum_blocks >= progress_quorum,
+            "conflicting READY recovery should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
+        );
         ensure!(
             max_blocks.saturating_sub(min_blocks) <= 1,
             "conflicting READY scenario should not cause unbounded height divergence (min={min_blocks}, max={max_blocks})"
@@ -1228,6 +1335,17 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     let mut summary_map = Map::new();
     summary_map.insert("scenario".into(), Value::from("conflicting_ready"));
     summary_map.insert("expected_height".into(), Value::from(expected_height));
+    summary_map.insert(
+        "status_before_blocks".into(),
+        Value::from(status_before.blocks),
+    );
+    summary_map.insert("status_after_blocks".into(), Value::from(max_blocks));
+    summary_map.insert("status_after_min_blocks".into(), Value::from(min_blocks));
+    summary_map.insert("progress_quorum".into(), Value::from(progress_quorum));
+    summary_map.insert(
+        "progress_quorum_blocks".into(),
+        Value::from(progress_quorum_blocks),
+    );
     summary_map.insert(
         "invalid_sessions".into(),
         Value::from(invalid_sessions as u64),
@@ -1324,10 +1442,7 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
         .and_then(|obj| obj.get("view"))
         .and_then(Value::as_u64);
 
-    let primary_delivered = primary_session
-        .as_ref()
-        .and_then(|value| get_bool(value, "delivered"))
-        .unwrap_or(false);
+    let primary_delivered = optional_session_bool(primary_session.as_ref(), "delivered")?;
     let observation_deadline = Instant::now() + Duration::from_secs(60);
     let (status_after, delivered_after, mut duplicate_views, drop_after, mismatch_after) = loop {
         let status_after = blocking_status(&client)?;
@@ -1476,6 +1591,7 @@ async fn run_partial_erasure_scenario() -> Result<()> {
     let mut missing_sessions = 0usize;
     let mut retained_nondelivered_sessions = 0usize;
     let peer_count = network.peers().len();
+    let progress_quorum = commit_quorum_from_len(peer_count).max(1);
 
     for peer in network.peers() {
         let Some(session) =
@@ -1485,21 +1601,21 @@ async fn run_partial_erasure_scenario() -> Result<()> {
             missing_sessions += 1;
             continue;
         };
-        let total = get_u64(&session, "total_chunks").unwrap_or(0);
-        let received = get_u64(&session, "received_chunks").unwrap_or(total);
+        let (total, received) = require_session_chunk_counts(&session)?;
         if total > received {
             stalled_sessions += 1;
         }
-        if get_bool(&session, "delivered").unwrap_or(false) {
+        if require_bool(&session, "delivered")? {
             delivered_sessions += 1;
         } else {
             retained_nondelivered_sessions += 1;
         }
     }
 
-    let status_after_all = match try_wait_for_cluster_height(
+    let status_after_all = match try_wait_for_cluster_height_quorum(
         &cluster_clients,
         expected_height,
+        progress_quorum,
         Duration::from_secs(180),
     )
     .await?
@@ -1517,6 +1633,8 @@ async fn run_partial_erasure_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(status_before.blocks);
+    let progress_quorum_blocks =
+        count_statuses_at_or_above_height(&status_after_all, expected_height);
     if max_blocks < expected_height {
         ensure!(
             stalled_sessions >= peer_count.saturating_sub(1)
@@ -1539,6 +1657,10 @@ async fn run_partial_erasure_scenario() -> Result<()> {
             "partial-erasure recovery should still expose stalled, retained, delivered, or bounded missing telemetry (stalled={stalled_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions}, missing={missing_sessions}, peers={peer_count})"
         );
         ensure!(
+            progress_quorum_blocks >= progress_quorum,
+            "partial-erasure recovery should expose height {expected_height} on commit quorum {progress_quorum}; observed {progress_quorum_blocks} peers at/above target (min={min_blocks}, max={max_blocks})"
+        );
+        ensure!(
             max_blocks.saturating_sub(min_blocks) <= 1,
             "when withheld chunks recover, the cluster should stay within one block of convergence (min={min_blocks}, max={max_blocks})"
         );
@@ -1548,6 +1670,11 @@ async fn run_partial_erasure_scenario() -> Result<()> {
     summary_map.insert("scenario".into(), Value::from("partial_erasure"));
     summary_map.insert("expected_height".into(), Value::from(expected_height));
     summary_map.insert("peer_count".into(), Value::from(peer_count as u64));
+    summary_map.insert("progress_quorum".into(), Value::from(progress_quorum));
+    summary_map.insert(
+        "progress_quorum_blocks".into(),
+        Value::from(progress_quorum_blocks),
+    );
     summary_map.insert(
         "stalled_sessions".into(),
         Value::from(stalled_sessions as u64),
@@ -1716,15 +1843,16 @@ fn collect_client_statuses_best_effort(clients: &[Client]) -> Result<Vec<Status>
     Ok(statuses)
 }
 
-async fn try_wait_for_cluster_height(
+async fn try_wait_for_cluster_height_quorum(
     clients: &[Client],
     target_height: u64,
+    quorum: usize,
     timeout: Duration,
 ) -> Result<Option<Vec<Status>>> {
     let deadline = Instant::now() + timeout;
     loop {
         let statuses = collect_client_statuses_best_effort(clients)?;
-        if statuses.iter().any(|status| status.blocks >= target_height) {
+        if count_statuses_at_or_above_height(&statuses, target_height) >= quorum {
             return Ok(Some(statuses));
         }
         if Instant::now() > deadline {
@@ -1732,6 +1860,20 @@ async fn try_wait_for_cluster_height(
         }
         sleep(Duration::from_millis(200)).await;
     }
+}
+
+fn count_statuses_at_or_above_height(statuses: &[Status], target_height: u64) -> usize {
+    count_heights_at_or_above_height(statuses.iter().map(|status| status.blocks), target_height)
+}
+
+fn count_heights_at_or_above_height<I>(heights: I, target_height: u64) -> usize
+where
+    I: IntoIterator<Item = u64>,
+{
+    heights
+        .into_iter()
+        .filter(|height| *height >= target_height)
+        .count()
 }
 
 fn extract_session(value: &Value, target_height: u64) -> Option<Value> {
@@ -1774,6 +1916,14 @@ fn runtime_rbc_configuration_required_only_when_da_is_disabled() {
         runtime_rbc_configuration_required(&disabled_parameters),
         "runtime reconfiguration should only be needed when DA/RBC is disabled"
     );
+}
+
+#[test]
+fn count_heights_at_or_above_height_counts_quorum_candidates() {
+    assert_eq!(count_heights_at_or_above_height([], 4), 0);
+    assert_eq!(count_heights_at_or_above_height([3, 4, 4, 5], 4), 3);
+    assert_eq!(count_heights_at_or_above_height([5, 6, 7], 4), 3);
+    assert_eq!(count_heights_at_or_above_height([1, 2, 3], 4), 0);
 }
 
 fn extract_session_at_or_after(value: &Value, target_height: u64) -> Option<Value> {
@@ -1834,6 +1984,51 @@ fn get_bool(value: &Value, key: &str) -> Option<bool> {
         .and_then(Value::as_bool)
 }
 
+fn require_u64(value: &Value, key: &str) -> Result<u64> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| eyre!("RBC session is not an object while reading `{key}`: {value:?}"))?;
+    let raw = obj
+        .get(key)
+        .ok_or_else(|| eyre!("RBC session is missing required `{key}` field: {value:?}"))?;
+    raw.as_u64()
+        .ok_or_else(|| eyre!("RBC session field `{key}` is not a u64: {raw:?}"))
+}
+
+fn require_bool(value: &Value, key: &str) -> Result<bool> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| eyre!("RBC session is not an object while reading `{key}`: {value:?}"))?;
+    let raw = obj
+        .get(key)
+        .ok_or_else(|| eyre!("RBC session is missing required `{key}` field: {value:?}"))?;
+    raw.as_bool()
+        .ok_or_else(|| eyre!("RBC session field `{key}` is not a bool: {raw:?}"))
+}
+
+fn optional_session_bool(value: Option<&Value>, key: &str) -> Result<bool> {
+    match value {
+        Some(value) => require_bool(value, key),
+        None => Ok(false),
+    }
+}
+
+fn require_session_chunk_counts(value: &Value) -> Result<(u64, u64)> {
+    let total = require_u64(value, "total_chunks")?;
+    let received = require_u64(value, "received_chunks")?;
+    ensure!(
+        received <= total,
+        "RBC session received_chunks must not exceed total_chunks: received={received}, total={total}, session={value:?}"
+    );
+    Ok((total, received))
+}
+
+fn session_chunk_counts(value: &Value) -> Option<(u64, u64)> {
+    let total = get_u64(value, "total_chunks")?;
+    let received = get_u64(value, "received_chunks")?;
+    (received <= total).then_some((total, received))
+}
+
 fn session_height(value: &Value) -> Option<u64> {
     value
         .as_object()
@@ -1844,23 +2039,20 @@ fn session_height(value: &Value) -> Option<u64> {
 fn any_delivered_session_for_height(value: &Value, target_height: u64) -> bool {
     extract_sessions_for_height(value, target_height)
         .iter()
-        .any(|session| get_bool(session, "delivered").unwrap_or(false))
+        .any(|session| get_bool(session, "delivered") == Some(true))
 }
 
 fn any_complete_session_for_height(value: &Value, target_height: u64) -> bool {
     extract_sessions_for_height(value, target_height)
         .iter()
         .any(|session| {
-            let total = get_u64(session, "total_chunks").unwrap_or_default();
-            let received = get_u64(session, "received_chunks").unwrap_or_default();
-            total > 0 && received >= total
+            session_chunk_counts(session)
+                .is_some_and(|(total, received)| total > 0 && received >= total)
         })
 }
 
 fn session_has_missing_chunks(value: &Value) -> bool {
-    let total = get_u64(value, "total_chunks").unwrap_or_default();
-    let received = get_u64(value, "received_chunks").unwrap_or_default();
-    total > 0 && received < total
+    session_chunk_counts(value).is_some_and(|(total, received)| total > 0 && received < total)
 }
 
 fn any_incomplete_session_for_height(value: &Value, target_height: u64) -> bool {
@@ -1911,6 +2103,65 @@ fn incomplete_height_check_accepts_delivered_sessions_with_missing_chunks() {
     assert!(any_incomplete_session_for_height(&sessions, 3));
     assert!(!any_incomplete_session_for_height(&sessions, 4));
     assert!(!any_incomplete_session_for_height(&sessions, 5));
+}
+
+#[test]
+fn chunk_telemetry_checks_fail_closed_on_malformed_counts() {
+    let sessions = norito::json!({
+        "items": [
+            {"height": 3, "view": 0, "delivered": false, "total_chunks": 8},
+            {"height": 3, "view": 1, "delivered": false, "total_chunks": 8, "received_chunks": "1"},
+            {"height": 3, "view": 2, "delivered": false, "total_chunks": 4, "received_chunks": 5},
+            {"height": 4, "view": 0, "delivered": false, "total_chunks": 4, "received_chunks": 1}
+        ]
+    });
+
+    assert!(!any_complete_session_for_height(&sessions, 3));
+    assert!(!any_incomplete_session_for_height(&sessions, 3));
+    assert!(any_incomplete_session_for_height(&sessions, 4));
+}
+
+#[test]
+fn required_session_reads_reject_missing_or_malformed_evidence_fields() {
+    let valid = norito::json!({
+        "height": 3,
+        "view": 0,
+        "delivered": true,
+        "invalid": false,
+        "total_chunks": 4,
+        "received_chunks": 4
+    });
+    assert_eq!(require_session_chunk_counts(&valid).unwrap(), (4, 4));
+    assert!(require_bool(&valid, "delivered").unwrap());
+
+    let missing_received = norito::json!({
+        "height": 3,
+        "view": 0,
+        "delivered": false,
+        "invalid": false,
+        "total_chunks": 4
+    });
+    assert!(require_session_chunk_counts(&missing_received).is_err());
+
+    let malformed_delivered = norito::json!({
+        "height": 3,
+        "view": 0,
+        "delivered": "true",
+        "invalid": false,
+        "total_chunks": 4,
+        "received_chunks": 4
+    });
+    assert!(require_bool(&malformed_delivered, "delivered").is_err());
+
+    let over_counted = norito::json!({
+        "height": 3,
+        "view": 0,
+        "delivered": false,
+        "invalid": false,
+        "total_chunks": 4,
+        "received_chunks": 5
+    });
+    assert!(require_session_chunk_counts(&over_counted).is_err());
 }
 
 fn consensus_message_total(status: &Value, kind: &str, outcome: &str, reason: &str) -> u64 {

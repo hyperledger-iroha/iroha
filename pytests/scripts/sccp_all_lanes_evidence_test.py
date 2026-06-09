@@ -1,4 +1,5 @@
 import base64
+import copy
 import json
 import hashlib
 import sys
@@ -6085,13 +6086,83 @@ def test_all_lanes_release_checklist_rejects_malformed_lane_containers():
         in items["route_allowlist_binding"]["blockers"]
     )
     assert (
-        "domain 2 (bsc): lane blocker summary is malformed"
+        "domain 2 (bsc): lane blockers must be a list of "
+        "non-empty canonical strings"
         in items["live_route_canary_evidence"]["blockers"]
     )
     assert (
-        "domain 2 (bsc): lane blocker summary is malformed"
+        "domain 2 (bsc): lane blockers must be a list of "
+        "non-empty canonical strings"
         in items["no_unresolved_blockers"]["blockers"]
     )
+
+
+def test_all_lanes_release_checklist_rejects_malformed_lane_blockers():
+    module = load_evidence_module()
+    base_lane = {
+        "domain": module.SCCP_DOMAIN_BSC,
+        "chain": "bsc",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_adapter_gate": {
+            "required": False,
+            "ready": True,
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x5B),
+                "evidence_source": "evm_message_proof_accepted_transaction",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+    cases = (
+        (
+            "operator hold",
+            "domain 2 (bsc): lane blockers must be a list of "
+            "non-empty canonical strings",
+        ),
+        (
+            [123],
+            "domain 2 (bsc): lane blockers[0] must be a "
+            "non-empty canonical string",
+        ),
+        (
+            [" padded "],
+            "domain 2 (bsc): lane blockers[0] must be a "
+            "non-empty canonical string",
+        ),
+        (
+            ["route canary operator hold"],
+            "domain 2 (bsc): route canary operator hold",
+        ),
+    )
+
+    for lane_blockers, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["blockers"] = lane_blockers
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, repr(lane_blockers)
+        assert items["live_route_canary_evidence"]["ready"] is False
+        assert items["no_unresolved_blockers"]["ready"] is False
+        assert expected in items["live_route_canary_evidence"]["blockers"]
+        assert expected in items["no_unresolved_blockers"]["blockers"]
+        if not isinstance(lane_blockers, list):
+            assert "o" not in items["live_route_canary_evidence"]["blockers"]
 
 
 def test_all_lanes_release_checklist_compares_item_ready_exactly():
@@ -6209,6 +6280,7 @@ def test_all_lanes_release_checklist_rejects_malformed_source_gate_flags():
     )
 
     lane["source_adapter_gate"]["ready"] = False
+    lane["source_adapter_gate"]["blockers"] = []
     checklist = module._release_checklist([lane], [])
     items = {item["id"]: item for item in checklist["items"]}
 
@@ -6218,6 +6290,303 @@ def test_all_lanes_release_checklist_rejects_malformed_source_gate_flags():
         "domain 3 (sol): source adapter gate is not ready"
         in items["governed_deployment_evidence"]["blockers"]
     )
+
+
+def test_all_lanes_release_checklist_requires_source_gate_hash_and_audits():
+    module = load_evidence_module()
+    lane = {
+        "domain": module.SCCP_DOMAIN_SOL,
+        "chain": "sol",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x51),
+                "evidence_source": "solana_live_programdata_snapshot",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+
+    checklist = module._release_checklist([lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+
+    assert checklist["ready"] is False
+    assert items["governed_deployment_evidence"]["ready"] is False
+    blockers = "\n".join(items["governed_deployment_evidence"]["blockers"])
+    assert (
+        "domain 3 (sol): source adapter gate hash must be a canonical non-zero "
+        "bytes32 when required"
+    ) in blockers
+    assert (
+        "domain 3 (sol): source adapter gate audit hashes must not be empty "
+        "when required"
+    ) in blockers
+
+    lane["source_adapter_gate"]["gate_hash"] = hex32(0x61)
+    lane["source_adapter_gate"]["audit_hashes"] = {
+        "operator_override": hex32(0x61),
+        "solana_tower_replay_verifier_hash": hex32(0x62),
+        "solana_full_accountsdb_lattice_verifier_hash": hex32(0x63),
+        "solana_bank_fork_choice_verifier_hash": hex32(0x64),
+    }
+
+    checklist = module._release_checklist([lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    blockers = "\n".join(items["governed_deployment_evidence"]["blockers"])
+
+    assert checklist["ready"] is False
+    assert (
+        "domain 3 (sol): source adapter gate audit hashes contains unexpected "
+        "field: operator_override"
+    ) in blockers
+    assert (
+        "domain 3 (sol): source adapter gate audit hashes "
+        "solana_full_light_client_gate_hash must be a canonical non-zero bytes32"
+    ) in blockers
+    assert (
+        "domain 3 (sol): source adapter gate hash must match "
+        "audit_hashes.solana_full_light_client_gate_hash"
+    ) in blockers
+
+
+def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay():
+    module = load_evidence_module()
+    route_canary_hash = hex32(0x66)
+    duplicate_audit_hash = hex32(0x67)
+    lane = {
+        "domain": module.SCCP_DOMAIN_SOL,
+        "chain": "sol",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_record_hashes": {
+            "source_verifier_material_hash": hex32(0x62),
+            "source_adapter_engine_deployment_hash": hex32(0x63),
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "gate_hash": route_canary_hash,
+            "audit_hashes": {
+                "solana_tower_replay_verifier_hash": duplicate_audit_hash,
+                "solana_full_accountsdb_lattice_verifier_hash": duplicate_audit_hash,
+                "solana_bank_fork_choice_verifier_hash": hex32(0x64),
+                "solana_full_light_client_gate_hash": route_canary_hash,
+            },
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+            "destination_binding_hash": hex32(0x65),
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_allowlist_hash": hex32(0x68),
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": route_canary_hash,
+                "evidence_source": "solana_live_programdata_snapshot",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+
+    checklist = module._release_checklist([lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    blockers = "\n".join(items["governed_deployment_evidence"]["blockers"])
+
+    assert checklist["ready"] is False
+    assert items["governed_deployment_evidence"]["ready"] is False
+    assert (
+        "domain 3 (sol): source adapter gate hash role "
+        "audit_hashes.solana_tower_replay_verifier_hash must not reuse "
+        "audit_hashes.solana_full_accountsdb_lattice_verifier_hash"
+    ) in blockers
+    assert (
+        "domain 3 (sol): source adapter gate hash role "
+        "audit_hashes.solana_full_light_client_gate_hash must not reuse "
+        "route_canary_evidence_hash"
+    ) in blockers
+
+
+def test_all_lanes_release_checklist_rejects_non_required_source_gate_material():
+    module = load_evidence_module()
+    lane = {
+        "domain": module.SCCP_DOMAIN_ETH,
+        "chain": "eth",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_adapter_gate": {
+            "required": False,
+            "ready": True,
+            "gate_hash": hex32(0x71),
+            "audit_hashes": {"operator_override": hex32(0x71)},
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x72),
+                "evidence_source": "evm_message_proof_accepted_transaction",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+
+    checklist = module._release_checklist([lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    blockers = "\n".join(items["governed_deployment_evidence"]["blockers"])
+
+    assert checklist["ready"] is False
+    assert items["governed_deployment_evidence"]["ready"] is False
+    assert (
+        "domain 1 (eth): source adapter gate hash must be empty when not "
+        "required"
+    ) in blockers
+    assert (
+        "domain 1 (eth): source adapter gate audit hashes must be empty when "
+        "not required"
+    ) in blockers
+
+
+def test_all_lanes_release_checklist_rejects_malformed_source_gate_blockers():
+    module = load_evidence_module()
+    base_lane = {
+        "domain": module.SCCP_DOMAIN_SOL,
+        "chain": "sol",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": False,
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x51),
+                "evidence_source": "solana_live_programdata_snapshot",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+    cases = (
+        (
+            "operator hold",
+            "domain 3 (sol): source adapter gate blockers must be a list of "
+            "non-empty canonical strings",
+        ),
+        (
+            [123],
+            "domain 3 (sol): source adapter gate blockers[0] must be a "
+            "non-empty canonical string",
+        ),
+        (
+            [" padded "],
+            "domain 3 (sol): source adapter gate blockers[0] must be a "
+            "non-empty canonical string",
+        ),
+        (
+            ["operator hold"],
+            "domain 3 (sol): operator hold",
+        ),
+    )
+
+    for blockers, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["source_adapter_gate"]["blockers"] = blockers
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+
+        assert checklist["ready"] is False, repr(blockers)
+        assert items["governed_deployment_evidence"]["ready"] is False
+        assert expected in items["governed_deployment_evidence"]["blockers"]
+
+
+def test_all_lanes_summary_rejects_malformed_source_gate_blockers():
+    module = load_evidence_module()
+    original_gate_summary = module._source_adapter_gate_summary
+    cases = (
+        (
+            "operator hold",
+            "domain 3 (sol): source adapter gate blockers must be a list of "
+            "non-empty canonical strings",
+        ),
+        (
+            [123],
+            "domain 3 (sol): source adapter gate blockers[0] must be a "
+            "non-empty canonical string",
+        ),
+        (
+            [" padded "],
+            "domain 3 (sol): source adapter gate blockers[0] must be a "
+            "non-empty canonical string",
+        ),
+        (
+            ["operator hold"],
+            "domain 3 (sol): operator hold",
+        ),
+    )
+
+    for blocker_value, expected in cases:
+        def patched_gate_summary(profile, *args, blocker_value=blocker_value):
+            summary = original_gate_summary(profile, *args)
+            if profile.domain == module.SCCP_DOMAIN_SOL:
+                return {
+                    **summary,
+                    "required": True,
+                    "ready": False,
+                    "blockers": blocker_value,
+                }
+            return summary
+
+        module._source_adapter_gate_summary = patched_gate_summary
+        try:
+            summary = module.validate_evidence_bundle(complete_bundle(module))
+        finally:
+            module._source_adapter_gate_summary = original_gate_summary
+
+        assert summary["production_ready"] is False, repr(blocker_value)
+        assert expected in summary["blockers"]
 
 
 def test_all_lanes_release_checklist_rejects_malformed_route_canary_summary():
@@ -6273,6 +6642,72 @@ def test_all_lanes_release_checklist_rejects_malformed_route_canary_summary():
 
     assert checklist["ready"] is False
     assert "domain 1 (eth): route canary summary is malformed" in blockers
+
+
+def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars():
+    module = load_evidence_module()
+    base_lane = {
+        "domain": module.SCCP_DOMAIN_ETH,
+        "chain": "eth",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_adapter_gate": {
+            "required": False,
+            "ready": True,
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": hex32(0x5C),
+                "evidence_source": "evm_message_proof_accepted_transaction",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+    cases = (
+        (
+            "status",
+            123,
+            "domain 1 (eth): route canary status must be a non-empty canonical string",
+        ),
+        (
+            "status",
+            " passed ",
+            "domain 1 (eth): route canary status must be a non-empty canonical string",
+        ),
+        (
+            "evidence_source",
+            123,
+            "domain 1 (eth): live route canary evidence source must be a non-empty canonical string",
+        ),
+        (
+            "evidence_source",
+            " evm_message_proof_accepted_transaction ",
+            "domain 1 (eth): live route canary evidence source must be a non-empty canonical string",
+        ),
+    )
+
+    for field, value, expected in cases:
+        lane = copy.deepcopy(base_lane)
+        lane["route_allowlist"]["route_canary"][field] = value
+
+        checklist = module._release_checklist([lane], [])
+        items = {item["id"]: item for item in checklist["items"]}
+        blockers = "\n".join(items["live_route_canary_evidence"]["blockers"])
+
+        assert checklist["ready"] is False, repr((field, value))
+        assert items["live_route_canary_evidence"]["ready"] is False
+        assert expected in blockers
 
 
 def test_all_lanes_evidence_rejects_stale_route_canary_metadata():

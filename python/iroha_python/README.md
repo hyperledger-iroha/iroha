@@ -68,6 +68,53 @@ readiness = client.get_offline_readiness()
 print("offline notes", readiness.offline_note)
 ```
 
+For app-facing offline cash flows, use `iroha_python.offline_cash` to keep the
+online load lifecycle separate from local exchange. The lifecycle controller
+syncs pending audit receipts before loading more cash, and the transport helper
+omits NFC unless the app provides an explicit supported capability.
+
+```python
+from iroha_python.offline_cash import (
+    OfflineCashConfigurationSnapshot,
+    OfflineCashLifecycleController,
+    OfflineCashNfcCapability,
+    OfflineCashTransportCapabilities,
+    offline_cash_available_transport_kinds,
+)
+
+snapshot = OfflineCashConfigurationSnapshot(
+    chain_id="00000042",
+    asset_definition_id="pkr#sbp",
+    offline_payments_enabled=True,
+    issuer_public_key_base64=cached_issuer_key_base64,
+    bridge_abi_version=7,
+    created_at_ms=cached_at_ms,
+    expires_at_ms=expires_at_ms,
+)
+snapshot.require_usable_for_offline_exchange(
+    now_ms=current_time_ms,
+    required_bridge_abi_version=7,
+)
+
+controller = OfflineCashLifecycleController(
+    offline_wallet,
+    has_pending_audit_receipts=has_pending_audit_receipts,
+    sync_pending_audit_receipts=sync_pending_audit_receipts,
+)
+await controller.load("pkr#sbp", "500")
+
+transports = offline_cash_available_transport_kinds(
+    OfflineCashTransportCapabilities(
+        qr_streaming=True,
+        nfc=OfflineCashNfcCapability(
+            supported=device_supports_nfc and app_has_hce_entitlement,
+            reason=None if device_supports_nfc and app_has_hce_entitlement else "missing HCE",
+        ),
+        nearby=True,
+    )
+)
+```
+
 ## Native Recursive Kagemusha Spend
 
 The `iroha_python.kagemusha` module exposes ABI-6 recursive Kagemusha
@@ -108,6 +155,19 @@ the append-boundary helper
 `kagemusha_recursive_spend_lineage_append_boundary`, both lineage-witness
 helpers, `kagemusha_recursive_spend_verify`, and
 `kagemusha_recursive_spend_redeem`.
+
+Transaction helpers expose the same Kagemusha instruction surface without
+asking wallet code to reframe native archives. Use
+`kagemusha_instruction_archive_instruction(instruction_type, instruction_archive)`
+for a typed `KagemushaTransfer` or `RedeemKagemushaRecursive` instruction
+archive, `build_kagemusha_instruction_transaction(...)` to sign a single
+archived instruction, and `build_kagemusha_recursive_redeem_transaction(...)`
+to derive the redeem instruction from a native recursive redeem request before
+signing. `TransactionDraft.kagemusha_instruction_archive(...)` and
+`TransactionDraft.kagemusha_recursive_redeem(...)` add the same instructions to
+draft transactions. These helpers require valid Norito archives, reject empty,
+malformed, tampered, or wrong-type instruction archives, and keep recursive
+redeem derivation inside the PyO3 host.
 
 All helper inputs and outputs are raw Norito archives. The transition-profile
 helpers return the canonical Reserved-lineage accumulator transition profile for
@@ -165,12 +225,15 @@ append and redeem use `KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1
 The privacy native surface is intentionally exposed as a generic raw Norito
 archive bridge: `privacy_capabilities_v1()`,
 `privacy_build_proof_v1(request_archive)`, and
-`privacy_verify_proof_v1(request_archive)`. The raw privacy FFI bridge does not
-expose algorithm-specific production proof builders while the privacy rows
-remain gated. Python's executable ZK-ACE SDK builder is exposed separately as
-`build_zk_ace_authorization_proof_v1()` and the legacy
-`zk_ace_build_transfer_authorization_v1()` alias; these helpers do not change
-the fail-closed production gate. Native availability requires bridge ABI 6 or
+`privacy_verify_proof_v1(request_archive)`. The raw privacy FFI bridge remains
+row-gated; algorithm-specific SDK builders are exposed separately for
+production-capable flows. Python exports
+`build_zk_ace_authorization_proof_v1()` with the legacy
+`zk_ace_build_transfer_authorization_v1()` alias, plus confidential transfer
+builders `buildConfidentialTransferProofV2()` and
+`buildConfidentialUnshieldProofV3()` with Pythonic snake-case aliases. These
+helpers do not bypass the fail-closed production gate or BOI evidence
+requirements. Native availability requires bridge ABI 6 or
 later plus successful `capabilities`, `build`, and `verify` probes whose
 operation-specific result schema bytes match the called entry point.
 

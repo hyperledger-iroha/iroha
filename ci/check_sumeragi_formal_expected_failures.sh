@@ -1396,7 +1396,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-complete-
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-wrong-payload-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-incomplete-match-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-missing-payload-skips
-bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-zero-chunk-fetches
+bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-zero-chunk-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-known-local-fetches
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-missing-session-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-payload-hash-skips
@@ -6643,7 +6643,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-header-hash-mismatch
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-header-height-mismatch
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-header-view-mismatch
-bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-reject-zero-chunk-expected-root
+bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-zero-chunk-expected-root
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-reject-expected-root-match
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-reject-no-expected-observed-root
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-zero-missing-expected-root

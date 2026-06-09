@@ -97,11 +97,31 @@ def _expected_production_gate_items() -> list[tuple[str, bool]]:
     return [(key, False) for key, _label in privacy_catalog.PRODUCTION_GATE_REQUIREMENTS]
 
 
+def _expected_required_production_gate_keys(algorithm_id: object) -> list[str]:
+    waived = (
+        set(privacy_catalog.TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS)
+        if algorithm_id == "transparent-transfer"
+        else set()
+    )
+    return [
+        key
+        for key, _label in privacy_catalog.PRODUCTION_GATE_REQUIREMENTS
+        if key not in waived
+    ]
+
+
 def _expected_production_gate_missing(gate: dict[str, object]) -> list[str]:
     missing = gate["missing"]
     assert isinstance(missing, list)
+    required_gates = gate["required_gates"]
+    assert isinstance(required_gates, list)
+    required_gate_set = set(required_gates)
     return [
-        *(label for _key, label in privacy_catalog.PRODUCTION_GATE_REQUIREMENTS),
+        *(
+            label
+            for key, label in privacy_catalog.PRODUCTION_GATE_REQUIREMENTS
+            if key in required_gate_set
+        ),
         *(
             reason
             for reason in privacy_catalog.PRODUCTION_GATE_SUPPLEMENTAL_MISSING_REASONS
@@ -2841,6 +2861,9 @@ def test_privacy_catalog_production_gate_remains_fail_closed_for_catalog_claims(
     assert descriptor["production_ready"] is False
     assert gate["ready"] is False
     assert list(gate["gates"].items()) == _expected_production_gate_items()
+    assert gate["required_gates"] == _expected_required_production_gate_keys(
+        descriptor["id"]
+    )
     assert "implementation stage is not production-hardened" not in gate["missing"]
     assert "dev fixture entrypoints are not production entrypoints" not in gate[
         "missing"
@@ -6279,6 +6302,7 @@ def test_privacy_catalog_returns_defensive_copies() -> None:
     descriptors[0]["production_gate"]["gates"]["external_audit"] = True
     real_proving = descriptors[0]["production_gate"]["gates"].pop("real_proving")
     descriptors[0]["production_gate"]["gates"]["real_proving"] = real_proving
+    descriptors[0]["production_gate"]["required_gates"].append("real_proving")
     descriptors[0]["production_gate"]["missing"].reverse()
     descriptors[0]["production_gate"]["missing"].clear()
     descriptors[0]["production_gate"]["audit_references"].append(
@@ -6307,6 +6331,9 @@ def test_privacy_catalog_returns_defensive_copies() -> None:
     assert fresh_descriptors[0]["production_gate"]["gates"]["external_audit"] is False
     assert list(fresh_descriptors[0]["production_gate"]["gates"].items()) == (
         _expected_production_gate_items()
+    )
+    assert fresh_descriptors[0]["production_gate"]["required_gates"] == (
+        _expected_required_production_gate_keys(fresh_descriptors[0]["id"])
     )
     assert fresh_descriptors[0]["production_gate"]["missing"] == (
         _expected_production_gate_missing(fresh_descriptors[0]["production_gate"])
@@ -6339,6 +6366,7 @@ def test_privacy_catalog_returns_defensive_copies() -> None:
     descriptor["verifier_key_metadata"]["pq_layers"]["proof"] = False
     descriptor["production_ready"] = True
     descriptor["production_gate"]["ready"] = True
+    descriptor["production_gate"]["required_gates"].clear()
     descriptor["production_gate"]["missing"].reverse()
     descriptor["production_gate"]["audit_references"].append(
         {"label": "forged audit", "url": "https://audit.example/forged"}
@@ -6353,6 +6381,9 @@ def test_privacy_catalog_returns_defensive_copies() -> None:
     assert fresh["verifier_key_metadata"]["pq_layers"]["proof"] is True
     assert fresh["production_ready"] is False
     assert fresh["production_gate"]["ready"] is False
+    assert fresh["production_gate"]["required_gates"] == (
+        _expected_required_production_gate_keys(fresh["id"])
+    )
     assert fresh["production_gate"]["missing"] == _expected_production_gate_missing(
         fresh["production_gate"]
     )
@@ -6418,6 +6449,9 @@ def test_privacy_catalog_descriptors_are_json_safe_and_boi_stable() -> None:
         assert list(descriptor["production_gate"]["gates"].items()) == (
             _expected_production_gate_items()
         )
+        assert descriptor["production_gate"]["required_gates"] == (
+            _expected_required_production_gate_keys(descriptor["id"])
+        )
         assert all(
             ready is False
             for ready in descriptor["production_gate"]["gates"].values()
@@ -6460,6 +6494,29 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     assert len(by_id) == len(descriptors)
     assert by_id["jindo-lattice-pcs-zk-v0"]["maturity"] == "technical_report"
 
+    transparent = by_id["transparent-transfer"]
+    assert transparent["proof_family"] == "none"
+    assert list(transparent["production_gate"]["gates"].items()) == (
+        _expected_production_gate_items()
+    )
+    assert transparent["production_gate"]["required_gates"] == (
+        _expected_required_production_gate_keys("transparent-transfer")
+    )
+    assert not any(
+        key in transparent["production_gate"]["required_gates"]
+        for key in privacy_catalog.TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS
+    )
+    assert not any(
+        missing
+        in {
+            "real proving engine is not registered",
+            "real verifier is not registered",
+            "witness privacy checks are incomplete",
+            "verifier fuzzing gate is incomplete",
+        }
+        for missing in transparent["production_gate"]["missing"]
+    )
+
     zk_ace = by_id["zk-ace-pq-authorization-v0"]
     assert zk_ace["implementation_stage"] == "chain-executable"
     assert zk_ace["sdk_entrypoints"] == [
@@ -6474,6 +6531,18 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
         "buildShieldedZkAceAuthorizedTransferInstruction",
     ]
     assert "buildZkAceAuthorizationProofV0" not in zk_ace["planned_sdk_entrypoints"]
+    assert zk_ace["required_state"] == [
+        "registered ZK-ACE identity commitment",
+        "source-account allowlist",
+        "authorization policy hash registry",
+        "active ZK-ACE verifier key",
+        "chain/domain binding state",
+        "transfer digest binding",
+        "replay nullifier uniqueness set",
+        "identity rotation/revocation registry",
+        "STARK/FRI verifier parameter floors",
+        "wallet identity witness and replay-secret store",
+    ]
     assert zk_ace["verifier_key_metadata"]["pq_layers"] == {
         "proof": True,
         "authorization": True,
@@ -6487,6 +6556,9 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
     assert zk_ace["production_gate"]["audit_references"] == []
     assert list(zk_ace["production_gate"]["gates"].items()) == (
         _expected_production_gate_items()
+    )
+    assert zk_ace["production_gate"]["required_gates"] == (
+        _expected_required_production_gate_keys(zk_ace["id"])
     )
     assert all(ready is False for ready in zk_ace["production_gate"]["gates"].values())
     assert zk_ace["production_gate"]["missing"] == [
@@ -7219,6 +7291,191 @@ def test_module_privacy_capabilities_defaults_to_static_sdk_surface() -> None:
 
 
 @pytest.mark.parametrize(
+    ("capability_key", "public_names", "native_name"),
+    [
+        (
+            "confidential_transfer_proof_v2",
+            (
+                "buildConfidentialTransferProofV2",
+                "build_confidential_transfer_proof_v2",
+            ),
+            "build_confidential_transfer_proof_v2",
+        ),
+        (
+            "confidential_unshield_proof_v3",
+            (
+                "buildConfidentialUnshieldProofV3",
+                "build_confidential_unshield_proof_v3",
+            ),
+            "build_confidential_unshield_proof_v3",
+        ),
+    ],
+)
+def test_confidential_python_capabilities_require_public_and_native_builders(
+    monkeypatch: pytest.MonkeyPatch,
+    capability_key: str,
+    public_names: tuple[str, str],
+    native_name: str,
+) -> None:
+    def callable_on_crypto(name: str) -> bool:
+        return name in public_names
+
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_callable_on_crypto",
+        callable_on_crypto,
+    )
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_callable_on_native_crypto",
+        lambda name: name == native_name,
+    )
+
+    capabilities = privacy_capabilities()
+
+    assert capabilities[capability_key] is True
+
+    monkeypatch.setattr(
+        privacy_catalog,
+        "_callable_on_native_crypto",
+        lambda _name: False,
+    )
+
+    disabled = privacy_capabilities()
+
+    assert disabled[capability_key] is False
+
+
+def test_confidential_python_exports_catalog_named_proof_builders() -> None:
+    assert "buildConfidentialTransferProofV2" in crypto.__all__
+    assert "build_confidential_transfer_proof_v2" in crypto.__all__
+    assert "buildConfidentialUnshieldProofV3" in crypto.__all__
+    assert "build_confidential_unshield_proof_v3" in crypto.__all__
+    assert "buildConfidentialTransferProofV2" in iroha_python.__all__
+    assert "buildConfidentialUnshieldProofV3" in iroha_python.__all__
+    assert (
+        crypto.buildConfidentialTransferProofV2
+        is crypto.build_confidential_transfer_proof_v2
+    )
+    assert (
+        crypto.buildConfidentialUnshieldProofV3
+        is crypto.build_confidential_unshield_proof_v3
+    )
+    assert (
+        iroha_python.buildConfidentialTransferProofV2
+        is crypto.buildConfidentialTransferProofV2
+    )
+    assert (
+        iroha_python.buildConfidentialUnshieldProofV3
+        is crypto.buildConfidentialUnshieldProofV3
+    )
+
+
+def test_confidential_transfer_python_builder_delegates_to_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, tuple[object, ...]] = {}
+
+    class Native:
+        @staticmethod
+        def build_confidential_transfer_proof_v2(*args: object) -> dict[str, object]:
+            captured["args"] = args
+            return {
+                "nullifiers": [b"n" * 32],
+                "output_commitments": [b"o" * 32],
+                "root": b"r" * 32,
+                "proof": b"proof",
+            }
+
+    monkeypatch.setattr(crypto, "_crypto", Native())
+
+    result = crypto.buildConfidentialTransferProofV2(
+        chain_id="wonderland",
+        asset_definition_id="xor#wonderland",
+        spend_key=b"s" * 32,
+        tree_commitments=[b"t" * 32],
+        inputs=[{"amount": "7", "rho": b"i" * 32, "leaf_index": 0}],
+        outputs=[
+            {
+                "amount": "7",
+                "rho": b"u" * 32,
+                "owner_tag": b"w" * 32,
+            }
+        ],
+        root_hint=b"r" * 32,
+        verifying_key={
+            "backend": "halo2/ipa",
+            "circuit_id": "confidential_transfer_v2",
+            "bytes": b"vk",
+        },
+    )
+
+    assert result["proof"] == b"proof"
+    assert captured["args"] == (
+        "wonderland",
+        "xor#wonderland",
+        b"s" * 32,
+        [b"t" * 32],
+        [{"amount": "7", "rho": b"i" * 32, "leaf_index": 0}],
+        [{"amount": "7", "rho": b"u" * 32, "owner_tag": b"w" * 32}],
+        b"r" * 32,
+        "halo2/ipa",
+        "confidential_transfer_v2",
+        b"vk",
+    )
+
+
+def test_confidential_unshield_python_builder_delegates_to_native(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, tuple[object, ...]] = {}
+
+    class Native:
+        @staticmethod
+        def build_confidential_unshield_proof_v3(*args: object) -> dict[str, object]:
+            captured["args"] = args
+            return {
+                "nullifiers": [b"n" * 32],
+                "output_commitments": [b"o" * 32],
+                "root": b"r" * 32,
+                "proof": b"proof",
+            }
+
+    monkeypatch.setattr(crypto, "_crypto", Native())
+
+    result = crypto.buildConfidentialUnshieldProofV3(
+        chain_id="wonderland",
+        asset_definition_id="xor#wonderland",
+        spend_key=b"s" * 32,
+        tree_commitments=[b"t" * 32],
+        inputs=[{"amount": "9", "rho": b"i" * 32, "leaf_index": 0}],
+        outputs=[{"amount": "2", "rho": b"u" * 32}],
+        public_amount=7,
+        root_hint=b"r" * 32,
+        verifying_key={
+            "backend": "halo2/ipa",
+            "circuit_id": "confidential_unshield_v3",
+            "bytes": b"vk",
+        },
+    )
+
+    assert result["proof"] == b"proof"
+    assert captured["args"] == (
+        "wonderland",
+        "xor#wonderland",
+        b"s" * 32,
+        [b"t" * 32],
+        [{"amount": "9", "rho": b"i" * 32, "leaf_index": 0}],
+        [{"amount": "2", "rho": b"u" * 32}],
+        "7",
+        b"r" * 32,
+        "halo2/ipa",
+        "confidential_unshield_v3",
+        b"vk",
+    )
+
+
+@pytest.mark.parametrize(
     "missing_builder",
     [
         "build_zk_ace_authorization_proof_v1",
@@ -7536,6 +7793,9 @@ def test_privacy_capabilities_reports_native_bridge_without_production_claims(
         assert list(descriptor["production_gate"]["gates"].items()) == (
             _expected_production_gate_items()
         )
+        assert descriptor["production_gate"]["required_gates"] == (
+            _expected_required_production_gate_keys(descriptor["id"])
+        )
         assert descriptor["production_gate"]["missing"] == (
             _expected_production_gate_missing(descriptor["production_gate"])
         )
@@ -7551,6 +7811,9 @@ def test_privacy_capabilities_reports_native_bridge_without_production_claims(
     assert zk_ace_capability["production_gate"]["audit_references"] == []
     assert list(zk_ace_capability["production_gate"]["gates"].items()) == (
         _expected_production_gate_items()
+    )
+    assert zk_ace_capability["production_gate"]["required_gates"] == (
+        _expected_required_production_gate_keys(zk_ace_capability["id"])
     )
     assert all(
         ready is False
@@ -7625,6 +7888,9 @@ def test_privacy_capabilities_returns_defensive_copies() -> None:
     assert list(
         fresh["privacy_algorithms"][0]["production_gate"]["gates"].items()
     ) == _expected_production_gate_items()
+    assert fresh["privacy_algorithms"][0]["production_gate"]["required_gates"] == (
+        _expected_required_production_gate_keys(fresh["privacy_algorithms"][0]["id"])
+    )
     assert fresh["privacy_algorithms"][0]["production_gate"]["missing"] == (
         _expected_production_gate_missing(
             fresh["privacy_algorithms"][0]["production_gate"]

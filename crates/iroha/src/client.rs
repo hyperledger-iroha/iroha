@@ -15115,7 +15115,7 @@ where
                     ))),
                 }
             }
-            _ = async move {
+            () = async move {
                 let queued_at =
                     queued_at.expect("queued timeout branch is gated by queued_at presence");
                 tokio::time::sleep_until(queued_at + max_queued_duration).await;

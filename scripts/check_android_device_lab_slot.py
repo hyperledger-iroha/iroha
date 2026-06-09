@@ -6,6 +6,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 from pathlib import Path
 from pathlib import PurePosixPath
 import re
@@ -98,6 +99,7 @@ MAX_D2D_PAYMENT_PAYLOAD_BYTES = 16 * 1024
 ATTESTATION_CERTIFICATE_CHAIN_SUFFIXES = (".der", ".pem")
 MAX_ATTESTATION_CERTIFICATE_CHAIN_BYTES = 64 * 1024
 SIGNED_EVIDENCE_SIGNATURE_ALGORITHMS = {"ed25519"}
+ED25519_SIGNATURE_BYTES = 64
 REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 7
 ABI7_RECURSIVE_COMPACT_ONE_HOP_JNI_PROBE_STATES = {"one_hop_verified"}
 ABI7_RECURSIVE_COMPACT_MULTI_HOP_PROVER_STATES = {"multi_hop_proof_composed"}
@@ -772,14 +774,14 @@ def parse_sha256_manifest(slot_path: Path) -> tuple[dict[str, str], list[str]]:
     errors: list[str] = []
     manifest_path = slot_path / "sha256sum.txt"
     try:
-        manifest_mode = manifest_path.lstat().st_mode
+        manifest_stat = manifest_path.lstat()
     except FileNotFoundError:
         return entries, ["missing sha256sum.txt"]
     except OSError:
         return entries, ["sha256sum.txt file metadata could not be read"]
-    if stat.S_ISLNK(manifest_mode):
+    if stat.S_ISLNK(manifest_stat.st_mode):
         return entries, ["sha256sum.txt must not be a symlink"]
-    if not stat.S_ISREG(manifest_mode):
+    if not stat.S_ISREG(manifest_stat.st_mode):
         return entries, ["sha256sum.txt must be a regular file"]
     try:
         if manifest_path.stat().st_nlink > 1:
@@ -788,7 +790,27 @@ def parse_sha256_manifest(slot_path: Path) -> tuple[dict[str, str], list[str]]:
         return entries, ["sha256sum.txt hardlink metadata could not be read"]
 
     try:
-        lines = manifest_path.read_text(encoding="utf-8").splitlines()
+        with manifest_path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = manifest_path.lstat()
+            expected_identity = (manifest_stat.st_dev, manifest_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if stat.S_ISLNK(path_stat.st_mode):
+                return entries, ["sha256sum.txt must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return entries, ["sha256sum.txt must be a regular file"]
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return entries, ["sha256sum.txt changed while being read"]
+            if open_stat.st_nlink > 1:
+                return entries, ["sha256sum.txt must not be hardlinked"]
+            payload = handle.read()
+            final_path_stat = manifest_path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return entries, ["sha256sum.txt changed while being read"]
+        lines = payload.decode("utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
         return entries, ["sha256sum.txt could not be read"]
     for line_no, raw in enumerate(lines, start=1):
@@ -847,13 +869,13 @@ def _slot_artifact_lstat_mode(
 def _validate_manifest_artifact_for_digest(
     slot_path: Path,
     relative: str,
-) -> tuple[Path | None, list[str]]:
+) -> tuple[Path | None, os.stat_result | None, list[str]]:
     """Validate one manifest artifact immediately before hashing it."""
 
     if SECRET_RE.search(str(slot_path)):
-        return None, ["slot path must not contain secret-looking material"]
+        return None, None, ["slot path must not contain secret-looking material"]
     if SECRET_RE.search(relative):
-        return None, ["slot artifacts must not contain secret-looking material"]
+        return None, None, ["slot artifacts must not contain secret-looking material"]
     normalise_errors: list[str] = []
     safe_relative = _normalise_safe_relative_path(
         relative,
@@ -862,67 +884,119 @@ def _validate_manifest_artifact_for_digest(
         allow_sha_manifest=True,
     )
     if normalise_errors:
-        return None, normalise_errors
+        return None, None, normalise_errors
     assert safe_relative is not None
     display = _display_path(safe_relative)
     artifact_path = slot_path / safe_relative
     if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:
-        return None, [
+        return None, None, [
             "sha256sum.txt references artifact under symlink directory "
             f"{display}"
         ]
-    mode, mode_errors = _slot_artifact_lstat_mode(
-        artifact_path,
-        f"sha256sum.txt references artifact file metadata could not be read {display}",
-    )
-    if mode_errors:
-        return None, mode_errors
-    if mode is None:
-        return None, [f"sha256sum.txt references missing file {display}"]
-    if stat.S_ISLNK(mode):
-        return None, [f"sha256sum.txt references symlink artifact {display}"]
-    if not stat.S_ISREG(mode):
-        return None, [f"sha256sum.txt references non-regular artifact {display}"]
     try:
-        link_count = artifact_path.stat().st_nlink
+        artifact_stat = artifact_path.lstat()
+    except FileNotFoundError:
+        return None, None, [f"sha256sum.txt references missing file {display}"]
+    except OSError:
+        return None, None, [
+            f"sha256sum.txt references artifact file metadata could not be read {display}"
+        ]
+    if stat.S_ISLNK(artifact_stat.st_mode):
+        return None, None, [f"sha256sum.txt references symlink artifact {display}"]
+    if not stat.S_ISREG(artifact_stat.st_mode):
+        return None, None, [f"sha256sum.txt references non-regular artifact {display}"]
+    if artifact_stat.st_nlink > 1:
+        return None, None, [f"sha256sum.txt references hardlinked artifact {display}"]
+    return artifact_path, artifact_stat, []
+
+
+def _read_validated_manifest_artifact_bytes(
+    artifact_path: Path,
+    expected_stat: os.stat_result,
+    relative: str,
+) -> tuple[bytes | None, list[str]]:
+    """Read a manifest artifact without trusting a stale path."""
+
+    display = _display_path(relative)
+    chunks: list[bytes] = []
+    try:
+        with artifact_path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = artifact_path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [f"sha256sum.txt references symlink artifact {display}"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, [
+                    f"sha256sum.txt references non-regular artifact {display}"
+                ]
+            manifest_expected_identity = (
+                expected_stat.st_dev,
+                expected_stat.st_ino,
+            )
+            manifest_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if manifest_open_identity != manifest_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != manifest_expected_identity:
+                return None, [
+                    "sha256sum.txt references artifact changed while being read "
+                    f"{display}"
+                ]
+            if open_stat.st_nlink > 1:
+                return None, [
+                    f"sha256sum.txt references hardlinked artifact {display}"
+                ]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = artifact_path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != manifest_expected_identity:
+                return None, [
+                    "sha256sum.txt references artifact changed while being read "
+                    f"{display}"
+                ]
     except OSError:
         return None, [
-            "sha256sum.txt references artifact with unreadable hardlink "
-            f"metadata {display}"
+            "sha256sum.txt references artifact that could not be read "
+            f"{display}"
         ]
-    if link_count > 1:
-        return None, [f"sha256sum.txt references hardlinked artifact {display}"]
-    return artifact_path, []
+    return b"".join(chunks), []
 
 
 def _manifest_artifact_sha256(
     slot_path: Path,
     relative: str,
 ) -> tuple[str | None, list[str]]:
-    artifact_path, errors = _validate_manifest_artifact_for_digest(slot_path, relative)
+    artifact_path, artifact_stat, errors = _validate_manifest_artifact_for_digest(
+        slot_path,
+        relative,
+    )
     if errors:
         return None, errors
-    assert artifact_path is not None
-    try:
-        payload = artifact_path.read_bytes()
-    except OSError:
-        return None, [
-            "sha256sum.txt references artifact that could not be read "
-            f"{_display_path(relative)}"
-        ]
+    assert artifact_path is not None and artifact_stat is not None
+    payload, read_errors = _read_validated_manifest_artifact_bytes(
+        artifact_path,
+        artifact_stat,
+        relative,
+    )
+    if read_errors:
+        return None, read_errors
+    assert payload is not None
     return hashlib.sha256(payload).hexdigest(), []
 
 
 def _validate_signed_evidence_artifact_for_digest(
     slot_path: Path,
     relative: str,
-) -> tuple[Path | None, list[str]]:
+) -> tuple[Path | None, os.stat_result | None, list[str]]:
     """Validate one signed-evidence artifact immediately before hashing it."""
 
     if SECRET_RE.search(str(slot_path)):
-        return None, ["slot path must not contain secret-looking material"]
+        return None, None, ["slot path must not contain secret-looking material"]
     if SECRET_RE.search(relative):
-        return None, [
+        return None, None, [
             "signed evidence artifact digest path must not contain secret-looking material"
         ]
     normalise_errors: list[str] = []
@@ -932,67 +1006,119 @@ def _validate_signed_evidence_artifact_for_digest(
         "signed evidence artifact digest path",
     )
     if normalise_errors:
-        return None, normalise_errors
+        return None, None, normalise_errors
     assert safe_relative is not None
     display = _display_path(safe_relative)
     artifact_path = slot_path / safe_relative
     if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:
-        return None, [
+        return None, None, [
             "signed evidence artifact digest references artifact under "
             f"symlink directory {display}"
         ]
-    mode, mode_errors = _slot_artifact_lstat_mode(
-        artifact_path,
-        "signed evidence artifact digest references artifact file metadata "
-        f"could not be read {display}",
-    )
-    if mode_errors:
-        return None, mode_errors
-    if mode is None:
-        return None, [
+    try:
+        artifact_stat = artifact_path.lstat()
+    except FileNotFoundError:
+        return None, None, [
             "signed evidence artifact required slot artifact is missing "
             f"{display}"
         ]
-    if stat.S_ISLNK(mode):
-        return None, [
+    except OSError:
+        return None, None, [
+            "signed evidence artifact digest references artifact file metadata "
+            f"could not be read {display}"
+        ]
+    if stat.S_ISLNK(artifact_stat.st_mode):
+        return None, None, [
             f"signed evidence artifact digest references symlink artifact {display}"
         ]
-    if not stat.S_ISREG(mode):
-        return None, [
+    if not stat.S_ISREG(artifact_stat.st_mode):
+        return None, None, [
             f"signed evidence artifact digest references non-regular artifact {display}"
         ]
-    try:
-        link_count = artifact_path.stat().st_nlink
-    except OSError:
-        return None, [
-            "signed evidence artifact digest references artifact with unreadable "
-            f"hardlink metadata {display}"
-        ]
-    if link_count > 1:
-        return None, [
+    if artifact_stat.st_nlink > 1:
+        return None, None, [
             f"signed evidence artifact digest references hardlinked artifact {display}"
         ]
-    return artifact_path, []
+    return artifact_path, artifact_stat, []
+
+
+def _read_validated_signed_evidence_artifact_bytes(
+    artifact_path: Path,
+    expected_stat: os.stat_result,
+    relative: str,
+) -> tuple[bytes | None, list[str]]:
+    """Read a signed-evidence digest artifact without trusting a stale path."""
+
+    display = _display_path(relative)
+    chunks: list[bytes] = []
+    try:
+        with artifact_path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = artifact_path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [
+                    f"signed evidence artifact digest references symlink artifact {display}"
+                ]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, [
+                    "signed evidence artifact digest references non-regular artifact "
+                    f"{display}"
+                ]
+            signed_evidence_expected_identity = (
+                expected_stat.st_dev,
+                expected_stat.st_ino,
+            )
+            signed_evidence_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if signed_evidence_open_identity != signed_evidence_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != signed_evidence_expected_identity:
+                return None, [
+                    "signed evidence artifact digest references artifact changed "
+                    f"while being read {display}"
+                ]
+            if open_stat.st_nlink > 1:
+                return None, [
+                    f"signed evidence artifact digest references hardlinked artifact {display}"
+                ]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = artifact_path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != signed_evidence_expected_identity:
+                return None, [
+                    "signed evidence artifact digest references artifact changed "
+                    f"while being read {display}"
+                ]
+    except OSError:
+        return None, [
+            "signed evidence artifact digest references artifact that could not be read "
+            f"{display}"
+        ]
+    return b"".join(chunks), []
 
 
 def _signed_evidence_artifact_sha256(
     slot_path: Path,
     relative: str,
 ) -> tuple[str | None, list[str]]:
-    artifact_path, errors = _validate_signed_evidence_artifact_for_digest(
+    artifact_path, artifact_stat, errors = _validate_signed_evidence_artifact_for_digest(
         slot_path,
         relative,
     )
     if errors:
         return None, errors
-    assert artifact_path is not None
-    try:
-        payload = artifact_path.read_bytes()
-    except OSError:
-        return None, [
-            "signed evidence artifact digest references artifact that could not be read "
-            f"{_display_path(relative)}"
-        ]
+    assert artifact_path is not None and artifact_stat is not None
+    payload, read_errors = _read_validated_signed_evidence_artifact_bytes(
+        artifact_path,
+        artifact_stat,
+        relative,
+    )
+    if read_errors:
+        return None, read_errors
+    assert payload is not None
     return hashlib.sha256(payload).hexdigest(), []
 
 
@@ -1001,13 +1127,13 @@ def _validate_metadata_artifact_for_read(
     relative: str,
     label: str,
     missing_error: str,
-) -> tuple[Path | None, list[str]]:
+) -> tuple[Path | None, os.stat_result | None, list[str]]:
     """Validate a slot-relative metadata artifact immediately before reading it."""
 
     if SECRET_RE.search(str(slot_path)):
-        return None, ["slot path must not contain secret-looking material"]
+        return None, None, ["slot path must not contain secret-looking material"]
     if SECRET_RE.search(relative):
-        return None, [f"{label} must not contain secret-looking material"]
+        return None, None, [f"{label} must not contain secret-looking material"]
     normalise_errors: list[str] = []
     safe_relative = _normalise_safe_relative_path(
         relative,
@@ -1015,33 +1141,71 @@ def _validate_metadata_artifact_for_read(
         label,
     )
     if normalise_errors:
-        return None, normalise_errors
+        return None, None, normalise_errors
     assert safe_relative is not None
     display = _display_path(safe_relative)
     artifact_path = slot_path / safe_relative
     if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:
-        return None, [f"{label} references artifact under symlink directory {display}"]
-    mode, mode_errors = _slot_artifact_lstat_mode(
-        artifact_path,
-        f"{label} references artifact file metadata could not be read {display}",
-    )
-    if mode_errors:
-        return None, mode_errors
-    if mode is None:
-        return None, [missing_error]
-    if stat.S_ISLNK(mode):
-        return None, [f"{label} references symlink artifact {display}"]
-    if not stat.S_ISREG(mode):
-        return None, [f"{label} references non-regular artifact {display}"]
-    try:
-        link_count = artifact_path.stat().st_nlink
-    except OSError:
-        return None, [
-            f"{label} references artifact with unreadable hardlink metadata {display}"
+        return None, None, [
+            f"{label} references artifact under symlink directory {display}"
         ]
-    if link_count > 1:
-        return None, [f"{label} references hardlinked artifact {display}"]
-    return artifact_path, []
+    try:
+        artifact_stat = artifact_path.lstat()
+    except FileNotFoundError:
+        return None, None, [missing_error]
+    except OSError:
+        return None, None, [
+            f"{label} references artifact file metadata could not be read {display}"
+        ]
+    if stat.S_ISLNK(artifact_stat.st_mode):
+        return None, None, [f"{label} references symlink artifact {display}"]
+    if not stat.S_ISREG(artifact_stat.st_mode):
+        return None, None, [f"{label} references non-regular artifact {display}"]
+    if artifact_stat.st_nlink > 1:
+        return None, None, [f"{label} references hardlinked artifact {display}"]
+    return artifact_path, artifact_stat, []
+
+
+def _read_validated_metadata_artifact_bytes(
+    artifact_path: Path,
+    expected_stat: os.stat_result,
+    label: str,
+    relative: str,
+    unreadable_error: str,
+) -> tuple[bytes | None, list[str]]:
+    """Read an already validated metadata artifact without trusting a stale path."""
+
+    digest_chunks: list[bytes] = []
+    try:
+        with artifact_path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = artifact_path.lstat()
+            display = _display_path(relative)
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [f"{label} references symlink artifact {display}"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, [f"{label} references non-regular artifact {display}"]
+            expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if open_identity != expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != expected_identity:
+                return None, [
+                    f"{label} references artifact changed while being read {display}"
+                ]
+            if open_stat.st_nlink > 1:
+                return None, [f"{label} references hardlinked artifact {display}"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest_chunks.append(chunk)
+            final_path_stat = artifact_path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
+                return None, [
+                    f"{label} references artifact changed while being read {display}"
+                ]
+    except OSError:
+        return None, [unreadable_error]
+    return b"".join(digest_chunks), []
 
 
 def _metadata_artifact_bytes_and_sha256(
@@ -1052,7 +1216,7 @@ def _metadata_artifact_bytes_and_sha256(
 ) -> tuple[bytes | None, str | None, list[str]]:
     """Validate a slot.json-referenced artifact immediately before reading it."""
 
-    artifact_path, errors = _validate_metadata_artifact_for_read(
+    artifact_path, artifact_stat, errors = _validate_metadata_artifact_for_read(
         slot_path,
         relative,
         label,
@@ -1060,11 +1224,17 @@ def _metadata_artifact_bytes_and_sha256(
     )
     if errors:
         return None, None, errors
-    assert artifact_path is not None
-    try:
-        artifact_bytes = artifact_path.read_bytes()
-    except OSError:
-        return None, None, [f"{label} could not be read"]
+    assert artifact_path is not None and artifact_stat is not None
+    artifact_bytes, read_errors = _read_validated_metadata_artifact_bytes(
+        artifact_path,
+        artifact_stat,
+        label,
+        relative,
+        f"{label} could not be read",
+    )
+    if read_errors:
+        return None, None, read_errors
+    assert artifact_bytes is not None
     return artifact_bytes, hashlib.sha256(artifact_bytes).hexdigest(), []
 
 
@@ -1079,7 +1249,7 @@ def _metadata_artifact_text(
 ) -> tuple[str | None, list[str]]:
     """Validate a slot-relative text artifact immediately before reading it."""
 
-    artifact_path, errors = _validate_metadata_artifact_for_read(
+    artifact_path, artifact_stat, errors = _validate_metadata_artifact_for_read(
         slot_path,
         relative,
         label,
@@ -1087,13 +1257,20 @@ def _metadata_artifact_text(
     )
     if errors:
         return None, errors
-    assert artifact_path is not None
+    assert artifact_path is not None and artifact_stat is not None
+    artifact_bytes, read_errors = _read_validated_metadata_artifact_bytes(
+        artifact_path,
+        artifact_stat,
+        label,
+        relative,
+        unreadable_error,
+    )
+    if read_errors:
+        return None, read_errors
+    assert artifact_bytes is not None
     try:
-        return artifact_path.read_text(
-            encoding="utf-8",
-            errors=decode_errors,
-        ), []
-    except (OSError, UnicodeDecodeError):
+        return artifact_bytes.decode("utf-8", errors=decode_errors), []
+    except UnicodeDecodeError:
         return None, [unreadable_error]
 
 
@@ -1165,10 +1342,6 @@ def _loads_json_without_duplicate_keys(text: str) -> Any:
     )
 
 
-def _read_json_without_duplicate_keys(path: Path) -> Any:
-    return _loads_json_without_duplicate_keys(path.read_text(encoding="utf-8"))
-
-
 def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | None:
     if SECRET_RE.search(str(path)):
         errors.append(f"{label} path must not contain secret-looking material")
@@ -1181,17 +1354,17 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
         errors.extend(json_ancestor_errors)
         return None
     try:
-        mode = path.lstat().st_mode
+        expected_stat = path.lstat()
     except FileNotFoundError:
         errors.append(f"missing {label}")
         return None
     except OSError:
         errors.append(f"{label} file metadata could not be read")
         return None
-    if stat.S_ISLNK(mode):
+    if stat.S_ISLNK(expected_stat.st_mode):
         errors.append(f"{label} must not be a symlink")
         return None
-    if not stat.S_ISREG(mode):
+    if not stat.S_ISREG(expected_stat.st_mode):
         errors.append(f"{label} must be a regular file")
         return None
     try:
@@ -1203,7 +1376,38 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
         errors.append(f"{label} must not be hardlinked")
         return None
     try:
-        data = _read_json_without_duplicate_keys(path)
+        chunks: list[bytes] = []
+        json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            json_path_stat = path.lstat()
+            if stat.S_ISLNK(json_path_stat.st_mode):
+                errors.append(f"{label} must not be a symlink")
+                return None
+            if not stat.S_ISREG(json_path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                errors.append(f"{label} must be a regular file")
+                return None
+            json_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if json_open_identity != json_expected_identity or (
+                json_path_stat.st_dev,
+                json_path_stat.st_ino,
+            ) != json_expected_identity:
+                errors.append(f"{label} changed while being read")
+                return None
+            if open_stat.st_nlink > 1:
+                errors.append(f"{label} must not be hardlinked")
+                return None
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            json_final_path_stat = path.lstat()
+            if (json_final_path_stat.st_dev, json_final_path_stat.st_ino) != (
+                json_expected_identity
+            ):
+                errors.append(f"{label} changed while being read")
+                return None
+        data = _loads_json_without_duplicate_keys(b"".join(chunks).decode("utf-8"))
     except (OSError, UnicodeDecodeError):
         errors.append(f"{label} could not be read")
         return None
@@ -2013,6 +2217,75 @@ def load_trusted_signer_public_keys(
     return trusted, errors
 
 
+def _write_staged_bytes(
+    path: Path,
+    payload: bytes,
+    *,
+    write_error: str,
+    verification_error: str,
+) -> list[str]:
+    """Write OpenSSL staging bytes durably enough for immediate subprocess use."""
+
+    staged_stat: os.stat_result | None = None
+    try:
+        with path.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+            staged_stat = os.fstat(handle.fileno())
+    except OSError:
+        return [write_error]
+    assert staged_stat is not None
+    readback, readback_errors = _read_staged_bytes(
+        path,
+        staged_stat,
+        verification_error,
+    )
+    if readback_errors:
+        return readback_errors
+    if readback != payload:
+        return [verification_error]
+    return []
+
+
+def _read_staged_bytes(
+    path: Path,
+    expected_stat: os.stat_result,
+    verification_error: str,
+) -> tuple[bytes | None, list[str]]:
+    """Read staged bytes without accepting a swapped staging path."""
+
+    chunks: list[bytes] = []
+    staged_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [verification_error]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                return None, [verification_error]
+            staged_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if staged_open_identity != staged_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != staged_expected_identity:
+                return None, [verification_error]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != staged_expected_identity:
+                return None, [verification_error]
+    except OSError:
+        return None, [verification_error]
+    return b"".join(chunks), []
+
+
 def _verify_ed25519_signature(
     *,
     public_key_path: Path,
@@ -2031,11 +2304,23 @@ def _verify_ed25519_signature(
             temp_path = Path(temp)
             payload_path = temp_path / "payload.bin"
             signature_path = temp_path / "signature.bin"
-            try:
-                payload_path.write_bytes(payload)
-                signature_path.write_bytes(signature)
-            except OSError:
-                errors.append("signature verification staging files could not be written")
+            stage_errors = _write_staged_bytes(
+                payload_path,
+                payload,
+                write_error="signature verification staging files could not be written",
+                verification_error="signature verification staged payload did not match input",
+            )
+            if stage_errors:
+                errors.extend(stage_errors)
+                return
+            stage_errors = _write_staged_bytes(
+                signature_path,
+                signature,
+                write_error="signature verification staging files could not be written",
+                verification_error="signature verification staged signature did not match input",
+            )
+            if stage_errors:
+                errors.extend(stage_errors)
                 return
             try:
                 completed = subprocess.run(
@@ -2352,7 +2637,7 @@ def validate_signed_evidence_artifact(
     signature_text = _require_evidence_string(evidence, "signature", errors)
     signature = _parse_hex_bytes(
         signature_text,
-        expected_len=64,
+        expected_len=ED25519_SIGNATURE_BYTES,
         label="signed evidence artifact signature",
         errors=errors,
     )
@@ -3070,14 +3355,116 @@ def _validate_summary_output_parent(
     return True, []
 
 
+def _read_summary_output_text(
+    path: Path,
+    expected_stat: os.stat_result,
+) -> tuple[str | None, list[str]]:
+    """Read scanner summary output text without trusting a stale path."""
+
+    chunks: list[bytes] = []
+    summary_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, ["--json-out must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                return None, ["--json-out must be a regular file"]
+            summary_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if summary_open_identity != summary_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != summary_expected_identity:
+                return None, ["--json-out changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, ["--json-out must not be hardlinked"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != summary_expected_identity:
+                return None, ["--json-out changed while being read"]
+    except OSError:
+        return None, ["--json-out write verification failed"]
+    try:
+        return b"".join(chunks).decode("utf-8"), []
+    except UnicodeDecodeError:
+        return None, ["--json-out write verification failed"]
+
+
 def write_summary(path: Path, summary: dict) -> list[str]:
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
         return errors
+    summary_text = json.dumps(summary, indent=2) + "\n"
+    tmp_path: Path | None = None
     try:
-        path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp_path = Path(handle.name)
+            handle.write(summary_text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        errors = validate_summary_output_path(path, "--json-out")
+        if errors:
+            return errors
+        os.replace(tmp_path, path)
+        tmp_path = None
     except OSError:
         return ["--json-out could not be written"]
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+    errors = validate_summary_output_path(path, "--json-out")
+    if errors:
+        return errors
+    try:
+        parent_fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        parent_fd = None
+    if parent_fd is not None:
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(parent_fd)
+    errors = validate_summary_output_path(path, "--json-out")
+    if errors:
+        return errors
+    try:
+        expected_stat = path.lstat()
+    except (FileNotFoundError, OSError):
+        return ["--json-out write verification failed"]
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return ["--json-out must not be a symlink"]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return ["--json-out must be a regular file"]
+    try:
+        link_count = path.stat().st_nlink
+    except OSError:
+        return ["--json-out hardlink metadata could not be read"]
+    if link_count > 1:
+        return ["--json-out must not be hardlinked"]
+    readback_text, readback_errors = _read_summary_output_text(path, expected_stat)
+    if readback_errors:
+        return readback_errors
+    if readback_text != summary_text:
+        return ["--json-out write verification failed"]
     return []
 
 

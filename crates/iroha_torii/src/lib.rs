@@ -6123,6 +6123,7 @@ async fn handler_offline_note_readiness(
     State(app): State<SharedAppState>,
 ) -> Result<impl IntoResponse, Error> {
     let offline = &app.state.settlement.offline;
+    let offline_kagemusha_abi7 = offline.kagemusha_enabled && !offline.kagemusha_force_legacy;
     let verifier_key_id = json_object([
         json_entry("backend", iroha_core::zk::ZK_BACKEND_HALO2_IPA),
         json_entry("name", iroha_core::zk::OFFLINE_NOTE_RECURSIVE_CIRCUIT_ID),
@@ -6162,6 +6163,14 @@ async fn handler_offline_note_readiness(
             "offline_kagemusha_force_legacy",
             offline.kagemusha_force_legacy,
         ),
+        json_entry("offline_kagemusha_abi7", offline_kagemusha_abi7),
+        json_entry("offline_kagemusha_abi7_mode", "recursive_compact_v1"),
+        json_entry("offline_kagemusha_abi7_bridge_abi_version", 7_u64),
+        json_entry(
+            "offline_kagemusha_abi7_circuit_id",
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1,
+        ),
+        json_entry("offline_kagemusha_abi7_artifacts", offline_kagemusha_abi7),
     ]))
 }
 

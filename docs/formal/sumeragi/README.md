@@ -3936,11 +3936,12 @@ payload knowledge for progress:
 - invalid sessions, missing payload hashes, missing headers, missing leader
   signatures, and key/header mismatches are rejected before chunk or local
   fallback checks,
-- complete RBC chunks are authoritative only for the accepted zero-chunk,
-  expected-root match, and no-expected-root observed-root cases,
+- complete RBC chunks are authoritative only when positive chunk bytes verify
+  against the advertised payload hash and the expected/observed root rules
+  match,
 - incomplete chunks, root mismatches, missing observed roots, and zero-chunk
-  sessions without an expected root must fall back to local authoritative
-  payload bytes and require exact height, view, and payload hash.
+  sessions must fall back to local authoritative payload bytes and require exact
+  height, view, and payload hash.
 
 `SumeragiSlotAuthoritativePayloadGate.tla` captures slot-level authoritative
 payload knowledge:
@@ -8239,7 +8240,27 @@ Invariants:
 - `NoCommitEvidenceBeforeCommit`
 - `NoCommitViewBeforeCommit`
 - `DeliverImpliesEvidence`
+- `RbcDeliveredWithoutFinalityWaitsForCommitEvidence`
 - `RbcProgressEvidenceMatchesState`
+- `RbcCorruptedRetainsHeaderEvidence`
+- `RbcCorruptedHasNoFinalityArtifacts`
+- `RbcCorruptedOnlyEnablesInitRepairProgress`
+- `RbcMissingHeaderRequiresIdle`
+- `RbcHeaderEvidenceRequiresNonIdle`
+- `RbcValidDigestRequiresHeader`
+- `RbcValidDigestRequiresActiveState`
+- `RbcChunkEvidenceRequiresHeader`
+- `RbcChunkEvidenceRequiresChunkOrCorruptedState`
+- `RbcPartialChunkEvidenceRequiresChunkingOrCorruption`
+- `RbcFullChunkCoverageRequiresCoveredOrCorruptedState`
+- `RbcZeroChunkEvidenceRequiresPreChunkOrCorruption`
+- `RbcReadyVotesRequireChunkHeaderEvidence`
+- `RbcReadyVotesRequireReadyOrCorruptedState`
+- `RbcPartialReadyEvidenceRequiresReadyPartialOrCorruption`
+- `RbcReadyQuorumEvidenceRequiresQuorumOrCorruptedState`
+- `RbcZeroReadyEvidenceRequiresPreReadyOrCorruption`
+- `RbcCounterEvidenceRequiresValidDigestOrCorruption`
+- `RbcInvalidDigestRequiresIdleOrCorruption`
 - `ByzantineFaultGateMatchesCorruptibleRbc`
 - `RbcInitGateMatchesRepairableState`
 - `RbcChunkGateMatchesHeaderDigestEvidence`
@@ -9805,6 +9826,15 @@ Temporal properties:
 - `RbcCorruptedDigestNeverValid` proves that once RBC enters the corrupted
   repair path, any retained RBC evidence is paired with an invalidated digest
   until the protocol repairs through RBC INIT.
+- `RbcCorruptedAlwaysRetainsHeaderEvidence` proves that a corrupted RBC repair
+  state always retains the header context needed for explicit INIT repair, even
+  though the digest has been invalidated.
+- `RbcCorruptedNeverCarriesFinalityArtifacts` proves that a corrupted RBC
+  repair state is never committed and never carries commit certificate vote,
+  stake, or commit-view artifacts.
+- `RbcCorruptedNeverBypassesInitRepairProgress` proves that a corrupted RBC
+  repair state enables explicit RBC INIT repair while disabling RBC CHUNK,
+  READY, DELIVER, and repeat Byzantine corruption progress.
 - `RbcStateOnlyChangesByProtocolOrFault` proves that the top-level RBC state
   changes only through proposal startup, explicit RBC INIT/CHUNK/READY/DELIVER
   protocol progress, or Byzantine fault corruption.
@@ -9825,9 +9855,67 @@ Temporal properties:
   from `Idle` or an explicit RBC INIT repair/recovery step.
 - `RbcHeaderEvidenceNeverLost` proves that once RBC header evidence is present,
   no later transition clears it.
+- `RbcMissingHeaderNeverLeavesIdle` proves the converse reachable-state
+  confinement: absent RBC header evidence is possible only in the initial idle
+  state, so every active progress, delivery, or corrupted repair state retains
+  header context.
+- `RbcHeaderEvidenceNeverReturnsToIdle` proves that present RBC header evidence
+  never coexists with the idle RBC state, so a reset to idle cannot retain stale
+  header context.
 - `RbcDigestInstallationOnlyByProposalInitOrChunk` proves that RBC digest
   evidence can move from absent to valid only through proposal startup, RBC INIT
   repair/recovery, or RBC CHUNK recovery/progress.
+- `RbcValidDigestNeverOutrunsHeader` proves that a valid RBC digest can never
+  appear without the corresponding header evidence already being present,
+  closing the header-before-digest causality obligation in every reachable
+  state.
+- `RbcValidDigestNeverLeavesActiveStates` proves that valid digest evidence is
+  confined to initialized, chunk, ready, or delivered RBC states, so it cannot
+  leak into idle, corrupted repair, or defensive withheld states.
+- `RbcChunkEvidenceNeverOutrunsHeader` proves that nonzero chunk evidence can
+  never appear before header evidence, including corrupted post-fault states
+  that retain chunk counters while invalidating the digest.
+- `RbcChunkEvidenceNeverLeavesChunkOrCorruptedHandoff` proves that nonzero
+  chunk evidence stays confined to chunking, chunk-complete, READY, delivered,
+  or corrupted repair states, so chunk counters cannot leak into idle or init
+  RBC states.
+- `RbcPartialChunkEvidenceNeverLeavesChunkingOrCorruptedHandoff` proves that
+  partial chunk evidence below full coverage is confined to the chunking state
+  or retained corrupted repair handoff.
+- `RbcFullChunkCoverageNeverLeavesCoveredOrCorruptedHandoff` proves that full
+  chunk coverage is confined to chunk-complete, READY, delivered, or corrupted
+  repair states, so full coverage cannot appear in idle, init, or partial
+  chunking states.
+- `RbcZeroChunkEvidenceNeverLeavesPreChunkOrCorruptedHandoff` proves that a
+  zero chunk counter is confined to idle, init, or corrupted repair states, so
+  later chunk/READY/delivered states cannot lose chunk evidence.
+- `RbcReadyVotesNeverOutrunChunkHeaderEvidence` proves that nonzero READY
+  evidence can never appear without prior header evidence and full chunk
+  coverage, including post-fault corrupted states where the digest may be
+  invalidated but the READY counter is retained.
+- `RbcReadyVotesNeverLeaveReadyOrCorruptedHandoff` proves that nonzero READY
+  evidence stays confined to READY-partial, READY-quorum, delivered, or
+  corrupted repair states, so READY counters cannot leak into idle, init, or
+  chunk-only RBC states.
+- `RbcPartialReadyEvidenceNeverLeavesPartialOrCorruptedHandoff` proves that
+  positive READY evidence below quorum is confined to the READY-partial state or
+  retained corrupted repair handoff.
+- `RbcReadyQuorumEvidenceNeverLeavesQuorumOrCorruptedHandoff` proves that READY
+  quorum evidence is confined to READY-quorum, delivered, or corrupted repair
+  states, so quorum counters cannot appear in idle, init, chunk, or partial
+  READY states.
+- `RbcZeroReadyEvidenceNeverLeavesPreReadyOrCorruptedHandoff` proves that a
+  zero READY counter is confined to idle, init, chunking, chunk-complete, or
+  corrupted repair states, so READY or delivered states cannot lose READY
+  evidence.
+- `RbcCounterEvidenceNeverOutrunsValidDigestOrCorruption` proves that nonzero
+  CHUNK or READY counters can only coexist with an invalid digest inside the
+  explicit corrupted repair state, so ordinary progress states keep digest
+  validation attached to their retained counter evidence.
+- `RbcInvalidDigestNeverLeavesIdleOrCorruption` proves that an invalid digest
+  is confined to the initial idle state or the explicit corrupted repair state,
+  so every non-corrupted RBC progress or delivery state keeps validated digest
+  evidence.
 - `RbcWithheldNeverReached` proves that the main Sumeragi model never reaches
   the defensive `Withheld` RBC state from its initial state; `Withheld` remains
   available only to gate repair/recovery branches if a future model explicitly
@@ -9854,12 +9942,18 @@ Temporal properties:
   it can only be an explicit RBC INIT repair/recovery step that enters `Init`,
   reinstalls header/digest evidence, resets chunk/READY counters, and preserves
   consensus/finality context.
+- `RbcCorruptedInitRepairAlwaysResetsEvidence` proves that an RBC INIT repair
+  from `Corrupted` enters a clean `Init` state with header/digest restored,
+  CHUNK/READY counters reset, and no committed or commit-certificate artifacts.
 - `RbcInitGateNeverBypassesRepairableState` proves that the live RBC INIT gate
   is enabled only from idle, withheld, or corrupted RBC states, so INIT cannot
   restart an already progressed valid session.
 - `RbcInitStepAlwaysInstallsHeaderDigestEvidence` proves that an RBC INIT step
   enters `Init`, resets chunk and READY counters, installs header and digest
   evidence, and preserves consensus-phase, vote, view, finality, and GST state.
+- `RbcInitStepAlwaysStartsChunkOnlyHandoff` proves that an RBC INIT step starts
+  the clean pre-CHUNK handoff: CHUNK becomes enabled while INIT, READY, and
+  DELIVER remain disabled in the post-state.
 - `RbcIdleExitOnlyByProposalOrInit` proves that once RBC is `Idle`, leaving it
   can only be proposal startup into `Init` while entering `Prepare`, or an
   explicit RBC INIT repair/recovery step that installs header/digest evidence
@@ -9878,6 +9972,9 @@ Temporal properties:
   `ChunksComplete` exactly when full coverage is reached, otherwise remains in
   `Chunking`, refreshes valid digest evidence, and preserves consensus-phase,
   vote, view, READY, finality, and GST state.
+- `RbcChunkStepAlwaysHandsOffByCoverage` proves that an RBC CHUNK step keeps
+  only CHUNK progress enabled while coverage is still partial, and disables
+  CHUNK while enabling READY exactly once full chunk coverage has been reached.
 - `RbcInitExitOnlyByChunkOrFault` proves that once RBC is in `Init`, leaving it
   can only be an RBC CHUNK transition into `Chunking` or `ChunksComplete` with
   header/digest evidence retained, or a Byzantine fault step to `Corrupted`
@@ -9914,6 +10011,10 @@ Temporal properties:
   increments READY evidence exactly, enters `ReadyQuorum` once commit quorum is
   reached, otherwise stays `ReadyPartial`, keeps chunk/header/digest evidence,
   and preserves consensus-phase, vote, view, finality, and GST state.
+- `RbcReadyStepAlwaysHandsOffByQuorum` proves that an RBC READY step keeps
+  READY-only progress enabled and DELIVER disabled below commit quorum, then
+  opens DELIVER exactly once READY quorum has been reached while earlier INIT
+  and CHUNK gates remain closed.
 - `RbcReadyQuorumStepAlwaysEnablesDeliverHandoff` proves that any RBC READY
   step whose post-state reaches READY quorum preserves complete chunk and
   header/digest evidence, opens the RBC DELIVER gate, closes earlier RBC init
@@ -9951,6 +10052,11 @@ Temporal properties:
 - `RbcDeliverStepAlwaysPreservesCompleteEvidence` proves that an RBC DELIVER
   step moves `ReadyQuorum` to `Delivered` while preserving the complete
   READY/chunk/header/digest evidence tuple and the live vote/view/GST context.
+- `RbcDeliverStepAlwaysHandsOffByCommitEvidence` proves that every RBC DELIVER
+  step closes the remaining RBC progress and fault gates in the delivered
+  post-state, then splits exactly on buffered commit evidence: finalizing
+  delivery installs committed finality, while pending delivery keeps commit
+  certificate artifacts absent.
 - `RbcDeliverFinalityGateNeverBypassesBufferedCommitEvidence` proves that RBC
   delivery can trigger finality only when buffered commit-vote/stake evidence,
   prepare quorum, cleared NewView handoff state, and nonzero-view quorum evidence
@@ -10075,6 +10181,183 @@ Temporal properties:
 - `RbcDeliveredNeverEnablesRbcProgress` proves that a delivered RBC session
   keeps INIT, CHUNK, READY, DELIVER, and Byzantine RBC-fault gates closed, so
   delivered RBC evidence cannot be reopened by RBC-side progress.
+- `RbcDeliveredWithoutFinalityAlwaysWaitsForCommitEvidence` proves that a
+  delivered-but-uncommitted RBC state has no commit-certificate artifacts, has
+  not entered the committed phase, lacks the live commit gate, and keeps all
+  RBC-side progress and fault gates closed while it waits for commit evidence.
+- `RbcDeliveredPendingHonestCommitVoteAlwaysKeepsWaitState` proves that a
+  non-final honest commit-vote step from a delivered-but-uncommitted RBC state
+  preserves delivered evidence, keeps commit-certificate artifacts absent, and
+  remains in the delivered-pending wait state when the added honest vote is not
+  enough to commit.
+- `RbcDeliveredPendingByzantineCommitVoteAlwaysKeepsWaitState` proves the same
+  delivered-pending preservation obligation for a non-final Byzantine commit
+  equivocation vote.
+- `RbcDeliveredPendingHonestCommitVoteAlwaysCompletesFinality` proves that an
+  honest commit-vote step from the delivered-pending wait state installs
+  committed finality, durable commit-certificate artifacts, and closed progress
+  gates exactly when the added honest vote completes commit evidence.
+- `RbcDeliveredPendingByzantineCommitVoteAlwaysCompletesFinality` proves the
+  matching Byzantine commit-vote finality handoff from delivered-pending state.
+- `RbcDeliveredPendingPrepareVoteAlwaysKeepsWaitState` proves that a
+  non-quorum prepare-vote step from delivered-pending state preserves delivered
+  RBC evidence, keeps commit artifacts absent, and remains in the same
+  delivered-pending wait state.
+- `RbcDeliveredPendingPrepareVoteAlwaysStartsCommitVoteWaitState` proves that a
+  quorum-forming prepare-vote step from delivered-pending state preserves
+  delivered RBC evidence and moves into the commit-vote wait state with commit
+  artifacts still absent and RBC progress still closed.
+- `RbcDeliveredPendingTimeoutAlwaysStartsNewViewWaitState` proves that a timeout
+  from delivered-pending state preserves delivered RBC evidence, keeps commit
+  artifacts absent, clears live vote counters, and starts a fresh NewView vote
+  handoff while RBC progress remains closed.
+- `RbcDeliveredPendingNewViewVoteAlwaysKeepsWaitState` proves that a pending
+  NewView vote from delivered-pending state preserves delivered RBC evidence and
+  commit-artifact absence while remaining in the NewView wait state.
+- `RbcDeliveredPendingNewViewVoteAlwaysStartsProposalWaitState` proves that a
+  quorum-forming NewView vote from delivered-pending state installs view
+  evidence, opens proposal progress, and preserves delivered RBC evidence and
+  absent commit artifacts.
+- `RbcDeliveredPendingHonestProposeAlwaysStartsPrepareWaitState` proves that a
+  proposal from delivered-pending state starts a fresh prepare-vote handoff
+  without reinitializing delivered RBC evidence or installing commit artifacts.
+- `RbcDeliveredPendingGstElapsedAlwaysKeepsWaitState` proves that GST
+  observation from delivered-pending state only raises the synchrony flag while
+  preserving delivered RBC evidence and absent commit artifacts.
+- `RbcDeliveredPendingNextAlwaysCoveredByHandoffs` proves that any real `Next`
+  step from delivered-pending state is covered by one of the checked
+  proposal, prepare-vote, commit-vote, timeout, NewView-vote, or GST handoff
+  obligations.
+- `RbcDeliveredPendingSpecStepAlwaysStuttersOrTakesCoveredHandoff` proves the
+  stuttering-closed `[Next]_vars` relation from delivered-pending state: every
+  spec step either takes a covered handoff/finality/GST action or stutters
+  while preserving the delivered-pending wait-state facts.
+- `RbcDeliveredPendingSpecStepAlwaysEndsInFinalityOrWaitState` proves that
+  every delivered-pending spec step ends either in committed finality with the
+  certified finality stack or remains in the delivered-pending wait state with
+  no commit-certificate artifacts.
+- `RbcDeliveredPendingSpecStepAlwaysPreservesDeliveredRbcEvidence` proves that
+  every delivered-pending spec step preserves the delivered RBC evidence
+  exactly: the delivered state, READY count, chunk count, header evidence, and
+  digest validity remain unchanged.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesCommitArtifactsOutcome` proves that
+  delivered-pending spec steps install or change commit-certificate artifacts
+  exactly when they reach committed finality; otherwise commit evidence and the
+  commit-view witness remain absent.
+- `RbcDeliveredPendingSpecStepAlwaysChangesGstOnlyByElapsed` proves that
+  delivered-pending spec steps can change the GST observation flag only through
+  the explicit `GstElapsed` action; all other handoff, finality, and stuttering
+  branches preserve the flag.
+- `RbcDeliveredPendingSpecStepAlwaysChangesViewOnlyByTimeout` proves that
+  delivered-pending spec steps can advance the active view only through timeout
+  recovery; all other handoff, finality, GST, and stuttering branches preserve
+  the view.
+- `RbcDeliveredPendingSpecStepAlwaysChangesViewEvidenceOnlyByNewViewOrTimeout`
+  proves that delivered-pending spec steps can change latched view evidence
+  only by timeout reset or quorum-forming NewView vote; all other branches
+  preserve the witness.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesVoteCounterHandoff` proves that
+  delivered-pending spec steps update live prepare, commit, and NewView
+  counters only according to the checked handoff or finality branch: prepare
+  votes increment during prepare, commit votes and stake advance during commit
+  voting, timeouts and proposals reset stale handoff counters, NewView votes
+  advance only in the NewView handoff, and GST or stuttering steps preserve
+  counters.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesPostGateHandoff` proves that the
+  post-state action gates from delivered-pending spec steps match the resulting
+  handoff: RBC progress and Byzantine fault gates stay closed, committed
+  finality disables all progress, non-final phases expose only the consensus
+  gate allowed by the handoff phase and remaining vote budget, and GST or
+  stuttering steps preserve the gate surface.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesTimerGateHandoff` proves that
+  delivered-pending spec-step post-states expose timer gates exactly from the
+  resulting synchrony and progress state: GST observation remains enabled
+  exactly while `gst` is false, timeout is enabled only for non-final pre-GST
+  or stalled post-states, and committed post-states never keep timeout progress
+  open.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesFinalitySource` proves that a
+  delivered-pending spec step can reach committed finality only through the
+  exact honest or Byzantine commit-vote branch whose added vote completes
+  `CanCommit`; proposal, prepare, timeout, NewView, RBC, Byzantine-fault, GST,
+  and stuttering branches stay non-final with commit-certificate artifacts
+  absent.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesFinalityWitnessFrame` proves that
+  delivered-pending finality installs the current-view commit witness, exact
+  commit-certificate vote and stake witnesses, and no live NewView handoff,
+  while non-final delivered-pending post-states keep all commit witnesses
+  absent.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesFinalityStackOutcome` proves that
+  delivered-pending post-state finality predicates match the outcome exactly:
+  the finality-certificate stack, committed phase, commit certificate, live
+  commit gate, RBC evidence, and commit-view predicates are present exactly on
+  the committed branch and absent on non-final branches.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesFinalityGateOutcome` proves that
+  delivered-pending finality closes every consensus, RBC, Byzantine-fault, and
+  timeout gate while leaving only pre-GST observation enabled, and that
+  non-final delivered-pending post-states keep the exact handoff/timer gate
+  surface for their resulting phase.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesFinalityQuorumOutcome` proves that
+  delivered-pending finality binds the committed post-state to the exact live
+  vote and stake quorum witnesses, while non-final post-states keep commit
+  evidence absent and remain below the live commit gate.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesNonFinalHandoffPhaseShape` proves
+  that non-final delivered-pending post-states stay in exactly one live
+  handoff phase (`Propose`, `Prepare`, `CommitVote`, or `NewView`) with the
+  matching vote counters, view evidence, and enabled gate surface.
+- `RbcDeliveredPendingSpecStepAlwaysClosesActionSurface` proves that
+  delivered-pending spec steps either stutter or run one covered
+  consensus/timer handoff/finality action, while RBC and Byzantine-fault
+  actions remain closed on that surface.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesPhaseChangeAction` proves that
+  delivered-pending phase changes come only from the exact proposal, prepare
+  quorum, timeout, NewView quorum, or commit-vote finality action that causes
+  the post-state phase; stutters, GST, and no-quorum votes preserve the phase.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesCounterChangeAction` proves that
+  delivered-pending counter and view-evidence changes have exact source
+  actions: votes increment their counters, timeout resets handoff state,
+  proposal clears NewView handoff counters, and quorum NewView votes install
+  view evidence.
+- `RbcDeliveredPendingSpecStepAlwaysHasExclusiveActionSource` proves that a
+  delivered-pending `Next` step is exactly one permitted consensus/timer action
+  and those action predicates are pairwise exclusive on the delivered-pending
+  surface.
+- `RbcDeliveredPendingSpecStepAlwaysPreservesActionSurfaceOnStutter` proves
+  that delivered-pending stuttering steps leave all consensus, RBC,
+  Byzantine-fault, timer, and GST gates unchanged while preserving the
+  delivered-pending wait state.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesCommitArtifactChangeSource` proves
+  that delivered-pending commit-certificate artifact changes are equivalent
+  to committed finality and come only from the exact honest or Byzantine
+  commit-vote source that installs the certificate witness.
+- `RbcDeliveredPendingSpecStepAlwaysInstallsCertifiedDeliveryOnCommitArtifactChange`
+  proves that any delivered-pending commit-certificate artifact delta installs
+  the certified committed-delivery post-state: delivered RBC evidence remains
+  complete, the finality stack and exact commit witnesses are present, and
+  progress gates close except for pre-GST observation.
+- `RbcDeliveredPendingSpecStepAlwaysInstallsExactSourceCertifiedDeliveryOnCommitArtifactChange`
+  proves that the certified post-state installed by a delivered-pending
+  commit-certificate artifact delta is tied to the exact honest or Byzantine
+  commit-vote source, including the source-specific `CanCommit` witness and
+  vote/stake deltas.
+- `RbcDeliveredPendingSpecStepAlwaysKeepsNonFinalHandoffOnStableCommitArtifacts`
+  proves the complementary stable-artifact branch: delivered-pending spec steps
+  that do not install commit artifacts remain non-final, keep delivered RBC
+  evidence and commit artifacts stable, and expose only the checked live
+  handoff/timer gate surface.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesNonFinalSourceOnStableCommitArtifacts`
+  proves that the stable-artifact branch is sourced only by stuttering or an
+  exact non-final proposal, prepare, commit-vote, timeout, NewView, or GST
+  handoff; finalizing commit-vote sources are excluded.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesCounterFootprintOnStableCommitArtifacts`
+  proves that stable-artifact delivered-pending steps have the exact live
+  counter footprint for their non-final source: commit votes advance only on
+  non-final commit-vote handoffs, handoff resets clear stale commit support,
+  and stutter/GST branches preserve counters.
+- `RbcDeliveredPendingSpecStepAlwaysMatchesPhaseGateFootprintOnStableCommitArtifacts`
+  proves that those stable-artifact non-final sources also install the exact
+  post-phase and gate footprint for their handoff: proposal, prepare,
+  commit-vote, timeout, NewView, GST, and stuttering branches expose only the
+  enabled action surface expected for that branch.
 - `PendingProtocolStepsNeverChangeGst` proves that non-final NewView,
   prepare-vote, honest commit-vote, Byzantine commit-vote, and RBC DELIVER
   pending branches preserve the GST observation flag; synchrony observation
@@ -10777,8 +11060,8 @@ implementation surfaces it abstracts:
 | `DaDisabled`, `TimeoutBoundary`, `LocalPayloadAvailable` | `rbc_availability_unresolved_for_reschedule(...)` fails open when DA is disabled, when a nonzero availability timeout has elapsed, or when the payload is already available locally. |
 | `TimeoutBelowPending`, `TimeoutZeroPending`, `PendingEntry` | Before the timeout, and indefinitely for a zero timeout, a pending RBC entry keeps quorum rescheduling blocked. |
 | `NoSession`, `InvalidSession`, `DeliveredSession` | Absent, invalid, and already-delivered RBC sessions do not block quorum rescheduling. |
-| `CompleteReady`, `MissingChunks`, `ZeroTotalReady`, `NotReady`, `CompleteButNotReady` | A usable session blocks only when nonzero chunks are still missing or READY quorum is not reached; zero-total complete sessions with READY quorum do not synthesize missing chunks. |
-| `RbcAvailabilityRescheduleExactness` | The aggregate invariant ties DA-disabled, timeout, local-payload, absent/invalid/delivered/complete fail-open paths with pending-entry, missing-chunk, and missing-READY blocking paths for every bounded case. |
+| `CompleteReady`, `MissingChunks`, `ZeroTotalReady`, `NotReady`, `CompleteButNotReady` | A usable session blocks when it has an impossible zero-total shape, nonzero chunks are still missing, or READY quorum is not reached; complete positive-chunk READY sessions fail open. |
+| `RbcAvailabilityRescheduleExactness` | The aggregate invariant ties DA-disabled, timeout, local-payload, absent/invalid/delivered/complete-positive fail-open paths with pending-entry, zero-total, missing-chunk, and missing-READY blocking paths for every bounded case. |
 
 The vote-backed reassembly stall model is intentionally finite. These are the
 implementation surfaces it abstracts:
@@ -14244,6 +14527,10 @@ retransmit/rotation, view-bound drop, and future reanchor/promotion branches.
 The unrestricted fast TLC initial cross-product is intentionally not used in CI
 because it expands to millions of initial states; Apalache remains the full
 bounded fast/deep/wide frontier proof.
+`deep` is intentionally Apalache-only in PR CI: it widens the top-level
+commit-path constants (`N = 7`, `F = 2`, `MaxView = 5`) beyond the finite TLC
+`fast` cross-check (`N = 4`, `F = 1`, `MaxView = 4`).
+Every other PR baseline mode must have both a TLC runner case and README command.
 `scripts/formal/sumeragi_tlc.sh frontier-small` remains the small exhaustive TLC
 cross-check using the same module and TLC-friendly weak-fairness specification.
 The TLC runner also accepts `frontier-bug-*` modes so the documented frontier
@@ -14716,7 +15003,7 @@ projection, and reset cleanup.
 RBC message commitment and payload-refetch decisions, including stale/current
 message handling, Kura presence, future-message rejection, invalid-session
 suppression, delivered/complete session suppression, payload-hash mismatch
-fetches, missing-payload fetches, and zero-chunk completeness.
+fetches, missing-payload fetches, and zero-chunk recovery.
 `rbc-missing-block-recovery-fast` and `rbc-missing-block-recovery-bug-*`
 cross-check RBC-specific missing-block recovery: known-local bypass,
 BlockCreated metadata recovery, forced frontier body fetches, signer fallback
@@ -17804,7 +18091,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-complete-
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-wrong-payload-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-incomplete-match-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-missing-payload-skips
-bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-zero-chunk-fetches
+bash scripts/formal/sumeragi_apalache.sh rbc-recovery-helper-bug-needs-zero-chunk-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-known-local-fetches
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-missing-session-skips
 bash scripts/formal/sumeragi_apalache.sh rbc-missing-block-recovery-bug-needs-payload-hash-skips
@@ -23051,7 +23338,7 @@ bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-header-hash-mismatch
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-header-height-mismatch
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-header-view-mismatch
-bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-reject-zero-chunk-expected-root
+bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-zero-chunk-expected-root
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-reject-expected-root-match
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-reject-no-expected-observed-root
 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-accept-zero-missing-expected-root

@@ -177,7 +177,7 @@ impl Actor {
         self.subsystems.validation.superseded_results.clear();
         self.pending.pending_fetch_requests.clear();
         self.pending.pending_block_body_requests.clear();
-        self.subsystems.da_rbc.rbc.pending.clear();
+        self.clear_all_pending_rbc();
         self.subsystems.da_rbc.rbc.sessions.clear();
         self.subsystems.da_rbc.rbc.deliver_deferral.clear();
         self.subsystems.da_rbc.rbc.outbound_chunks.clear();

@@ -1091,6 +1091,392 @@ test("Kagemusha Swift native bridge caps Kagemusha outputs before Data copies", 
   );
 });
 
+test("Kagemusha Swift instruction transaction builder stays wired", () => {
+  assertContainsAll(
+    source("IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"),
+    [
+      "public enum KagemushaInstructionTransactionError",
+      "public enum KagemushaInstructionType",
+      'case transfer = "KagemushaTransfer"',
+      'case redeemRecursive = "RedeemKagemushaRecursive"',
+      "public struct KagemushaInstructionTransactionRequest",
+      "public struct KagemushaRecursiveRedeemTransactionRequest",
+      "public enum KagemushaRecursiveRedeemRequestArchive",
+      "KagemushaRecursiveRedeemRequestArchiveError",
+      "unexpectedInstructionArchiveType(expected: KagemushaInstructionType, actual: KagemushaInstructionType)",
+      "KagemushaRecursiveSpendRedeemRequestV1",
+      "static func encodeKagemushaInstruction(",
+      "static func encodeKagemushaRecursiveRedeem(",
+      "func buildKagemushaInstruction(",
+      "func buildKagemushaRecursiveRedeem(",
+      "try KagemushaRecursiveSpendProver.redeemSpend(requestArchive: $0)",
+      "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes",
+      "frame.header.compression == .none",
+      "frame.header.schema == noritoSchemaHash(forTypeName: type.wireName)",
+      "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1",
+      "noritoSchemaHash(forTypeName: schemaName) == frame.header.schema",
+    ],
+    "Swift Kagemusha instruction transaction builder",
+  );
+  assertContainsAll(
+    source("IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"),
+    [
+      "testBuildRecursiveRedeemInstructionTransactionWrapsNativeInstructionArchive",
+      "testBuildKagemushaTransferInstructionTransactionUsesTransferWireName",
+      "testKagemushaArchiveValidationAcceptsSharedAbi7Fixtures",
+      "testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+      "testKagemushaInstructionTransactionRejectsAdversarialArchives",
+      "testKagemushaRecursiveRedeemTransactionRejectsMalformedRequestBeforeNativeRedeem",
+      "testKagemushaRecursiveRedeemTransactionRejectsAdversarialNativeInstructionArchives",
+      "testKagemushaRecursiveRedeemRequestArchiveValidationRejectsAdversarialInputs",
+      "testKagemushaInstructionRequestValidationRejectsInvalidInputsBeforeSigning",
+      ".unsupportedInstructionArchiveType",
+      ".unsupportedRequestArchiveType",
+      ".unexpectedInstructionArchiveType(expected: .redeemRecursive, actual: .transfer)",
+      "unsupportedFlagsArchive",
+      "nonZeroPaddingArchive",
+      "excessivePaddingArchive",
+      "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes + 1",
+    ],
+    "Swift Kagemusha instruction transaction builder tests",
+  );
+});
+
+test("Kagemusha C# instruction transaction builder stays wired", () => {
+  assertContainsAll(
+    source("csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs"),
+    [
+      "public enum KagemushaInstructionType",
+      "RedeemRecursive",
+      "ArchiveTypeName",
+      "WireName",
+      '"KagemushaTransfer"',
+      '"RedeemKagemushaRecursive"',
+      '"iroha_data_model::isi::offline::KagemushaTransfer"',
+      '"iroha_data_model::isi::offline::RedeemKagemushaRecursive"',
+      "CopyAndValidateArchive",
+      "KagemushaRecursiveSpendNative.NativeArchiveMaxBytes",
+      "PrivacyNative.IsNoritoV1Archive(copy)",
+      "PrivacyNative.HasNonEmptyPrivacyNoritoPayload(copy)",
+      "NoritoCodec.SchemaHash(instructionType.WireName())",
+      "SequenceEqual(expectedSchema)",
+      "KagemushaRecursiveSpendRedeemInstructionArchive",
+      "EncodeFramedPayload",
+      "return InstructionArchive;",
+    ],
+    "C# Kagemusha instruction archive transaction instruction",
+  );
+  assertContainsAll(
+    source("csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs"),
+    [
+      "internal virtual byte[] EncodeFramedPayload",
+      "NoritoCodec.Encode(TypeName, EncodePayload(context))",
+      "KagemushaInstructionArchive(",
+      "KagemushaRecursiveRedeem(",
+      "KagemushaInstructionArchiveInstruction.RedeemRecursive",
+    ],
+    "C# Kagemusha instruction transaction factories",
+  );
+  assertContainsAll(
+    source("csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs"),
+    [
+      "instruction.EncodeFramedPayload(this)",
+      "writer.WriteField(EncodeString(instruction.WireId))",
+      "writer.WriteField(EncodeBytesVec(framedInstruction))",
+    ],
+    "C# Kagemusha instruction archive pass-through encoder",
+  );
+  assertContainsAll(
+    source("csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs"),
+    [
+      "KagemushaInstructionArchive(",
+      "KagemushaRecursiveRedeem(",
+      "KagemushaRecursiveSpendNative.Redeem(redeemRequestArchive)",
+      "KagemushaRecursiveSpendRedeemInstructionArchive",
+    ],
+    "C# Kagemusha recursive redeem transaction builder",
+  );
+  assertContainsAll(
+    source("csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs"),
+    [
+      "AddInstructionAcceptsKagemushaInstructionArchiveFactories",
+      "BuildSignedEmbedsKagemushaInstructionArchiveWithoutReframing",
+      "KagemushaInstructionArchiveRejectsMalformedWrongTypeAndMismatchedType",
+      "KagemushaInstructionArchiveAcceptsNativeAbi7RedeemInstructionFixture",
+      "KagemushaInstructionType.RedeemRecursive",
+      "KagemushaInstructionType.Transfer",
+      "new KagemushaRecursiveSpendRedeemInstructionArchive(redeemArchive)",
+      "Assert.Equal(archive, instruction.Payload)",
+      'Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId)',
+      'NoritoCodec.Encode("KagemushaRecursiveSpendRedeemRequestV1", new byte[] { 1, 2, 3 })',
+    ],
+    "C# Kagemusha instruction transaction builder tests",
+  );
+});
+
+test("Kagemusha JVM instruction archive transaction helpers stay wired", () => {
+  assertContainsAll(
+    source("kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt"),
+    [
+      "enum class KagemushaInstructionType",
+      "TRANSFER(",
+      "REDEEM_RECURSIVE(",
+      '"KagemushaTransfer"',
+      '"RedeemKagemushaRecursive"',
+      '"iroha_data_model::isi::offline::KagemushaTransfer"',
+      '"iroha_data_model::isi::offline::RedeemKagemushaRecursive"',
+      "fun instructionBox(",
+      "recursiveRedeemInstructionBox",
+      "recursiveRedeemInstructionBoxFromRequest",
+      "fun transactionPayload(",
+      "recursiveRedeemTransactionPayload",
+      "recursiveRedeemTransactionPayloadFromRequest",
+      "KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive)",
+      "KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES",
+      "NoritoHeader.decode(archive, SchemaHash.hash16(instructionType.wireName))",
+      "decoded.header.compression == NoritoHeader.COMPRESSION_NONE",
+      "decoded.header.payloadLength > 0",
+      "decoded.header.validateChecksum(decoded.payload)",
+      "InstructionBox.fromWirePayload(instructionType.wireName, archive)",
+      "Executable.instructions(listOf(instructionBox(instructionType, instructionArchive)))",
+    ],
+    "Kotlin Kagemusha instruction archive transaction helper",
+  );
+  assertContainsAll(
+    source("java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java"),
+    [
+      "public enum InstructionType",
+      "TRANSFER(",
+      "REDEEM_RECURSIVE(",
+      '"KagemushaTransfer"',
+      '"RedeemKagemushaRecursive"',
+      '"iroha_data_model::isi::offline::KagemushaTransfer"',
+      '"iroha_data_model::isi::offline::RedeemKagemushaRecursive"',
+      "public static InstructionBox instructionBox(",
+      "recursiveRedeemInstructionBox",
+      "recursiveRedeemInstructionBoxFromRequest",
+      "public static TransactionPayload transactionPayload(",
+      "recursiveRedeemTransactionPayload",
+      "recursiveRedeemTransactionPayloadFromRequest",
+      "KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive)",
+      "KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES",
+      "NoritoHeader.decode(archive, SchemaHash.hash16(instructionType.wireName()))",
+      "decoded.header().compression() != NoritoHeader.COMPRESSION_NONE",
+      "decoded.header().payloadLength() == 0",
+      "decoded.header().validateChecksum(decoded.payload())",
+      "InstructionBox.fromWirePayload(instructionType.wireName(), archive)",
+      "Executable.instructions(List.of(instructionBox(instructionType, instructionArchive)))",
+    ],
+    "Android Java Kagemusha instruction archive transaction helper",
+  );
+  assertContainsAll(
+    source("kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt"),
+    [
+      "instructionBox preserves redeem archive bytes and wire name",
+      "transactionPayload wraps a single transfer archive instruction",
+      "instructionBox accepts native ABI 7 redeem instruction fixture",
+      "instructionBox rejects malformed wrong schema empty and tampered archives",
+      "KagemushaInstructionType.REDEEM_RECURSIVE",
+      "KagemushaInstructionType.TRANSFER",
+      "assertContentEquals(archive, wire.payloadBytes)",
+      "recursiveRedeemInstructionBoxFromRequest(byteArrayOf())",
+      "recursiveRedeemTransactionPayloadFromRequest(",
+      '"KagemushaRecursiveSpendRedeemRequestV1"',
+      "tampered[tampered.lastIndex]",
+    ],
+    "Kotlin Kagemusha instruction archive transaction helper tests",
+  );
+  assertContainsAll(
+    source("java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java"),
+    [
+      "kagemushaInstructionArchivesBuildPayloads",
+      "kagemushaInstructionArchivesAcceptAbi7Fixtures",
+      "kagemushaInstructionArchivesRejectAdversarialInputs",
+      "KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE",
+      "KagemushaInstructionArchives.InstructionType.TRANSFER",
+      "KagemushaInstructionArchives.recursiveRedeemInstructionBox(archive)",
+      "KagemushaInstructionArchives.transactionPayload(",
+      "KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(new byte[0])",
+      "KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(",
+      "Arrays.equals(transferArchive, transferWire.payloadBytes())",
+      '"KagemushaRecursiveSpendRedeemRequestV1"',
+      "tampered[tampered.length - 1] ^= 0x01",
+    ],
+    "Android Java Kagemusha instruction archive transaction helper tests",
+  );
+});
+
+test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
+  for (const relative of [
+    "javascript/iroha_js/src/transaction.js",
+    "javascript/iroha_js/dist/transaction.js",
+  ]) {
+    const transactionSource = source(relative);
+    assertContainsAll(
+      transactionSource,
+      [
+        "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
+        "buildKagemushaInstructionArchiveInstruction",
+        "buildKagemushaInstructionTransaction",
+        "buildKagemushaRecursiveRedeemTransaction",
+        "KagemushaInstructionArchive",
+        "KagemushaTransfer",
+        "RedeemKagemushaRecursive",
+        "instruction_type",
+        "kagemushaRecursiveSpendRedeem",
+        "kagemushaRecursiveRedeem.redeemRequestArchive",
+      ],
+      `${relative} Kagemusha instruction transaction builder`,
+    );
+    assert.match(
+      transactionSource,
+      /buildKagemushaRecursiveRedeemTransaction[\s\S]*?kagemushaRecursiveSpendRedeem[\s\S]*?buildKagemushaInstructionTransaction/u,
+      `${relative} must derive the redeem instruction before signing`,
+    );
+  }
+  for (const relative of [
+    "javascript/iroha_js/src/index.js",
+    "javascript/iroha_js/dist/index.js",
+  ]) {
+    assertContainsAll(
+      source(relative),
+      [
+        "buildKagemushaInstructionArchiveInstruction",
+        "buildKagemushaInstructionTransaction",
+        "buildKagemushaRecursiveRedeemTransaction",
+      ],
+      `${relative} Kagemusha instruction transaction exports`,
+    );
+  }
+  assertContainsAll(
+    source("javascript/iroha_js/index.d.ts"),
+    [
+      "KagemushaInstructionArchiveType",
+      '"KagemushaTransfer"',
+      '"RedeemKagemushaRecursive"',
+      "KagemushaInstructionArchiveInput",
+      "KagemushaInstructionTransactionInput",
+      "KagemushaRecursiveRedeemTransactionBaseInput",
+      "KagemushaRecursiveRedeemArchiveInput",
+      "KagemushaRecursiveRedeemTransactionInput",
+      "buildKagemushaInstructionArchiveInstruction",
+      "buildKagemushaInstructionTransaction",
+      "buildKagemushaRecursiveRedeemTransaction",
+      "redeemRequestArchive: BinaryLike;",
+      "redeem_request_archive: BinaryLike;",
+      "requestArchive: BinaryLike;",
+      "bytes_base64: string;",
+    ],
+    "JavaScript Kagemusha instruction transaction TypeScript declarations",
+  );
+  assertContainsAll(
+    source("crates/iroha_js_host/src/lib.rs"),
+    [
+      "fn kagemusha_instruction_archive_from_json",
+      'remove_case_insensitive(&mut map, "KagemushaInstructionArchive")',
+      "KagemushaTransfer",
+      "RedeemKagemushaRecursive",
+      'ensure_kagemusha_recursive_archive_len(archive.len(), "Kagemusha instruction archive")',
+      "build_transaction_from_instructions_json_accepts_kagemusha_instruction_archive",
+      "kagemusha_instruction_archive_json_rejects_adversarial_inputs",
+    ],
+    "iroha_js_host Kagemusha instruction archive decoder",
+  );
+  assertContainsAll(
+    source("javascript/iroha_js/test/transactionBuilder.test.js"),
+    [
+      "buildKagemushaInstructionArchiveInstruction normalizes archive bytes",
+      "buildKagemushaInstructionTransaction wraps one archive instruction",
+      "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+      "instruction_type: \"KagemushaTransfer\"",
+      "redeemRequestArchive must be a Buffer or ArrayBuffer view",
+      "redeem native rejected",
+    ],
+    "JavaScript Kagemusha instruction transaction builder tests",
+  );
+});
+
+test("Kagemusha Python instruction transaction builder stays wired", () => {
+  assertContainsAll(
+    source("python/iroha_python/src/iroha_python/kagemusha.py"),
+    [
+      "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
+      "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+      "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
+      "KagemushaInstructionArchiveType",
+      "def _normalize_kagemusha_instruction_archive_type(",
+      "def kagemusha_instruction_archive_instruction(",
+      "def kagemusha_recursive_redeem_instruction(",
+      "def build_kagemusha_instruction_transaction(",
+      "def build_kagemusha_recursive_redeem_transaction(",
+      '_norito_archive_bytes_named(instruction_archive, "instruction_archive")',
+      'getattr(Instruction, "kagemusha_instruction_archive", None)',
+      'getattr(Instruction, "kagemusha_recursive_redeem", None)',
+      "build_signed_transaction",
+      "instructions=(instruction,)",
+    ],
+    "Python Kagemusha instruction transaction builder",
+  );
+  assertContainsAll(
+    source("python/iroha_python/src/iroha_python/__init__.py"),
+    [
+      "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
+      "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+      "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
+      "KagemushaInstructionArchiveType",
+      "kagemusha_instruction_archive_instruction",
+      "kagemusha_recursive_redeem_instruction",
+      "build_kagemusha_instruction_transaction",
+      "build_kagemusha_recursive_redeem_transaction",
+    ],
+    "Python Kagemusha instruction transaction root exports",
+  );
+  assertContainsAll(
+    source("python/iroha_python/src/iroha_python/tx.py"),
+    [
+      "def kagemusha_instruction_archive(",
+      "kagemusha_instruction_archive_instruction",
+      "def kagemusha_recursive_redeem(",
+      "kagemusha_recursive_redeem_instruction",
+      "self.add_instruction(",
+    ],
+    "Python TransactionDraft Kagemusha helpers",
+  );
+  assertContainsAll(
+    source("python/iroha_python/iroha_python_rs/src/lib.rs"),
+    [
+      "fn kagemusha_instruction_archive_box(",
+      "fn kagemusha_instruction_archive(",
+      "fn kagemusha_recursive_redeem(",
+      "KagemushaTransfer",
+      "RedeemKagemushaRecursive",
+      "decode_from_bytes(instruction_archive)",
+      "kagemusha_recursive_spend_redeem_instruction_from_request(request)",
+      "kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives",
+      "kagemusha_instruction_archive_box_rejects_adversarial_archives",
+    ],
+    "Python PyO3 Kagemusha instruction archive decoder",
+  );
+  assertContainsAll(
+    source("python/iroha_python/tests/kagemusha_test.py"),
+    [
+      "test_kagemusha_instruction_archive_transaction_helpers_wrap_redeem_archive",
+      "test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_before_signing",
+      "test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_inputs",
+      '_shared_recursive_spend_abi7_archive("redeem_instruction")',
+      '_shared_recursive_spend_abi7_archive("redeem_request")',
+      "_instruction_archive_bytes(instruction)",
+      "committed_instruction = kagemusha.kagemusha_instruction_archive_instruction",
+      "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+      "instruction_archive must be a valid Norito archive",
+      "invalid RedeemKagemushaRecursive instruction archive",
+      "redeem_request_archive must be a valid Norito archive",
+      "draft.kagemusha_recursive_redeem(request_archive)",
+    ],
+    "Python Kagemusha instruction transaction tests",
+  );
+});
+
 test("recursive Kagemusha ABI-7 compact verifier surface stays in parity", () => {
   const rustBridge = source("crates/connect_norito_bridge/src/lib.rs");
   const header = source("crates/connect_norito_bridge/include/connect_norito_bridge.h");
@@ -2103,6 +2489,92 @@ test("recursive Kagemusha SDK docs expose compact projection verifier APIs", () 
   );
 });
 
+test("recursive Kagemusha SDK docs expose instruction transaction builders", () => {
+  const commonReadmeSnippets = [
+    "KagemushaTransfer",
+    "RedeemKagemushaRecursive",
+    "valid Norito archives",
+    "empty, malformed, tampered, or wrong-type instruction archives",
+    "recursive redeem derivation inside",
+  ];
+  const perSdkSnippets = new Map([
+    [
+      "IrohaSwift/README.md",
+      [
+        "KagemushaInstructionTransactionRequest",
+        "IrohaSDK.buildKagemushaRecursiveRedeem(...)",
+      ],
+    ],
+    [
+      "kotlin/README.md",
+      [
+        "KagemushaInstructionArchives",
+        "builds a single archived instruction transaction payload",
+        "derives the redeem instruction from a native recursive redeem request",
+      ],
+    ],
+    [
+      "java/iroha_android/README.md",
+      [
+        "KagemushaInstructionArchives",
+        "builds a single archived instruction transaction payload",
+        "derives the redeem instruction from a native recursive redeem request",
+      ],
+    ],
+    [
+      "csharp/README.md",
+      [
+        "TransactionInstruction.KagemushaInstructionArchive(...)",
+        "KagemushaInstructionArchiveInstruction",
+        "TransactionBuilder.KagemushaInstructionArchive(...)",
+        "TransactionBuilder.KagemushaRecursiveRedeem(...)",
+      ],
+    ],
+    [
+      "javascript/iroha_js/README.md",
+      [
+        "buildKagemushaInstructionArchiveInstruction({ instructionType, instructionArchive })",
+        "buildKagemushaInstructionTransaction(...)",
+        "buildKagemushaRecursiveRedeemTransaction(...)",
+      ],
+    ],
+    [
+      "python/iroha_python/README.md",
+      [
+        "kagemusha_instruction_archive_instruction(instruction_type, instruction_archive)",
+        "build_kagemusha_instruction_transaction(...)",
+        "build_kagemusha_recursive_redeem_transaction(...)",
+        "TransactionDraft.kagemusha_instruction_archive(...)",
+        "TransactionDraft.kagemusha_recursive_redeem(...)",
+      ],
+    ],
+  ]);
+
+  for (const [relativePath, snippets] of perSdkSnippets.entries()) {
+    assertContainsAll(
+      source(relativePath).replace(/\s+/gu, " "),
+      [...commonReadmeSnippets, ...snippets],
+      `${relativePath} instruction transaction builder docs`,
+    );
+  }
+
+  assertContainsAll(
+    source("docs/source/offline_kagemusha.md").replace(/\s+/gu, " "),
+    [
+      "typed archived-instruction transaction surface",
+      "KagemushaTransfer",
+      "RedeemKagemushaRecursive",
+      "valid Norito archives",
+      "preserve their canonical bytes rather than re-framing them",
+      "empty, malformed, tampered, or wrong-type instruction archives",
+      "Recursive redeem derivation inside the transaction helper",
+      "native recursive redeem request",
+      "signs exactly one `RedeemKagemushaRecursive` instruction",
+    ],
+    "offline Kagemusha instruction transaction docs",
+  );
+});
+
 test("recursive Kagemusha Python SDK docs name compact root helpers exactly", () => {
   const readme = source("python/iroha_python/README.md").replace(/\s+/gu, " ");
   assertContainsAll(
@@ -2435,6 +2907,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
     "--negative-control-core-append-boundary-profile-comparison",
     "--negative-control-data-model-proof-public-input-circuit-binding",
     "--negative-control-data-model-previous-proof-field-binding",
+    "--negative-control-data-model-previous-proof-stale-hash-fixture",
     "--negative-control-core-recursive-public-input-schema-order",
     "--negative-control-core-recursive-public-input-index-map",
     "--negative-control-core-recursive-public-input-value-order",
@@ -2485,7 +2958,7 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
 
   const previousProofFieldBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-data-model-previous-proof-field-binding":'),
-    guard.indexOf('if mode == "--negative-control-core-append-cap-boundary":'),
+    guard.indexOf('if mode == "--negative-control-data-model-previous-proof-stale-hash-fixture":'),
   );
   assert.match(
     previousProofFieldBranch,
@@ -2514,6 +2987,30 @@ test("recursive Kagemusha policy negative controls pin lineage accumulator cover
       'field: "previous_recursive_proof.folded_public_inputs_hash"',
     ],
     "previous-proof folded hash adversarial fixture policy coverage",
+  );
+  const previousProofStaleHashBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-data-model-previous-proof-stale-hash-fixture":'),
+    guard.indexOf('if mode == "--negative-control-core-append-cap-boundary":'),
+  );
+  assert.match(
+    previousProofStaleHashBranch,
+    /recursive-spend-stale-previous-proof-public-input-hash[\s\S]*?recursive-spend-previous-proof-public-input-hash/u,
+    "previous-proof stale hash negative control must mutate the stale cached hash fixture",
+  );
+  assert.match(
+    previousProofStaleHashBranch,
+    /text_overrides\[target\]\s*=\s*mutated[\s\S]*?run_checks\(\)/u,
+    "previous-proof stale hash negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    previousProofStaleHashBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\("negative control failed: stale previous-proof hash fixture drift was not detected"\)/u,
+    "previous-proof stale hash negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    previousProofStaleHashBranch,
+    /except\s+PolicyError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "previous-proof stale hash negative control must not unconditionally pass after run_checks",
   );
 
   const profileSplitBranch = guard.slice(
@@ -3334,6 +3831,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-sdk-readme-boundary",
     "--negative-control-sdk-readme-proof-chain-accumulator",
     "--negative-control-offline-doc-native-owned-accumulator-boundary",
+    "--negative-control-offline-doc-instruction-transaction-surface",
     "--negative-control-sdk-proof-chain-accumulator-input",
     "--negative-control-sdk-accumulator-digest-inputs",
     "--negative-control-sdk-accumulator-boundary-digest-inputs",
@@ -3415,6 +3913,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-swift-recursive-compact-verifier-bool",
     "--negative-control-swift-recursive-compact-verifier-availability",
     "--negative-control-swift-kagemusha-native-output-cap",
+    "--negative-control-swift-kagemusha-instruction-transaction-builder",
     "--negative-control-swift-sdk-version-script",
     "--negative-control-swift-sdk-override-script",
     "--negative-control-swift-sdk-needs-workflow",
@@ -3920,7 +4419,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const offlineDocAccumulatorBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":'),
-    guard.indexOf('if mode == "--negative-control-sdk-proof-chain-accumulator-input":'),
+    guard.indexOf('if mode == "--negative-control-offline-doc-instruction-transaction-surface":'),
   );
   assert.match(
     offlineDocAccumulatorBranch,
@@ -3936,6 +4435,25 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     offlineDocAccumulatorBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "offline Kagemusha doc accumulator negative control must not unconditionally pass after run_checks",
+  );
+  const offlineDocInstructionTransactionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-offline-doc-instruction-transaction-surface":'),
+    guard.indexOf('if mode == "--negative-control-sdk-proof-chain-accumulator-input":'),
+  );
+  assert.match(
+    offlineDocInstructionTransactionBranch,
+    /empty, malformed, tampered, or wrong-type[\s\S]*?instruction archives before transaction payload construction[\s\S]*?empty instruction archives before transaction payload construction[\s\S]*?run_checks\(mutated\)/u,
+    "offline Kagemusha doc instruction transaction negative control must mutate the archive validation boundary",
+  );
+  assert.match(
+    offlineDocInstructionTransactionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: offline Kagemusha instruction transaction surface drift was not detected"\s*\)/u,
+    "offline Kagemusha doc instruction transaction negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    offlineDocInstructionTransactionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "offline Kagemusha doc instruction transaction negative control must not unconditionally pass after run_checks",
   );
   const sdkProofChainAccumulatorInputBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-sdk-proof-chain-accumulator-input":'),
@@ -4534,6 +5052,54 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     swiftKagemushaNativeOutputCapBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "Swift Kagemusha native output cap negative control must not unconditionally pass after run_checks",
+  );
+  const swiftInstructionTransactionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":'),
+    guard.indexOf('if mode == "--negative-control-swift-sdk-version-script":'),
+  );
+  assert.match(
+    swiftInstructionTransactionBranch,
+    /func buildKagemushaRecursiveRedeem\([\s\S]*?func buildKagemushaRecursiveRedeemUnchecked\([\s\S]*?testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning[\s\S]*?testBuildKagemushaRecursiveRedeemTransactionSkipsNativeDerivationBeforeSigning/u,
+    "Swift instruction transaction builder negative control must mutate the recursive redeem builder and derivation test",
+  );
+  assert.match(
+    swiftInstructionTransactionBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[source_target\]\s*=\s*mutated_source[\s\S]*?mutated_texts\[test_target\]\s*=\s*mutated_test[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Swift instruction transaction builder negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    swiftInstructionTransactionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Swift Kagemusha instruction transaction builder drift was not detected"\s*\)/u,
+    "Swift instruction transaction builder negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    swiftInstructionTransactionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Swift instruction transaction builder negative control must not unconditionally pass after run_checks",
+  );
+  const jsInstructionTransactionBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":'),
+    guard.indexOf('if mode == "--negative-control-python-lineage-key-package-binding":'),
+  );
+  assert.match(
+    jsInstructionTransactionBranch,
+    /export function buildKagemushaRecursiveRedeemTransaction[\s\S]*?export function buildKagemushaRecursiveRedeemUncheckedTransaction[\s\S]*?buildKagemushaRecursiveRedeemTransaction derives instruction before signing[\s\S]*?buildKagemushaRecursiveRedeemTransaction skips instruction derivation before signing/u,
+    "JS instruction transaction builder negative control must mutate the builder and redeem-before-sign test",
+  );
+  assert.match(
+    jsInstructionTransactionBranch,
+    /mutated\s*=\s*dict\(texts\)[\s\S]*?mutated\[source_target\]\s*=\s*mutated_source[\s\S]*?mutated\[test_target\]\s*=\s*mutated_test[\s\S]*?run_checks\(mutated\)/u,
+    "JS instruction transaction builder negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    jsInstructionTransactionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: JS Kagemusha instruction transaction builder drift was not detected"\s*\)/u,
+    "JS instruction transaction builder negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    jsInstructionTransactionBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "JS instruction transaction builder negative control must not unconditionally pass after run_checks",
   );
   const jsRunner = source("ci/check_kagemusha_recursive_spend_js_sdk.sh");
   const pythonRunner = source("ci/check_kagemusha_recursive_spend_python_sdk.sh");

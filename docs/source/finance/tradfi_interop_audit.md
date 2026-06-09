@@ -299,16 +299,22 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   requires manifest `version` to be the exact integer `1` rather than a JSON
   boolean, recursively rejects secret-looking profile-catalog strings before
   rail, signature-policy, reference-dataset, address-mode, or version diagnostics
-  can echo catalog-provided values, applies the same profile-catalog scanner to
-  identifier-style strings such as profile ids, rejects secret-looking schema
-  and fixture `payload_root` values before namespace/root mismatch diagnostics
-  can echo manifest-provided payload names, and rejects secret-looking checked-in
-  XSD `targetNamespace` attributes before schema namespace mismatch diagnostics
-  can echo schema-provided attribute values, with the same label-only treatment
-  for XSD/fixture payload identifiers, schema-root attribute names, and
-  unsupported foreign child namespace URIs, scans XML fixture contents before
-  optional `xmllint` validation, and redacts secret-looking or control-bearing
-  validator output before composing XSD preflight diagnostics,
+  can echo catalog-provided values, requires profile-catalog enum and list values
+  such as rails, embedded signature policies, reference datasets,
+  structured-address modes, and business services to be printable ASCII, applies
+  the same profile-catalog scanner and overlong-value caps to identifier-style
+  strings such as profile ids and business-service entries, rejects
+  secret-looking or non-ASCII schema and fixture `payload_root`
+  values before namespace/root mismatch diagnostics can echo manifest-provided
+  payload names, and rejects secret-looking or non-ASCII checked-in XSD
+  `targetNamespace` attributes before schema namespace mismatch diagnostics can
+  echo schema-provided attribute values, with the same label-only treatment for
+  XSD/fixture payload identifiers, XML fixture namespace/name identifiers, and
+  schema-root attribute names, caps those XSD/XML schema and fixture identifiers
+  before schema/root mismatch diagnostics can print overlong ASCII spellings,
+  scans XML fixture contents before optional
+  `xmllint` validation, and redacts secret-looking, control-bearing, or
+  non-ASCII validator output before composing XSD preflight diagnostics,
   records manifest, schema, fixture, profile source-file, and embedded catalog
   JSON SHA-256 provenance, requires exactly one active Rust
   `DEFAULT_PROFILES_JSON` raw-string declaration and ignores spoofed matches in
@@ -489,7 +495,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   profile or rail-message-id values that look like secret-bearing identifiers,
   rejects archived receipt `message_type` values that look like secret-bearing
   identifiers before receipt-summary emission, rejects malformed archived rail
-  receipt `message_type` family IDs before allowlist checks, rejects archived
+  receipt `message_type` family IDs and Unicode digit confusables before
+  allowlist checks, rejects archived
   rail receipt `message_type` values outside the same adapter endpoint map
   before receipt-summary emission, caps receipt JSON at 4 MiB, notary
   anchor/index JSON at 64 MiB, persisted notary record-source JSON at 1 MiB,
@@ -625,9 +632,12 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   redacted from planned command output. Canary child stdout/stderr previews
   also reject identifier-style secret-looking material and unsafe control
   characters before summary emission.
+  Canary runbook path strings, archived child-command local path values, and
+  production-readiness compact summary/config/receipt path strings must also
+  remain printable ASCII before planning, evidence replay, or release archival.
   XSD `xmllint` diagnostics redact key/value secret material,
-  identifier-style secret-looking validator output, and unsafe control
-  characters before reporting schema-validation failures.
+  identifier-style secret-looking validator output, unsafe control characters,
+  and non-ASCII material before reporting schema-validation failures.
   Direct evidence receipt-verifier failures also redact key/value and
   identifier-style secret-looking stderr plus unsafe control characters before
   reporting child verifier diagnostics.
@@ -640,18 +650,25 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   evidence secret scanner without reflecting the command value. Compact path
   strings in archived evidence/readiness rollups, including canary/trust
   summary paths, canary config paths, receipt paths, and XSD schema/fixture
-  paths, reject secret-looking key/value material before successful summaries
-  can preserve those strings. Compact trust-source URL validation inside
+  paths, reject secret-looking key/value material and path confusables before
+  successful summaries can preserve those strings. Compact trust-source URL validation inside
   archived evidence and readiness rollups follows the same label-only error
   pattern, and URL port parser failures now omit raw parser exception text so
   malformed operator-provided ports cannot be reflected. URL host validation now
-  rejects secret-looking hostname labels, and non-port parser failures also use
-  label-only diagnostics before malformed URL text can be echoed. Compact canary
+  rejects secret-looking hostname labels and non-ASCII raw host labels, and
+  non-port parser failures also use label-only diagnostics before malformed URL
+  text can be echoed. Compact canary
   provider/environment, evidence policy context,
   trust profile ID/rail/environment, trust embedded-signature policy,
   profile-override policy, trust source authority/version, and archived trust
   DER label values reject secret-looking identifier-style strings without
-  echoing them. Trust-bundle SHA-256 pins, declared DER digests, and certificate
+  echoing them. Direct trust-bundle material and archived evidence replay also
+  require DER labels to be printable ASCII before summaries can preserve
+  Unicode-confusable material. Trust embedded-signature policies also reject non-ASCII
+  confusable spellings before unsupported-policy diagnostics or readiness
+  blockers can preserve forged values, and trust source authority/version
+  provenance must be printable ASCII before direct summaries, evidence replay,
+  or readiness rollups can preserve it. Trust-bundle SHA-256 pins, declared DER digests, and certificate
   policy OIDs, plus archived evidence/readiness SHA-256 fields for trust bundles,
   profile-override pins, and receipt payload/anchor/index digests, reject the
   same markers before canonical-format diagnostics. Canary runbook
@@ -659,14 +676,36 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   identifier boundary before plan-only or executed summaries can persist those
   labels. Live rail sidecar `profile` and `rail_message_id` identifiers
   and archived rail receipt identifiers enforce the same no-echo check before
-  receipt emission, network delivery, or summary rollup, and rail sidecar
+  receipt emission, network delivery, or summary rollup. Live rail sidecar
+  `message_type` values must also remain printable ASCII and match the
+  canonical lowercase ISO family-id shape before unsupported-type diagnostics
+  can print a short unsupported family value, and rail sidecar
   `message_type`/`payload_sha256` plus archived rail receipt `message_type`
   values reject secret-looking markers before digest or summary diagnostics.
+  Direct receipt replay, evidence replay, readiness replay, and XSD profile
+  catalogs now use ASCII-only rail message-type digits, and evidence/readiness
+  archive/canary kind, filename, or metadata mismatch blockers avoid printing
+  receipt kind values, receipt leaf names, or full metadata tuples.
+  XSD profile-catalog enum values such as rails, embedded signature policies,
+  reference datasets, and structured-address modes also reject overlong ASCII
+  spellings before unknown-value diagnostics can print them.
+  Profile-catalog profile IDs are capped before duplicate-ID or
+  missing-schema-version diagnostics can print them.
+  Profile-catalog business-service entries are capped before overlong service
+  identifiers can be emitted or archived.
+  XSD/XML schema and fixture identifiers are capped before schema/root mismatch
+  diagnostics can print overlong ASCII payload names or namespace URIs.
+  XSD profile-catalog `message_def_id` and version entries also require
+  ASCII-only digits before missing-schema or skipped-version classification.
   Receipt verifier, evidence, and readiness `receipt_kind` values reject
-  secret-looking identifier markers before unsupported-kind diagnostics or
-  blockers can preserve forged archive values, and archived canary stage names
-  reject those markers before unsupported-stage, ordering, or stage-window
-  diagnostics.
+  secret-looking identifier markers and non-ASCII confusable spellings before
+  unsupported-kind diagnostics or blockers can preserve forged archive values,
+  and archived canary stage names reject those markers plus non-ASCII confusable
+  spellings before unsupported-stage, ordering, or stage-window diagnostics.
+  Trust-bundle preflight, evidence replay, and production-readiness compact
+  trust profile IDs, override IDs, embedded signature policy strings, and
+  trust-source authority/version provenance are capped before trust diagnostics
+  can print or archive them.
   Live rail/notary adapter timeouts must be
   positive finite numbers, and their response/payload byte caps must be positive
   integers rather than JSON/Python boolean aliases before any local read or
@@ -683,11 +722,18 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   empty equals-form values, separate values that begin with `--`, and
   equals-form values such as `--summary-out=--flag` as missing path values, so
   flag tokens cannot be misparsed as operator-local paths before file or network
-  work starts. Direct numeric CLI preflights similarly reject malformed, empty,
-  flag-looking, or secret-looking numeric values before argparse can echo raw
-  operator input. All ISO operator entry points reject secret-looking raw CLI
+  work starts. Required notary/rail URL values now also reject control-bearing,
+  non-ASCII, whitespace-padded, or non-URL-shaped secret-looking values before
+  unrelated file or directory requirements can mask the URL error. Direct numeric CLI preflights
+  similarly reject malformed, empty, flag-looking, secret-looking, and non-ASCII
+  numeric values before Python/argparse can accept Unicode digit confusables or
+  echo raw operator input. All ISO operator entry
+  points reject secret-looking raw CLI
   tokens, including percent-encoded forms, before argparse can echo unknown
-  arguments. Because those tools do not accept positional operands, they also
+  arguments, and reject control-bearing unknown CLI tokens before terminal
+  control bytes can reach argparse diagnostics. Unknown raw CLI tokens must also
+  be printable ASCII, so Unicode-confusable option spellings cannot reach
+  argparse output. Because those tools do not accept positional operands, they also
   reject the `--` argument terminator in raw secret, boolean, path, context, and
   numeric preflights before any trailing flag/value material can bypass scanning
   and be echoed by argparse. The parsers also disable long-option abbreviation,
@@ -696,8 +742,18 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   flags reject attached `--flag=value`
   spellings and separate non-option values before argparse can echo the value or
   reinterpret the option. Evidence and production-readiness
-  provider/environment context flags reject missing, empty, flag-looking, or
-  secret-looking values before argparse or summary loading.
+  provider/environment context flags reject missing, empty, flag-looking,
+  secret-looking, or non-ASCII values before argparse or summary loading, while
+  canary and trust-bundle context summaries must keep provider/environment
+  labels printable ASCII. Expected provider/environment mismatch diagnostics
+  remain label-only and do not print observed or expected context values.
+  Archived canary command replays reject unsupported secret-looking or
+  non-ASCII flag names with label-only diagnostics before evidence summaries can
+  echo the flag spelling.
+  Unknown JSON field names that are secret-looking, control-bearing,
+  non-ASCII, overlong, too numerous, or collectively oversized are likewise
+  reported with label-only diagnostics while ordinary ASCII typos remain listed
+  for operator ergonomics.
   Duplicate record, list, digest, OID, DER, compact-summary, archived
   receipt-reuse, and trust-material diagnostics now report label/index-only
   structural failures without echoing the rejected duplicate value.
@@ -735,10 +791,13 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   material lists, booleans, numeric caps, business-service arrays, and amount
   minor-unit arrays now fail before digest-bound XSD summaries are emitted.
   Reviewed XSD gap reasons and profile-catalog identity strings also reject
-  ASCII control characters at preflight time, and production readiness rejects
-  digest-correct archived XSD summaries whose reviewed gap reasons are present
-  but empty or non-string, or whose schema-backed fixtures still carry a
-  missing-schema reason. Rejected XSD manifest and archived summary path
+  ASCII control characters at preflight time. Reviewed gap reasons and
+  blocked-source review reasons must also remain printable ASCII and
+  secret-looking-free with a 1024-character cap in direct XSD summaries and
+  production-readiness replay, and production readiness rejects digest-correct
+  archived XSD summaries whose reviewed gap reasons are present but empty,
+  non-string, or overlong, or whose
+  schema-backed fixtures still carry a missing-schema reason. Rejected XSD manifest and archived summary path
   validation errors report label-only failures without echoing raw path values
   that may contain secret-looking segments. Checked-in XSD source provenance
   now rejects placeholder GitHub repository coordinates plus embedded
@@ -787,12 +846,13 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   unsupported child command flags outside the expected rail/notary/receipt
   verifier CLI surfaces, duplicate singleton child command flags, boolean
   child command flags using attached or separate values, non-positive or
-  non-finite numeric child command flag values, value-taking child command flags
-  whose separate or equals-form values are empty or another flag token,
-  child command arrays that do not start with a Python interpreter plus the
-  expected stage script path, or that contain extra positional arguments after
-  that runner-emitted prefix,
-  non-canonical child command path values including leading-dash segments,
+  non-finite numeric child command flag values, Unicode digit confusables in
+  floating timeout flags, value-taking child command flags whose separate or
+  equals-form values are empty or another flag token,
+  child command arrays that do not start with a Python interpreter using
+  ASCII-only numeric version suffixes plus the expected stage script path, or
+  that contain extra positional arguments after that runner-emitted prefix,
+  non-ASCII or non-canonical child command path values including leading-dash segments,
   control characters or surrounding whitespace in executed or plan-only child
   command arrays,
   and child command arrays that omit required stage inputs,
@@ -1235,7 +1295,7 @@ trust profile's canonical lowercase profile ID, known rail ID, source
 `authority`/`version`, source URL, and `retrieved_at` timestamp, rejects stale or
 smuggled trust source provenance including
 raw-whitespace and empty/zero/leading-zero/malformed-port URL smuggling plus non-canonical host spelling,
-invalid host labels, percent-host and percent-path smuggling including encoded
+non-ASCII or invalid host labels, percent-host and percent-path smuggling including encoded
 semicolon parameters and encoded URL delimiters, numeric-host
 spoofing, repeated path separators, and path traversal, rejects omitted,
 malformed, evidence-weaker, or release-weaker compact trust source freshness
@@ -1322,7 +1382,9 @@ source evidence before the rollup is accepted. The rollup also binds canary
 rail evidence to trust material by requiring every `iso-rail-gateway` receipt
 profile exercised by a canary to have a matching compact trust profile for the
 same profile ID and environment; built-in rail-named profiles must also bind to
-the same rail in the trust profile.
+the same rail in the trust profile. Evidence and readiness blockers for missing
+trust coverage identify the canary receipt index without printing the compact
+profile ID or canary environment label.
 The rollup requires at least one XSD summary and at least
 one evidence summary, and compact canary and trust summary entries must also
 retain control-free, trim-free, leading-dash-free, traversal-free source paths

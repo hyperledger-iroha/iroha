@@ -495,6 +495,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             ("%70assword_evidence_unknown_leak", "evidence_unknown_leak"),
             ("private-key_evidence_unknown_leak", "evidence_unknown_leak"),
             ("unexpected\x1bevidence_key", "\x1b"),
+            ("unexpected_evidence_\uff4bey", "\uff4b"),
+            ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -508,6 +510,13 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
+        many_unknown = {f"field_{offset}": "redacted" for offset in range(9)}
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._reject_unknown_keys(many_unknown, set(), "summary")
+        message = str(caught.exception)
+        self.assertIn("contains unknown keys", message)
+        self.assertNotIn("field_0", message)
+        self.assertNotIn("field_8", message)
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=evidence-terminator-secret"
@@ -569,6 +578,27 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--summary-ou", stderr.getvalue())
+
+    def test_raw_cli_control_characters_are_rejected_without_echo(self):
+        hidden = "--unknown-evidence\x1bflag"
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must not contain control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("unknown-evidence", message)
+
+    def test_raw_cli_non_ascii_is_rejected_without_echo(self):
+        hidden = "\uff0d\uff0dsummary-out"
+        with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+            EVIDENCE._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must use printable ASCII", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("summary-out", message)
 
     def test_output_cli_path_flags_reject_flag_like_values(self):
         cases = (
@@ -691,8 +721,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertIn("path must not contain URL delimiter characters", message)
                 self.assertNotIn(url, message)
 
-    def test_url_paths_reject_non_ascii_smuggling(self):
+    def test_urls_reject_non_ascii_smuggling(self):
         cases = (
+            (
+                "https://pki\u0661.local-bank.bank/source",
+                "host must use printable ASCII",
+            ),
             ("https://pki.local-bank.bank/source∕debug", "path must use printable ASCII"),
             (
                 "https://pki.local-bank.bank/source%c3%a9",
@@ -789,6 +823,21 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertIn("numeric value", stderr)
                 self.assertNotIn("token=", stderr)
                 self.assertNotIn("evidence-secret", stderr)
+
+    def test_numeric_cli_flags_reject_unicode_digits_without_echo(self):
+        hidden = "\u0661"
+        cases = (
+            ["--max-canary-age-days", hidden],
+            [f"--max-trust-age-days={hidden}"],
+            ["--receipt-verifier-timeout-secs", f"{hidden}.5"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_evidence(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("must use printable ASCII", stderr)
+                self.assertNotIn(hidden, stderr)
 
     def test_raw_cli_secret_like_values_rejected_without_echo(self):
         cases = (
@@ -1915,6 +1964,40 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(rc, 2)
             self.assertIn("--environment must not have surrounding whitespace", stderr)
 
+            rc, _stdout, stderr = run_evidence(
+                base_argv + ["--provider", "local-b\u00e1nk", "--environment", "preprod"],
+                include_context=False,
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("--provider must use printable ASCII", stderr)
+            self.assertNotIn("local-b\u00e1nk", stderr)
+
+            rc, _stdout, stderr = run_evidence(
+                base_argv + ["--provider", "local-bank", "--environment", "prepr\u043ed"],
+                include_context=False,
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("--environment must use printable ASCII", stderr)
+            self.assertNotIn("prepr\u043ed", stderr)
+
+            rc, _stdout, stderr = run_evidence(
+                base_argv + ["--provider", "other-bank", "--environment", "preprod"],
+                include_context=False,
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("provider does not match expected provider", stderr)
+            self.assertNotIn("other-bank", stderr)
+            self.assertNotIn("local-bank", stderr)
+
+            rc, _stdout, stderr = run_evidence(
+                base_argv + ["--provider", "local-bank", "--environment", "prod"],
+                include_context=False,
+            )
+            self.assertEqual(rc, 2)
+            self.assertIn("environment does not match expected environment", stderr)
+            self.assertNotIn("prod", stderr)
+            self.assertNotIn("preprod", stderr)
+
     def test_evidence_freshness_budgets_are_required_and_positive(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2701,9 +2784,11 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn(
                         "canary_summaries[0].receipt_summary.receipts[1].profile "
-                        "'swift-cbpr-plus' has no matching trust profile coverage",
+                        "has no matching trust profile coverage for canary environment",
                         stderr,
                     )
+                    self.assertNotIn("'swift-cbpr-plus'", stderr)
+                    self.assertNotIn("'preprod'", stderr)
 
     def test_custom_canary_profile_id_can_use_matching_trust_profile(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2782,9 +2867,11 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
             self.assertEqual(stdout, "")
             self.assertIn(
                 "canary_summaries[0].receipt_summary.receipts[1].profile "
-                "'swift-cbpr-plus-alt' has no matching trust profile coverage",
+                "has no matching trust profile coverage for canary environment",
                 stderr,
             )
+            self.assertNotIn(custom_profile, stderr)
+            self.assertNotIn("'preprod'", stderr)
 
     def test_direct_receipt_archive_verification_is_preserved(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3028,6 +3115,12 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("direct receipt archive verification binds", stderr)
+            self.assertIn(
+                "a receipt kind that does not match canary receipt kind",
+                stderr,
+            )
+            self.assertNotIn("receipt_kind 'iso-rail-gateway'", stderr)
+            self.assertNotIn("receipt_kind 'iso-audit-notary'", stderr)
 
     def test_direct_receipt_archive_must_bind_canary_receipt_filenames(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3056,7 +3149,11 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("direct receipt archive verification binds", stderr)
-            self.assertIn("receipt filename", stderr)
+            self.assertIn(
+                "a receipt filename that does not match canary receipt filename",
+                stderr,
+            )
+            self.assertNotIn("relabelled-notary.receipt.json", stderr)
 
     def test_direct_receipt_archive_must_bind_canary_receipt_metadata(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3088,7 +3185,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("direct receipt archive verification binds", stderr)
-            self.assertIn("metadata", stderr)
+            self.assertIn("metadata that does not match canary receipt metadata", stderr)
+            self.assertNotIn("sepa-sct-inst", stderr)
 
     def test_direct_receipt_archive_must_bind_canary_endpoint_policy_evidence(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3131,7 +3229,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("direct receipt archive verification binds", stderr)
-            self.assertIn("endpoint_requires_insecure_http", stderr)
+            self.assertIn("metadata that does not match canary receipt metadata", stderr)
+            self.assertNotIn("endpoint_requires_insecure_http", stderr)
 
     def test_notary_receipt_record_count_must_be_positive_for_production_evidence(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -4118,6 +4217,64 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_secret_or_non_ascii_unsupported_child_command_flags_do_not_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            cases = []
+            secret_flag = "--token-evidence-command-secret"
+            secret = valid_canary_summary()
+            secret["stages"][0]["command"].append(secret_flag)
+            secret.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(secret),
+                    [],
+                    "unsupported secret-looking flag",
+                    secret_flag,
+                    "evidence-command-secret",
+                )
+            )
+            encoded_secret_flag = "--%70assword%253Devidence-command-secret"
+            encoded_secret = valid_canary_summary()
+            encoded_secret["stages"][1]["command"].append(encoded_secret_flag)
+            encoded_secret.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(encoded_secret),
+                    [],
+                    "contains secret-looking material",
+                    encoded_secret_flag,
+                    "evidence-command-secret",
+                )
+            )
+            non_ascii_flag = "--summ\u0430ry-out"
+            non_ascii = plan_only_canary_summary()
+            non_ascii["planned_stages"][0]["command"].append(non_ascii_flag)
+            non_ascii.pop("summary_sha256")
+            cases.append(
+                (
+                    digest_summary(non_ascii),
+                    ["--allow-plan-only"],
+                    "uses unsupported flag",
+                    non_ascii_flag,
+                    "summary-out",
+                )
+            )
+            for body, extra_args, message, hidden, hidden_detail in cases:
+                with self.subTest(message=message, extra_args=extra_args):
+                    canary_path = write_canary(root, body)
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                        + extra_args
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn(hidden_detail, stderr)
+
     def test_canary_child_commands_require_runner_command_shape(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -4214,6 +4371,98 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                         "must not contain" in message or "unsupported positional" in message
                     ):
                         self.assertNotIn(hidden, stderr)
+
+    def test_canary_child_command_interpreter_rejects_unicode_digits_without_echo(self):
+        hidden = "python\u0663"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            body = valid_canary_summary()
+            body["stages"][0]["command"][0] = f"/usr/local/bin/{hidden}"
+            body.pop("summary_sha256")
+            canary_path = write_canary(root, digest_summary(body))
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("stages[0].command[0] must use printable ASCII", stderr)
+            self.assertNotIn(hidden, stderr)
+
+    def test_canary_child_command_paths_reject_non_ascii_without_echo(self):
+        hidden = "inb\u043ex"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            executed = valid_canary_summary()
+            executed["stages"][0]["command"][3] = f"/ops/iso/{hidden}"
+            executed.pop("summary_sha256")
+            planned = plan_only_canary_summary()
+            planned["planned_stages"][2]["command"][3] = f"/ops/iso/{hidden}"
+            planned.pop("summary_sha256")
+            cases = (
+                (
+                    digest_summary(executed),
+                    [],
+                    "stages[0].command[3] must use printable ASCII",
+                ),
+                (
+                    digest_summary(planned),
+                    ["--allow-plan-only"],
+                    "planned_stages[2].command[3] must use printable ASCII",
+                ),
+            )
+            for body, extra_args, message in cases:
+                with self.subTest(extra_args=extra_args):
+                    canary_path = write_canary(root, body)
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                        + extra_args
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
+    def test_numeric_child_command_flags_reject_unicode_digits_without_echo(self):
+        hidden = "\u0663.5"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root)
+            executed = valid_canary_summary()
+            executed["stages"][0]["command"].append(f"--timeout-secs={hidden}")
+            executed.pop("summary_sha256")
+            planned = plan_only_canary_summary()
+            planned["planned_stages"][1]["command"].append(f"--timeout-secs={hidden}")
+            planned.pop("summary_sha256")
+            cases = (
+                (digest_summary(executed), []),
+                (digest_summary(planned), ["--allow-plan-only"]),
+            )
+            for body, extra_args in cases:
+                with self.subTest(extra_args=extra_args):
+                    canary_path = write_canary(root, body)
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                        + extra_args
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("--timeout-secs must be a positive finite number", stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_duplicate_singleton_child_command_flags_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -5739,6 +5988,57 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_canary_and_trust_context_strings_reject_non_ascii_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            trust_path = write_trust_summary(root / "trust")
+            canary_cases = (
+                (
+                    "provider",
+                    lambda body: body.__setitem__("provider", "local-b\u00e1nk"),
+                    "provider must use printable ASCII",
+                    "local-b\u00e1nk",
+                ),
+                (
+                    "environment",
+                    lambda body: body.__setitem__("environment", "prepr\u043ed"),
+                    "environment must use printable ASCII",
+                    "prepr\u043ed",
+                ),
+            )
+            for field, mutate, message, hidden in canary_cases:
+                with self.subTest(kind="canary", field=field):
+                    body = valid_canary_summary()
+                    mutate(body)
+                    body.pop("summary_sha256")
+                    canary_path = write_canary(root, digest_summary(body))
+
+                    rc, _stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
+            canary_path = write_canary(root, valid_canary_summary())
+            mutated_trust_path = write_trust_summary(root / "trust-nonascii")
+            rewrite_trust_summary(
+                mutated_trust_path,
+                lambda summary: summary["bundles"][0].__setitem__(
+                    "environment",
+                    "prepr\u043ed",
+                ),
+            )
+
+            rc, _stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(mutated_trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("environment must use printable ASCII", stderr)
+            self.assertNotIn("prepr\u043ed", stderr)
+
     def test_trust_profile_identity_fields_are_rechecked_in_archives(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -5793,6 +6093,78 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_overlong_trust_profile_identity_values_are_rejected_without_echo(self):
+        overlong_profile = "a" * 129
+        overlong_policy = "require-verified-" + ("a" * 129)
+        cases = (
+            (
+                "bundle-profile-id",
+                lambda summary: summary["bundles"][0].__setitem__(
+                    "profile_id",
+                    overlong_profile,
+                ),
+                "profile_id must be no longer than 128 characters",
+                overlong_profile,
+                "profile_id must be a canonical lowercase profile id",
+            ),
+            (
+                "override-profile-id",
+                lambda summary: summary["bundles"][0]["profile_overrides"].__setitem__(
+                    "id",
+                    overlong_profile,
+                ),
+                "profile_overrides.id must be no longer than 128 characters",
+                overlong_profile,
+                "profile_overrides.id does not match profile_id",
+            ),
+            (
+                "bundle-policy",
+                lambda summary: summary["bundles"][0].__setitem__(
+                    "embedded_signature_policy",
+                    overlong_policy,
+                ),
+                "embedded_signature_policy must be no longer than 128 characters",
+                overlong_policy,
+                "embedded_signature_policy is unsupported",
+            ),
+            (
+                "override-policy",
+                lambda summary: summary["bundles"][0]["profile_overrides"].__setitem__(
+                    "embedded_signature_policy",
+                    overlong_policy,
+                ),
+                (
+                    "profile_overrides.embedded_signature_policy must be no longer "
+                    "than 128 characters"
+                ),
+                overlong_policy,
+                "profile_overrides.embedded_signature_policy does not match",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root, valid_canary_summary())
+            for name, mutate, message, hidden, bypassed_message in cases:
+                with self.subTest(name=name):
+                    trust_path = write_trust_summary(root / name)
+                    rewrite_trust_summary(trust_path, mutate)
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                            "--allow-record-only-trust",
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn(bypassed_message, stderr)
 
     def test_secret_looking_trust_identity_values_are_rejected_without_echo(self):
         cases = (
@@ -5924,63 +6296,69 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertIn("secret-looking material", stderr)
                     self.assertNotIn(secret, stderr)
 
-    def test_secret_looking_receipt_kind_values_are_rejected_without_echo(self):
+    def test_secret_or_non_ascii_receipt_kind_values_are_rejected_without_echo(self):
         cases = (
             (
                 "receipt-kind-list",
-                lambda summary, secret: summary["receipt_kind"].__setitem__(0, secret),
+                lambda summary, value: summary["receipt_kind"].__setitem__(0, value),
             ),
             (
                 "receipt-entry-kind",
-                lambda summary, secret: summary["receipts"][0].__setitem__(
+                lambda summary, value: summary["receipts"][0].__setitem__(
                     "receipt_kind",
-                    secret,
+                    value,
                 ),
             ),
+        )
+        values = (
+            ("secret", "token-evidence-receipt-kind-secret", "secret-looking material"),
+            ("non-ascii", "iso-rail-gatew\u0430y", "must use printable ASCII"),
         )
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             trust_path = write_trust_summary(root / "trust")
             for name, mutate in cases:
-                with self.subTest(name=name):
-                    case_root = root / name
-                    case_root.mkdir()
-                    secret = f"token-evidence-{name}-secret"
-                    receipt_summary = json.loads(receipt_stdout())
-                    mutate(receipt_summary, secret)
-                    canary = valid_canary_summary()
-                    canary["stages"][2]["stdout_preview"] = (
-                        json.dumps(
-                            digest_receipt_summary(receipt_summary),
-                            sort_keys=True,
+                for value_kind, value, message in values:
+                    with self.subTest(name=name, value_kind=value_kind):
+                        case_root = root / f"{name}-{value_kind}"
+                        case_root.mkdir()
+                        receipt_summary = json.loads(receipt_stdout())
+                        mutate(receipt_summary, value)
+                        canary = valid_canary_summary()
+                        canary["stages"][2]["stdout_preview"] = (
+                            json.dumps(
+                                digest_receipt_summary(receipt_summary),
+                                sort_keys=True,
+                            )
+                            + "\n"
                         )
-                        + "\n"
-                    )
-                    canary.pop("summary_sha256")
-                    canary_path = write_canary(case_root, digest_summary(canary))
+                        canary.pop("summary_sha256")
+                        canary_path = write_canary(case_root, digest_summary(canary))
 
-                    rc, _stdout, stderr = run_evidence(
-                        [
-                            "--canary-summary",
-                            str(canary_path),
-                            "--trust-summary",
-                            str(trust_path),
-                        ]
-                    )
+                        rc, _stdout, stderr = run_evidence(
+                            [
+                                "--canary-summary",
+                                str(canary_path),
+                                "--trust-summary",
+                                str(trust_path),
+                            ]
+                        )
 
-                    self.assertEqual(rc, 2)
-                    self.assertIn("secret-looking material", stderr)
-                    self.assertNotIn(secret, stderr)
+                        self.assertEqual(rc, 2)
+                        self.assertIn(message, stderr)
+                        self.assertNotIn(value, stderr)
+                        if value_kind == "non-ascii":
+                            self.assertNotIn("unsupported", stderr)
 
-    def test_secret_looking_canary_stage_names_are_rejected_without_echo(self):
-        def executed_summary(secret):
+    def test_secret_or_non_ascii_canary_stage_names_are_rejected_without_echo(self):
+        def executed_summary(value):
             body = valid_canary_summary()
-            body["stages"][0]["name"] = secret
+            body["stages"][0]["name"] = value
             return digest_summary(body)
 
-        def planned_summary(secret):
+        def planned_summary(value):
             body = plan_only_canary_summary()
-            body["planned_stages"][0]["name"] = secret
+            body["planned_stages"][0]["name"] = value
             return digest_summary(body)
 
         cases = (
@@ -5995,29 +6373,35 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 ["--allow-plan-only"],
             ),
         )
+        values = (
+            ("secret", "token-evidence-stage-secret", "secret-looking material"),
+            ("non-ascii", "ra\u0430l", "must use printable ASCII"),
+        )
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             trust_path = write_trust_summary(root / "trust")
             for name, build_canary, extra_args in cases:
-                with self.subTest(name=name):
-                    case_root = root / name
-                    case_root.mkdir()
-                    secret = f"token-evidence-{name}-secret"
-                    canary_path = write_canary(case_root, build_canary(secret))
+                for value_kind, value, message in values:
+                    with self.subTest(name=name, value_kind=value_kind):
+                        case_root = root / f"{name}-{value_kind}"
+                        case_root.mkdir()
+                        canary_path = write_canary(case_root, build_canary(value))
 
-                    rc, _stdout, stderr = run_evidence(
-                        [
-                            "--canary-summary",
-                            str(canary_path),
-                            "--trust-summary",
-                            str(trust_path),
-                        ]
-                        + extra_args
-                    )
+                        rc, _stdout, stderr = run_evidence(
+                            [
+                                "--canary-summary",
+                                str(canary_path),
+                                "--trust-summary",
+                                str(trust_path),
+                            ]
+                            + extra_args
+                        )
 
-                    self.assertEqual(rc, 2)
-                    self.assertIn("secret-looking material", stderr)
-                    self.assertNotIn(secret, stderr)
+                        self.assertEqual(rc, 2)
+                        self.assertIn(message, stderr)
+                        self.assertNotIn(value, stderr)
+                        if value_kind == "non-ascii":
+                            self.assertNotIn("unsupported canary stage", stderr)
 
     def test_secret_looking_trust_identity_values_are_rejected_without_echo(self):
         cases = (
@@ -6087,6 +6471,101 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn("secret-looking material", stderr)
                     self.assertNotIn(secret, stderr)
+
+    def test_non_ascii_trust_source_identity_values_are_rejected_without_echo(self):
+        cases = (
+            (
+                "source-authority",
+                "ISO\u2011MDR",
+                lambda summary, value: summary["bundles"][0]["source"].__setitem__(
+                    "authority",
+                    value,
+                ),
+            ),
+            (
+                "source-version",
+                "2026\u2011Q2",
+                lambda summary, value: summary["bundles"][0]["source"].__setitem__(
+                    "version",
+                    value,
+                ),
+            ),
+            (
+                "der-label",
+                "root\u2011a",
+                lambda summary, value: summary["bundles"][0]["x509_trust_anchors"][
+                    0
+                ].__setitem__("label", value),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root, valid_canary_summary())
+            for name, hidden, mutate in cases:
+                with self.subTest(name=name):
+                    trust_path = write_trust_summary(root / name)
+                    rewrite_trust_summary(
+                        trust_path,
+                        lambda summary, hidden=hidden, mutate=mutate: mutate(
+                            summary,
+                            hidden,
+                        ),
+                    )
+
+                    rc, _stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn("must use printable ASCII", stderr)
+                    self.assertNotIn(hidden, stderr)
+
+    def test_overlong_trust_source_identity_values_are_rejected_without_echo(self):
+        hidden = "A" * (EVIDENCE.MAX_TRUST_SOURCE_TEXT_CHARS + 1)
+        cases = (
+            (
+                "source-authority",
+                lambda summary: summary["bundles"][0]["source"].__setitem__(
+                    "authority",
+                    hidden,
+                ),
+                "source.authority must be no longer than 256 characters",
+            ),
+            (
+                "source-version",
+                lambda summary: summary["bundles"][0]["source"].__setitem__(
+                    "version",
+                    hidden,
+                ),
+                "source.version must be no longer than 256 characters",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary_path = write_canary(root, valid_canary_summary())
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    trust_path = write_trust_summary(root / name)
+                    rewrite_trust_summary(trust_path, mutate)
+
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_trust_source_identity_fields_are_required_and_must_be_strings(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -6941,6 +7420,8 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             trust_path = write_trust_summary(root)
+            hidden = "\u0660"
+            unicode_digit_message_type = f"pacs.{hidden}{hidden}2"
             cases = (
                 (
                     "notary-missing-anchor",
@@ -6977,6 +7458,21 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     1,
                     lambda receipt: receipt.__setitem__("message_type", "zzzz.999"),
                     "stdout_preview.receipts[1].message_type is unsupported",
+                ),
+                (
+                    "rail-non-ascii-message-type",
+                    1,
+                    lambda receipt: receipt.__setitem__(
+                        "message_type",
+                        unicode_digit_message_type,
+                    ),
+                    "stdout_preview.receipts[1].message_type must use printable ASCII",
+                ),
+                (
+                    "rail-secret-message-type",
+                    1,
+                    lambda receipt: receipt.__setitem__("message_type", "token.001"),
+                    "stdout_preview.receipts[1].message_type must not contain secret-looking material",
                 ),
                 (
                     "rail-bad-payload",
@@ -7036,6 +7532,9 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn(unicode_digit_message_type, stderr)
+                    self.assertNotIn("token.001", stderr)
 
     def test_receipt_verifier_stdout_policy_flags_are_required(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -7374,7 +7873,9 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 ]
             )
             self.assertEqual(rc, 2)
-            self.assertIn("expected 'different-provider'", stderr)
+            self.assertIn("provider does not match expected provider", stderr)
+            self.assertNotIn("different-provider", stderr)
+            self.assertNotIn("local-bank", stderr)
 
             rc, _stdout, stderr = run_evidence(
                 [
@@ -7387,7 +7888,9 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 ]
             )
             self.assertEqual(rc, 2)
-            self.assertIn("expected 'prod'", stderr)
+            self.assertIn("environment does not match expected environment", stderr)
+            self.assertNotIn("'prod'", stderr)
+            self.assertNotIn("'preprod'", stderr)
 
             trust = json.loads(trust_path.read_text(encoding="utf-8"))
             trust["verified_bundles"] = 2
@@ -7652,28 +8155,47 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             canary_path = write_canary(root)
-            trust_path = write_trust_summary(root / "trust")
-            rewrite_trust_summary(
-                trust_path,
-                lambda summary: summary["bundles"][0].__setitem__(
-                    "embedded_signature_policy",
+            cases = (
+                (
+                    "ascii-unsupported",
                     "diagnostic-only",
+                    "embedded_signature_policy is unsupported",
+                    None,
+                ),
+                (
+                    "non-ascii",
+                    "require-verif\u0456ed",
+                    "embedded_signature_policy must use printable ASCII",
+                    "require-verif\u0456ed",
                 ),
             )
+            for name, policy, message, hidden in cases:
+                with self.subTest(name=name):
+                    trust_path = write_trust_summary(root / name)
+                    rewrite_trust_summary(
+                        trust_path,
+                        lambda summary, policy=policy: summary["bundles"][0].__setitem__(
+                            "embedded_signature_policy",
+                            policy,
+                        ),
+                    )
 
-            rc, stdout, stderr = run_evidence(
-                [
-                    "--canary-summary",
-                    str(canary_path),
-                    "--trust-summary",
-                    str(trust_path),
-                    "--allow-record-only-trust",
-                ]
-            )
+                    rc, stdout, stderr = run_evidence(
+                        [
+                            "--canary-summary",
+                            str(canary_path),
+                            "--trust-summary",
+                            str(trust_path),
+                            "--allow-record-only-trust",
+                        ]
+                    )
 
-            self.assertEqual(rc, 2)
-            self.assertEqual(stdout, "")
-            self.assertIn("embedded_signature_policy is unsupported", stderr)
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    if hidden is not None:
+                        self.assertNotIn(hidden, stderr)
+                        self.assertNotIn("embedded_signature_policy is unsupported", stderr)
 
     def test_trust_summary_must_emit_profile_json_by_default(self):
         with tempfile.TemporaryDirectory() as raw_root:

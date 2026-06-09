@@ -7275,6 +7275,90 @@ fn parse_instruction_payloads(payloads: Vec<String>) -> napi::Result<Vec<Instruc
     Ok(instructions)
 }
 
+fn kagemusha_instruction_archive_from_json(value: json::Value) -> napi::Result<InstructionBox> {
+    let mut map = match value {
+        json::Value::Object(map) => map,
+        other => {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("KagemushaInstructionArchive payload must be an object (found {other:?})"),
+            ));
+        }
+    };
+    let type_value = remove_case_insensitive(&mut map, "type").ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "KagemushaInstructionArchive.type field missing",
+        )
+    })?;
+    let instruction_type = type_value.as_str().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "KagemushaInstructionArchive.type must be a string",
+        )
+    })?;
+    let bytes_value = remove_case_insensitive(&mut map, "bytes_base64")
+        .or_else(|| remove_case_insensitive(&mut map, "bytesBase64"))
+        .ok_or_else(|| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                "KagemushaInstructionArchive.bytes_base64 field missing",
+            )
+        })?;
+    let bytes_base64 = bytes_value.as_str().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "KagemushaInstructionArchive.bytes_base64 must be a string",
+        )
+    })?;
+    if !map.is_empty() {
+        let mut keys = map.keys().cloned().collect::<Vec<_>>();
+        keys.sort();
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "KagemushaInstructionArchive contains unexpected field(s): {}",
+                keys.join(", ")
+            ),
+        ));
+    }
+    let archive = STANDARD.decode(bytes_base64.as_bytes()).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid KagemushaInstructionArchive.bytes_base64: {err}"),
+        )
+    })?;
+    ensure_kagemusha_recursive_archive_len(archive.len(), "Kagemusha instruction archive")?;
+    match instruction_type {
+        "KagemushaTransfer" => {
+            let instruction: iroha_data_model::isi::offline::KagemushaTransfer =
+                decode_from_bytes(&archive).map_err(|err| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("invalid KagemushaTransfer instruction archive: {err}"),
+                    )
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
+        "RedeemKagemushaRecursive" => {
+            let instruction: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
+                decode_from_bytes(&archive).map_err(|err| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("invalid RedeemKagemushaRecursive instruction archive: {err}"),
+                    )
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
+        other => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "unsupported KagemushaInstructionArchive.type `{other}`; expected KagemushaTransfer or RedeemKagemushaRecursive"
+            ),
+        )),
+    }
+}
+
 fn encode_trigger_action(action: &Action) -> napi::Result<String> {
     norito::to_bytes(action)
         .map(|bytes| STANDARD.encode(bytes))
@@ -7302,6 +7386,12 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     }
     match value {
         json::Value::Object(mut map) => {
+            if let Some(kagemusha_value) =
+                remove_case_insensitive(&mut map, "KagemushaInstructionArchive")
+            {
+                return kagemusha_instruction_archive_from_json(kagemusha_value);
+            }
+
             if let Some(json::Value::Object(mut register_map)) = map.remove("Register") {
                 if let Some(domain_value) = register_map.remove("Domain") {
                     let new_domain: NewDomain =
@@ -10201,6 +10291,12 @@ const PRIVACY_PRODUCTION_GATE_REQUIREMENTS: &[(&str, &str)] = &[
         "internal cryptographic review signoff is missing",
     ),
 ];
+const PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS: &[&str] = &[
+    "real_proving",
+    "real_verification",
+    "witness_privacy_checks",
+    "verifier_fuzzing",
+];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
     (
@@ -10615,6 +10711,7 @@ struct PrivacyProductionGateV1 {
     version: String,
     ready: bool,
     gates: Vec<PrivacyProductionGateStatusV1>,
+    required_gates: Vec<String>,
     missing: Vec<String>,
     audit_references: Vec<String>,
 }
@@ -10667,7 +10764,20 @@ enum PrivacyProofOperationV1 {
     Verify,
 }
 
-fn privacy_production_gate() -> PrivacyProductionGateV1 {
+fn privacy_production_gate_requirement_is_waived(entry: &PrivacyAlgorithmEntry, key: &str) -> bool {
+    entry.id == "transparent-transfer"
+        && PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS.contains(&key)
+}
+
+fn privacy_required_production_gate_keys(entry: &PrivacyAlgorithmEntry) -> Vec<String> {
+    PRIVACY_PRODUCTION_GATE_REQUIREMENTS
+        .iter()
+        .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
+        .map(|(key, _)| (*key).to_owned())
+        .collect()
+}
+
+fn privacy_production_gate(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionGateV1 {
     PrivacyProductionGateV1 {
         version: PRIVACY_PRODUCTION_GATE_VERSION.to_owned(),
         ready: false,
@@ -10678,8 +10788,10 @@ fn privacy_production_gate() -> PrivacyProductionGateV1 {
                 passed: false,
             })
             .collect(),
+        required_gates: privacy_required_production_gate_keys(entry),
         missing: PRIVACY_PRODUCTION_GATE_REQUIREMENTS
             .iter()
+            .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
             .map(|(_, label)| (*label).to_owned())
             .chain(
                 [
@@ -10716,7 +10828,7 @@ fn privacy_capabilities() -> PrivacyCapabilitiesV1 {
                     .map(|entrypoint| (*entrypoint).to_owned())
                     .collect(),
                 production_ready: false,
-                production_gate: privacy_production_gate(),
+                production_gate: privacy_production_gate(entry),
             })
             .collect(),
     };
@@ -11056,33 +11168,63 @@ fn privacy_gate_statuses_match_requirements(gates: &[PrivacyProductionGateStatus
             .all(|(status, (key, _))| status.key.as_str() == *key && !status.passed)
 }
 
-fn privacy_gate_missing_reasons_match_requirements(missing: &[String]) -> bool {
-    missing.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len() + 2
-        && missing
+fn privacy_required_gate_keys_match_entry(
+    required_gates: &[String],
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let expected = privacy_required_production_gate_keys(entry);
+    required_gates.len() == expected.len()
+        && required_gates
             .iter()
-            .take(PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len())
-            .zip(PRIVACY_PRODUCTION_GATE_REQUIREMENTS.iter())
-            .all(|(missing, (_, label))| missing.as_str() == *label)
-        && missing[PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len()].as_str()
-            == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE
-        && missing[PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len() + 1].as_str()
-            == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
+            .zip(expected.iter())
+            .all(|(required, expected)| required == expected)
 }
 
-fn privacy_production_gate_invariants_hold(gate: &PrivacyProductionGateV1) -> bool {
+fn privacy_gate_missing_reasons_match_requirements(
+    missing: &[String],
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let required_requirements = PRIVACY_PRODUCTION_GATE_REQUIREMENTS
+        .iter()
+        .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key));
+    let required_count = required_requirements.clone().count();
+
+    missing.len() == required_count + 2
+        && missing
+            .iter()
+            .take(required_count)
+            .zip(required_requirements)
+            .all(|(missing, (_, label))| missing.as_str() == *label)
+        && missing[required_count].as_str() == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE
+        && missing[required_count + 1].as_str() == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
+}
+
+fn privacy_production_gate_invariants_hold(
+    gate: &PrivacyProductionGateV1,
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let required_gate_count = privacy_required_production_gate_keys(entry).len();
+
     gate.version == PRIVACY_PRODUCTION_GATE_VERSION
         && !gate.ready
         && gate.audit_references.is_empty()
         && gate.gates.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len()
-        && gate.missing.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len() + 2
+        && gate.required_gates.len() == required_gate_count
+        && gate.missing.len() == required_gate_count + 2
         && privacy_gate_statuses_match_requirements(&gate.gates)
-        && privacy_gate_missing_reasons_match_requirements(&gate.missing)
+        && privacy_required_gate_keys_match_entry(&gate.required_gates, entry)
+        && privacy_gate_missing_reasons_match_requirements(&gate.missing, entry)
         && !privacy_gate_status_keys_have_duplicates(&gate.gates)
+        && !privacy_string_vec_has_duplicates(&gate.required_gates)
         && !privacy_string_vec_has_duplicates(&gate.missing)
         && gate.gates.iter().all(|status| {
             privacy_text_field_is_portable_identifier(&status.key)
                 && privacy_production_gate_key_is_required(&status.key)
                 && !status.passed
+        })
+        && gate.required_gates.iter().all(|key| {
+            privacy_text_field_is_portable_identifier(key)
+                && privacy_production_gate_key_is_required(key)
         })
         && gate
             .missing
@@ -11090,10 +11232,15 @@ fn privacy_production_gate_invariants_hold(gate: &PrivacyProductionGateV1) -> bo
             .all(|missing| privacy_production_gate_missing_reason_is_required(missing))
         && PRIVACY_PRODUCTION_GATE_REQUIREMENTS
             .iter()
+            .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
             .all(|(key, label)| {
                 gate.gates
                     .iter()
                     .any(|status| status.key.as_str() == *key && !status.passed)
+                    && gate
+                        .required_gates
+                        .iter()
+                        .any(|required| required.as_str() == *key)
                     && gate
                         .missing
                         .iter()
@@ -11158,7 +11305,7 @@ fn privacy_capability_invariants_hold(capability: &PrivacyCapabilityV1) -> bool 
             &capability.planned_entrypoints,
         )
         && !capability.production_ready
-        && privacy_production_gate_invariants_hold(&capability.production_gate)
+        && privacy_production_gate_invariants_hold(&capability.production_gate, entry)
 }
 
 fn privacy_capabilities_invariants_hold(capabilities: &PrivacyCapabilitiesV1) -> bool {
@@ -14249,6 +14396,36 @@ mod tests {
                 .iter()
                 .any(|entry| entry.algorithm_id == "pq-masp-stark-v0"),
         );
+        let transparent = decoded
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.algorithm_id == "transparent-transfer")
+            .expect("transparent transfer native capability must be advertised");
+        let transparent_entry = privacy_algorithm_entry("transparent-transfer")
+            .expect("transparent transfer catalog row");
+        assert_eq!(
+            transparent.production_gate.required_gates,
+            privacy_required_production_gate_keys(transparent_entry),
+            "transparent transfer must advertise only baseline transfer production gates",
+        );
+        assert!(
+            !transparent
+                .production_gate
+                .required_gates
+                .iter()
+                .any(|key| PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS
+                    .contains(&key.as_str())),
+            "transparent transfer must not require proof-only gates",
+        );
+        assert!(
+            !transparent.production_gate.missing.iter().any(|missing| {
+                missing == "real proving engine is not registered"
+                    || missing == "real verifier is not registered"
+                    || missing == "witness privacy checks are incomplete"
+                    || missing == "verifier fuzzing gate is incomplete"
+            }),
+            "transparent transfer must not report waived proof-only gates as missing",
+        );
         let zk_ace = decoded
             .algorithms
             .iter()
@@ -14263,6 +14440,13 @@ mod tests {
         assert!(!zk_ace.production_gate.ready);
         assert!(zk_ace.production_gate.audit_references.is_empty());
         assert!(zk_ace.production_gate.gates.iter().all(|gate| !gate.passed));
+        let zk_ace_entry =
+            privacy_algorithm_entry("zk-ace-pq-authorization-v0").expect("ZK-ACE catalog row");
+        assert_eq!(
+            zk_ace.production_gate.required_gates,
+            privacy_required_production_gate_keys(zk_ace_entry),
+            "ZK-ACE must require the full production proof gate set",
+        );
         assert!(
             zk_ace
                 .production_gate
@@ -14294,6 +14478,14 @@ mod tests {
                     .missing
                     .iter()
                     .any(|missing| missing.contains("internal cryptographic review")),
+            );
+            let entry = privacy_algorithm_entry(&algorithm.algorithm_id)
+                .expect("privacy capability row must be cataloged");
+            assert_eq!(
+                algorithm.production_gate.required_gates,
+                privacy_required_production_gate_keys(entry),
+                "native privacy required production gates drifted for {}",
+                algorithm.algorithm_id,
             );
         }
     }
@@ -14529,8 +14721,10 @@ mod tests {
 
         assert!(privacy_capabilities_invariants_hold(&capabilities));
         assert!(capabilities.algorithms.iter().all(|algorithm| {
+            let entry = privacy_algorithm_entry(&algorithm.algorithm_id)
+                .expect("privacy capability row must be cataloged");
             !algorithm.production_ready
-                && privacy_production_gate_invariants_hold(&algorithm.production_gate)
+                && privacy_production_gate_invariants_hold(&algorithm.production_gate, entry)
         }));
     }
 
@@ -14649,6 +14843,47 @@ mod tests {
         assert!(
             !privacy_capability_invariants_hold(&duplicate_gate),
             "duplicate production gate keys must be rejected",
+        );
+
+        let mut missing_required_gate = base.clone();
+        missing_required_gate.production_gate.required_gates.clear();
+        assert!(
+            !privacy_capability_invariants_hold(&missing_required_gate),
+            "missing required production gate keys must be rejected",
+        );
+
+        let mut duplicate_required_gate = base.clone();
+        duplicate_required_gate
+            .production_gate
+            .required_gates
+            .push(duplicate_required_gate.production_gate.required_gates[0].clone());
+        assert!(
+            !privacy_capability_invariants_hold(&duplicate_required_gate),
+            "duplicate required production gate keys must be rejected",
+        );
+
+        let mut unknown_required_gate = base.clone();
+        unknown_required_gate.production_gate.required_gates[0] = "shadow_gate".to_owned();
+        assert!(
+            !privacy_capability_invariants_hold(&unknown_required_gate),
+            "unknown required production gate keys must be rejected",
+        );
+
+        let mut unportable_required_gate = base.clone();
+        unportable_required_gate.production_gate.required_gates[0] = "shadow gate".to_owned();
+        assert!(
+            !privacy_capability_invariants_hold(&unportable_required_gate),
+            "unportable required production gate keys must be rejected",
+        );
+
+        let mut forged_waived_required_gate = base.clone();
+        forged_waived_required_gate
+            .production_gate
+            .required_gates
+            .insert(0, "real_proving".to_owned());
+        assert!(
+            !privacy_capability_invariants_hold(&forged_waived_required_gate),
+            "transparent-transfer waived proof gates must not be reintroduced as required",
         );
 
         let mut extra_entrypoint = base.clone();
@@ -21731,6 +21966,132 @@ mod tests {
             tx.hash().as_ref(),
             "hash must match signed transaction hash"
         );
+    }
+
+    #[test]
+    fn build_transaction_from_instructions_json_accepts_kagemusha_instruction_archive() {
+        disable_packed_struct_once();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let instruction = sample_kagemusha_transfer_instruction_for_js_host();
+        let archive = norito::to_bytes(&instruction).expect("encode Kagemusha transfer");
+        let instruction_json =
+            kagemusha_instruction_archive_json("KagemushaTransfer", &STANDARD.encode(&archive), "");
+        let (_, secret_bytes) = keypair.private_key().to_bytes();
+
+        let result = build_transaction_from_instructions_json(
+            chain_id,
+            authority,
+            vec![instruction_json],
+            None,
+            Some(1_700_000_000_000),
+            Some(5_000),
+            Some(42),
+            &secret_bytes,
+        )
+        .expect("transaction built");
+
+        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        match tx.instructions() {
+            Executable::Instructions(batch) => {
+                assert_eq!(batch.len(), 1);
+                let decoded = batch
+                    .iter()
+                    .next()
+                    .expect("instruction")
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::offline::KagemushaTransfer>()
+                    .expect("KagemushaTransfer instruction");
+                assert_eq!(decoded, &instruction);
+            }
+            other => panic!("expected instruction batch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kagemusha_instruction_archive_json_rejects_adversarial_inputs() {
+        let transfer = sample_kagemusha_transfer_instruction_for_js_host();
+        let transfer_archive = norito::to_bytes(&transfer).expect("encode Kagemusha transfer");
+        let cases = [
+            (
+                kagemusha_instruction_archive_json("KagemushaTransfer", "", ""),
+                "Kagemusha instruction archive must not be empty",
+            ),
+            (
+                kagemusha_instruction_archive_json(
+                    "KagemushaTransfer",
+                    &STANDARD.encode(&[0x01_u8, 0x02]),
+                    "",
+                ),
+                "invalid KagemushaTransfer instruction archive",
+            ),
+            (
+                kagemusha_instruction_archive_json(
+                    "RedeemOfflineNoteV2",
+                    &STANDARD.encode(&[0x01_u8, 0x02]),
+                    "",
+                ),
+                "unsupported KagemushaInstructionArchive.type",
+            ),
+            (
+                kagemusha_instruction_archive_json(
+                    "RedeemKagemushaRecursive",
+                    &STANDARD.encode(&transfer_archive),
+                    "",
+                ),
+                "invalid RedeemKagemushaRecursive instruction archive",
+            ),
+            (
+                kagemusha_instruction_archive_json(
+                    "KagemushaTransfer",
+                    &STANDARD.encode(&transfer_archive),
+                    r#","extra":true"#,
+                ),
+                "KagemushaInstructionArchive contains unexpected field",
+            ),
+        ];
+
+        for (instruction_json, expected) in cases {
+            let err = instruction_from_json(&instruction_json)
+                .expect_err("adversarial Kagemusha archive payload must fail");
+            assert!(
+                err.to_string().contains(expected),
+                "expected {expected:?} in error, got {err}",
+            );
+        }
+    }
+
+    fn kagemusha_instruction_archive_json(
+        instruction_type: &str,
+        bytes_base64: &str,
+        extra_fields: &str,
+    ) -> String {
+        format!(
+            r#"{{"KagemushaInstructionArchive":{{"type":"{instruction_type}","bytes_base64":"{bytes_base64}"{extra_fields}}}}}"#
+        )
+    }
+
+    fn sample_kagemusha_transfer_instruction_for_js_host()
+    -> iroha_data_model::isi::offline::KagemushaTransfer {
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain"),
+            "kgm".parse().expect("asset name"),
+        );
+        iroha_data_model::isi::offline::KagemushaTransfer::new(
+            asset_definition,
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".parse().expect("backend ident"),
+                ProofBox::new(
+                    "halo2/ipa".parse().expect("proof backend ident"),
+                    vec![0xAA, 0xBB, 0xCC],
+                ),
+                VerifyingKeyId::new("halo2/ipa", "js-host-kagemusha-transfer"),
+            ),
+            Some([0x33; 32]),
+        )
     }
 
     #[test]

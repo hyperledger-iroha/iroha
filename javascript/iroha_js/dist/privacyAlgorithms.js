@@ -501,6 +501,12 @@ const PRODUCTION_GATE_REQUIREMENTS = Object.freeze([
   Object.freeze(["performance_gates", "performance gate is incomplete"]),
   Object.freeze(["external_audit", "internal cryptographic review signoff is missing"]),
 ]);
+const TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS = Object.freeze([
+  "real_proving",
+  "real_verification",
+  "witness_privacy_checks",
+  "verifier_fuzzing",
+]);
 const PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE =
   "implementation stage is not production-hardened";
 const PRODUCTION_GATE_MISSING_PLANNED_SDK = "planned SDK entrypoints remain";
@@ -810,9 +816,15 @@ const REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID = Object.freeze({
     "typed sis-with-hints credential proof instruction",
   ]),
   "zk-ace-pq-authorization-v0": Object.freeze([
-    "active identity commitment registry",
-    "replay nullifier set",
-    "authorization verifier registry",
+    "registered zk-ace identity commitment",
+    "source-account allowlist",
+    "authorization policy hash registry",
+    "active zk-ace verifier key",
+    "chain/domain binding state",
+    "transfer digest binding",
+    "replay nullifier uniqueness set",
+    "identity rotation/revocation registry",
+    "stark/fri verifier parameter floors",
     "wallet identity witness",
     "zk::submitzkaceauthorizedtransfer",
   ]),
@@ -1244,7 +1256,7 @@ const REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID = Object.freeze({
   "zk-x509-onchain-identity-v0": Object.freeze(["trusted CA root registry", "certificate policy registry", "revocation root registry", "identity proof verifier", "wallet certificate witness store", "certificate subject commitment registry", "ZK-X.509 verifier key registry"]),
   "jindo-lattice-pcs-zk-v0": Object.freeze(["lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "benchmark fixtures"]),
   "sis-hints-anoncred-pq-v0": Object.freeze(["lattice credential parameter registry", "issuer parameter registry", "credential showing verifier", "wallet lattice credential witness store", "lattice credential commitment registry", "lattice credential verifier key registry"]),
-  "zk-ace-pq-authorization-v0": Object.freeze(["active identity commitment registry", "replay nullifier set", "authorization verifier registry", "wallet identity witness and replay-secret store"]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["registered ZK-ACE identity commitment", "source-account allowlist", "authorization policy hash registry", "active ZK-ACE verifier key", "chain/domain binding state", "transfer digest binding", "replay nullifier uniqueness set", "identity rotation/revocation registry", "STARK/FRI verifier parameter floors", "wallet identity witness and replay-secret store"]),
   "orchard-halo2-actions-v1": Object.freeze(["Orchard note commitment tree", "Orchard nullifier set", "Orchard action-bundle verifier key registry", "wallet Orchard witness store"]),
   "penumbra-masp-v1": Object.freeze(["multi-asset state commitment tree", "typed nullifier set", "Groth16 spend/output verifier key registry", "wallet asset metadata witness store"]),
   "monero-fcmp-plus-plus-v1": Object.freeze(["full-output-set commitment accumulator", "spent link-tag set", "FCMP++ verifier key registry", "wallet output ownership scan state"]),
@@ -2132,7 +2144,17 @@ function productionGateForDescriptor(descriptor) {
   const gates = Object.fromEntries(
     PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, false]),
   );
-  const missing = PRODUCTION_GATE_REQUIREMENTS.map(([_key, label]) => label);
+  const waived =
+    descriptor.id === "transparent-transfer"
+      ? new Set(TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS)
+      : new Set();
+  const requiredGates = PRODUCTION_GATE_REQUIREMENTS
+    .map(([key]) => key)
+    .filter((key) => !waived.has(key));
+  const requiredGateSet = new Set(requiredGates);
+  const missing = PRODUCTION_GATE_REQUIREMENTS
+    .filter(([key]) => requiredGateSet.has(key))
+    .map(([_key, label]) => label);
   if (descriptor.implementationStage !== "production-hardened") {
     missing.push(PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE);
   }
@@ -2147,6 +2169,7 @@ function productionGateForDescriptor(descriptor) {
     version: PRODUCTION_GATE_VERSION,
     ready: false,
     gates,
+    requiredGates,
     missing: dedupeStrings(missing),
     auditReferences: [],
   };
@@ -3468,9 +3491,15 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
       "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.",
     ]),
     requiredState: Object.freeze([
-      "active identity commitment registry",
-      "replay nullifier set",
-      "authorization verifier registry",
+      "registered ZK-ACE identity commitment",
+      "source-account allowlist",
+      "authorization policy hash registry",
+      "active ZK-ACE verifier key",
+      "chain/domain binding state",
+      "transfer digest binding",
+      "replay nullifier uniqueness set",
+      "identity rotation/revocation registry",
+      "STARK/FRI verifier parameter floors",
       "wallet identity witness and replay-secret store",
     ]),
     failureModes: Object.freeze([

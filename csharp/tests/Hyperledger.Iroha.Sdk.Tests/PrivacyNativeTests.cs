@@ -83,6 +83,9 @@ public sealed class PrivacyNativeTests
 
         var missing = Assert.IsAssignableFrom<IList<string>>(bridgeAvailable.ProductionGate.Missing);
         Assert.Throws<NotSupportedException>(() => missing.Add("tampered"));
+        var requiredGates = Assert.IsAssignableFrom<IList<string>>(
+            bridgeAvailable.ProductionGate.RequiredGates);
+        Assert.Throws<NotSupportedException>(() => requiredGates.Add("tampered"));
         var auditReferences = Assert.IsAssignableFrom<IList<string>>(
             bridgeAvailable.ProductionGate.AuditReferences);
         Assert.Throws<NotSupportedException>(() =>
@@ -90,9 +93,11 @@ public sealed class PrivacyNativeTests
 
         var fresh = PrivacyNative.GetPrivacyCapabilities(bridgeAvailable: true);
         Assert.DoesNotContain("tampered", fresh.ProductionGate.Missing);
+        Assert.DoesNotContain("tampered", fresh.ProductionGate.RequiredGates);
         Assert.DoesNotContain(
             "https://audit.example/forged-signoff",
             fresh.ProductionGate.AuditReferences);
+        Assert.Equal(PrivacyProductionGate.RequiredGateKeys, fresh.ProductionGate.RequiredGates);
         Assert.Equal(PrivacyProductionGate.MissingReasons, fresh.ProductionGate.Missing);
     }
 
@@ -194,15 +199,27 @@ public sealed class PrivacyNativeTests
     public void PrivacyNativeRejectsEmptyProofRequestArchivesBeforeLoadingNativeBridge()
     {
         Assert.Throws<ArgumentException>(() => PrivacyNative.BuildProofV1(Array.Empty<byte>()));
+        Assert.Throws<ArgumentException>(() =>
+            PrivacyNative.buildConfidentialTransferProofV2(Array.Empty<byte>()));
+        Assert.Throws<ArgumentException>(() =>
+            PrivacyNative.buildConfidentialUnshieldProofV3(Array.Empty<byte>()));
         Assert.Throws<ArgumentException>(() => PrivacyNative.VerifyProofV1(Array.Empty<byte>()));
 
         var buildEmptyPayload = Assert.Throws<ArgumentException>(() =>
             PrivacyNative.BuildProofV1(PrivacyNoritoFrame(0x52)));
+        var transferEmptyPayload = Assert.Throws<ArgumentException>(() =>
+            PrivacyNative.buildConfidentialTransferProofV2(PrivacyNoritoFrame(0x52)));
+        var unshieldEmptyPayload = Assert.Throws<ArgumentException>(() =>
+            PrivacyNative.buildConfidentialUnshieldProofV3(PrivacyNoritoFrame(0x52)));
         var verifyEmptyPayload = Assert.Throws<ArgumentException>(() =>
             PrivacyNative.VerifyProofV1(PrivacyNoritoFrame(0x52)));
         Assert.Contains("non-empty privacy request payload", buildEmptyPayload.Message);
+        Assert.Contains("non-empty privacy request payload", transferEmptyPayload.Message);
+        Assert.Contains("non-empty privacy request payload", unshieldEmptyPayload.Message);
         Assert.Contains("non-empty privacy request payload", verifyEmptyPayload.Message);
         Assert.Equal("requestArchive", buildEmptyPayload.ParamName);
+        Assert.Equal("requestArchive", transferEmptyPayload.ParamName);
+        Assert.Equal("requestArchive", unshieldEmptyPayload.ParamName);
         Assert.Equal("requestArchive", verifyEmptyPayload.ParamName);
     }
 
@@ -213,12 +230,20 @@ public sealed class PrivacyNativeTests
 
         var buildError = Assert.Throws<ArgumentException>(() =>
             PrivacyNative.BuildProofV1(oversized));
+        var transferError = Assert.Throws<ArgumentException>(() =>
+            PrivacyNative.buildConfidentialTransferProofV2(oversized));
+        var unshieldError = Assert.Throws<ArgumentException>(() =>
+            PrivacyNative.buildConfidentialUnshieldProofV3(oversized));
         var verifyError = Assert.Throws<ArgumentException>(() =>
             PrivacyNative.VerifyProofV1(oversized));
 
         Assert.Contains("must not exceed", buildError.Message);
+        Assert.Contains("must not exceed", transferError.Message);
+        Assert.Contains("must not exceed", unshieldError.Message);
         Assert.Contains("must not exceed", verifyError.Message);
         Assert.Equal("requestArchive", buildError.ParamName);
+        Assert.Equal("requestArchive", transferError.ParamName);
+        Assert.Equal("requestArchive", unshieldError.ParamName);
         Assert.Equal("requestArchive", verifyError.ParamName);
     }
 
@@ -987,6 +1012,7 @@ public sealed class PrivacyNativeTests
         Assert.False(capabilities.ProductionGate.PerformanceGates);
         Assert.False(capabilities.ProductionGate.ExternalAudit);
         Assert.Empty(capabilities.ProductionGate.AuditReferences);
+        Assert.Equal(PrivacyProductionGate.RequiredGateKeys, capabilities.ProductionGate.RequiredGates);
         Assert.Equal(PrivacyProductionGate.MissingReasons, capabilities.ProductionGate.Missing);
         Assert.Contains(
             "real proving engine is not registered",

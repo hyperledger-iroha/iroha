@@ -120,7 +120,7 @@ pub const SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_GAS_SCHEDULE_ID_V1: &str =
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV full-bootstrap material proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_full_bootstrap_material_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_material_proof_statement_digest"}"#;
+    br#"{"schema":"soracloud_fhe_full_bootstrap_material_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_material_proof_statement_digest(version,field_count,params,public_key,evaluation_key_digest,bootstrap_key_id,bootstrap_key_mode,max_refresh_rounds,full_bootstrap_material_digest)","preflight":["bootstrap_key.public_key_digest matches public_key"]}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV full-bootstrap material proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_CIRCUIT_ID_V1: &str =
     "soracloud_fhe_full_bootstrap_material_v1";
@@ -131,7 +131,7 @@ pub const SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_GAS_SCHEDULE_ID_V1: &str =
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_VERSION_V1: u16 = 1;
 /// Public-input schema for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1: &[u8] =
-    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_execution_proof_statement_digest(params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound,execution_witness_digest))","execution_witness_layout":{"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_witness_digest.v1","material_version":1,"material_field_count":14,"trace_field_count":7,"trace_bounds_field_count":6,"binds_trace":true,"binds_trace_bounds":true}}"#;
+    br#"{"schema":"soracloud_fhe_full_bootstrap_execution_v1","public_inputs":["statement_hash"],"statement_layout":"full_bootstrap_execution_proof_statement_digest(version,field_count,params,public_key,bootstrap_key,full_bootstrap_material_digest,artifact_bundle_digest,(slot_index,input_ciphertext,output_ciphertext,bound_mode,input_bound,output_bound,execution_witness_digest))","preflight":["bootstrap_key.public_key_digest matches public_key"],"execution_witness_layout":{"digest_domain":"iroha.crypto.fhe.bfv.full_bootstrap_execution_witness_digest.v1","material_version":1,"material_field_count":14,"trace_field_count":7,"trace_bounds_field_count":6,"binds_trace":true,"binds_trace_bounds":true},"arithmetic_trace_profile":{"version":1,"field_count":34,"material_version":1,"material_field_count":8,"row_width":34,"private_row_count":64,"private_row_kind":1,"public_row_kind":0,"forbids_unmasked_private_row_openings":true},"release_prover_input":{"proof_input_material_version":1,"proof_input_material_field_count":5,"prover_input_material_version":1,"prover_input_material_field_count":7,"binds_arithmetic_trace_material_digest":true,"binds_generated_proof_key_pair":true}}"#;
 /// Canonical STARK/FRI circuit id for Soracloud BFV full-bootstrap execution proofs.
 pub const SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1: &str =
     BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1;
@@ -6956,28 +6956,18 @@ impl SoraServiceDeploymentStateV1 {
             self.current_container_manifest_hash,
         )?;
 
-        if self.revision_count == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service deployment state",
-                field: "revision_count",
-                reason: "must be greater than zero".to_string(),
-            });
-        }
-
-        if self.process_generation == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service deployment state",
-                field: "process_generation",
-                reason: "must be greater than zero".to_string(),
-            });
-        }
-
-        if self.process_started_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service deployment state",
-                field: "process_started_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+        for (field, value) in [
+            ("revision_count", u64::from(self.revision_count)),
+            ("process_generation", self.process_generation),
+            ("process_started_sequence", self.process_started_sequence),
+        ] {
+            if value == 0 {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora service deployment state",
+                    field,
+                    reason: "must be greater than zero".to_string(),
+                });
+            }
         }
 
         for (config_name, entry) in &self.service_configs {
@@ -8523,6 +8513,43 @@ pub struct SoraUploadedModelBundleV1 {
     pub decryption_policy_ref: String,
 }
 
+fn validate_uploaded_model_wrapped_key_matches_recipient(
+    recipient: &SoraUploadedModelEncryptionRecipientV1,
+    wrapped_key: &SoraUploadedModelWrappedKeyV1,
+) -> Result<(), SoracloudManifestError> {
+    for (field, matches, reason) in [
+        (
+            "wrapped_bundle_key.recipient_key_id",
+            recipient.key_id == wrapped_key.recipient_key_id,
+            "must match upload_recipient.key_id",
+        ),
+        (
+            "wrapped_bundle_key.recipient_key_version",
+            recipient.key_version == wrapped_key.recipient_key_version,
+            "must match upload_recipient.key_version",
+        ),
+        (
+            "wrapped_bundle_key.kem",
+            recipient.kem == wrapped_key.kem,
+            "must match upload_recipient.kem",
+        ),
+        (
+            "wrapped_bundle_key.aead",
+            recipient.aead == wrapped_key.aead,
+            "must match upload_recipient.aead",
+        ),
+    ] {
+        if !matches {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora uploaded model bundle",
+                field,
+                reason: reason.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl SoraUploadedModelBundleV1 {
     /// Validate uploaded-model bundle metadata.
     ///
@@ -8588,49 +8615,17 @@ impl SoraUploadedModelBundleV1 {
         }
         self.upload_recipient.validate()?;
         self.wrapped_bundle_key.validate()?;
-        if self.upload_recipient.key_id != self.wrapped_bundle_key.recipient_key_id {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model bundle",
-                field: "wrapped_bundle_key.recipient_key_id",
-                reason: "must match upload_recipient.key_id".to_string(),
-            });
-        }
-        if self.upload_recipient.key_version != self.wrapped_bundle_key.recipient_key_version {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model bundle",
-                field: "wrapped_bundle_key.recipient_key_version",
-                reason: "must match upload_recipient.key_version".to_string(),
-            });
-        }
-        if self.upload_recipient.kem != self.wrapped_bundle_key.kem {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model bundle",
-                field: "wrapped_bundle_key.kem",
-                reason: "must match upload_recipient.kem".to_string(),
-            });
-        }
-        if self.upload_recipient.aead != self.wrapped_bundle_key.aead {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model bundle",
-                field: "wrapped_bundle_key.aead",
-                reason: "must match upload_recipient.aead".to_string(),
-            });
-        }
-        validate_soracloud_digest_hash(
-            "sora uploaded model bundle",
-            "plaintext_root",
-            self.plaintext_root,
+        validate_uploaded_model_wrapped_key_matches_recipient(
+            &self.upload_recipient,
+            &self.wrapped_bundle_key,
         )?;
-        validate_soracloud_digest_hash(
-            "sora uploaded model bundle",
-            "bundle_root",
-            self.bundle_root,
-        )?;
-        validate_soracloud_digest_hash(
-            "sora uploaded model bundle",
-            "chunk_manifest_root",
-            self.chunk_manifest_root,
-        )?;
+        for (field, hash) in [
+            ("plaintext_root", self.plaintext_root),
+            ("bundle_root", self.bundle_root),
+            ("chunk_manifest_root", self.chunk_manifest_root),
+        ] {
+            validate_soracloud_digest_hash("sora uploaded model bundle", field, hash)?;
+        }
         if self.chunk_count == 0 || self.plaintext_bytes == 0 || self.ciphertext_bytes == 0 {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora uploaded model bundle",
@@ -15816,15 +15811,31 @@ mod tests {
         );
         assert_eq!(
             hex::encode(soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1()),
-            "1ac4d2baa55297d601efb1a4330e58b80f17c76c63907bcb8de1e8b463290ae1",
+            "e0c273e68e8166f653e2875421834d5db62a5d6ce3a6e860e9c20b239de243ed",
             "full-bootstrap material proof public-input schema hash drifted"
         );
         assert_eq!(
             hex::encode(
                 soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1()
             ),
-            "cc1dd151890f141509fb7074984bef74e0e563d4e703f80b5755b39c9315d89d",
+            "11c053fd4b1f95ba231186193b57e5afe0dcdd02db3e40705aa9c8e5953a3c89",
             "full-bootstrap execution proof public-input schema hash drifted"
+        );
+    }
+
+    #[test]
+    fn soracloud_fhe_full_bootstrap_material_schema_advertises_statement_header() {
+        let schema = std::str::from_utf8(
+            SORACLOUD_FHE_FULL_BOOTSTRAP_MATERIAL_PROOF_PUBLIC_INPUTS_SCHEMA_V1,
+        )
+        .expect("full-bootstrap material schema is valid UTF-8");
+        assert!(
+            schema.contains("full_bootstrap_material_proof_statement_digest(version,field_count,"),
+            "public schema must advertise the self-describing material statement header"
+        );
+        assert!(
+            schema.contains("full_bootstrap_material_digest"),
+            "public schema must advertise the governed material digest"
         );
     }
 
@@ -15837,6 +15848,10 @@ mod tests {
         assert!(
             schema.contains("execution_witness_digest"),
             "public schema must advertise the execution witness digest bound by the typed claim"
+        );
+        assert!(
+            schema.contains("full_bootstrap_execution_proof_statement_digest(version,field_count,"),
+            "public schema must advertise the self-describing statement material header"
         );
         assert!(
             schema.contains("full_bootstrap_execution_witness_digest.v1"),
@@ -15853,6 +15868,24 @@ mod tests {
             assert!(
                 schema.contains(required),
                 "public schema must advertise witness layout term {required}"
+            );
+        }
+        for required in [
+            "\"arithmetic_trace_profile\"",
+            "\"field_count\":34",
+            "\"row_width\":34",
+            "\"private_row_count\":64",
+            "\"private_row_kind\":1",
+            "\"public_row_kind\":0",
+            "\"forbids_unmasked_private_row_openings\":true",
+            "\"release_prover_input\"",
+            "\"prover_input_material_field_count\":7",
+            "\"binds_arithmetic_trace_material_digest\":true",
+            "\"binds_generated_proof_key_pair\":true",
+        ] {
+            assert!(
+                schema.contains(required),
+                "public schema must advertise release-prover trace/key term {required}"
             );
         }
         assert!(

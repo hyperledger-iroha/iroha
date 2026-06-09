@@ -373,11 +373,34 @@ READINESS_MARKDOWN_REQUIRED_RELEASE_EVIDENCE_MARKERS = (
     "Ethereum route-canary finalized receipt-block source inventory",
     "Ethereum EVM block-tag metadata source inventory",
     "SCCP native no-WASM/no-remote source inventory",
+    "canonical native EVM prover SDK-id rejection",
+    "padded-SDK adversarial tests",
+    "SCCP BSC route-config canonical-manifest source inventory",
+    "SCCP TRON route-config canonical-manifest source inventory",
+    "SCCP TRON runtime route-manifest source inventory",
+    "TRON runtime route-manifest parser",
+    "SCCP all-lanes route-canary scalar source inventory",
+    "SCCP all-lanes governed blocker schema source inventory",
+    "SCCP all-lanes release-checklist exact-boolean source inventory",
+    "destination-rollout and route-allowlist blocker container rejection",
+    "SCCP active-launch checklist schema source inventory",
+    "active launch checklist ready value",
     "proof-request bundle/source-proof source inventory",
     "SCCP phase-evidence source inventory",
     "SCCP release bundle source-copy source inventory",
     "SCCP release bundle output-path source inventory",
     "SCCP release artifact path text source inventory",
+    "SCCP release input-provenance schema source inventory",
+    "SCCP release public JSON-root schema source inventory",
+    "SCCP release public Markdown text schema source inventory",
+    "SCCP release public cryptographic-evidence binding source inventory",
+    "SCCP release public submission-surface binding source inventory",
+    "SCCP release manifest readiness-flags source inventory",
+    "SCCP release manifest artifact-set/order source inventory",
+    "SCCP release public blocker-list schema source inventory",
+    "SCCP release public scalar-text schema source inventory",
+    "SCCP release-notes attachment invariants source inventory",
+    "SCCP readiness Markdown invariants source inventory",
 )
 NATIVE_EVM_PROVER_BUNDLE_SCHEMA = "sccp-native-evm-groth16-prover-bundle-v1"
 NATIVE_EVM_PROVER_BUNDLE_ID = (
@@ -602,6 +625,13 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "ethereum_data_collection_no_proxy_gate",
     "ethereum_inbound_adversarial_gate",
     "bsc_inbound_adversarial_gate",
+    "bsc_route_config_canonical_manifest_gate",
+    "tron_route_config_canonical_manifest_gate",
+    "tron_runtime_route_manifest_gate",
+    "all_lanes_route_canary_scalar_gate",
+    "all_lanes_governed_blocker_schema_gate",
+    "all_lanes_release_checklist_exact_boolean_gate",
+    "active_launch_checklist_schema_gate",
     "ethereum_outbound_precallback_gate",
     "ethereum_outbound_provider_validation_gate",
     "ethereum_local_admission_gate",
@@ -632,11 +662,27 @@ SOURCE_INVENTORY_REQUIRED_GATES = {
     "ethereum_route_canary_finalized_receipt_block_gate",
     "ethereum_evm_block_tag_metadata_gate",
     "native_sccp_no_wasm_readiness_gate",
+    "release_native_prover_bundle_schema_gate",
+    "all_lanes_governed_blocker_schema_gate",
+    "all_lanes_release_checklist_exact_boolean_gate",
+    "active_launch_checklist_schema_gate",
     "proof_request_bundle_gate",
     "phase_evidence_source_gate",
+    "release_corridor_phase_transcript_gate",
     "release_bundle_source_copy_gate",
     "release_bundle_output_path_gate",
     "release_artifact_path_text_gate",
+    "release_input_provenance_schema_gate",
+    "release_public_json_root_schema_gate",
+    "release_public_markdown_text_schema_gate",
+    "release_public_crypto_evidence_binding_gate",
+    "release_public_submission_surface_binding_gate",
+    "release_manifest_readiness_flags_gate",
+    "release_manifest_artifact_set_order_gate",
+    "release_public_blocker_list_schema_gate",
+    "release_public_scalar_text_schema_gate",
+    "release_notes_attachment_invariants_gate",
+    "readiness_markdown_invariants_gate",
     "retired_network_surface_gate",
     "unready_transparent_proof_config_gate",
 }
@@ -3553,17 +3599,11 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_MARKERS = (
             "def test_retired_network_patterns_catch_adversarial_examples",
             "def test_retired_network_surface_scan_covers_expected_files",
             "def test_retired_network_surface_scan_covers_pipeline_translations",
-            "def test_retired_network_surface_scan_rejects_family_specific_notes",
             "def test_generic_no_support_note_stays_in_launch_scope_files",
-            "def test_specific_no_support_note_uses_exact_launch_scope_sentence",
             "def test_active_tree_excludes_retired_network_surface_tokens",
             "BANNED_PATTERNS",
             "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES",
             "SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE",
-            "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE",
-            "SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT",
-            "def _is_specific_no_support_scope_note_match",
-            "violations.append(f\"{relative}:{match.start()}: {match.group(0)!r}\")",
             '_literal("sub", "strate")',
             '_literal("pol", "kadot")',
             '_literal("ku", "sama")',
@@ -3603,6 +3643,352 @@ SCCP_RETIRED_NETWORK_SURFACE_GUARD_FORBIDDEN_MARKERS = (
     "_CHAIN_NAMES_PHRASE",
     "SCCP_EXPLICIT_UNSUPPORTED_SCOPE_NOTE_SNIPPETS",
     "def _is_explicit_unsupported_scope_note_match",
+)
+BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
+    (
+        "scripts/sccp_bsc_taira_xor_deploy.mjs",
+        (
+            "function canonicalRecordString(value, label)",
+            "function normalizeCanonicalHex32(value, label = \"value\")",
+            "function normalizeCanonicalEvmAddress(value, label = \"address\")",
+            "route manifest bscNetwork must be canonical lowercase text",
+            "route manifest chain must be canonical lowercase text",
+            "route manifest chainIdHex must be canonical lowercase hex.",
+            "route manifest BSC token address",
+            "route manifest BSC bridge address",
+            "route manifest BSC source bridge address",
+            "route manifest BSC verifier address",
+        ),
+    ),
+    (
+        "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
+        (
+            "BSC route-config rejects malformed or foreign route manifests",
+            "routeId: \" taira_bsc_xor\"",
+            "assetKey: \"xor \"",
+            "networkIdHex: BSC_TESTNET_NETWORK_ID_HEX.toUpperCase()",
+            "bscTokenAddress: BSC_TOKEN_ADDRESS.toUpperCase()",
+            "destinationBridgeAddress: BSC_BRIDGE_ADDRESS.toUpperCase()",
+            "sccpBscSourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS.toUpperCase()",
+            "bscVerifierAddress: BSC_VERIFIER_ADDRESS.replace(/^0x/u, \"0X\")",
+            "verifierIdentity: BSC_VERIFIER_ADDRESS.toUpperCase()",
+            "offlineFullTomlSha256: HASH_33.toUpperCase()",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _bsc_route_config_canonical_manifest_gate_inventory_errors(",
+            '"bsc_route_config_canonical_manifest_gate"',
+            "SCCP BSC route-config canonical-manifest source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_bsc_route_config_canonical_manifest_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_bsc_route_config_canonical_manifest_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_bsc_route_config_canonical_manifest_inventory_gate",
+            "def test_release_bundle_verifier_guards_bsc_route_config_canonical_manifest_inventory",
+        ),
+    ),
+)
+TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS = (
+    (
+        "scripts/sccp_tron_taira_xor_deploy.mjs",
+        (
+            "function normalizeBytes32(value, label)",
+            "function normalizeNonEmptyText(value, label)",
+            "route manifest tronNetwork must be canonical lowercase text",
+            "route manifest chain must be canonical lowercase text",
+            "route manifest chainIdHex must be canonical lowercase hex",
+            "route manifest tairaXorTokenAddress",
+            "route manifest tairaXorBridgeAddress",
+            "route manifest sccpTronSourceBridgeAddress",
+            "route manifest tronVerifierAddress",
+            "route manifest destinationRollout.verifierIdentity",
+        ),
+    ),
+    (
+        "scripts/sccp_tron_taira_xor_deploy.test.mjs",
+        (
+            "TRON route-config rejects malformed or foreign route manifests",
+            "routeId: \" taira_tron_xor\"",
+            "assetKey: \"xor \"",
+            "tronNetwork: \"TRON-MAINNET\"",
+            "chainIdHex: \"0X2B6653DC\"",
+            "networkIdHex: TRON_MAINNET_NETWORK_ID_HEX.toUpperCase()",
+            "destinationNetworkId: TRON_MAINNET_NETWORK_ID_HEX.toUpperCase()",
+            "verifierIdentity: manifest.tairaXorBridgeAddress",
+            "sourceEventTransactionId: routeHash(\"source-event-transaction\").toUpperCase()",
+            "offlineFullTomlSha256: routeHash(\"offline-full-toml\").toUpperCase()",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _tron_route_config_canonical_manifest_gate_inventory_errors(",
+            '"tron_route_config_canonical_manifest_gate"',
+            "SCCP TRON route-config canonical-manifest source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_tron_route_config_canonical_manifest_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_tron_route_config_canonical_manifest_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_tron_route_config_canonical_manifest_inventory_gate",
+            "def test_release_bundle_verifier_guards_tron_route_config_canonical_manifest_inventory",
+        ),
+    ),
+)
+TRON_RUNTIME_ROUTE_MANIFEST_MARKERS = (
+    (
+        "crates/iroha_config/src/parameters/user.rs",
+        (
+            "fn validate_tron_production_metadata(",
+            "fn validate_post_deploy_evidence(",
+            "fn expected_tron_destination_binding_key(",
+            "Self::normalize_tron_base58_address(",
+            "map(SccpRouteManifest::parse)",
+            "fn production_ready_tron_route_with_post_deploy_evidence_parses()",
+            "fn tron_route_rejects_duplicate_contract_role_addresses()",
+            "fn production_ready_tron_route_rejects_wrong_counterparty_domain()",
+            "fn production_ready_tron_route_rejects_testnet_network()",
+            "fn production_ready_tron_route_rejects_wrong_destination_binding_key()",
+            "fn production_ready_tron_route_requires_post_deploy_full_toml_ready()",
+            "fn production_ready_tron_route_requires_offline_full_toml_hash()",
+            "fn tron_route_rejects_malformed_post_deploy_hashes()",
+            "SCCP TRON route manifest production_ready requires route_id =",
+            "SCCP TRON route manifest production_ready requires network_id_hex =",
+            "SCCP TRON route manifest production_ready requires taira_burn_record_vk_backend =",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _tron_runtime_route_manifest_gate_inventory_errors(",
+            '"tron_runtime_route_manifest_gate"',
+            "SCCP TRON runtime route-manifest source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_tron_runtime_route_manifest_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_tron_runtime_route_manifest_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_tron_runtime_route_manifest_inventory",
+            "def test_release_bundle_verifier_rejects_missing_tron_runtime_route_manifest_inventory_gate",
+        ),
+    ),
+)
+ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS = (
+    (
+        "scripts/sccp_all_lanes_evidence.py",
+        (
+            "canary_status = canary.get(\"status\")",
+            "route canary status must be a non-empty canonical string",
+            "canary_evidence_source = canary.get(\"evidence_source\")",
+            "live route canary evidence source must be a non-empty canonical string",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_all_lanes_evidence_test.py",
+        (
+            "def test_all_lanes_release_checklist_rejects_malformed_route_canary_scalars",
+            "\"status\",",
+            "123,",
+            "\" passed \"",
+            "\"evidence_source\",",
+            "\" evm_message_proof_accepted_transaction \"",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _all_lanes_route_canary_scalar_gate_inventory_errors(",
+            '"all_lanes_route_canary_scalar_gate"',
+            "SCCP all-lanes route-canary scalar source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_all_lanes_route_canary_scalar_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_all_lanes_route_canary_scalar_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_missing_all_lanes_route_canary_scalar_inventory_gate",
+            "def test_release_bundle_verifier_guards_all_lanes_route_canary_scalar_inventory",
+        ),
+    ),
+)
+ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS = (
+    (
+        "scripts/sccp_all_lanes_evidence.py",
+        (
+            "def _blocker_list_errors(record: dict[str, Any], label: str) -> list[str]:",
+            "blockers must be a list of non-empty canonical strings",
+            "errors.extend(_blocker_list_errors(record, \"destination rollout\"))",
+            "errors.extend(_blocker_list_errors(record, \"route allowlist\"))",
+            "f\"{label} blockers must be empty\"",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_all_lanes_evidence_test.py",
+        (
+            "def test_all_lanes_evidence_rejects_malformed_governed_blocker_containers",
+            "eth_destination[\"blockers\"] = \"operator says destination rollout is ready\"",
+            "tron_destination[\"blockers\"] = [123]",
+            "bsc_route[\"blockers\"] = [\"\"]",
+            "sol_route[\"blockers\"] = [\" route canary still pending\"]",
+            "route allowlist blockers must be empty",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _all_lanes_governed_blocker_schema_gate_inventory_errors(",
+            '"all_lanes_governed_blocker_schema_gate"',
+            "SCCP all-lanes governed blocker schema source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_all_lanes_governed_blocker_schema_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_all_lanes_governed_blocker_schema_gate",
+            "all_lanes_governed_blocker_schema_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_all_lanes_governed_blocker_schema_inventory",
+            "def test_release_bundle_verifier_rejects_missing_all_lanes_governed_blocker_schema_inventory_gate",
+        ),
+    ),
+)
+ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS = (
+    (
+        "scripts/sccp_all_lanes_evidence.py",
+        (
+            'records.get(key) is not True',
+            'if records.get("source_adapter_deployment") is not True:',
+            'records.get("destination_rollout") is True',
+            '"ready": all(item["ready"] is True for item in items)',
+            '"production_ready": not all_blockers',
+            'return 0 if summary["production_ready"] is True else 1',
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_all_lanes_evidence_test.py",
+        (
+            "def test_all_lanes_release_checklist_compares_item_ready_exactly",
+            'item["ready"] = "true"',
+            'assert checklist["ready"] is False',
+            "def test_all_lanes_cli_exit_compares_production_ready_exactly",
+            'module.validate_evidence_bundle = lambda records: {"production_ready": "true"}',
+            "def test_all_lanes_evidence_rejects_route_canary_hash_replay",
+            "def test_all_lanes_evidence_rejects_cross_lane_route_canary_replay",
+            "def test_all_lanes_evidence_rejects_cross_lane_route_canary_source_hash_replay",
+            "def test_all_lanes_evidence_rejects_cross_lane_route_canary_governed_hash_replay",
+            "route canary evidence hash for domain 2 must be distinct from domain 1",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _all_lanes_release_checklist_exact_boolean_gate_inventory_errors(",
+            '"all_lanes_release_checklist_exact_boolean_gate"',
+            "SCCP all-lanes release-checklist exact-boolean source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_all_lanes_release_checklist_exact_boolean_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_all_lanes_release_checklist_exact_boolean_gate",
+            "all_lanes_release_checklist_exact_boolean_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_all_lanes_release_checklist_exact_boolean_inventory",
+            "def test_release_bundle_verifier_rejects_missing_all_lanes_release_checklist_exact_boolean_inventory_gate",
+        ),
+    ),
+)
+ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS = (
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _active_launch_release_checklist(",
+            "release_checklist[\"ready\"] is True",
+            "def _active_launch_lane_blockers_for_checklist(",
+            "lane_blocker_schema_errors",
+            "_active_launch_route_allowlist_binding_blockers(lane_label, lane)",
+            "_active_launch_route_canary_metadata_blockers(lane_label, canary)",
+            "def _active_launch_checklist_schema_gate_inventory_errors(",
+            '"active_launch_checklist_schema_gate"',
+            "SCCP active-launch checklist schema source inventory",
+        ),
+    ),
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _release_checklist_schema_errors(",
+            "_true_field_errors(f\"{label} release_checklist\", checklist, \"ready\")",
+            "_boolean_field_errors(f\"{label} release_checklist\", checklist, \"ready\")",
+            "readiness report release_checklist is not ready",
+            "readiness report release_checklist does not match embedded evidence",
+            "all-lanes summary active {ACTIVE_LAUNCH_DISPLAY} release checklist is not ready",
+            "def _active_launch_checklist_schema_inventory_errors(",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_active_launch_checklist_schema_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_active_launch_checklist_schema_gate",
+            "def test_release_readiness_report_compares_checklist_ready_exactly",
+            "def test_release_readiness_report_blocks_malformed_active_route_allowlist_binding",
+            "def test_release_readiness_report_blocks_malformed_active_governed_deployment_metadata",
+            "def test_release_readiness_report_blocks_malformed_active_required_record_metadata",
+            "def test_release_readiness_report_classifies_malformed_active_lane_blockers",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_active_launch_checklist_schema_inventory",
+            "def test_release_bundle_verifier_rejects_missing_active_launch_checklist_schema_inventory_gate",
+            "def test_release_bundle_verifier_rejects_readiness_boolean_type_drift",
+            "def test_release_bundle_verifier_recomputes_active_checklist_rejects_malformed_canary_source",
+            "def test_release_bundle_verifier_classifies_malformed_active_lane_blockers",
+            "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
+            "def test_release_bundle_verifier_rejects_malformed_active_launch_blockers",
+        ),
+    ),
 )
 ETHEREUM_CORE_RANGE_FINALITY_BINDING_MARKERS = (
     (
@@ -3750,6 +4136,34 @@ SCCP_UNREADY_TRANSPARENT_PROOF_CONFIG_MARKERS = (
         "configs/soranexus/taira/config.toml",
         (
             "sccp_allow_unready_transparent_proofs = false",
+        ),
+    ),
+    (
+        "scripts/sccp_bsc_taira_xor_deploy.mjs",
+        (
+            "route.productionReady && allowUnready",
+            "production-ready route manifests cannot enable --allow-unready.",
+        ),
+    ),
+    (
+        "scripts/sccp_tron_taira_xor_deploy.mjs",
+        (
+            "route.productionReady && allowUnready",
+            "production-ready route manifests cannot enable --allow-unready",
+        ),
+    ),
+    (
+        "scripts/sccp_bsc_taira_xor_deploy.test.mjs",
+        (
+            "BSC route-config refuses allow-unready for production-ready manifests",
+            "buildMergedBscTairaXorRouteConfigToml(",
+        ),
+    ),
+    (
+        "scripts/sccp_tron_taira_xor_deploy.test.mjs",
+        (
+            "TRON route-config refuses allow-unready for production-ready manifests",
+            "buildMergedTairaXorRouteConfigToml(",
         ),
     ),
     (
@@ -4047,6 +4461,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "native_sdk_artifacts[",
             "native_sdk_artifacts contains duplicate sdk",
             "native_sdk_artifacts contains unknown sdk",
+            "sdk.strip() != sdk",
+            ".sdk must not contain surrounding whitespace",
             "implementation must be",
             "prover_artifact_hash must match proof_artifact_hash",
             "sha256 must match {hash_field}",
@@ -4158,6 +4574,8 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_readiness_report_blocks_noncanonical_native_evm_prover_hash",
             "def test_release_readiness_report_blocks_duplicate_native_evm_prover_sdk_artifacts",
             "def test_release_readiness_report_blocks_malformed_native_evm_prover_sdk_artifacts",
+            "def test_release_readiness_report_blocks_padded_native_evm_prover_sdk_artifacts",
+            "native_sdk_artifacts[0].sdk must not contain surrounding whitespace",
             "def test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift",
             "def test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift",
             "def test_release_readiness_report_blocks_reused_native_evm_prover_audit_hash",
@@ -4210,6 +4628,47 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
         ),
     ),
     (
+        "javascript/iroha_js/test/sccpEthereumMainnet.test.js",
+        (
+            'sdk: " javascript "',
+            "sdk must be a non-empty canonical string",
+            "nativeProverArtifacts\\.sdk must be a non-empty canonical string",
+            "nativeSdkArtifacts\\[\\d+\\]\\.sdk must be a non-empty canonical string",
+            "paddedSelfTestHookCalled",
+        ),
+    ),
+    (
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/sccp/EvmSccpProverTest.kt",
+        (
+            '\\"sdk\\": \\" kotlin \\"',
+            'sdk = " kotlin "',
+            "sdk must be a non-empty canonical string",
+            "nativeProverArtifacts sdk must be a non-empty canonical string",
+            "assertFalse(paddedSdkProverCalled)",
+            "assertFalse(paddedSelfTestHookCalled)",
+        ),
+    ),
+    (
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/EvmSccpProverTests.java",
+        (
+            '" java-android "',
+            "nativeProverArtifacts.sdk must be a non-empty canonical string",
+            "Android native prover artifact resolver must reject padded sdk",
+            "Android native prover artifact verifier must reject padded sdk",
+            "Android prover callback must not run with padded sdk artifacts",
+        ),
+    ),
+    (
+        "IrohaSwift/Tests/IrohaSwiftTests/SccpSolanaProverTests.swift",
+        (
+            'sdk: " swift "',
+            "Ethereum outbound prover must reject padded native artifact sdk",
+            "Ethereum native prover self-test must reject padded native artifact sdk",
+            "XCTAssertFalse(paddedSdkProverCalled)",
+            "XCTAssertFalse(paddedSelfTestHookCalled)",
+        ),
+    ),
+    (
         "javascript/iroha_js/test/package_dist.test.js",
         (
             "function assertBrowserMainnetSccpArtifactsStayJsOnlyAndLocalProverOwned()",
@@ -4252,6 +4711,7 @@ NATIVE_SCCP_NO_WASM_READINESS_TEST_MARKERS = (
             "def test_release_bundle_verifier_rejects_noncanonical_native_evm_prover_hash",
             "def test_release_bundle_verifier_rejects_duplicate_native_evm_prover_sdk_artifacts",
             "def test_release_bundle_verifier_rejects_malformed_native_evm_prover_sdk_artifacts",
+            "def test_release_bundle_verifier_rejects_padded_native_evm_prover_sdk_artifacts",
             "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift",
             "def test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift",
             "def test_release_bundle_verifier_rejects_reused_native_evm_prover_audit_hash",
@@ -4324,6 +4784,73 @@ SCCP_PHASE_EVIDENCE_SOURCE_MARKERS = (
         ),
     ),
 )
+SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS = (
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _release_corridor_phase_transcript_gate_inventory_errors(",
+            '"release_corridor_phase_transcript_gate"',
+            "SCCP release corridor phase-transcript source inventory",
+            "def _phase_transcript_block(",
+            "def _transcript_has_full_corridor_completion(",
+            "def _phase_command_lines(",
+            "def _phase_command_matches_required_fragment(",
+            "def _phase_transcript_errors(",
+            "evidence artifact is a dry-run transcript",
+            "evidence artifact is missing the phase marker",
+            "evidence artifact is missing the phase-block completion sentinel",
+            "evidence artifact is missing expected phase-block command:",
+            "evidence artifact is missing expected phase-block success marker:",
+        ),
+    ),
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _phase_transcript_block(",
+            "def _transcript_has_full_corridor_completion(",
+            "not line.lstrip().startswith(\"+ \")",
+            "def _phase_command_matches_required_fragment(",
+            "def _phase_transcript_errors(",
+            "readiness report phase {phase} evidence artifact is a dry-run transcript",
+            "readiness report phase {phase} evidence artifact is missing the phase marker",
+            "evidence artifact is missing the phase-block completion sentinel",
+            "evidence artifact is missing expected phase-block command:",
+            "evidence artifact is missing expected phase-block success marker:",
+            "errors.extend(",
+            "_phase_transcript_errors(",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "test_release_readiness_report_guards_release_corridor_phase_transcript_gate_inventory",
+            "test_release_readiness_report_blocks_missing_release_corridor_phase_transcript_gate",
+            "test_release_readiness_report_rejects_forged_phase_log",
+            "test_release_readiness_report_rejects_prefix_alias_phase_marker",
+            "test_release_readiness_report_rejects_phase_log_without_expected_command",
+            "test_release_readiness_report_rejects_phase_log_without_phase_completion",
+            "test_release_readiness_report_rejects_command_line_only_completion_marker",
+            "test_release_readiness_report_rejects_command_line_only_success_marker",
+            "test_release_readiness_report_rejects_output_only_phase_command_fragment",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_verifier_guards_release_corridor_phase_transcript_inventory",
+            "test_release_bundle_verifier_rejects_missing_release_corridor_phase_transcript_inventory_gate",
+            "test_release_bundle_verifier_rejects_forged_phase_log",
+            "test_release_bundle_verifier_rejects_prefix_alias_phase_marker",
+            "test_release_bundle_verifier_rejects_phase_log_without_expected_command",
+            "test_release_bundle_verifier_rejects_phase_command_outside_claimed_block",
+            "test_release_bundle_verifier_rejects_phase_log_without_success_marker",
+            "test_release_bundle_verifier_rejects_completion_outside_claimed_phase_block",
+            "test_release_bundle_verifier_rejects_command_line_only_success_marker",
+            "test_release_bundle_verifier_rejects_command_line_only_completion_marker",
+            "test_release_bundle_verifier_phase_transcript_inventory_is_independent",
+        ),
+    ),
+)
 SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS = (
     (
         "scripts/sccp_release_readiness_report.py",
@@ -4374,6 +4901,69 @@ SCCP_RELEASE_BUNDLE_SOURCE_COPY_MARKERS = (
         (
             "test_release_readiness_report_guards_sccp_release_bundle_source_copy_gate_inventory",
             "test_release_readiness_report_blocks_missing_sccp_release_bundle_source_copy_gate",
+        ),
+    ),
+)
+SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS = (
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _native_evm_prover_bundle_status_from_payload(",
+            "native EVM Groth16 prover bundle must be a JSON object",
+            "native EVM Groth16 prover bundle contains unknown field",
+            "native EVM Groth16 prover bundle missing field",
+            "native EVM Groth16 prover bundle no_wasm must be true",
+            "native EVM Groth16 prover bundle remote_prover_required must be false",
+            "native EVM Groth16 prover bundle destination_binding_hash must match",
+            "def _expected_native_evm_prover_bundle_status(",
+            "native EVM Groth16 prover bundle JSON contains duplicate key:",
+            "def _native_evm_prover_bundle_summary_schema_errors(",
+            "readiness report native_evm_prover_bundle",
+            "cross_sdk_fixture_parity_artifact sha256 must match",
+            "native_prover_self_test_artifact sha256 must match",
+            "validation_status must be passed",
+            "validation_blockers must be empty",
+            "readiness report native_evm_prover_bundle is not an object",
+            "_native_evm_prover_bundle_summary_schema_errors(",
+            "bundled native EVM prover manifest blocker:",
+            "readiness report native_evm_prover_bundle does not match bundled",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_native_prover_bundle_schema_gate_inventory_errors(",
+            '"release_native_prover_bundle_schema_gate"',
+            "SCCP release native-prover bundle schema source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_verifier_guards_release_native_prover_bundle_schema_inventory",
+            "test_release_bundle_verifier_rejects_missing_release_native_prover_bundle_schema_inventory_gate",
+            "test_release_bundle_verifier_rejects_native_evm_prover_unknown_root_and_audit_fields",
+            "test_release_bundle_verifier_rejects_duplicate_native_evm_prover_nested_json_keys",
+            "test_release_bundle_verifier_rejects_native_evm_prover_sdk_artifact_value_drift",
+            "test_release_bundle_verifier_rejects_native_evm_prover_sdk_implementation_artifact_drift",
+            "test_release_bundle_verifier_rejects_missing_native_evm_parity_fixture",
+            "test_release_bundle_verifier_rejects_tampered_native_evm_parity_fixture_hash",
+            "test_release_bundle_verifier_rejects_native_evm_parity_fixture_sdk_drift",
+            "test_release_bundle_verifier_rejects_native_evm_self_test_role_reuse",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "test_release_readiness_report_guards_release_native_prover_bundle_schema_gate_inventory",
+            "test_release_readiness_report_blocks_missing_release_native_prover_bundle_schema_gate",
+            "test_release_readiness_report_blocks_native_evm_prover_unknown_root_and_audit_fields",
+            "test_release_readiness_report_blocks_native_evm_prover_sdk_artifact_value_drift",
+            "test_release_readiness_report_blocks_native_evm_prover_sdk_implementation_artifact_drift",
+            "test_release_readiness_report_blocks_missing_native_evm_parity_fixture",
+            "test_release_readiness_report_blocks_tampered_native_evm_parity_fixture_hash",
+            "test_release_readiness_report_blocks_native_evm_parity_fixture_sdk_drift",
+            "test_release_readiness_report_blocks_native_evm_self_test_role_reuse",
         ),
     ),
 )
@@ -4432,8 +5022,10 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "MARKDOWN_UNSAFE_PATH_CHARACTERS",
             "def _path_markdown_unsafe_character(",
             "release artifact path contains Markdown-unsafe character",
+            "release artifact path must not contain surrounding whitespace",
             "release bundle copied filename contains Markdown-unsafe character",
             "path contains Markdown-unsafe character",
+            "path must not contain surrounding whitespace",
         ),
     ),
     (
@@ -4443,6 +5035,7 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "def _path_markdown_unsafe_character(",
             "release artifact path contains Markdown-unsafe character",
             "path contains Markdown-unsafe character",
+            "path must not contain surrounding whitespace",
         ),
     ),
     (
@@ -4452,7 +5045,9 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "def _path_markdown_unsafe_character(",
             "manifest artifact path contains Markdown-unsafe character",
             "readiness report inputs path contains Markdown-unsafe character",
+            "readiness report inputs path must not contain surrounding whitespace",
             "artifact path contains Markdown-unsafe character",
+            "artifact path must not contain surrounding whitespace",
             "bundle contains entry path with Markdown-unsafe character",
         ),
     ),
@@ -4465,8 +5060,12 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_bundle_rejects_markdown_unsafe_phase_evidence_before_copy",
             "test_release_bundle_rejects_markdown_unsafe_native_evm_payload_before_copy",
             "test_release_bundle_rejects_markdown_unsafe_artifact_paths",
+            "test_release_bundle_rejects_padded_artifact_paths",
             "test_release_bundle_verifier_rejects_markdown_unsafe_manifest_paths",
+            "test_release_bundle_verifier_rejects_padded_manifest_paths",
             "test_release_bundle_verifier_rejects_markdown_unsafe_report_paths",
+            "test_release_bundle_verifier_rejects_padded_report_paths",
+            "test_release_bundle_verifier_rejects_padded_native_evm_prover_payload_paths",
             "test_release_bundle_verifier_rejects_markdown_unsafe_filesystem_entries",
         ),
     ),
@@ -4476,7 +5075,561 @@ SCCP_RELEASE_ARTIFACT_PATH_TEXT_MARKERS = (
             "test_release_readiness_report_guards_sccp_release_artifact_path_text_gate_inventory",
             "test_release_readiness_report_blocks_missing_sccp_release_artifact_path_text_gate",
             "test_release_readiness_rejects_markdown_unsafe_artifact_paths",
+            "test_release_readiness_rejects_padded_artifact_paths",
             "test_release_readiness_rejects_markdown_unsafe_native_evm_payload_paths",
+            "test_release_readiness_rejects_padded_native_evm_payload_paths",
+        ),
+    ),
+)
+SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS = (
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _canonical_report_input_path_errors(",
+            "readiness report inputs item must be a non-empty string",
+            "readiness report inputs path escapes bundle",
+            "def _copied_input_layout_errors(",
+            "path must use copied evidence layout",
+            "def _input_provenance_schema_errors(",
+            "readiness report inputs must be a non-empty list of canonical paths",
+            "readiness report inputs contains duplicate path",
+            "readiness report input_artifacts contains duplicate path",
+            "def _copied_input_summary(",
+            "readiness report input_artifacts must be a non-empty list",
+            "readiness report has no usable copied evidence inputs",
+            "readiness report inputs do not match copied input artifacts",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_input_provenance_schema_gate_inventory_errors(",
+            '"release_input_provenance_schema_gate"',
+            "SCCP release input-provenance schema source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_verifier_guards_release_input_provenance_schema_inventory",
+            "test_release_bundle_verifier_rejects_missing_release_input_provenance_schema_inventory_gate",
+            "test_release_bundle_verifier_rejects_input_path_drift",
+            "test_release_bundle_verifier_rejects_input_provenance_schema_drift",
+            "test_release_bundle_verifier_rejects_report_artifact_path_drift",
+            "test_release_bundle_verifier_rejects_copied_input_layout_drift",
+            "test_release_bundle_verifier_requires_copied_evidence_inputs",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "test_release_readiness_report_guards_release_input_provenance_schema_gate_inventory",
+            "test_release_readiness_report_blocks_missing_release_input_provenance_schema_gate",
+        ),
+    ),
+)
+SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS = (
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "class DuplicateJsonKeyError",
+            "def _reject_duplicate_json_keys(",
+            "object_pairs_hook=_reject_duplicate_json_keys",
+            "def _canonical_json_file_errors(",
+            "JSON is not canonical release-bundle serialization",
+            "manifest JSON is not UTF-8 text",
+            "manifest JSON contains duplicate key",
+            "_canonical_json_file_errors(\"manifest\", manifest_path, manifest)",
+            "readiness report JSON contains duplicate key",
+            "readiness report JSON is not UTF-8 text",
+            "_canonical_json_file_errors(\"readiness report\", report_path, report)",
+            "all-lanes summary JSON contains duplicate key",
+            "all-lanes summary JSON is not UTF-8 text",
+            "_canonical_json_file_errors(\"all-lanes summary\", summary_path, summary)",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_public_json_root_schema_gate_inventory_errors(",
+            '"release_public_json_root_schema_gate"',
+            "SCCP release public JSON-root schema source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_verifier_guards_release_public_json_root_schema_inventory",
+            "test_release_bundle_verifier_rejects_missing_release_public_json_root_schema_inventory_gate",
+            "test_release_bundle_verifier_rejects_noncanonical_json_serialization",
+            "test_release_bundle_verifier_rejects_duplicate_json_keys",
+            "test_release_bundle_verifier_rejects_report_summary_duplicate_json_keys",
+            "test_release_bundle_verifier_rejects_non_utf8_manifest_json",
+            "test_release_bundle_verifier_rejects_non_utf8_report_summary_json",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "test_release_readiness_report_guards_release_public_json_root_schema_gate_inventory",
+            "test_release_readiness_report_blocks_missing_release_public_json_root_schema_gate",
+        ),
+    ),
+)
+SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS = (
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            'report_md_path.read_text(encoding="utf-8")',
+            "readiness report Markdown is not UTF-8 text",
+            "_readiness_markdown_invariant_errors(report, report_markdown)",
+            "readiness report Markdown does not match readiness report JSON",
+            'notes_path.read_text(encoding="utf-8")',
+            "release-notes attachment is not UTF-8 text",
+            "_release_notes_attachment_invariant_errors(report, artifacts, notes)",
+            "release notes attachment does not match manifest and report",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_public_markdown_text_schema_gate_inventory_errors(",
+            '"release_public_markdown_text_schema_gate"',
+            "SCCP release public Markdown text schema source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_verifier_guards_release_public_markdown_text_schema_inventory",
+            "test_release_bundle_verifier_rejects_missing_release_public_markdown_text_schema_inventory_gate",
+            "test_release_bundle_verifier_rejects_non_utf8_public_markdown",
+            "test_release_bundle_verifier_rejects_markdown_report_drift",
+            "test_release_bundle_verifier_rejects_release_notes_drift",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "test_release_readiness_report_guards_release_public_markdown_text_schema_gate_inventory",
+            "test_release_readiness_report_blocks_missing_release_public_markdown_text_schema_gate",
+        ),
+    ),
+)
+SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS = (
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _expected_cryptographic_evidence(evidence:",
+            "def _cryptographic_evidence_inventory_errors(",
+            "def _cryptographic_evidence_lane_binding_errors(",
+            "readiness report cryptographic_evidence does not cover every lane",
+            "_expected_cryptographic_evidence(report_evidence)",
+            "readiness report cryptographic_evidence does not match embedded lane evidence",
+            "readiness report cryptographic evidence row has unbound route canary",
+            "must match embedded lane",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_public_crypto_evidence_binding_gate_inventory_errors(",
+            '"release_public_crypto_evidence_binding_gate"',
+            "SCCP release public cryptographic-evidence binding source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_verifier_guards_release_public_crypto_evidence_binding_inventory",
+            "test_release_bundle_verifier_rejects_missing_release_public_crypto_evidence_binding_inventory_gate",
+            "test_release_bundle_verifier_rejects_unbound_crypto_evidence",
+            "test_release_bundle_verifier_rejects_crypto_evidence_hash_drift",
+            "test_release_bundle_verifier_expected_crypto_evidence_preserves_malformed_values",
+            "test_release_bundle_verifier_rejects_crypto_evidence_field_binding_drift",
+            "test_release_bundle_verifier_rejects_crypto_evidence_lane_binding_drift",
+            "test_release_bundle_verifier_rejects_crypto_evidence_inventory_drift",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "test_release_readiness_report_guards_release_public_crypto_evidence_binding_gate_inventory",
+            "test_release_readiness_report_blocks_missing_release_public_crypto_evidence_binding_gate",
+        ),
+    ),
+)
+SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS = (
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _expected_submission_surfaces(report:",
+            "USER_PROVER_REQUIRED_LANE_BACKENDS",
+            "USER_PROVER_REQUIRED_HELPERS_BY_LANE_SDK",
+            "def _submission_surface_inventory_errors(",
+            "readiness report user_prover_submission_surfaces is missing",
+            "_submission_surface_inventory_errors(surfaces)",
+            "_expected_submission_surfaces(report)",
+            "readiness report user_prover_submission_surfaces does not match corridor phases",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_public_submission_surface_binding_gate_inventory_errors(",
+            '"release_public_submission_surface_binding_gate"',
+            "SCCP release public submission-surface binding source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "test_release_bundle_verifier_guards_release_public_submission_surface_binding_inventory",
+            "test_release_bundle_verifier_rejects_missing_release_public_submission_surface_binding_inventory_gate",
+            "test_release_bundle_verifier_required_helper_inventory_matches_report",
+            "test_release_bundle_verifier_expected_submission_surfaces_are_independent",
+            "test_release_bundle_verifier_helper_inventory_is_independent",
+            "test_release_bundle_verifier_rejects_submission_surface_drift",
+            "test_release_bundle_verifier_rejects_submission_surface_duplicate_lanes",
+            "test_release_bundle_verifier_rejects_submission_surface_unknown_lanes",
+            "test_release_bundle_verifier_rejects_submission_surface_backend_mismatch",
+            "test_release_bundle_verifier_rejects_missing_required_submission_surface_helper",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "test_release_readiness_report_guards_release_public_submission_surface_binding_gate_inventory",
+            "test_release_readiness_report_blocks_missing_release_public_submission_surface_binding_gate",
+        ),
+    ),
+)
+SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS = (
+    (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _release_bundle_manifest(",
+            "Build the release manifest without truthy-coercing readiness fields.",
+            '"production_ready": report["production_ready"]',
+            '"release_checklist_ready": report["release_checklist"]["ready"]',
+            '"corridor_ready": report["corridor"]["production_ready"]',
+        ),
+    ),
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            '_boolean_field_errors("manifest", manifest, "production_ready")',
+            '_boolean_field_errors("manifest", manifest, "release_checklist_ready")',
+            '_boolean_field_errors("manifest", manifest, "corridor_ready")',
+            "manifest production_ready is not true",
+            "manifest release_checklist_ready is not true",
+            "manifest corridor_ready is not true",
+            "manifest production_ready does not match readiness report",
+            "manifest release_checklist_ready does not match readiness report release_checklist",
+            "manifest corridor_ready does not match readiness report corridor",
+            "manifest production_ready does not match all-lanes summary active",
+            "manifest release_checklist_ready does not match all-lanes summary active",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_manifest_readiness_flags_gate_inventory_errors(",
+            '"release_manifest_readiness_flags_gate"',
+            "SCCP release manifest readiness-flags source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_release_manifest_readiness_flags_inventory",
+            "def test_release_bundle_manifest_preserves_malformed_readiness_values",
+            "def test_release_bundle_verifier_rejects_readiness_boolean_type_drift",
+            "def test_release_bundle_verifier_rejects_manifest_readiness_claim_drift",
+            "def test_release_bundle_verifier_compares_summary_launch_ready_exactly",
+            "def test_release_bundle_verifier_rejects_missing_release_manifest_readiness_flags_inventory_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_release_manifest_readiness_flags_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_release_manifest_readiness_flags_gate",
+        ),
+    ),
+)
+SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS = (
+    (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _release_bundle_manifest(",
+            "artifact_paths: list[Path]",
+            '"artifacts": _bundle_artifacts(output_dir, artifact_paths)',
+        ),
+    ),
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "REQUIRED_ARTIFACT_PATHS = (",
+            'MANIFEST_ROOT_PATH = "manifest.json"',
+            "def _referenced_report_artifact_paths(",
+            "paths = set(REQUIRED_ARTIFACT_PATHS)",
+            "def _manifest_artifacts_by_path(",
+            "duplicate manifest artifact path",
+            "manifest must not list verifier root as an artifact",
+            "def _bundle_entry_paths(",
+            "bundle contains unmanifested artifact",
+            "bundle contains unmanifested directory",
+            "manifest missing required artifact",
+            "manifest contains artifact not referenced by readiness report",
+            "manifest missing readiness report referenced artifact",
+            "def _manifest_artifact_paths_in_order(",
+            "def _expected_manifest_artifact_order(",
+            "manifest artifact order does not match canonical",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_manifest_artifact_set_order_gate_inventory_errors(",
+            '"release_manifest_artifact_set_order_gate"',
+            "SCCP release manifest artifact-set/order source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_release_manifest_artifact_set_order_inventory",
+            "def test_release_bundle_verifier_rejects_missing_release_manifest_artifact_set_order_inventory_gate",
+            "def test_release_bundle_verifier_rejects_manifest_root_self_listing",
+            "def test_release_bundle_verifier_rejects_duplicate_manifest_artifact_paths",
+            "def test_release_bundle_verifier_rejects_unmanifested_artifact",
+            "def test_release_bundle_verifier_rejects_unmanifested_directory",
+            "def test_release_bundle_verifier_rejects_omitted_phase_artifact",
+            "def test_release_bundle_verifier_rejects_extra_manifested_artifact",
+            "def test_release_bundle_verifier_rejects_unknown_phase_artifact_reference",
+            "def test_release_bundle_verifier_rejects_manifest_artifact_order_drift",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_release_manifest_artifact_set_order_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_release_manifest_artifact_set_order_gate",
+        ),
+    ),
+)
+SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS = (
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _string_list_field_errors(",
+            "with no surrounding whitespace",
+            "must not contain duplicate strings",
+            '_string_list_field_errors("manifest", manifest, "blockers", allow_empty=True)',
+            '"readiness report",',
+            '"blockers",',
+            "def _corridor_schema_errors(",
+            "readiness report corridor blockers must be empty",
+            "def _release_checklist_schema_errors(",
+            "blockers must be empty",
+            "def _all_lanes_summary_schema_errors(",
+            "active {ACTIVE_LAUNCH_DISPLAY} launch blockers must be empty",
+            "def _all_lanes_lane_schema_errors(",
+            '_string_list_field_errors(lane_label, lane, "blockers", allow_empty=True)',
+            "def _active_launch_blockers(",
+            "active launch lane blocker summary is malformed",
+            "def _readiness_markdown_string_list_cell(",
+            "`<invalid blockers>`",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_public_blocker_list_schema_gate_inventory_errors(",
+            '"release_public_blocker_list_schema_gate"',
+            "SCCP release public blocker-list schema source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_release_public_blocker_list_schema_inventory",
+            "def test_release_bundle_verifier_rejects_missing_release_public_blocker_list_schema_inventory_gate",
+            "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
+            "def test_release_bundle_verifier_rejects_padded_public_blocker_strings",
+            "def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings",
+            "def test_release_bundle_verifier_active_launch_blockers_reject_malformed_containers",
+            "def test_release_bundle_verifier_rejects_malformed_active_launch_blockers",
+            "def test_release_bundle_verifier_rejects_all_lanes_root_blockers",
+            "def test_release_bundle_release_notes_mark_malformed_blocker_containers",
+            "def test_release_bundle_verifier_markdown_invariants_require_invalid_blocker_markers",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_release_public_blocker_list_schema_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_release_public_blocker_list_schema_gate",
+            "def test_release_readiness_report_markdown_marks_malformed_blocker_containers",
+            "def test_release_readiness_report_classifies_malformed_active_lane_blockers",
+            "def test_release_readiness_report_blocks_malformed_native_prover_blockers",
+        ),
+    ),
+)
+SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS = (
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _non_empty_string_field_errors(",
+            "with no surrounding whitespace",
+            "def _cryptographic_evidence_row_schema_errors(",
+            "route_canary_evidence_source must be a non-empty string",
+            "def _submission_surface_row_schema_errors(",
+            'for field in ("lanes", "proof_backend", "sdk_helpers", "on_chain_submission"):',
+            "sdk_helper_symbols_by_sdk[{sdk}] must be a list of ",
+            "def _all_lanes_lane_schema_errors(",
+            "chain must be a non-empty string",
+            '"destination_binding_key"',
+            "def _all_lanes_route_canary_schema_errors(",
+            'for field in ("status", "evidence_source"):',
+            "status must be passed",
+            "evidence_source must be {expected_source}",
+            "def _release_checklist_schema_errors(",
+            '_non_empty_string_field_errors(item_label, item, "id")',
+            '_non_empty_string_field_errors(item_label, item, "title")',
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_public_scalar_text_schema_gate_inventory_errors(",
+            '"release_public_scalar_text_schema_gate"',
+            "SCCP release public scalar-text schema source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_guards_release_public_scalar_text_schema_inventory",
+            "def test_release_bundle_verifier_rejects_missing_release_public_scalar_text_schema_inventory_gate",
+            "def test_release_bundle_verifier_rejects_padded_public_scalar_strings",
+            "def test_release_bundle_verifier_rejects_release_checklist_field_type_drift",
+            "def test_release_bundle_verifier_rejects_all_lanes_list_scalar_type_drift",
+            "def test_release_bundle_verifier_rejects_all_lanes_destination_binding_field_shape",
+            "def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift",
+            "def test_release_bundle_verifier_rejects_submission_surface_field_type_drift",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_release_public_scalar_text_schema_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_release_public_scalar_text_schema_gate",
+        ),
+    ),
+)
+SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS = (
+    (
+        "scripts/sccp_release_bundle.py",
+        (
+            "def _release_notes_attachment(",
+            'status = "READY" if report["production_ready"] is True else "NOT READY"',
+            "# SCCP Public Release Notes Attachment",
+            "Attach `manifest.json` plus every artifact below",
+            "`manifest.json` is the verifier root and is intentionally not listed",
+            "| Artifact | Bytes | SHA-256 |",
+            "lines.extend([\"\", \"## Blocking Items\", \"\"])",
+        ),
+    ),
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "def _expected_release_notes_attachment(",
+            'status = "READY" if report.get("production_ready") is True else "NOT READY"',
+            "def _release_notes_attachment_invariant_errors(",
+            "release notes attachment missing canonical title",
+            "release notes attachment missing status line",
+            "release notes attachment does not list manifest.json",
+            "release notes attachment missing Blocking Items section",
+            "release notes attachment missing blocker",
+            "release notes attachment does not match manifest and report",
+        ),
+    ),
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _sccp_release_notes_attachment_invariants_gate_inventory_errors(",
+            '"release_notes_attachment_invariants_gate"',
+            "SCCP release-notes attachment invariants source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_requires_manifest_handoff_note",
+            "def test_release_bundle_verifier_rejects_release_notes_drift",
+            "def test_release_bundle_verifier_release_notes_renderer_is_independent",
+            "def test_release_bundle_verifier_release_notes_invariants_require_status_and_blockers",
+            "def test_release_bundle_verifier_rejects_release_notes_status_drift",
+            "def test_release_bundle_release_note_status_compares_ready_exactly",
+            "def test_release_bundle_release_notes_mark_malformed_blocker_containers",
+            "def test_release_bundle_verifier_guards_release_notes_attachment_invariants_inventory",
+            "def test_release_bundle_verifier_rejects_missing_release_notes_attachment_invariants_inventory_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_release_notes_attachment_invariants_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_release_notes_attachment_invariants_gate",
+        ),
+    ),
+)
+SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS = (
+    (
+        "scripts/sccp_release_readiness_report.py",
+        (
+            "def _render_markdown(",
+            "## Release Checklist",
+            "## Source Inventory",
+            "## Required Release Evidence",
+            "def _sccp_readiness_markdown_invariants_gate_inventory_errors(",
+            '"readiness_markdown_invariants_gate"',
+            "SCCP readiness Markdown invariants source inventory",
+        ),
+    ),
+    (
+        "scripts/sccp_verify_release_bundle.py",
+        (
+            "READINESS_MARKDOWN_REQUIRED_SECTIONS",
+            "def _expected_readiness_markdown(",
+            "def _readiness_markdown_invariant_errors(",
+            "readiness report Markdown missing section",
+            "def _readiness_markdown_string_list_cell_presence_errors(",
+            "def _readiness_markdown_string_list_items_presence_errors(",
+            "readiness report Markdown does not match readiness report JSON",
+            "SCCP readiness Markdown invariants source inventory",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_bundle_test.py",
+        (
+            "def test_release_bundle_verifier_rejects_markdown_report_drift",
+            "def test_release_bundle_verifier_readiness_markdown_renderer_matches_report",
+            "def test_release_bundle_verifier_readiness_markdown_renderer_is_independent",
+            "def test_release_bundle_verifier_markdown_invariants_require_public_sections",
+            "def test_release_bundle_verifier_markdown_invariants_require_blocker_text",
+            "def test_release_bundle_verifier_markdown_invariants_require_invalid_blocker_markers",
+            "def test_release_bundle_verifier_guards_readiness_markdown_invariants_inventory",
+            "def test_release_bundle_verifier_rejects_missing_readiness_markdown_invariants_inventory_gate",
+        ),
+    ),
+    (
+        "pytests/scripts/sccp_release_readiness_report_test.py",
+        (
+            "def test_release_readiness_report_guards_readiness_markdown_invariants_gate_inventory",
+            "def test_release_readiness_report_blocks_missing_readiness_markdown_invariants_gate",
         ),
     ),
 )
@@ -5453,6 +6606,11 @@ def _artifact(path: Path) -> dict[str, Any]:
     if path.is_symlink():
         raise ValueError(f"release artifact path must not be a symlink: {path}")
     artifact_path = str(path)
+    if artifact_path.strip() != artifact_path:
+        raise ValueError(
+            "release artifact path must not contain surrounding whitespace: "
+            f"{artifact_path!r}"
+        )
     control_character = _path_control_character(artifact_path)
     if control_character is not None:
         raise ValueError(
@@ -5499,6 +6657,11 @@ def _canonical_artifact_path(artifact: dict[str, Any]) -> tuple[str | None, list
     artifact_path = artifact.get("path")
     if not isinstance(artifact_path, str) or not artifact_path:
         return None, ["manifest artifact has no path"]
+    if artifact_path.strip() != artifact_path:
+        return None, [
+            "manifest artifact path must not contain surrounding whitespace: "
+            f"{artifact_path!r}"
+        ]
     control_character = _path_control_character(artifact_path)
     if control_character is not None:
         return None, [
@@ -5524,6 +6687,11 @@ def _canonical_artifact_path(artifact: dict[str, Any]) -> tuple[str | None, list
 def _canonical_report_input_path_errors(value: Any) -> list[str]:
     if not isinstance(value, str) or not value:
         return ["readiness report inputs item must be a non-empty string"]
+    if value.strip() != value:
+        return [
+            "readiness report inputs path must not contain surrounding "
+            f"whitespace: {value!r}"
+        ]
     control_character = _path_control_character(value)
     if control_character is not None:
         return [
@@ -5547,6 +6715,11 @@ def _canonical_report_input_path_errors(value: Any) -> list[str]:
 
 
 def _canonical_report_artifact_path_errors(label: str, value: str) -> list[str]:
+    if value.strip() != value:
+        return [
+            f"{label} artifact path must not contain surrounding whitespace: "
+            f"{value!r}"
+        ]
     control_character = _path_control_character(value)
     if control_character is not None:
         return [
@@ -6549,6 +7722,19 @@ def _native_sccp_no_wasm_readiness_inventory_errors(
     )
 
 
+def _sccp_release_native_prover_bundle_schema_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for native prover bundle schema/binding checks."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_NATIVE_PROVER_BUNDLE_SCHEMA_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release native-prover bundle schema",
+    )
+
+
 def _sccp_phase_evidence_source_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -6559,6 +7745,19 @@ def _sccp_phase_evidence_source_inventory_errors(
     return _source_marker_inventory_errors(
         inventory,
         label="SCCP phase evidence duplicate-input",
+    )
+
+
+def _sccp_release_corridor_phase_transcript_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for strict corridor phase transcript checks."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_CORRIDOR_PHASE_TRANSCRIPT_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release corridor phase-transcript",
     )
 
 
@@ -6601,6 +7800,149 @@ def _sccp_release_artifact_path_text_inventory_errors(
     )
 
 
+def _sccp_release_input_provenance_schema_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for copied input provenance schema checks."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_INPUT_PROVENANCE_SCHEMA_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release input-provenance schema",
+    )
+
+
+def _sccp_release_public_json_root_schema_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for public JSON-root schema checks."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_PUBLIC_JSON_ROOT_SCHEMA_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release public JSON-root schema",
+    )
+
+
+def _sccp_release_public_markdown_text_schema_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for public Markdown text schema checks."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_PUBLIC_MARKDOWN_TEXT_SCHEMA_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release public Markdown text schema",
+    )
+
+
+def _sccp_release_public_crypto_evidence_binding_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for public cryptographic-evidence binding checks."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_PUBLIC_CRYPTO_EVIDENCE_BINDING_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release public cryptographic-evidence binding",
+    )
+
+
+def _sccp_release_public_submission_surface_binding_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for public submission-surface binding checks."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_PUBLIC_SUBMISSION_SURFACE_BINDING_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release public submission-surface binding",
+    )
+
+
+def _sccp_release_manifest_readiness_flags_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for exact release manifest readiness flags."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_MANIFEST_READINESS_FLAGS_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release manifest readiness-flags",
+    )
+
+
+def _sccp_release_manifest_artifact_set_order_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for the release manifest artifact set and order."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_MANIFEST_ARTIFACT_SET_ORDER_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release manifest artifact-set/order",
+    )
+
+
+def _sccp_release_public_blocker_list_schema_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for public release blocker-list schema checks."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_PUBLIC_BLOCKER_LIST_SCHEMA_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release public blocker-list schema",
+    )
+
+
+def _sccp_release_public_scalar_text_schema_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for public release scalar-text schema checks."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_PUBLIC_SCALAR_TEXT_SCHEMA_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release public scalar-text schema",
+    )
+
+
+def _sccp_release_notes_attachment_invariants_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for release-notes attachment invariants."""
+
+    if inventory is None:
+        inventory = SCCP_RELEASE_NOTES_ATTACHMENT_INVARIANTS_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP release-notes attachment invariants",
+    )
+
+
+def _sccp_readiness_markdown_invariants_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for readiness Markdown invariants."""
+
+    if inventory is None:
+        inventory = SCCP_READINESS_MARKDOWN_INVARIANTS_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP readiness Markdown invariants",
+    )
+
+
 def _bsc_inbound_adversarial_sdk_test_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -6611,6 +7953,97 @@ def _bsc_inbound_adversarial_sdk_test_inventory_errors(
     return _sdk_test_inventory_errors(
         inventory,
         label="BSC mainnet inbound adversarial",
+    )
+
+
+def _bsc_route_config_canonical_manifest_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for BSC route-config canonical manifest guards."""
+
+    if inventory is None:
+        inventory = BSC_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP BSC route-config canonical-manifest",
+    )
+
+
+def _tron_route_config_canonical_manifest_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for TRON route-config canonical manifest guards."""
+
+    if inventory is None:
+        inventory = TRON_ROUTE_CONFIG_CANONICAL_MANIFEST_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP TRON route-config canonical-manifest",
+    )
+
+
+def _tron_runtime_route_manifest_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for TRON runtime route-manifest guards."""
+
+    if inventory is None:
+        inventory = TRON_RUNTIME_ROUTE_MANIFEST_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP TRON runtime route-manifest",
+    )
+
+
+def _all_lanes_route_canary_scalar_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for all-lanes route-canary scalar guards."""
+
+    if inventory is None:
+        inventory = ALL_LANES_ROUTE_CANARY_SCALAR_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP all-lanes route-canary scalar",
+    )
+
+
+def _all_lanes_governed_blocker_schema_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for all-lanes governed blocker schemas."""
+
+    if inventory is None:
+        inventory = ALL_LANES_GOVERNED_BLOCKER_SCHEMA_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP all-lanes governed blocker schema",
+    )
+
+
+def _all_lanes_release_checklist_exact_boolean_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for all-lanes checklist exact-boolean guards."""
+
+    if inventory is None:
+        inventory = ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP all-lanes release-checklist exact-boolean",
+    )
+
+
+def _active_launch_checklist_schema_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return inventory errors for active-launch checklist schema guards."""
+
+    if inventory is None:
+        inventory = ACTIVE_LAUNCH_CHECKLIST_SCHEMA_MARKERS
+    return _source_marker_inventory_errors(
+        inventory,
+        label="SCCP active-launch checklist schema",
     )
 
 
@@ -6976,8 +8409,12 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
         add("SCCP evidence blocker summary is malformed")
     else:
         for blocker in evidence_blockers:
-            if not isinstance(blocker, str) or not blocker:
-                add("SCCP evidence blocker must be a non-empty string")
+            if (
+                not isinstance(blocker, str)
+                or not blocker
+                or blocker.strip() != blocker
+            ):
+                add("SCCP evidence blocker must be a non-empty canonical string")
                 continue
             if blocker.startswith(prefix):
                 add(blocker)
@@ -6995,8 +8432,14 @@ def _active_launch_blockers(evidence: dict[str, Any]) -> list[str]:
         add(f"{prefix}active launch lane blocker summary is malformed")
         return blockers
     for blocker in lane_blockers:
-        if not isinstance(blocker, str) or not blocker:
-            add(f"{prefix}active launch lane blocker must be a non-empty string")
+        if (
+            not isinstance(blocker, str)
+            or not blocker
+            or blocker.strip() != blocker
+        ):
+            add(
+                f"{prefix}active launch lane blocker must be a non-empty canonical string"
+            )
         elif blocker.startswith(prefix):
             add(blocker)
         else:
@@ -7016,6 +8459,25 @@ def _string_list_or_schema_blockers(value: Any, label: str) -> list[str]:
         else:
             blockers.append(item)
     return blockers
+
+
+def _active_launch_lane_blockers_for_checklist(
+    value: Any,
+    lane_label: str,
+) -> tuple[list[str], list[str]]:
+    label = f"{lane_label}: active launch lane blockers"
+    if not isinstance(value, list):
+        return [], [f"{label} must be a list of non-empty canonical strings"]
+    blockers: list[str] = []
+    schema_blockers: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item or item.strip() != item:
+            schema_blockers.append(
+                f"{label}[{index}] must be a non-empty canonical string"
+            )
+        else:
+            blockers.append(item)
+    return blockers, schema_blockers
 
 
 def _active_launch_evm_live_metadata_blockers(
@@ -7072,7 +8534,17 @@ def _active_launch_route_canary_metadata_blockers(
             f"{lane_label}: route canary evidence hash must be a canonical "
             "non-zero bytes32 hex string"
         )
-    if canary.get("evidence_source") != ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE:
+    evidence_source = canary.get("evidence_source")
+    if (
+        not isinstance(evidence_source, str)
+        or not evidence_source
+        or evidence_source.strip() != evidence_source
+    ):
+        blockers.append(
+            f"{lane_label}: route canary evidence source must be a non-empty "
+            "canonical string"
+        )
+    elif evidence_source != ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE:
         blockers.append(
             f"{lane_label}: route canary evidence source must be "
             f"{ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}"
@@ -7308,6 +8780,8 @@ def _native_evm_manifest_relative_path(
         return None, [
             f"{prefix} path must be a non-empty relative POSIX file path"
         ]
+    if value.strip() != value:
+        return None, [f"{prefix} path must not contain surrounding whitespace"]
     control_character = _path_control_character(value)
     if control_character is not None:
         return None, [
@@ -7450,6 +8924,9 @@ def _native_evm_prover_bundle_artifact_summary(
         implementation = artifact.get("implementation")
         if not isinstance(sdk, str) or not sdk:
             blockers.append(f"{label}.sdk must be a non-empty string")
+            continue
+        if sdk.strip() != sdk:
+            blockers.append(f"{label}.sdk must not contain surrounding whitespace")
             continue
         if sdk in by_sdk:
             blockers.append(f"native_sdk_artifacts contains duplicate sdk: {sdk}")
@@ -8385,6 +9862,9 @@ def _native_evm_prover_bundle_summary_schema_errors(status: dict[str, Any]) -> l
             if not isinstance(sdk, str) or not sdk:
                 errors.append(f"{row_label} sdk must be a non-empty string")
                 continue
+            if sdk.strip() != sdk:
+                errors.append(f"{row_label} sdk must not contain surrounding whitespace")
+                continue
             if sdk in seen_sdks:
                 errors.append(f"{label} sdk_artifacts contains duplicate sdk: {sdk}")
             seen_sdks.add(sdk)
@@ -8439,12 +9919,12 @@ def _active_launch_release_checklist(
 ) -> dict[str, Any]:
     lane = _active_launch_lane(evidence) or {}
     lane_label = f"domain {ACTIVE_LAUNCH_DOMAIN} ({ACTIVE_LAUNCH_CHAIN})"
-    raw_lane_blockers = lane.get("blockers")
-    lane_blockers = [
-        blocker
-        for blocker in raw_lane_blockers
-        if isinstance(blocker, str)
-    ] if isinstance(raw_lane_blockers, list) else []
+    lane_blockers, lane_blocker_schema_errors = (
+        _active_launch_lane_blockers_for_checklist(
+            lane.get("blockers"),
+            lane_label,
+        )
+    )
     record_labels = {
         "source_verifier_material": "source verifier material",
         "source_adapter_deployment": "source adapter deployment",
@@ -8471,6 +9951,7 @@ def _active_launch_release_checklist(
             )
         )
     ]
+    deployment_blockers.extend(lane_blocker_schema_errors)
     if lane:
         deployment_blockers.extend(
             _active_launch_evm_live_metadata_blockers(lane_label, lane)
@@ -8483,6 +9964,7 @@ def _active_launch_release_checklist(
         for blocker in lane_blockers
         if "route allowlist" in blocker
     ]
+    route_blockers.extend(lane_blocker_schema_errors)
     if lane:
         route_blockers.extend(
             _active_launch_route_allowlist_binding_blockers(lane_label, lane)
@@ -8492,6 +9974,7 @@ def _active_launch_release_checklist(
         for blocker in lane_blockers
         if "route canary" in blocker
     ]
+    canary_blockers.extend(lane_blocker_schema_errors)
     route_summary = lane.get("route_allowlist")
     if not isinstance(route_summary, dict):
         route_summary = {}
@@ -8971,6 +10454,19 @@ def _render_readiness_markdown(
             "- SCCP Ethereum no-proxy data-collection source inventory must pin app-owned execution/Beacon provider reads and reject Torii proxy or embedded HTTP-client fallbacks across public SDKs.",
             "- SCCP Ethereum inbound adversarial source inventory must pin public SDK regressions for failed receipts, source-event drift, hash-only proof bypasses, immutable evidence snapshots, oversized proof bytes, finality mismatches, sync-committee quorum checks, and wrong-domain receipt transcripts before inbound source proofs can be accepted.",
             "- SCCP BSC inbound adversarial source inventory must pin public SDK regressions for hash-only proof bypasses, receipt-proof metadata binding, source-event digest drift, malformed source logs, and missing source-event validation before BSC inbound source proofs can be accepted.",
+            "- SCCP BSC route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, lowercase EVM address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
+            "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
+            "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
+            "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
+            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
+            "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed lane metadata, and verifier recomputation before production readiness can pass.",
+            "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
+            "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, and canonical attachment order before published bundle readiness can pass.",
+            "- SCCP release public blocker-list schema source inventory must pin canonical non-empty blocker strings, no surrounding whitespace, duplicate rejection, ready-surface empty-blocker checks, and invalid-marker rendering before published bundle readiness can pass.",
+            "- SCCP release public scalar-text schema source inventory must pin canonical non-empty scalar text for release-checklist ids/titles, cryptographic-evidence chain/source labels, user-prover submission rows, all-lanes chain labels, destination-binding keys, and route-canary status/source fields before published bundle readiness can pass.",
+            "- SCCP release-notes attachment invariants source inventory must pin canonical title/status rendering, manifest handoff, artifact table hashes, blocker visibility, and canonical attachment drift rejection before public bundle readiness can pass.",
+            "- SCCP readiness Markdown invariants source inventory must pin verifier-owned public Markdown sections, checklist and source-inventory blocker visibility, invalid-marker rendering, and canonical Markdown drift rejection before public bundle readiness can pass.",
             "- SCCP Ethereum outbound pre-callback source inventory must pin public SDK regressions that reject foreign-lane outbound requests, forged destination bindings, missing or partial proof-artifact hashes, zero proof-artifact hashes, and callback-visible proof material before outbound prover callbacks can run.",
             "- SCCP Ethereum outbound provider-validation source inventory must pin public SDK and facade guards that validate app-supplied Ethereum mainnet execution providers before outbound submitter callbacks can run.",
             "- SCCP Ethereum local-admission source inventory must pin public SDK regressions that reject mutated proof bytes, all-zero proof/public-input/bundle/envelope bytes, empty envelopes, zero statement/source-material/source-adapter hashes, and stale proof-family metadata before local admission payloads can be submitted.",
@@ -8999,14 +10495,21 @@ def _render_readiness_markdown(
             "- SCCP Ethereum EVM live source/destination source inventory must pin canonical live RPC chain ids, finalized block tags, deployment receipt binding, runtime bytecode hashes, route canary calldata, and proof tuple drift tests.",
             "- SCCP Ethereum route-canary finalized receipt-block source inventory must pin finalized receipt-block binding, TOML evidence fields, all-lanes comments, runtime hashing, and negative drift tests.",
             "- SCCP Ethereum EVM block-tag metadata source inventory must pin finalized source/destination block-tag evidence and negative drift tests.",
-            "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, and adversarial manifest coverage.",
+            "- SCCP native no-WASM/no-remote source inventory must pin public SDK parsers, artifact verifiers, self-tests, browser distribution guards, canonical native EVM prover SDK-id rejection, padded-SDK adversarial tests, and adversarial manifest coverage.",
+            "- SCCP release native-prover bundle schema source inventory must pin native EVM Groth16 manifest schema, readiness summary schema, artifact hash/path binding, and bundled-manifest drift rejection before published bundle readiness can pass.",
             "- SCCP proof-request bundle/source-proof source inventory must pin canonical bundle-byte and non-SORA source-proof rejection gates across Rust, JavaScript, Python, Swift, Kotlin/JVM, and Java Android.",
             "- SCCP phase-evidence source inventory must pin duplicate assignment and directory override rejection across readiness-report and release-bundle CLIs before corridor phase evidence can satisfy production readiness.",
+            "- SCCP release corridor phase-transcript source inventory must pin exact phase markers, observed completion/success output, traced command fragments, dry-run rejection, and forged-block rejection before corridor logs can satisfy public bundle readiness.",
             "- SCCP release bundle source-copy source inventory must pin symlink and control-character rejection for evidence inputs, phase evidence, native EVM prover manifests, and native prover payload sources before bundle copy can run.",
             "- SCCP release bundle output-path source inventory must pin symlink and control-character rejection for output directories before bundle generation can create or overwrite release artifacts.",
             "- SCCP release artifact path text source inventory must pin Markdown-unsafe character rejection for manifest artifact paths, readiness inputs, native prover payload paths, copied bundle filenames, and bundle filesystem entries before release notes can render artifact tables.",
+            "- SCCP release input-provenance schema source inventory must pin canonical copied evidence input paths, unique input/input-artifact provenance, copied `evidence/NN-*.toml` layout, and recomputation from copied TOML before published bundle readiness can pass.",
+            "- SCCP release public JSON-root schema source inventory must pin canonical manifest/readiness/all-lanes JSON serialization, duplicate-key rejection, and non-UTF-8 fail-closed diagnostics before published bundle readiness can pass.",
+            "- SCCP release public Markdown text schema source inventory must pin UTF-8 readiness/release-note Markdown loading and canonical text drift rejection before published bundle readiness can pass.",
+            "- SCCP release public cryptographic-evidence binding source inventory must pin production-domain inventory, lane-field binding, canonical row recomputation, and active route-canary binding rejection before published bundle readiness can pass.",
+            "- SCCP release public submission-surface binding source inventory must pin lane/backend inventory, per-SDK helper inventory, verifier-owned surface recomputation, and corridor-phase binding before published bundle readiness can pass.",
             "- SCCP retired network-surface source inventory must pin the launch-scope no-support note and active-tree scan so retired runtime-network integrations cannot re-enter release evidence silently.",
-            "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned and reject environment override paths.",
+            "- SCCP unready transparent-proof source inventory must pin the diagnostic `allow_unready` toggle as config-owned, reject environment override paths, and reject production-ready BSC/TRON route configs that force the unready toggle back on.",
             "- Public release notes must attach this report and the all-lanes JSON summary before production activation.",
         ]
     )
@@ -9965,10 +11468,13 @@ def _cryptographic_evidence_row_schema_errors(
     if "domain" in row and type(row.get("domain")) is not int:
         errors.append("readiness report cryptographic evidence row domain must be an integer")
     if "chain" in row and (
-        not isinstance(row.get("chain"), str) or not row.get("chain")
+        not isinstance(row.get("chain"), str)
+        or not row.get("chain")
+        or row.get("chain").strip() != row.get("chain")
     ):
         errors.append(
-            "readiness report cryptographic evidence row chain must be a non-empty string"
+            "readiness report cryptographic evidence row chain must be a non-empty "
+            "string with no surrounding whitespace"
         )
     for field in ("evm_source_rpc_chain_id", "evm_destination_rpc_chain_id"):
         if field in row and not isinstance(row.get(field), str):
@@ -10115,10 +11621,13 @@ def _cryptographic_evidence_row_schema_errors(
     if "route_canary_evidence_source" in row and (
         not isinstance(row.get("route_canary_evidence_source"), str)
         or not row.get("route_canary_evidence_source")
+        or row.get("route_canary_evidence_source").strip()
+        != row.get("route_canary_evidence_source")
     ):
         errors.append(
             "readiness report cryptographic evidence row "
-            "route_canary_evidence_source must be a non-empty string"
+            "route_canary_evidence_source must be a non-empty string "
+            "with no surrounding whitespace"
         )
     expected_canary_source = ALL_LANES_ROUTE_CANARY_SOURCE_BY_DOMAIN.get(
         row.get("domain")
@@ -10479,8 +11988,12 @@ def _non_empty_string_field_errors(
 ) -> list[str]:
     if field not in payload:
         return []
-    if not isinstance(payload.get(field), str) or not payload.get(field):
-        return [f"{label} {field} must be a non-empty string"]
+    value = payload.get(field)
+    if not isinstance(value, str) or not value or value.strip() != value:
+        return [
+            f"{label} {field} must be a non-empty string "
+            "with no surrounding whitespace"
+        ]
     return []
 
 
@@ -10494,10 +12007,18 @@ def _string_list_field_errors(
     if field not in payload:
         return []
     value = payload.get(field)
-    if not isinstance(value, list) or (
-        not allow_empty and not value
-    ) or any(not isinstance(item, str) or not item for item in value):
-        return [f"{label} {field} must be a list of non-empty strings"]
+    if (
+        not isinstance(value, list)
+        or (not allow_empty and not value)
+        or any(
+            not isinstance(item, str) or not item or item.strip() != item
+            for item in value
+        )
+    ):
+        return [
+            f"{label} {field} must be a list of non-empty strings "
+            "with no surrounding whitespace"
+        ]
     if len(value) != len(set(value)):
         return [f"{label} {field} must not contain duplicate strings"]
     return []
@@ -10569,15 +12090,25 @@ def _submission_surface_row_schema_errors(row: dict[str, Any]) -> list[str]:
             )
         for sdk in expected_sdk_order:
             helpers = helper_sets.get(sdk)
-            if (
-                not isinstance(helpers, list)
-                or not helpers
-                or any(not isinstance(item, str) or not item for item in helpers)
-            ):
+            if not isinstance(helpers, list) or not helpers:
                 errors.append(
                     "readiness report user prover submission surface row "
                     f"sdk_helper_symbols_by_sdk[{sdk}] must be a list of "
                     "non-empty strings"
+                )
+                continue
+            if any(not isinstance(item, str) or not item for item in helpers):
+                errors.append(
+                    "readiness report user prover submission surface row "
+                    f"sdk_helper_symbols_by_sdk[{sdk}] must be a list of "
+                    "non-empty strings"
+                )
+                continue
+            if any(item.strip() != item for item in helpers):
+                errors.append(
+                    "readiness report user prover submission surface row "
+                    f"sdk_helper_symbols_by_sdk[{sdk}] must be a list of "
+                    "non-empty strings with no surrounding whitespace"
                 )
                 continue
             if len(helpers) != len(set(helpers)):
@@ -11702,9 +13233,14 @@ def _all_lanes_lane_schema_errors(label: str, lanes: Any) -> list[str]:
         if type(domain) is int and expected_chain is None:
             errors.append(f"{lane_label} domain must be a production remote domain")
         if "chain" in lane and (
-            not isinstance(lane.get("chain"), str) or not lane.get("chain")
+            not isinstance(lane.get("chain"), str)
+            or not lane.get("chain")
+            or lane.get("chain").strip() != lane.get("chain")
         ):
-            errors.append(f"{lane_label} chain must be a non-empty string")
+            errors.append(
+                f"{lane_label} chain must be a non-empty string "
+                "with no surrounding whitespace"
+            )
         elif expected_chain is not None and not _chain_matches_domain(
             domain,
             lane.get("chain"),
@@ -12826,12 +14362,32 @@ def verify_bundle(bundle_dir: Path) -> dict[str, Any]:
     errors.extend(_contract_smoke_eth_mainnet_network_id_inventory_errors())
     errors.extend(_contract_smoke_evm_production_surface_inventory_errors())
     errors.extend(_native_sccp_no_wasm_readiness_inventory_errors())
+    errors.extend(_sccp_release_native_prover_bundle_schema_inventory_errors())
     errors.extend(_sccp_phase_evidence_source_inventory_errors())
+    errors.extend(_sccp_release_corridor_phase_transcript_inventory_errors())
     errors.extend(_sccp_release_bundle_source_copy_inventory_errors())
     errors.extend(_sccp_release_bundle_output_path_inventory_errors())
     errors.extend(_sccp_release_artifact_path_text_inventory_errors())
+    errors.extend(_sccp_release_input_provenance_schema_inventory_errors())
+    errors.extend(_sccp_release_public_json_root_schema_inventory_errors())
+    errors.extend(_sccp_release_public_markdown_text_schema_inventory_errors())
+    errors.extend(_sccp_release_public_crypto_evidence_binding_inventory_errors())
+    errors.extend(_sccp_release_public_submission_surface_binding_inventory_errors())
+    errors.extend(_sccp_release_manifest_readiness_flags_inventory_errors())
+    errors.extend(_sccp_release_manifest_artifact_set_order_inventory_errors())
+    errors.extend(_sccp_release_public_blocker_list_schema_inventory_errors())
+    errors.extend(_sccp_release_public_scalar_text_schema_inventory_errors())
+    errors.extend(_sccp_release_notes_attachment_invariants_inventory_errors())
+    errors.extend(_sccp_readiness_markdown_invariants_inventory_errors())
     errors.extend(_ethereum_data_collection_no_proxy_inventory_errors())
     errors.extend(_bsc_inbound_adversarial_sdk_test_inventory_errors())
+    errors.extend(_bsc_route_config_canonical_manifest_inventory_errors())
+    errors.extend(_tron_route_config_canonical_manifest_inventory_errors())
+    errors.extend(_tron_runtime_route_manifest_inventory_errors())
+    errors.extend(_all_lanes_route_canary_scalar_inventory_errors())
+    errors.extend(_all_lanes_governed_blocker_schema_inventory_errors())
+    errors.extend(_all_lanes_release_checklist_exact_boolean_inventory_errors())
+    errors.extend(_active_launch_checklist_schema_inventory_errors())
     if summary and _active_launch_blockers(summary):
         errors.append(f"all-lanes summary has active {ACTIVE_LAUNCH_DISPLAY} launch blockers")
     if summary and not _active_launch_release_checklist(

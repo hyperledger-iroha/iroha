@@ -12876,15 +12876,15 @@ mod offline_note_tests {
                 if backend == "halo2/kzg"
         ));
 
-        let mut transparent_wrong_family = bundle.clone();
-        transparent_wrong_family.recursive_proof.proof =
-            ProofBox::new("stark/fri/transparent-v1".into(), vec![0xA5; 64]);
-        transparent_wrong_family.recursive_proof.verifier_key_id = VerifyingKeyId::new(
-            "stark/fri/transparent-v1",
+        let mut stark_wrong_family = bundle.clone();
+        stark_wrong_family.recursive_proof.proof =
+            ProofBox::new("stark/fri/sha256-goldilocks".into(), vec![0xA5; 64]);
+        stark_wrong_family.recursive_proof.verifier_key_id = VerifyingKeyId::new(
+            "stark/fri/sha256-goldilocks",
             KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         );
         assert!(matches!(
-            transparent_wrong_family.validate_evidence_binding(),
+            stark_wrong_family.validate_evidence_binding(),
             Err(KagemushaFoldError::InvalidRecursiveAggregationProof {
                 field: "proof.backend"
             })
@@ -16437,6 +16437,18 @@ mod offline_note_tests {
             Err(KagemushaFoldError::RecursiveSpendPublicInputMismatch {
                 field: "previous_recursive_proof.folded_public_inputs_hash"
             })
+        ));
+        let mut stale_previous_public_input_hash = previous_proof0.clone();
+        stale_previous_public_input_hash.public_inputs_hash =
+            Hash::new(b"recursive-spend-stale-previous-proof-public-input-hash");
+        assert!(matches!(
+            kagemusha_recursive_spend_accumulator_append_evidence(
+                &accumulator0,
+                &stale_previous_public_input_hash,
+                &append_evidence,
+                &note1,
+            ),
+            Err(KagemushaFoldError::RecursiveAggregationProofPublicInputHashMismatch { .. })
         ));
         let mut previous_proof_byte_splice = previous_proof0.clone();
         previous_proof_byte_splice.proof.bytes[0] ^= 0x01;

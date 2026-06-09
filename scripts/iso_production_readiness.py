@@ -47,12 +47,16 @@ SUMMARY_DIGEST_FIELD = "summary_sha256"
 MAX_TRUST_DER_BLOBS = 8
 MAX_TRUST_DER_BYTES = 1024 * 1024
 MAX_RAIL_MESSAGE_ID_CHARS = 128
+MAX_PROFILE_ID_CHARS = 128
+MAX_TRUST_POLICY_CHARS = 128
+MAX_TRUST_SOURCE_TEXT_CHARS = 256
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_URL_CHARS = 2048
 MAX_SOURCE_REPOSITORY_CHARS = 2048
-MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.\d{3}\.\d{3}\.\d{2}$")
+MAX_REVIEWED_GAP_REASON_CHARS = 1024
+MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}\.[0-9]{3}\.[0-9]{2}$")
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
-MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.\d{3}$")
+MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 RAIL_MESSAGE_ID_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._:@+-]*[A-Za-z0-9])?$")
 SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SOURCE_REPOSITORY_RE = re.compile(
@@ -626,6 +630,10 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+            raise ReadinessError("CLI argument must not contain control characters")
+        if any(ord(ch) > 0x7E for ch in arg):
+            raise ReadinessError("CLI argument must use printable ASCII")
         _reject_secret_string(arg, "CLI argument")
         index += 1
 
@@ -649,6 +657,18 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
         index += 1
 
 
+def _reject_raw_context_cli_value(raw: str, flag: str) -> None:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise ReadinessError(f"{flag} must not contain control characters")
+    if not raw.strip():
+        return
+    if raw != raw.strip():
+        raise ReadinessError(f"{flag} must not have surrounding whitespace")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise ReadinessError(f"{flag} must use printable ASCII")
+    _reject_secret_looking_identifier(raw, flag)
+
+
 def _preflight_required_cli_values(
     argv: list[str] | None,
     flags: set[str],
@@ -668,6 +688,8 @@ def _preflight_required_cli_values(
                 value = raw_args[index + 1]
                 if not value or value.startswith("--"):
                     raise ReadinessError(f"{flag} requires a {value_name} value")
+                if value_name == "context":
+                    _reject_raw_context_cli_value(value, flag)
                 index += 2
                 matched = True
                 break
@@ -676,6 +698,8 @@ def _preflight_required_cli_values(
                 value = arg[len(prefix) :]
                 if not value or value.startswith("--"):
                     raise ReadinessError(f"{flag} requires a {value_name} value")
+                if value_name == "context":
+                    _reject_raw_context_cli_value(value, flag)
                 index += 1
                 matched = True
                 break
@@ -718,6 +742,8 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
 def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
     if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{flag} must be a numeric value")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise ReadinessError(f"{flag} must use printable ASCII")
     try:
         int(raw, 10) if integer else float(raw)
     except ValueError as error:
@@ -901,7 +927,13 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
+        if any(
+            _is_secret_looking_key(key)
+            or _is_control_bearing_key(key)
+            or len(str(key)) > 128
+            or any(ord(ch) > 0x7E for ch in str(key))
+            for key in unknown
+        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
             raise ReadinessError(f"{label} contains unknown keys")
         raise ReadinessError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -922,6 +954,11 @@ def _reject_secret_looking_identifier(value: str, label: str) -> None:
         raise ReadinessError(f"{label} must not contain secret-looking material")
 
 
+def _reject_non_ascii_context(value: str, label: str) -> None:
+    if any(ord(ch) > 0x7E for ch in value):
+        raise ReadinessError(f"{label} must use printable ASCII")
+
+
 def _require_list(value: Any, label: str) -> list[Any]:
     if not isinstance(value, list):
         raise ReadinessError(f"{label} must be a JSON array")
@@ -939,6 +976,13 @@ def _require_string(value: dict[str, Any], key: str, label: str) -> str:
     return raw
 
 
+def _require_context_string(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
+
+
 def _require_cli_string(value: str | None, label: str) -> str:
     if value is None or not value.strip():
         raise ReadinessError(f"provide {label}")
@@ -946,6 +990,7 @@ def _require_cli_string(value: str | None, label: str) -> str:
         raise ReadinessError(f"{label} must not contain control characters")
     if value != value.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
+    _reject_non_ascii_context(value, label)
     _reject_secret_looking_identifier(value, label)
     return value
 
@@ -1082,6 +1127,8 @@ def _validate_config_path(raw: str, label: str) -> str:
 def _reject_path_smuggling(raw: str, label: str) -> None:
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label} must not contain control characters")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise ReadinessError(f"{label} must use printable ASCII")
     if raw != raw.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
     if any(ch.isspace() for ch in raw):
@@ -1109,6 +1156,8 @@ def _reject_path_smuggling(raw: str, label: str) -> None:
 
 def _require_message_def_id(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if MESSAGE_DEF_ID_RE.fullmatch(raw) is None:
         raise ReadinessError(f"{label}.{key} must be a lowercase ISO message id")
     return raw
@@ -1116,10 +1165,28 @@ def _require_message_def_id(value: dict[str, Any], key: str, label: str) -> str:
 
 def _require_profile_id(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
+    if len(raw) > MAX_PROFILE_ID_CHARS:
+        raise ReadinessError(
+            f"{label}.{key} must be no longer than {MAX_PROFILE_ID_CHARS} characters"
+        )
     if PROFILE_ID_RE.fullmatch(raw) is None:
         raise ReadinessError(f"{label}.{key} must be a canonical lowercase profile id")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
+
+
+def _reject_overlong_trust_policy(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_POLICY_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_TRUST_POLICY_CHARS} characters"
+        )
+
+
+def _reject_overlong_trust_source_text(value: str, label: str) -> None:
+    if len(value) > MAX_TRUST_SOURCE_TEXT_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_TRUST_SOURCE_TEXT_CHARS} characters"
+        )
 
 
 def _require_rail(value: dict[str, Any], key: str, label: str) -> str:
@@ -1134,6 +1201,8 @@ def _require_rail(value: dict[str, Any], key: str, label: str) -> str:
 
 def _require_message_type(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
     if MESSAGE_TYPE_RE.fullmatch(raw) is None:
         raise ReadinessError(f"{label}.{key} must be lowercase ISO family id")
     return raw
@@ -1169,12 +1238,14 @@ def _require_nullable_rail_message_id(
 
 def _require_receipt_kind(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
 
 
 def _require_stage_name(value: dict[str, Any], key: str, label: str) -> str:
     raw = _require_string(value, key, label)
+    _reject_non_ascii_context(raw, f"{label}.{key}")
     _reject_secret_looking_identifier(raw, f"{label}.{key}")
     return raw
 
@@ -1435,6 +1506,12 @@ def _validate_reviewed_gap_reason(raw: Any, label: str) -> str | None:
         raise ReadinessError(f"{label} must not contain control characters")
     if raw != raw.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
+    if len(raw) > MAX_REVIEWED_GAP_REASON_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_REVIEWED_GAP_REASON_CHARS} characters"
+        )
+    _reject_non_ascii_context(raw, label)
+    _reject_secret_looking_identifier(raw, label)
     return raw
 
 
@@ -1539,8 +1616,12 @@ def _verify_blocked_schema_source_summary(
     _reject_unknown_keys(entry, XSD_BLOCKED_SCHEMA_SOURCE_KEYS, label)
     message_def_id = _require_message_def_id(entry, "message_def_id", label)
     reason = _require_string(entry, "reason", label)
-    if len(reason) > 1024:
-        raise ReadinessError(f"{label}.reason must be no longer than 1024 characters")
+    if len(reason) > MAX_REVIEWED_GAP_REASON_CHARS:
+        raise ReadinessError(
+            f"{label}.reason must be no longer than {MAX_REVIEWED_GAP_REASON_CHARS} characters"
+        )
+    _reject_non_ascii_context(reason, f"{label}.reason")
+    _reject_secret_looking_identifier(reason, f"{label}.reason")
     if "source" not in entry:
         raise ReadinessError(f"{label}.source must be recorded")
     source = _require_object(entry["source"], f"{label}.source")
@@ -1683,6 +1764,8 @@ def _validate_https_source_url(raw: str, label: str) -> str:
         raise ReadinessError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise ReadinessError(f"{label} host must not end with a dot")
+    if any(ord(ch) > 0x7E for ch in raw_host):
+        raise ReadinessError(f"{label} host must use printable ASCII")
     _reject_secret_looking_identifier(raw_host, f"{label} host")
     _validate_host_labels(raw_host, label)
     if parsed.params or parsed.query or parsed.fragment:
@@ -2613,6 +2696,7 @@ def _verify_receipt_summary(
             raise ReadinessError(
                 f"{label}.receipt_kind[{offset}] must not have surrounding whitespace"
             )
+        _reject_non_ascii_context(item, f"{label}.receipt_kind[{offset}]")
         _reject_secret_looking_identifier(item, f"{label}.receipt_kind[{offset}]")
         if item in seen_receipt_kinds:
             _blocker(
@@ -3146,22 +3230,20 @@ def _verify_policy(
 ) -> dict[str, Any]:
     policy = _require_object(summary.get("policy"), f"{path}.policy")
     _reject_unknown_keys(policy, EVIDENCE_POLICY_KEYS, f"{path}.policy")
-    provider = _require_string(policy, "provider", f"{path}.policy")
-    environment = _require_string(policy, "environment", f"{path}.policy")
-    _reject_secret_looking_identifier(provider, f"{path}.policy.provider")
-    _reject_secret_looking_identifier(environment, f"{path}.policy.environment")
+    provider = _require_context_string(policy, "provider", f"{path}.policy")
+    environment = _require_context_string(policy, "environment", f"{path}.policy")
     if provider != args.provider:
         _blocker(
             blockers,
             "evidence.policy_provider_mismatch",
-            f"evidence policy provider is {provider!r}, expected {args.provider!r}",
+            "evidence policy provider does not match expected provider",
             path,
         )
     if environment != args.environment:
         _blocker(
             blockers,
             "evidence.policy_environment_mismatch",
-            f"evidence policy environment is {environment!r}, expected {args.environment!r}",
+            "evidence policy environment does not match expected environment",
             path,
         )
     for flag in sorted(PRODUCTION_FALSE_POLICY_FLAGS):
@@ -3232,24 +3314,22 @@ def _verify_canary(
         path=path,
         blockers=blockers,
     )
-    provider = _require_string(canary, "provider", label)
-    environment = _require_string(canary, "environment", label)
-    _reject_secret_looking_identifier(provider, f"{label}.provider")
-    _reject_secret_looking_identifier(environment, f"{label}.environment")
+    provider = _require_context_string(canary, "provider", label)
+    environment = _require_context_string(canary, "environment", label)
     plan_only = _require_bool(canary, "plan_only", label)
     require_explicit_policy = _require_bool(canary, "require_explicit_policy", label)
     if args.provider is not None and provider != args.provider:
         _blocker(
             blockers,
             "evidence.provider_mismatch",
-            f"canary provider is {provider!r}, expected {args.provider!r}",
+            "canary provider does not match expected provider",
             path,
         )
     if args.environment is not None and environment != args.environment:
         _blocker(
             blockers,
             "evidence.environment_mismatch",
-            f"canary environment is {environment!r}, expected {args.environment!r}",
+            "canary environment does not match expected environment",
             path,
         )
     if plan_only:
@@ -3274,6 +3354,7 @@ def _verify_canary(
             raise ReadinessError(
                 f"{label}.stage_names[{offset}] must not have surrounding whitespace"
             )
+        _reject_non_ascii_context(item, f"{label}.stage_names[{offset}]")
         _reject_secret_looking_identifier(item, f"{label}.stage_names[{offset}]")
         stage_names_clean.append(item)
     stage_names_raw = stage_names_clean
@@ -3431,10 +3512,11 @@ def _verify_trust_profile(
     _reject_unknown_keys(profile, TRUST_PROFILE_KEYS, label)
     profile_id = _require_profile_id(profile, "profile_id", label)
     rail = _require_rail(profile, "rail", label)
-    environment = _require_string(profile, "environment", label)
-    _reject_secret_looking_identifier(environment, f"{label}.environment")
+    environment = _require_context_string(profile, "environment", label)
     bundle_sha256 = _require_sha256(profile, "bundle_sha256", label)
     policy = _require_string(profile, "embedded_signature_policy", label)
+    _reject_overlong_trust_policy(policy, f"{label}.embedded_signature_policy")
+    _reject_non_ascii_context(policy, f"{label}.embedded_signature_policy")
     _reject_secret_looking_identifier(policy, f"{label}.embedded_signature_policy")
     signature_pin_count = _require_nonnegative_int(
         profile,
@@ -3511,6 +3593,10 @@ def _verify_trust_profile(
         _reject_unknown_keys(source, TRUST_SOURCE_KEYS, f"{label}.source")
         source_authority = _require_string(source, "authority", f"{label}.source")
         source_version = _require_string(source, "version", f"{label}.source")
+        _reject_overlong_trust_source_text(source_authority, f"{label}.source.authority")
+        _reject_overlong_trust_source_text(source_version, f"{label}.source.version")
+        _reject_non_ascii_context(source_authority, f"{label}.source.authority")
+        _reject_non_ascii_context(source_version, f"{label}.source.version")
         _reject_secret_looking_identifier(source_authority, f"{label}.source.authority")
         _reject_secret_looking_identifier(source_version, f"{label}.source.version")
         source_url = _validate_https_source_url(
@@ -3565,7 +3651,7 @@ def _verify_trust_profile(
         _blocker(
             blockers,
             "trust.environment_mismatch",
-            f"trust profile {profile_id!r} environment is {environment!r}, expected {args.environment!r}",
+            "trust profile environment does not match expected environment",
             path,
         )
     if policy not in TRUST_SIGNATURE_POLICIES:
@@ -3729,7 +3815,7 @@ def _block_if_archive_receipts_do_not_cover_canaries(
                         "direct receipt archive verification binds "
                         f"canary_summaries[{canary_offset}].receipt_summary.receipts"
                         f"[{receipt_offset}].receipt_sha256 {receipt_sha256} to "
-                        f"receipt_kind {archive_kind!r}, not {receipt_kind!r}"
+                        "a receipt kind that does not match canary receipt kind"
                     ),
                     path,
                 )
@@ -3744,7 +3830,7 @@ def _block_if_archive_receipts_do_not_cover_canaries(
                         "direct receipt archive verification binds "
                         f"canary_summaries[{canary_offset}].receipt_summary.receipts"
                         f"[{receipt_offset}].receipt_sha256 {receipt_sha256} to "
-                        f"receipt filename {archive_path_name!r}, not {canary_path_name!r}"
+                        "a receipt filename that does not match canary receipt filename"
                     ),
                     path,
                 )
@@ -3759,7 +3845,7 @@ def _block_if_archive_receipts_do_not_cover_canaries(
                         "direct receipt archive verification binds "
                         f"canary_summaries[{canary_offset}].receipt_summary.receipts"
                         f"[{receipt_offset}].receipt_sha256 {receipt_sha256} to "
-                        f"metadata {archive_metadata!r}, not {canary_metadata!r}"
+                        "metadata that does not match canary receipt metadata"
                     ),
                     path,
                 )
@@ -3919,8 +4005,8 @@ def _block_canary_rail_receipts_without_trust(
                     "trust.canary_rail_without_profile",
                     (
                         f"canary_summaries[{canary_offset}].receipt_summary.receipts"
-                        f"[{receipt_offset}].profile {profile_id!r} has no matching "
-                        f"trust profile coverage for environment {canary_environment!r}"
+                        f"[{receipt_offset}].profile has no matching trust profile "
+                        "coverage for canary environment"
                     ),
                     path,
                 )
@@ -4627,11 +4713,13 @@ def main(argv: list[str] | None = None) -> int:
             argv,
             {
                 "--evidence-summary",
+                "--environment",
                 "--max-canary-age-days",
                 "--max-evidence-age-days",
                 "--max-trust-age-days",
                 "--max-trust-source-age-days",
                 "--max-xsd-age-days",
+                "--provider",
                 "--summary-out",
                 "--xsd-summary",
             },

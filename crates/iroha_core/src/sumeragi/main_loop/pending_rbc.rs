@@ -43,11 +43,13 @@ pub(super) enum PendingChunkOutcome {
         pending_bytes: usize,
         evicted_chunks: u64,
         evicted_bytes: u64,
+        evicted: Vec<PendingRbcChunk>,
     },
     Dropped {
         dropped_bytes: u64,
         evicted_chunks: u64,
         evicted_bytes: u64,
+        evicted: Vec<PendingRbcChunk>,
     },
 }
 
@@ -149,12 +151,14 @@ impl PendingRbcMessages {
             return PendingChunkOutcome::Dropped {
                 evicted_chunks: 0,
                 evicted_bytes: 0,
+                evicted: Vec::new(),
                 dropped_bytes: u64::try_from(chunk.bytes.len()).unwrap_or(u64::MAX),
             };
         }
 
         let mut evicted_chunks = 0u64;
         let mut evicted_bytes = 0u64;
+        let mut evicted_entries = Vec::new();
         let chunk_len = chunk.bytes.len();
         while (self.chunks.len().saturating_add(1) > max_chunks)
             || (self.pending_bytes.saturating_add(chunk_len) > max_bytes)
@@ -166,6 +170,7 @@ impl PendingRbcMessages {
                     evicted_bytes.saturating_add(u64::try_from(evicted_len).unwrap_or(u64::MAX));
                 self.pending_bytes = self.pending_bytes.saturating_sub(evicted_len);
                 self.record_drop(evicted_len, now);
+                evicted_entries.push(evicted);
             } else {
                 break;
             }
@@ -179,6 +184,7 @@ impl PendingRbcMessages {
             return PendingChunkOutcome::Dropped {
                 evicted_chunks,
                 evicted_bytes,
+                evicted: evicted_entries,
                 dropped_bytes,
             };
         }
@@ -191,6 +197,7 @@ impl PendingRbcMessages {
             pending_bytes: self.pending_bytes,
             evicted_chunks,
             evicted_bytes,
+            evicted: evicted_entries,
         }
     }
 
@@ -416,7 +423,16 @@ impl Actor {
     }
 
     pub(super) fn clear_pending_rbc(&mut self, key: &SessionKey) {
-        self.subsystems.da_rbc.rbc.pending.remove(key);
+        if let Some(pending) = self.subsystems.da_rbc.rbc.pending.remove(key) {
+            self.release_pending_rbc_dedup(&pending);
+        }
+    }
+
+    pub(super) fn clear_all_pending_rbc(&mut self) {
+        let pending = std::mem::take(&mut self.subsystems.da_rbc.rbc.pending);
+        for pending in pending.into_values() {
+            self.release_pending_rbc_dedup(&pending);
+        }
     }
 
     pub(super) fn flush_pending_rbc(&mut self, key: SessionKey) -> Result<()> {

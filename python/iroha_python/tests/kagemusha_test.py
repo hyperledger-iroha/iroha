@@ -62,6 +62,49 @@ def _shared_recursive_spend_fixture(file_name: str) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _shared_recursive_spend_abi7_fixture(file_name: str) -> dict[str, object]:
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "kagemusha_recursive_spend_abi7"
+        / file_name
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _shared_recursive_spend_archive(name: str) -> bytes:
+    archives = _shared_recursive_spend_archives()["archives"]
+    assert isinstance(archives, list)
+    for entry in archives:
+        assert isinstance(entry, dict)
+        if entry.get("name") == name:
+            encoded = entry.get("bytes_base64")
+            assert isinstance(encoded, str)
+            return base64.b64decode(encoded)
+    raise AssertionError(f"missing shared recursive spend archive: {name}")
+
+
+def _shared_recursive_spend_abi7_archive(name: str) -> bytes:
+    archives = _shared_recursive_spend_abi7_fixture("archives.json")["archives"]
+    assert isinstance(archives, list)
+    for entry in archives:
+        assert isinstance(entry, dict)
+        if entry.get("name") == name:
+            encoded = entry.get("bytes_base64")
+            assert isinstance(encoded, str)
+            return base64.b64decode(encoded)
+    raise AssertionError(f"missing shared recursive spend ABI-7 archive: {name}")
+
+
+def _instruction_archive_bytes(instruction: object) -> bytes:
+    to_json = getattr(instruction, "to_json")
+    encoded = json.loads(to_json())
+    assert isinstance(encoded, str)
+    archive = base64.b64decode(encoded)
+    assert archive.startswith(b"NRT0")
+    return archive
+
+
 def _is_malformed_probe_archive(value: bytes) -> bool:
     return bytes(value) == MALFORMED_PROBE_ARCHIVE
 
@@ -159,6 +202,122 @@ def _kagemusha_input_archive(schema_byte: int = 0x50) -> bytes:
 
 RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE = _kagemusha_input_archive(0xE1)
 RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE = _kagemusha_input_archive(0xE2)
+
+
+def _kagemusha_test_keypair() -> iroha_python.Ed25519KeyPair:
+    return iroha_python.Ed25519KeyPair.from_private_key(bytes([0x42] * 32))
+
+
+def test_kagemusha_instruction_archive_transaction_helpers_wrap_redeem_archive() -> None:
+    archive = _shared_recursive_spend_abi7_archive("redeem_instruction")
+    instruction = kagemusha.kagemusha_instruction_archive_instruction(
+        kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
+        archive,
+    )
+    canonical_archive = _instruction_archive_bytes(instruction)
+    assert canonical_archive.startswith(b"NRT0")
+    assert len(canonical_archive) > 0
+
+    keypair = _kagemusha_test_keypair()
+    authority = keypair.default_account_id("wonderland")
+    envelope = kagemusha.build_kagemusha_instruction_transaction(
+        "chain",
+        authority,
+        keypair.private_key,
+        kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
+        archive,
+        creation_time_ms=1,
+        ttl_ms=10_000,
+        nonce=1,
+        metadata={"kagemusha": "redeem"},
+    )
+    assert envelope.chain_id == "chain"
+    assert envelope.authority == authority
+    assert bytes(envelope.signed_transaction)
+    assert bytes(envelope.signed_transaction_versioned)
+    assert envelope.hash_hex()
+
+    draft = iroha_python.TransactionDraft(
+        iroha_python.TransactionConfig(chain_id="chain", authority=authority)
+    )
+    draft.kagemusha_instruction_archive(
+        kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
+        archive,
+    )
+    assert len(draft) == 1
+
+
+def test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_before_signing() -> None:
+    request_archive = _shared_recursive_spend_abi7_archive("redeem_request")
+    redeem_instruction_archive = _shared_recursive_spend_abi7_archive("redeem_instruction")
+    instruction = kagemusha.kagemusha_recursive_redeem_instruction(request_archive)
+    committed_instruction = kagemusha.kagemusha_instruction_archive_instruction(
+        kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
+        redeem_instruction_archive,
+    )
+    assert _instruction_archive_bytes(instruction) == _instruction_archive_bytes(
+        committed_instruction
+    )
+
+    keypair = _kagemusha_test_keypair()
+    authority = keypair.default_account_id("wonderland")
+    envelope = kagemusha.build_kagemusha_recursive_redeem_transaction(
+        "chain",
+        authority,
+        keypair.private_key,
+        request_archive,
+        creation_time_ms=2,
+        ttl_ms=10_000,
+        nonce=2,
+        metadata={"kagemusha": "recursive-redeem"},
+    )
+    assert envelope.chain_id == "chain"
+    assert envelope.authority == authority
+    assert bytes(envelope.signed_transaction)
+    assert envelope.hash_hex()
+
+    draft = iroha_python.TransactionDraft(
+        iroha_python.TransactionConfig(chain_id="chain", authority=authority)
+    )
+    draft.kagemusha_recursive_redeem(request_archive)
+    assert len(draft) == 1
+
+
+def test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_inputs() -> None:
+    archive = _shared_recursive_spend_abi7_archive("redeem_instruction")
+
+    with pytest.raises(ValueError, match="instruction_type must be KagemushaTransfer"):
+        kagemusha.kagemusha_instruction_archive_instruction("RedeemRecursive", archive)
+
+    with pytest.raises(ValueError, match="instruction_archive must not be empty"):
+        kagemusha.kagemusha_instruction_archive_instruction(
+            kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
+            b"",
+        )
+
+    with pytest.raises(ValueError, match="invalid RedeemKagemushaRecursive instruction archive"):
+        kagemusha.kagemusha_instruction_archive_instruction(
+            kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
+            _shared_recursive_spend_abi7_archive("verify_request"),
+        )
+
+    tampered = bytearray(archive)
+    tampered[-1] ^= 0x01
+    with pytest.raises(ValueError, match="instruction_archive must be a valid Norito archive"):
+        kagemusha.kagemusha_instruction_archive_instruction(
+            kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
+            tampered,
+        )
+
+    keypair = _kagemusha_test_keypair()
+    authority = keypair.default_account_id("wonderland")
+    with pytest.raises(ValueError, match="redeem_request_archive must be a valid Norito archive"):
+        kagemusha.build_kagemusha_recursive_redeem_transaction(
+            "chain",
+            authority,
+            keypair.private_key,
+            b"\x00",
+        )
 
 
 class _Native:

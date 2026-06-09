@@ -480,6 +480,10 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+            raise AdapterError("CLI argument must not contain control characters")
+        if any(ord(ch) > 0x7E for ch in arg):
+            raise AdapterError("CLI argument must use printable ASCII")
         if _contains_secret_material(arg) or _contains_secret_identifier_material(arg):
             raise AdapterError("CLI argument must not contain secret-looking material")
         index += 1
@@ -555,6 +559,8 @@ def _preflight_required_cli_values(
                 value = raw_args[index + 1]
                 if not value or value.startswith("--"):
                     raise AdapterError(f"{flag} requires a {value_name} value")
+                if value_name == "URL":
+                    _reject_raw_url_cli_value(value, flag)
                 index += 2
                 matched = True
                 break
@@ -563,6 +569,8 @@ def _preflight_required_cli_values(
                 value = arg[len(prefix) :]
                 if not value or value.startswith("--"):
                     raise AdapterError(f"{flag} requires a {value_name} value")
+                if value_name == "URL":
+                    _reject_raw_url_cli_value(value, flag)
                 index += 1
                 matched = True
                 break
@@ -570,9 +578,24 @@ def _preflight_required_cli_values(
             index += 1
 
 
+def _reject_raw_url_cli_value(raw: str, flag: str) -> None:
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
+        raise AdapterError(f"{flag} URL must not contain control characters")
+    if raw != raw.strip():
+        raise AdapterError(f"{flag} URL must not have surrounding whitespace")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise AdapterError(f"{flag} URL must use printable ASCII")
+    if not raw.lower().startswith(("http://", "https://")) and (
+        _contains_secret_material(raw) or _contains_secret_identifier_material(raw)
+    ):
+        raise AdapterError(f"{flag} URL must not contain secret-looking material")
+
+
 def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
     if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise AdapterError(f"{flag} must be a numeric value")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise AdapterError(f"{flag} must use printable ASCII")
     try:
         int(raw, 10) if integer else float(raw)
     except ValueError as error:
@@ -763,7 +786,13 @@ def _reject_json_surrogates(value: Any) -> None:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
+        if any(
+            _is_secret_looking_key(key)
+            or _is_control_bearing_key(key)
+            or len(str(key)) > 128
+            or any(ord(ch) > 0x7E for ch in str(key))
+            for key in unknown
+        ) or len(unknown) > 8 or sum(len(str(key)) for key in unknown) > 256:
             raise AdapterError(f"{label} contains unknown keys")
         raise AdapterError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -1451,6 +1480,8 @@ def _validate_url_host(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise AdapterError(f"{label} host must be lowercase")
     if raw_host.endswith("."):
         raise AdapterError(f"{label} host must not end with a dot")
+    if any(ord(ch) > 0x7E for ch in raw_host):
+        raise AdapterError(f"{label} host must use printable ASCII")
     _reject_secret_looking_identifier(raw_host, f"{label} host")
     if len(raw_host) > 253:
         raise AdapterError(f"{label} host must be at most 253 characters")

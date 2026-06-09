@@ -96,7 +96,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 - [x] Re-run the `sumeragi_da_*` failures after aligning proposal block signatures with the local validator index (RBC INIT leader signature should now match non-zero leaders).
 - [x] Add 4-fault coverage to the unstable-network integration suite (raised 12-peer case to `n_rounds=3` to match the restored baselines).
  - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_four_peers -- --nocapture` to confirm DA large-payload RBC flow completes after READY/DELIVER queue routing.
- - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_six_peers -- --nocapture` after wiring `sumeragi.debug.rbc.force_deliver_quorum_one` to confirm the 6-peer large-payload scenario stays within delivery budgets.
+ - [x] Re-run `cargo test -p integration_tests sumeragi_rbc_da_large_payload_six_peers -- --nocapture` with the protocol READY quorum to confirm the 6-peer DA/RBC scenario stays within delivery budgets.
 
 4. **IZANAMI-NPOS-VALIDATION-LATENCY — Reduce pre-vote validation latency to meet 1 TPS targets** (Consensus/Perf, Line: Iroha 3, Owner: Core WG, Priority: Medium, Status: 🈺 In Progress, target TBD)
 - [x] Instrument `validate_block_for_voting` with stage timings (stateless checks vs execution) and surface per-block validation latency in Izanami logs (debug log + testing guide note).

@@ -1664,7 +1664,7 @@ impl Actor {
         )
     }
 
-    fn frontier_block_created_from_proposal_with_roster_hint_and_payload(
+    pub(super) fn frontier_block_created_from_proposal_with_roster_hint_and_payload(
         &self,
         block: &SignedBlock,
         proposal: &crate::sumeragi::consensus::Proposal,
@@ -1680,6 +1680,25 @@ impl Actor {
             let hash = Hash::new(&owned_payload_bytes);
             (owned_payload_bytes.as_slice(), hash)
         };
+        if Hash::new(payload_bytes) != payload_hash {
+            debug!(
+                height = header.height().get(),
+                view = header.view_change_index(),
+                block = %block.hash(),
+                observed = ?payload_hash,
+                "skipping frontier BlockCreated manifest build: payload hash does not match carried bytes"
+            );
+            return None;
+        }
+        if super::proposals::block_payload_bytes(block) != payload_bytes {
+            debug!(
+                height = header.height().get(),
+                view = header.view_change_index(),
+                block = %block.hash(),
+                "skipping frontier BlockCreated manifest build: carried payload bytes are not canonical for block"
+            );
+            return None;
+        }
         if payload_hash != proposal.payload_hash {
             debug!(
                 height = header.height().get(),
@@ -4381,6 +4400,21 @@ impl Actor {
                         if expected_hash != payload_hash {
                             session.invalid = true;
                             mismatch_expected = Some(expected_hash);
+                        }
+                    } else if session.total_chunks() != 0
+                        && session.received_chunks() == session.total_chunks()
+                    {
+                        if let Some(reconstructed_payload) = session.payload_bytes() {
+                            let reconstructed_hash = Hash::new(&reconstructed_payload);
+                            if reconstructed_hash == payload_hash {
+                                session.payload_hash = Some(payload_hash);
+                            } else {
+                                session.invalid = true;
+                                mismatch_expected = Some(reconstructed_hash);
+                            }
+                        } else {
+                            session.invalid = true;
+                            mismatch_expected = Some(payload_hash);
                         }
                     } else {
                         session.payload_hash = Some(payload_hash);

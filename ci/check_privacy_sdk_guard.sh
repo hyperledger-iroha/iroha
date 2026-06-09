@@ -2127,7 +2127,7 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ("zk-x509-onchain-identity-v0", "trusted ca root registry", "revocation root registry"),
         ("jindo-lattice-pcs-zk-v0", "lattice pcs parameter registry", "lattice pcs verifier key registry"),
         ("sis-hints-anoncred-pq-v0", "lattice credential parameter registry", "credential showing verifier"),
-        ("zk-ace-pq-authorization-v0", "active identity commitment registry", "replay nullifier set"),
+        ("zk-ace-pq-authorization-v0", "registered zk-ace identity commitment", "source-account allowlist", "authorization policy hash registry", "active zk-ace verifier key", "chain/domain binding state", "transfer digest binding", "replay nullifier uniqueness set", "identity rotation/revocation registry", "stark/fri verifier parameter floors"),
         ("orchard-halo2-actions-v1", "orchard note commitment tree", "orchard nullifier set"),
         ("penumbra-masp-v1", "multi-asset state commitment tree", "typed nullifier set"),
         ("monero-fcmp-plus-plus-v1", "full-output-set commitment accumulator", "spent link-tag set"),
@@ -2301,7 +2301,7 @@ def check_public_privacy_required_production_plan_rows_coverage(errors):
         ("zk-x509-onchain-identity-v0", "trusted CA root registry", "certificate policy registry", "revocation root registry", "identity proof verifier", "wallet certificate witness store", "certificate subject commitment registry", "ZK-X.509 verifier key registry"),
         ("jindo-lattice-pcs-zk-v0", "lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "benchmark fixtures"),
         ("sis-hints-anoncred-pq-v0", "lattice credential parameter registry", "issuer parameter registry", "credential showing verifier", "wallet lattice credential witness store", "lattice credential commitment registry", "lattice credential verifier key registry"),
-        ("zk-ace-pq-authorization-v0", "active identity commitment registry", "replay nullifier set", "authorization verifier registry", "wallet identity witness and replay-secret store"),
+        ("zk-ace-pq-authorization-v0", "registered ZK-ACE identity commitment", "source-account allowlist", "authorization policy hash registry", "active ZK-ACE verifier key", "chain/domain binding state", "transfer digest binding", "replay nullifier uniqueness set", "identity rotation/revocation registry", "STARK/FRI verifier parameter floors", "wallet identity witness and replay-secret store"),
         ("orchard-halo2-actions-v1", "Orchard note commitment tree", "Orchard nullifier set", "Orchard action-bundle verifier key registry", "wallet Orchard witness store"),
         ("penumbra-masp-v1", "multi-asset state commitment tree", "typed nullifier set", "Groth16 spend/output verifier key registry", "wallet asset metadata witness store"),
         ("monero-fcmp-plus-plus-v1", "full-output-set commitment accumulator", "spent link-tag set", "FCMP++ verifier key registry", "wallet output ownership scan state"),
@@ -7380,7 +7380,7 @@ if mode == "--negative-control-public-required-production-plan-state-token-cover
     target = "javascript/iroha_js/test/privacyCatalogParity.test.js"
     original = read(target)
     mutated = original.replace(
-        '"replay nullifier set"',
+        '"replay nullifier uniqueness set"',
         '"forged replay state placeholder"',
         1,
     )

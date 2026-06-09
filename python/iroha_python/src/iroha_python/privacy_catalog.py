@@ -35,6 +35,12 @@ PRODUCTION_GATE_REQUIREMENTS = (
     ("performance_gates", "performance gate is incomplete"),
     ("external_audit", "internal cryptographic review signoff is missing"),
 )
+TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS = (
+    "real_proving",
+    "real_verification",
+    "witness_privacy_checks",
+    "verifier_fuzzing",
+)
 PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE = (
     "implementation stage is not production-hardened"
 )
@@ -361,9 +367,15 @@ REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID = {
         "typed sis-with-hints credential proof instruction",
     ),
     "zk-ace-pq-authorization-v0": (
-        "active identity commitment registry",
-        "replay nullifier set",
-        "authorization verifier registry",
+        "registered zk-ace identity commitment",
+        "source-account allowlist",
+        "authorization policy hash registry",
+        "active zk-ace verifier key",
+        "chain/domain binding state",
+        "transfer digest binding",
+        "replay nullifier uniqueness set",
+        "identity rotation/revocation registry",
+        "stark/fri verifier parameter floors",
         "wallet identity witness",
         "zk::submitzkaceauthorizedtransfer",
     ),
@@ -775,7 +787,7 @@ REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID = {
     "zk-x509-onchain-identity-v0": ("trusted CA root registry", "certificate policy registry", "revocation root registry", "identity proof verifier", "wallet certificate witness store", "certificate subject commitment registry", "ZK-X.509 verifier key registry"),
     "jindo-lattice-pcs-zk-v0": ("lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "benchmark fixtures"),
     "sis-hints-anoncred-pq-v0": ("lattice credential parameter registry", "issuer parameter registry", "credential showing verifier", "wallet lattice credential witness store", "lattice credential commitment registry", "lattice credential verifier key registry"),
-    "zk-ace-pq-authorization-v0": ("active identity commitment registry", "replay nullifier set", "authorization verifier registry", "wallet identity witness and replay-secret store"),
+    "zk-ace-pq-authorization-v0": ("registered ZK-ACE identity commitment", "source-account allowlist", "authorization policy hash registry", "active ZK-ACE verifier key", "chain/domain binding state", "transfer digest binding", "replay nullifier uniqueness set", "identity rotation/revocation registry", "STARK/FRI verifier parameter floors", "wallet identity witness and replay-secret store"),
     "orchard-halo2-actions-v1": ("Orchard note commitment tree", "Orchard nullifier set", "Orchard action-bundle verifier key registry", "wallet Orchard witness store"),
     "penumbra-masp-v1": ("multi-asset state commitment tree", "typed nullifier set", "Groth16 spend/output verifier key registry", "wallet asset metadata witness store"),
     "monero-fcmp-plus-plus-v1": ("full-output-set commitment accumulator", "spent link-tag set", "FCMP++ verifier key registry", "wallet output ownership scan state"),
@@ -884,8 +896,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "e PQ before a payment flow is end-to-end post-quantum.\",\"Replay nullifiers must be chain-domain "
     "separated and irreversible after acceptance.\",\"A dev verifier must never be accepted under a pro"
     "duction verifier key id.\",\"Native AIR openings are blinded so sampled rows do not recover"
-    " identity or replay witness limbs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"active identity commitment registry\",\"replay nullif"
-    "ier set\",\"authorization verifier registry\",\"wallet identity witness and replay-secret store\"],\"f"
+    " identity or replay witness limbs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"registered ZK-ACE identity commitment\",\"source-account allowlist\",\"authorization policy hash registry\",\"active ZK-ACE verifier key\",\"chain/domain binding state\",\"transfer digest binding\",\"replay nullifier uniqueness set\",\"identity rotation/revocation registry\",\"STARK/FRI verifier parameter floors\",\"wallet identity witness and replay-secret store\"],\"f"
     "ailureModes\":[\"transaction digest substitution\",\"chain-id or domain-separator mismatch\",\"replaye"
     "d nullifier\",\"revoked identity commitment\",\"policy hash mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register a ZK-"
     "ACE identity commitment, source-account allowlist, and verifier key.\",\"Initialize replay-state "
@@ -2675,9 +2686,24 @@ def _dedupe_strings(items: list[str]) -> list[str]:
     return deduped
 
 
+def _production_gate_required_keys(descriptor: Mapping[str, Any]) -> list[str]:
+    waived = (
+        set(TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS)
+        if descriptor.get("id") == "transparent-transfer"
+        else set()
+    )
+    return [key for key, _label in PRODUCTION_GATE_REQUIREMENTS if key not in waived]
+
+
 def _production_gate_for_descriptor(descriptor: Mapping[str, Any]) -> dict[str, Any]:
     flags = {key: False for key, _label in PRODUCTION_GATE_REQUIREMENTS}
-    missing = [label for _key, label in PRODUCTION_GATE_REQUIREMENTS]
+    required_gates = _production_gate_required_keys(descriptor)
+    required_gate_set = set(required_gates)
+    missing = [
+        label
+        for key, label in PRODUCTION_GATE_REQUIREMENTS
+        if key in required_gate_set
+    ]
 
     if descriptor.get("implementation_stage") != "production-hardened":
         missing.append(PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE)
@@ -2696,6 +2722,7 @@ def _production_gate_for_descriptor(descriptor: Mapping[str, Any]) -> dict[str, 
         "version": PRODUCTION_GATE_VERSION,
         "ready": False,
         "gates": flags,
+        "required_gates": required_gates,
         "missing": deduped_missing,
         "audit_references": [],
     }
@@ -4188,6 +4215,14 @@ def _callable_on_crypto(name: str) -> bool:
     return callable(getattr(crypto, name, None))
 
 
+def _callable_on_native_crypto(name: str) -> bool:
+    try:
+        from . import crypto
+    except Exception:  # pragma: no cover - optional native extension
+        return False
+    return callable(getattr(getattr(crypto, "_crypto", None), name, None))
+
+
 def _callable_on_verange(name: str) -> bool:
     try:
         from . import verange
@@ -4294,6 +4329,16 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     ) and _callable_on_crypto("zk_ace_build_transfer_authorization_v1")
     zk_ace_sdk_exports = (
         zk_ace_register and zk_ace_rotate and zk_ace_revoke and zk_ace_transfer and zk_ace_prover
+    )
+    confidential_transfer_proof_v2 = (
+        _callable_on_crypto("buildConfidentialTransferProofV2")
+        and _callable_on_crypto("build_confidential_transfer_proof_v2")
+        and _callable_on_native_crypto("build_confidential_transfer_proof_v2")
+    )
+    confidential_unshield_proof_v3 = (
+        _callable_on_crypto("buildConfidentialUnshieldProofV3")
+        and _callable_on_crypto("build_confidential_unshield_proof_v3")
+        and _callable_on_native_crypto("build_confidential_unshield_proof_v3")
     )
     verange_commitment_builder = _callable_on_verange("buildRangeCommitment")
     verange_envelope_builder = _callable_on_verange("buildVeRangeProofEnvelope")
@@ -4519,8 +4564,8 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
         "sis_hints_credential_dev_fixture_v0": sis_hints_credential_dev_fixture,
         "sis_hints_credential_local_verifier_v0": sis_hints_credential_local_verifier,
         "sis_hints_credential_sdk_exports_v0": sis_hints_credential_sdk_exports,
-        "confidential_transfer_proof_v2": False,
-        "confidential_unshield_proof_v3": False,
+        "confidential_transfer_proof_v2": confidential_transfer_proof_v2,
+        "confidential_unshield_proof_v3": confidential_unshield_proof_v3,
         "asset_hidden_transfer_instruction": False,
         "asset_hidden_pool_registration_instruction": False,
         "asset_hidden_transfer_proof_v1": False,

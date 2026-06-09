@@ -24,6 +24,22 @@ public enum PrivacyNativeBridgeError: Error, Equatable, LocalizedError {
 
 public struct PrivacyProductionGate: Equatable, Sendable {
     public static let version = "privacy-production-gate-v1"
+    public static let requiredGateKeys = [
+        "real_proving",
+        "real_verification",
+        "chain_admission",
+        "sdk_parity",
+        "wallet_state",
+        "witness_privacy_checks",
+        "deterministic_tests",
+        "negative_adversarial_tests",
+        "replay_nullifier_tests",
+        "fuzzing",
+        "parser_fuzzing",
+        "verifier_fuzzing",
+        "performance_gates",
+        "external_audit"
+    ]
     public static let missingReasons = [
         "real proving engine is not registered",
         "real verifier is not registered",
@@ -61,6 +77,7 @@ public struct PrivacyProductionGate: Equatable, Sendable {
     public let verifierFuzzing: Bool
     public let performanceGates: Bool
     public let externalAudit: Bool
+    public let requiredGates: [String]
     public let missing: [String]
     public let auditReferences: [String]
 
@@ -85,6 +102,7 @@ public struct PrivacyProductionGate: Equatable, Sendable {
         verifierFuzzing = false
         performanceGates = false
         externalAudit = false
+        requiredGates = Self.requiredGateKeys
         missing = Self.missingReasons
         auditReferences = []
     }
@@ -146,6 +164,14 @@ public enum PrivacyNativeBridge {
         ) {
             try NoritoNativeBridge.shared.privacyBuildProofV1(requestArchive: $0)
         }
+    }
+
+    public static func buildConfidentialTransferProofV2(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
+    }
+
+    public static func buildConfidentialUnshieldProofV3(requestArchive: Data) throws -> Data {
+        try buildProofV1(requestArchive: requestArchive)
     }
 
     public static func verifyProofV1(requestArchive: Data) throws -> Data {

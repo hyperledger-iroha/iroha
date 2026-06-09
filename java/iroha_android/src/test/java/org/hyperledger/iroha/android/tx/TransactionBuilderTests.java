@@ -1,10 +1,17 @@
 package org.hyperledger.iroha.android.tx;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.KeyPair;
 import java.security.Signature;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import org.hyperledger.iroha.android.model.Executable;
@@ -21,9 +28,12 @@ import org.hyperledger.iroha.android.crypto.keystore.KeyGenParameters;
 import org.hyperledger.iroha.android.crypto.keystore.KeyGenerationResult;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreBackend;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProvider;
+import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.offline.OfflineCashLifecycle;
+import org.hyperledger.iroha.android.offline.KagemushaInstructionArchives;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -40,6 +50,10 @@ public final class TransactionBuilderTests {
     encodeAndSignWithExplicitSigner();
     encodeAndSignWithKeyManagerAlias();
     instructionsVariantRoundTrips();
+    kagemushaInstructionArchivesBuildPayloads();
+    kagemushaInstructionArchivesAcceptAbi7Fixtures();
+    kagemushaInstructionArchivesRejectAdversarialInputs();
+    offlineCashLifecycleAndTransportGuards();
     encodeAndSignEnvelopeWithAttestationBundle();
     encodeAndSignEnvelopeWithAttestationWithoutHardware();
     System.out.println("[IrohaAndroid] Transaction builder tests passed.");
@@ -140,6 +154,240 @@ public final class TransactionBuilderTests {
     assert decoded.executable().isInstructions() : "Executable variant must remain instructions";
     assert decoded.executable().instructions().equals(payload.executable().instructions())
         : "Instruction list must round-trip";
+  }
+
+  private static void kagemushaInstructionArchivesBuildPayloads() {
+    final byte[] archive =
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
+    final InstructionBox box = KagemushaInstructionArchives.recursiveRedeemInstructionBox(archive);
+    archive[0] = 0;
+
+    final InstructionBox.WirePayload wire = (InstructionBox.WirePayload) box.payload();
+    assert wire
+        .wireName()
+        .equals("iroha_data_model::isi::offline::RedeemKagemushaRecursive")
+        : "Redeem instruction wire name must be canonical";
+    assert Arrays.equals(
+            kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE),
+            wire.payloadBytes())
+        : "Archive bytes must be defensively copied";
+
+    final byte[] transferArchive =
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.TRANSFER);
+    final TransactionPayload payload =
+        KagemushaInstructionArchives.transactionPayload(
+            KagemushaInstructionArchives.InstructionType.TRANSFER,
+            transferArchive,
+            "00000042",
+            TestAccountIds.ed25519Authority(0x2C),
+            1_735_000_000_000L,
+            3_500L,
+            17,
+            Map.of("mode", "kagemusha"));
+    assert payload.executable().isInstructions() : "Payload must use instruction executable";
+    final InstructionBox.WirePayload transferWire =
+        (InstructionBox.WirePayload) payload.executable().instructions().get(0).payload();
+    assert transferWire
+        .wireName()
+        .equals("iroha_data_model::isi::offline::KagemushaTransfer")
+        : "Transfer instruction wire name must be canonical";
+    assert Arrays.equals(transferArchive, transferWire.payloadBytes())
+        : "Transfer archive bytes must be preserved";
+    assert KagemushaInstructionArchives.TRANSFER_INSTRUCTION_WIRE_NAME.equals(
+            KagemushaInstructionArchives.InstructionType.TRANSFER.wireName())
+        : "Transfer wire-name constant must match enum";
+    assert KagemushaInstructionArchives.RECURSIVE_REDEEM_REQUEST_WIRE_NAME.equals(
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1")
+        : "Redeem request wire-name constant must be canonical";
+  }
+
+  private static void kagemushaInstructionArchivesAcceptAbi7Fixtures() {
+    final byte[] archive = sharedRecursiveSpendAbi7Archive("redeem_instruction");
+    final InstructionBox box = KagemushaInstructionArchives.recursiveRedeemInstructionBox(archive);
+    final InstructionBox.WirePayload wire = (InstructionBox.WirePayload) box.payload();
+
+    assert wire
+        .wireName()
+        .equals("iroha_data_model::isi::offline::RedeemKagemushaRecursive")
+        : "ABI-7 redeem instruction wire name must be canonical";
+    assert Arrays.equals(archive, wire.payloadBytes())
+        : "ABI-7 redeem instruction archive bytes must be preserved";
+  }
+
+  private static void kagemushaInstructionArchivesRejectAdversarialInputs() {
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(new byte[0]),
+        "empty archive must be rejected");
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(new byte[0]),
+        "empty redeem request archive must be rejected");
+    assertThrows(
+        () ->
+            KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(
+                new byte[0],
+                "00000042",
+                TestAccountIds.ed25519Authority(0x2C),
+                1_735_000_000_000L,
+                3_500L,
+                17,
+                Map.of("mode", "kagemusha")),
+        "empty redeem request transaction archive must be rejected");
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(new byte[] {0}),
+        "malformed archive must be rejected");
+    assertThrows(
+        () ->
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(
+                NoritoCodec.encode(
+                    "request",
+                    "KagemushaRecursiveSpendRedeemRequestV1",
+                    NoritoAdapters.stringAdapter())),
+        "wrong schema archive must be rejected");
+
+    final byte[] tampered =
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
+    tampered[tampered.length - 1] ^= 0x01;
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(tampered),
+        "checksum drift must be rejected");
+  }
+
+  private static void offlineCashLifecycleAndTransportGuards() throws Exception {
+    final OfflineCashLifecycle.TransportCapabilities capabilities =
+        new OfflineCashLifecycle.TransportCapabilities(
+            true,
+            OfflineCashLifecycle.NfcCapability.unavailable("missing HCE"),
+            true);
+    assert capabilities.supportedTransportKinds().equals(List.of("qr", "nearby"))
+        : "Unsupported NFC must be hidden from app-facing transport choices";
+
+    final OfflineCashLifecycle.ConfigurationSnapshot snapshot =
+        new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 7, 1_000L);
+    snapshot.requireUsableForOfflineExchange(999L, 7);
+    assertThrowsRuntime(
+        () ->
+            new OfflineCashLifecycle.ConfigurationSnapshot(true, " ", 7, null)
+                .requireUsableForOfflineExchange(200L, 7),
+        "cached issuer key must be required before offline exchange");
+    assertSnapshotRejected(
+        new OfflineCashLifecycle.ConfigurationSnapshot(false, "issuer-key", 7, null),
+        200L,
+        7,
+        "offline_payments_disabled");
+    assertSnapshotRejected(
+        new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 6, null),
+        200L,
+        7,
+        "unsupported_bridge_abi");
+    assertSnapshotRejected(
+        new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 7, 1_000L),
+        1_000L,
+        7,
+        "expired");
+
+    final List<String> events = new java.util.ArrayList<>();
+    final OfflineCashLifecycle.Controller controller =
+        new OfflineCashLifecycle.Controller(
+            new OfflineCashLifecycle.Wallet() {
+              @Override
+              public CompletableFuture<Object> load(
+                  final String assetDefinitionId, final String amount) {
+                events.add("load:" + assetDefinitionId + ":" + amount);
+                return CompletableFuture.completedFuture("ok");
+              }
+
+              @Override
+              public Object prepareReceive(final String assetDefinitionId, final String amount) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public Object createPayment(final Object receiveRequest) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public Object acceptPayment(final Object paymentToken) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public CompletableFuture<Object> redeem(final Object note, final String recipient) {
+                throw new UnsupportedOperationException();
+              }
+            },
+            new OfflineCashLifecycle.AuditReceiptSynchronizer() {
+              @Override
+              public CompletableFuture<Boolean> hasPendingAuditReceipts() {
+                events.add("hasPending");
+                return CompletableFuture.completedFuture(true);
+              }
+
+              @Override
+              public CompletableFuture<Void> syncPendingAuditReceipts() {
+                events.add("sync");
+                return CompletableFuture.completedFuture(null);
+              }
+            });
+
+    assert "ok".equals(controller.load("pkr#sbp", "10").get())
+        : "Lifecycle controller must return wallet load result";
+    assert events.equals(List.of("hasPending", "sync", "load:pkr#sbp:10"))
+        : "Lifecycle controller must sync pending receipts before loading";
+
+    final List<String> failedEvents = new java.util.ArrayList<>();
+    final OfflineCashLifecycle.Controller failingController =
+        new OfflineCashLifecycle.Controller(
+            new OfflineCashLifecycle.Wallet() {
+              @Override
+              public CompletableFuture<Object> load(
+                  final String assetDefinitionId, final String amount) {
+                failedEvents.add("load:" + assetDefinitionId + ":" + amount);
+                return CompletableFuture.completedFuture("unexpected");
+              }
+
+              @Override
+              public Object prepareReceive(final String assetDefinitionId, final String amount) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public Object createPayment(final Object receiveRequest) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public Object acceptPayment(final Object paymentToken) {
+                throw new UnsupportedOperationException();
+              }
+
+              @Override
+              public CompletableFuture<Object> redeem(final Object note, final String recipient) {
+                throw new UnsupportedOperationException();
+              }
+            },
+            new OfflineCashLifecycle.AuditReceiptSynchronizer() {
+              @Override
+              public CompletableFuture<Boolean> hasPendingAuditReceipts() {
+                failedEvents.add("hasPending");
+                return CompletableFuture.completedFuture(true);
+              }
+
+              @Override
+              public CompletableFuture<Void> syncPendingAuditReceipts() {
+                failedEvents.add("sync");
+                return CompletableFuture.failedFuture(new IllegalStateException("audit sync failed"));
+              }
+            });
+    try {
+      failingController.load("pkr#sbp", "10").get();
+      throw new AssertionError("Lifecycle controller must not load when audit sync fails");
+    } catch (final java.util.concurrent.ExecutionException expected) {
+      assert expected.getCause() instanceof IllegalStateException
+          : "Expected audit sync failure to propagate";
+    }
+    assert failedEvents.equals(List.of("hasPending", "sync"))
+        : "Lifecycle controller must stop before wallet load after sync failure";
   }
 
   private static void encodeAndSignEnvelopeWithAttestationBundle() throws Exception {
@@ -290,5 +538,72 @@ public final class TransactionBuilderTests {
     System.arraycopy(left, 0, out, 0, left.length);
     System.arraycopy(right, 0, out, left.length, right.length);
     return out;
+  }
+
+  private static byte[] kagemushaArchive(final KagemushaInstructionArchives.InstructionType type) {
+    return NoritoCodec.encode("payload", type.wireName(), NoritoAdapters.stringAdapter());
+  }
+
+  @SuppressWarnings("unchecked")
+  private static byte[] sharedRecursiveSpendAbi7Archive(final String name) {
+    final Map<String, Object> root =
+        (Map<String, Object>) JsonParser.parse(sharedRecursiveSpendAbi7Fixture("archives.json"));
+    final List<Map<String, Object>> archives = (List<Map<String, Object>>) root.get("archives");
+    for (final Map<String, Object> archive : archives) {
+      if (name.equals(archive.get("name"))) {
+        return Base64.getDecoder().decode((String) archive.get("bytes_base64"));
+      }
+    }
+    throw new AssertionError("missing shared recursive spend ABI-7 archive " + name);
+  }
+
+  private static String sharedRecursiveSpendAbi7Fixture(final String fileName) {
+    Path directory = Paths.get("").toAbsolutePath();
+    while (directory != null) {
+      final Path candidate =
+          directory.resolve("fixtures/kagemusha_recursive_spend_abi7").resolve(fileName);
+      if (Files.isRegularFile(candidate)) {
+        try {
+          return new String(Files.readAllBytes(candidate), StandardCharsets.UTF_8);
+        } catch (final java.io.IOException error) {
+          throw new AssertionError("failed to read shared recursive spend ABI-7 fixture", error);
+        }
+      }
+      directory = directory.getParent();
+    }
+    throw new AssertionError("missing shared recursive spend ABI-7 fixture " + fileName);
+  }
+
+  private static void assertThrows(final Runnable runnable, final String message) {
+    try {
+      runnable.run();
+    } catch (final IllegalArgumentException expected) {
+      return;
+    }
+    throw new AssertionError(message);
+  }
+
+  private static void assertThrowsRuntime(final Runnable runnable, final String message) {
+    try {
+      runnable.run();
+    } catch (final RuntimeException expected) {
+      return;
+    }
+    throw new AssertionError(message);
+  }
+
+  private static void assertSnapshotRejected(
+      final OfflineCashLifecycle.ConfigurationSnapshot snapshot,
+      final long nowMs,
+      final Integer requiredBridgeAbiVersion,
+      final String expectedCode) {
+    try {
+      snapshot.requireUsableForOfflineExchange(nowMs, requiredBridgeAbiVersion);
+    } catch (final OfflineCashLifecycle.ConfigurationSnapshotException expected) {
+      assert expectedCode.equals(expected.code())
+          : "Expected snapshot rejection code " + expectedCode + ", got " + expected.code();
+      return;
+    }
+    throw new AssertionError("Expected snapshot rejection " + expectedCode);
   }
 }

@@ -68,6 +68,42 @@ System.out.println(formats.i105Warning);
 Use `displayFormats()` whenever UI layers need to render or copy addresses so the warning text and
 network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`.
 
+## Offline cash lifecycle
+
+Use `OfflineCashLifecycle.Controller` around the app's offline wallet for load
+actions. It syncs pending audit receipts before issuing more cash, while local
+device-to-device send/receive code should use cached setup state instead of
+fetching fresh capabilities.
+
+```java
+import org.hyperledger.iroha.android.offline.OfflineCashLifecycle;
+
+OfflineCashLifecycle.ConfigurationSnapshot snapshot =
+    new OfflineCashLifecycle.ConfigurationSnapshot(
+        true,
+        cachedIssuerPublicKeyBase64,
+        7,
+        expiresAtMs);
+snapshot.requireUsableForOfflineExchange(System.currentTimeMillis(), 7);
+
+OfflineCashLifecycle.Controller controller =
+    new OfflineCashLifecycle.Controller(offlineWallet, auditReceiptSynchronizer);
+controller.load("pkr#sbp", "500").join();
+
+OfflineCashLifecycle.TransportCapabilities transports =
+    new OfflineCashLifecycle.TransportCapabilities(
+        true,
+        appHasHceEntitlement && deviceSupportsNfc
+            ? OfflineCashLifecycle.NfcCapability.supported()
+            : OfflineCashLifecycle.NfcCapability.unavailable("missing HCE"),
+        true);
+System.out.println(transports.supportedTransportKinds());
+```
+
+UI layers must not render NFC actions when `supportedTransportKinds()` omits
+`nfc`; non-NFC devices and app builds without HCE should expose QR or Nearby
+only.
+
 ## Multisig specs and TTL preview
 
 ```java
@@ -1215,7 +1251,15 @@ with native opening preflight material. The append-boundary digest uses the
 public `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1` domain, plus
 `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1` and
 `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1` for
-chain/asset and final-root/current-note binding. Use
+chain/asset and final-root/current-note binding.
+`KagemushaInstructionArchives` wraps a typed `KagemushaTransfer` or
+`RedeemKagemushaRecursive` instruction archive, builds a single archived
+instruction transaction payload, or derives the redeem instruction from a
+native recursive redeem request before constructing that payload. These helpers
+require valid Norito archives, reject empty, malformed, tampered, or wrong-type
+instruction archives, and keep recursive redeem derivation inside the native
+bridge.
+Use
 `canRedeemWitnessless(circuitId, hopCount)` or
 `requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem
 construction. `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is `64`, and

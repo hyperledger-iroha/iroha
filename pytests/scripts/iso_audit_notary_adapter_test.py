@@ -282,6 +282,8 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
             ("%70assword_audit_unknown_leak", "audit_unknown_leak"),
             ("private-key_audit_unknown_leak", "audit_unknown_leak"),
             ("unexpected\x1baudit_key", "\x1b"),
+            ("unexpected_audit_\uff4bey", "\uff4b"),
+            ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -293,6 +295,13 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
+        many_unknown = {f"field_{offset}": "redacted" for offset in range(9)}
+        with self.assertRaises(ADAPTER.AdapterError) as caught:
+            ADAPTER._reject_unknown_keys(many_unknown, set(), "anchor")
+        message = str(caught.exception)
+        self.assertIn("contains unknown keys", message)
+        self.assertNotIn("field_0", message)
+        self.assertNotIn("field_8", message)
 
     def test_cli_argument_terminator_is_rejected_without_echo(self):
         hidden = "token=audit-terminator-secret"
@@ -356,6 +365,27 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--receipt-di", stderr.getvalue())
+
+    def test_raw_cli_control_characters_are_rejected_without_echo(self):
+        hidden = "--unknown-audit\x1bflag"
+        with self.assertRaises(ADAPTER.AdapterError) as caught:
+            ADAPTER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must not contain control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("unknown-audit", message)
+
+    def test_raw_cli_non_ascii_is_rejected_without_echo(self):
+        hidden = "\uff0d\uff0dreceipt-dir"
+        with self.assertRaises(ADAPTER.AdapterError) as caught:
+            ADAPTER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must use printable ASCII", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("receipt-dir", message)
 
     def test_audit_index_secret_looking_identifiers_are_rejected_without_echo(self):
         cases = (
@@ -566,8 +596,12 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertIn("path must not contain URL delimiter characters", message)
                 self.assertNotIn(endpoint, message)
 
-    def test_url_paths_reject_non_ascii_smuggling(self):
+    def test_urls_reject_non_ascii_smuggling(self):
         cases = (
+            (
+                "https://notary\u0661.local-bank.bank/archive/anchor",
+                "host must use printable ASCII",
+            ),
             (
                 "https://notary.local-bank.bank/archive∕debug/anchor",
                 "path must use printable ASCII",
@@ -620,11 +654,28 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertNotIn("token=", stderr)
                 self.assertNotIn("notary-secret", stderr)
 
+    def test_numeric_cli_flags_reject_unicode_digits_without_echo(self):
+        hidden = "\u0661"
+        cases = (
+            ["--response-limit-bytes", hidden],
+            [f"--response-limit-bytes={hidden}"],
+            ["--timeout-secs", f"{hidden}.5"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("must use printable ASCII", stderr)
+                self.assertNotIn(hidden, stderr)
+
     def test_raw_cli_secret_like_values_rejected_without_echo(self):
         cases = (
             ["--private-key=notary-secret"],
             ["token=notary-secret"],
             ["password=notary-secret"],
+            ["--endpoint", "token=notary-secret"],
+            ["--endpoint=%70assword%253Dnotary-secret"],
         )
         for argv in cases:
             with self.subTest(argv=argv):
@@ -635,6 +686,7 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertNotIn("token=", stderr)
                 self.assertNotIn("password=", stderr)
                 self.assertNotIn("notary-secret", stderr)
+                self.assertNotIn("export_dir", stderr)
 
     def test_url_cli_flags_reject_missing_empty_or_flag_like_values(self):
         cases = (
@@ -650,6 +702,17 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
 
                 self.assertEqual(rc, 2)
                 self.assertIn("--endpoint requires a URL value", stderr)
+
+    def test_url_cli_values_reject_non_ascii_without_echo(self):
+        hidden = "https://notary.local-bank.bank/source\u2215debug"
+        for argv in (["--endpoint", hidden], [f"--endpoint={hidden}"]):
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("--endpoint URL must use printable ASCII", stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("export_dir", stderr)
 
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
