@@ -11,7 +11,7 @@
 //   variable such as SCCP_BSC_DEPLOYER_PRIVATE_KEY.
 import { createRequire } from "node:module";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { sha256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha256.js";
 import { keccak_256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha3.js";
@@ -1472,6 +1472,9 @@ const PRODUCTION_PROOF_MATERIAL_SHAPE_MIN_BYTES = 4096;
 const PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES = 16;
 const PRODUCTION_PROOF_MATERIAL_MAX_REPEATED_PATTERN_BYTES = 64;
 const PRODUCTION_PROOF_MATERIAL_MAX_DOMINANT_BYTE_FRACTION = 0.98;
+const SNARKJS_R1CS_MAGIC = [0x72, 0x31, 0x63, 0x73];
+const SNARKJS_ZKEY_MAGIC = [0x7a, 0x6b, 0x65, 0x79];
+const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d];
 
 function repeatedPrefixPatternLength(
   bytes,
@@ -1521,7 +1524,77 @@ function dominantByteFrequency(bytes) {
   return { byte: dominantByte, count: dominantCount };
 }
 
-function assertProductionProofMaterialShape(artifact, label) {
+function u32le(bytes, offset) {
+  return (
+    bytes[offset] |
+    (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) |
+    (bytes[offset + 3] << 24)
+  ) >>> 0;
+}
+
+function hasBytePrefix(bytes, prefix) {
+  return prefix.every((byte, index) => bytes[index] === byte);
+}
+
+function assertSnarkjsBinaryHeader(artifact, label, magic, formatLabel) {
+  const bytes = artifact.bytes;
+  if (bytes.length < 12) {
+    throw new Error(`${label} ${formatLabel} header is truncated.`);
+  }
+  if (!hasBytePrefix(bytes, magic)) {
+    throw new Error(`${label} must start with ${formatLabel} magic bytes.`);
+  }
+  const version = u32le(bytes, 4);
+  if (version < 1 || version > 2) {
+    throw new Error(`${label} ${formatLabel} version is unsupported.`);
+  }
+  const sectionCount = u32le(bytes, 8);
+  if (sectionCount < 1 || sectionCount > 128) {
+    throw new Error(`${label} ${formatLabel} section count is invalid.`);
+  }
+}
+
+function assertWasmHeader(artifact, label) {
+  const bytes = artifact.bytes;
+  if (bytes.length < 8) {
+    throw new Error(`${label} WebAssembly header is truncated.`);
+  }
+  if (!hasBytePrefix(bytes, WASM_MAGIC)) {
+    throw new Error(`${label} must start with WebAssembly magic bytes.`);
+  }
+  if (u32le(bytes, 4) !== 1) {
+    throw new Error(`${label} WebAssembly version is unsupported.`);
+  }
+}
+
+function assertProductionProofMaterialFormat(artifact, label, kind) {
+  const extension = extname(artifact.path).toLowerCase();
+  if (kind === "proof-artifact") {
+    if (extension === ".r1cs") {
+      assertSnarkjsBinaryHeader(artifact, label, SNARKJS_R1CS_MAGIC, ".r1cs");
+      return;
+    }
+    if (extension === ".wasm") {
+      assertWasmHeader(artifact, label);
+      return;
+    }
+    throw new Error(
+      `${label} must be a .r1cs or .wasm artifact; received ${artifact.path}.`,
+    );
+  }
+  if (kind === "proving-key") {
+    if (extension === ".zkey") {
+      assertSnarkjsBinaryHeader(artifact, label, SNARKJS_ZKEY_MAGIC, ".zkey");
+      return;
+    }
+    throw new Error(
+      `${label} must be a .zkey artifact; received ${artifact.path}.`,
+    );
+  }
+}
+
+function assertProductionProofMaterialShape(artifact, label, kind = null) {
   const bytes = artifact.bytes;
   if (bytes.length < PRODUCTION_PROOF_MATERIAL_SHAPE_MIN_BYTES) {
     return;
@@ -1553,8 +1626,14 @@ function assertProductionProofMaterialShape(artifact, label) {
   for (const byte of bytes) {
     uniqueBytes.add(byte);
     if (uniqueBytes.size >= PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES) {
-      return;
+      break;
     }
+  }
+  if (uniqueBytes.size >= PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES) {
+    if (kind) {
+      assertProductionProofMaterialFormat(artifact, label, kind);
+    }
+    return;
   }
   throw new Error(
     `${label} looks like placeholder proof material: only ${uniqueBytes.size} unique byte values across ${bytes.length} bytes.`,
@@ -1897,8 +1976,12 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
     );
     sdkArtifacts.push({ ...artifact, sdk, implementation });
   }
-  assertProductionProofMaterialShape(proofArtifact, "proof artifact");
-  assertProductionProofMaterialShape(provingKey, "proving key");
+  assertProductionProofMaterialShape(
+    proofArtifact,
+    "proof artifact",
+    "proof-artifact",
+  );
+  assertProductionProofMaterialShape(provingKey, "proving key", "proving-key");
   const auditHashes = await readNativeProverAuditHashes(root, options, {
     parityFixture,
     selfTestFixture,
