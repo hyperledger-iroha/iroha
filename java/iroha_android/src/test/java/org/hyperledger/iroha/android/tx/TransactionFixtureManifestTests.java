@@ -56,7 +56,6 @@ public final class TransactionFixtureManifestTests {
   private static final NoritoJavaCodecAdapter PAYLOAD_CODEC = new NoritoJavaCodecAdapter();
   private static final TypeAdapter<String> STRING_ADAPTER = NoritoAdapters.stringAdapter();
   private static final TypeAdapter<String> CHAIN_ID_ADAPTER = new ChainIdAdapter();
-  private static final JsonStringAdapter JSON_STRING_ADAPTER = new JsonStringAdapter();
   private static final TypeAdapter<String> JSON_ADAPTER = new JsonAdapter();
   private static final TypeAdapter<Long> UINT64_ADAPTER = NoritoAdapters.uint(64);
   private static final TypeAdapter<Long> UINT32_ADAPTER = NoritoAdapters.uint(32);
@@ -1180,12 +1179,12 @@ public final class TransactionFixtureManifestTests {
       if (value == null) {
         throw new IllegalArgumentException("Metadata values must not be null");
       }
-      encodeSizedField(encoder, JSON_STRING_ADAPTER, value);
+      encodeSizedField(encoder, STRING_ADAPTER, value);
     }
 
     @Override
     public String decode(final NoritoDecoder decoder) {
-      return decodeSizedField(decoder, JSON_STRING_ADAPTER, "metadata.value.json");
+      return decodeSizedField(decoder, STRING_ADAPTER, "metadata.value.json");
     }
 
     @Override
@@ -1193,123 +1192,6 @@ public final class TransactionFixtureManifestTests {
       return true;
     }
   }
-
-  private static final class JsonStringAdapter implements TypeAdapter<String> {
-    @Override
-    public void encode(final NoritoEncoder encoder, final String value) {
-      if (value == null) {
-        throw new IllegalArgumentException("Metadata values must not be null");
-      }
-      STRING_ADAPTER.encode(encoder, encodeJsonString(value));
-    }
-
-    @Override
-    public String decode(final NoritoDecoder decoder) {
-      final String raw = STRING_ADAPTER.decode(decoder);
-      return decodeJsonString(raw);
-    }
-
-    @Override
-    public boolean isSelfDelimiting() {
-      return true;
-    }
-  }
-
-  private static String encodeJsonString(final String value) {
-    final StringBuilder builder = new StringBuilder(value.length() + 2);
-    builder.append('"');
-    for (int i = 0; i < value.length(); i++) {
-      final char c = value.charAt(i);
-      switch (c) {
-        case '"' -> builder.append("\\\"");
-        case '\\' -> builder.append("\\\\");
-        case '\b' -> builder.append("\\b");
-        case '\f' -> builder.append("\\f");
-        case '\n' -> builder.append("\\n");
-        case '\r' -> builder.append("\\r");
-        case '\t' -> builder.append("\\t");
-        default -> {
-          if (c < 0x20) {
-            builder.append("\\u00");
-            builder.append(HEX_DIGITS[(c >> 4) & 0xF]);
-            builder.append(HEX_DIGITS[c & 0xF]);
-          } else {
-            builder.append(c);
-          }
-        }
-      }
-    }
-    builder.append('"');
-    return builder.toString();
-  }
-
-  private static String decodeJsonString(final String raw) {
-    if (raw == null) {
-      return null;
-    }
-    final String trimmed = raw.trim();
-    if (trimmed.length() < 2 || trimmed.charAt(0) != '"' || trimmed.charAt(trimmed.length() - 1) != '"') {
-      return raw;
-    }
-    try {
-      return parseJsonString(trimmed);
-    } catch (final IllegalArgumentException ex) {
-      return raw;
-    }
-  }
-
-  private static String parseJsonString(final String input) {
-    final StringBuilder builder = new StringBuilder();
-    for (int i = 1; i < input.length() - 1; ) {
-      final char c = input.charAt(i++);
-      if (c == '\\') {
-        if (i >= input.length() - 1) {
-          throw new IllegalArgumentException("Invalid JSON escape");
-        }
-        final char esc = input.charAt(i++);
-        switch (esc) {
-          case '"' -> builder.append('"');
-          case '\\' -> builder.append('\\');
-          case '/' -> builder.append('/');
-          case 'b' -> builder.append('\b');
-          case 'f' -> builder.append('\f');
-          case 'n' -> builder.append('\n');
-          case 'r' -> builder.append('\r');
-          case 't' -> builder.append('\t');
-          case 'u' -> {
-            if (i + 4 > input.length() - 1) {
-              throw new IllegalArgumentException("Invalid unicode escape");
-            }
-            int codePoint = 0;
-            for (int j = 0; j < 4; j++) {
-              codePoint = (codePoint << 4) | hexNibble(input.charAt(i + j));
-            }
-            builder.append((char) codePoint);
-            i += 4;
-          }
-          default -> throw new IllegalArgumentException("Unsupported escape: \\" + esc);
-        }
-      } else {
-        builder.append(c);
-      }
-    }
-    return builder.toString();
-  }
-
-  private static int hexNibble(final char c) {
-    if (c >= '0' && c <= '9') {
-      return c - '0';
-    }
-    if (c >= 'a' && c <= 'f') {
-      return 10 + (c - 'a');
-    }
-    if (c >= 'A' && c <= 'F') {
-      return 10 + (c - 'A');
-    }
-    throw new IllegalArgumentException("Invalid hex digit: " + c);
-  }
-
-  private static final char[] HEX_DIGITS = "0123456789ABCDEF".toCharArray();
 
   private static final class SigningKey {
     private final byte[] publicKey;

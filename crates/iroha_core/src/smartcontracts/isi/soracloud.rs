@@ -1468,6 +1468,11 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
     native: &crate::zk_stark::StarkVerifyEnvelopeV1,
     public_padding_context: Option<BfvFullBootstrapNativeAirPublicPaddingContext>,
 ) -> Result<(), InstructionExecutionError> {
+    if statement_hash == Hash::prehashed([0_u8; Hash::LENGTH]) {
+        return Err(invalid_parameter(format!(
+            "{label} native BFV AIR statement hash must not be zero"
+        )));
+    }
     if native.transcript_label
         != iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_NATIVE_STARK_AIR_TRANSCRIPT_LABEL_V1
     {
@@ -18345,6 +18350,15 @@ mod tests {
             public_padding_context,
         )
         .expect("BFV AIR boundary accepts public padding-row openings");
+
+        let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+            label,
+            Hash::prehashed([0_u8; Hash::LENGTH]),
+            &native,
+            public_padding_context,
+        )
+        .expect_err("BFV AIR boundary must reject zero statement hashes before digest binding");
+        assert_invalid_parameter_contains(err, "statement hash must not be zero");
 
         let mut missing_bfv_air = native.clone();
         missing_bfv_air.proof.air = None;

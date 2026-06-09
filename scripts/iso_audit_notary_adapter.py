@@ -48,6 +48,8 @@ PERSISTED_RECORD_VERSION = 1
 RECORDS_DIR = "messages"
 MAX_BEARER_TOKEN_BYTES = 8192
 MAX_HTTP_URL_CHARS = 2048
+MAX_LOCAL_PATH_CHARS = 4096
+MAX_CLEAN_STRING_CHARS = 4096
 MAX_AUDIT_EXPORT_JSON_BYTES = 64 * 1024 * 1024
 MAX_PERSISTED_RECORD_JSON_BYTES = 1024 * 1024
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
@@ -413,6 +415,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
         raise AdapterError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise AdapterError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise AdapterError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -440,6 +444,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
 def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
     if not raw:
         raise AdapterError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise AdapterError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise AdapterError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -902,6 +908,8 @@ def require_digest_matches(obj: dict[str, Any], digest_field: str, label: str) -
 def _require_clean_string(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise AdapterError(f"{label} must be a non-empty string")
+    if len(value) > MAX_CLEAN_STRING_CHARS:
+        raise AdapterError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise AdapterError(f"{label} must not contain control characters")
     if value != value.strip():
@@ -918,6 +926,8 @@ def _require_nonsecret_clean_string(value: Any, label: str) -> str:
 
 def _require_clean_path_string(value: Any, label: str) -> str:
     path = _require_clean_string(value, label)
+    if len(path) > MAX_LOCAL_PATH_CHARS:
+        raise AdapterError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ch.isspace() for ch in path):
         raise AdapterError(f"{label} must not contain whitespace")
     if path.startswith("-"):

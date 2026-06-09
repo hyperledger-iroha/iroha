@@ -286,6 +286,17 @@ def test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_befor
 def test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_inputs() -> None:
     archive = _shared_recursive_spend_abi7_archive("redeem_instruction")
 
+    assert (
+        kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES[
+            kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE
+        ]
+        == "iroha_data_model::isi::offline::RedeemKagemushaRecursive"
+    )
+    assert (
+        iroha_python.KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME
+        == "iroha_data_model::isi::offline::KagemushaTransfer"
+    )
+
     with pytest.raises(ValueError, match="instruction_type must be KagemushaTransfer"):
         kagemusha.kagemusha_instruction_archive_instruction("RedeemRecursive", archive)
 
@@ -295,10 +306,10 @@ def test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_in
             b"",
         )
 
-    with pytest.raises(ValueError, match="invalid RedeemKagemushaRecursive instruction archive"):
+    with pytest.raises(ValueError, match="schema must match RedeemKagemushaRecursive"):
         kagemusha.kagemusha_instruction_archive_instruction(
             kagemusha.KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
-            _shared_recursive_spend_abi7_archive("verify_request"),
+            _shared_recursive_spend_abi7_archive("redeem_request"),
         )
 
     tampered = bytearray(archive)

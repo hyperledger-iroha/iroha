@@ -15,7 +15,7 @@ translation_last_reviewed: 2026-01-01
 
 # Sumeragi Evidence (Audit API)
 
-Sumeragi evidence کیلئے عارضی audit endpoints۔
+Sumeragi evidence audit endpoints.
 
 - GET `/v1/sumeragi/evidence/count`
   - اس نوڈ کے ذریعے دیکھی گئی منفرد Evidence entries کی تعداد واپس کرتا ہے۔

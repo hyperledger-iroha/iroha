@@ -53,7 +53,9 @@ MAX_TRUST_SOURCE_TEXT_CHARS = 256
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_TIMESTAMP_CHARS = 128
 MAX_SOURCE_URL_CHARS = 2048
+MAX_LOCAL_PATH_CHARS = 4096
 MAX_SOURCE_REPOSITORY_CHARS = 2048
+MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
 MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}\.[0-9]{3}\.[0-9]{2}$")
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
@@ -537,6 +539,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
         raise ReadinessError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -563,6 +567,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
 def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
     if not raw:
         raise ReadinessError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise ReadinessError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -1126,6 +1132,10 @@ def _validate_config_path(raw: str, label: str) -> str:
 
 
 def _reject_path_smuggling(raw: str, label: str) -> None:
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label} must not contain control characters")
     if any(ord(ch) > 0x7E for ch in raw):
@@ -1443,16 +1453,24 @@ def _require_profile_direction(value: dict[str, Any], key: str, label: str) -> s
 
 
 def _validate_schema_source_path(raw: str, label: str) -> str:
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
     if "\\" in raw:
         raise ReadinessError(f"{label} must use forward slashes")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label} must not contain control characters")
+    _reject_non_ascii_context(raw, label)
     if raw != raw.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
     if any(ch.isspace() for ch in raw):
         raise ReadinessError(f"{label} must not contain whitespace")
     if ";" in raw:
         raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise ReadinessError(f"{label} must not contain URI or drive prefixes")
+    _reject_percent_encoded_path_smuggling(raw, label)
     _reject_secret_string(raw, label)
     path = Path(raw)
     if path.is_absolute():
@@ -1468,16 +1486,24 @@ def _validate_schema_source_path(raw: str, label: str) -> str:
 
 
 def _validate_fixture_summary_path(raw: str, label: str) -> str:
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
     if "\\" in raw:
         raise ReadinessError(f"{label} must use forward slashes")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label} must not contain control characters")
+    _reject_non_ascii_context(raw, label)
     if raw != raw.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
     if any(ch.isspace() for ch in raw):
         raise ReadinessError(f"{label} must not contain whitespace")
     if ";" in raw:
         raise ReadinessError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise ReadinessError(f"{label} must not contain URI or drive prefixes")
+    _reject_percent_encoded_path_smuggling(raw, label)
     _reject_secret_string(raw, label)
     if Path(raw).is_absolute():
         raise ReadinessError(f"{label} must be relative")
@@ -2376,7 +2402,9 @@ def _verify_xsd_summary_entries(
         label = f"{path}.missing_schema_fixtures[{offset}]"
         missing = _require_object(raw_missing, label)
         _reject_unknown_keys(missing, XSD_GAP_ENTRY_KEYS, label)
-        actual_missing_schema_entries.append(_xsd_gap_entry_key(missing, label))
+        actual_missing_schema_entries.append(
+            _xsd_gap_entry_key(missing, label, path_kind="fixture")
+        )
     if sorted(actual_missing_schema_entries) != sorted(computed_missing_schema_entries):
         _blocker(
             blockers,
@@ -2405,7 +2433,9 @@ def _verify_xsd_summary_entries(
         label = f"{path}.schema_only_entries[{offset}]"
         schema_only = _require_object(raw_schema_only, label)
         _reject_unknown_keys(schema_only, XSD_GAP_ENTRY_KEYS, label)
-        actual_schema_only_entries.append(_xsd_gap_entry_key(schema_only, label))
+        actual_schema_only_entries.append(
+            _xsd_gap_entry_key(schema_only, label, path_kind="schema")
+        )
     if sorted(actual_schema_only_entries) != sorted(declared_schema_only_entries):
         _blocker(
             blockers,
@@ -2424,11 +2454,28 @@ def _verify_xsd_summary_entries(
     summary["_validated_fixture_digests"] = fixture_digests
 
 
-def _xsd_gap_entry_key(entry: dict[str, Any], label: str) -> tuple[str, str, str]:
-    return (
-        _require_string(entry, "path", label),
-        _require_message_def_id(entry, "message_def_id", label),
+def _xsd_gap_entry_key(
+    entry: dict[str, Any],
+    label: str,
+    *,
+    path_kind: str,
+) -> tuple[str, str, str]:
+    raw_path = _require_string(entry, "path", label)
+    if path_kind == "fixture":
+        gap_path = _validate_fixture_summary_path(raw_path, f"{label}.path")
+    elif path_kind == "schema":
+        gap_path = _validate_schema_source_path(raw_path, f"{label}.path")
+    else:
+        raise AssertionError(f"unsupported XSD gap path kind {path_kind!r}")
+    reason = _validate_reviewed_gap_reason(
         _require_string(entry, "reason", label),
+        f"{label}.reason",
+    )
+    assert reason is not None
+    return (
+        gap_path,
+        _require_message_def_id(entry, "message_def_id", label),
+        reason,
     )
 
 
@@ -2442,6 +2489,15 @@ def _profile_version_key(entry: dict[str, Any], label: str) -> tuple[str, str, s
             f"{label}.message_def_id must match message_type {message_type!r}"
         )
     return profile_id, message_type, direction, message_def_id
+
+
+def _require_profile_catalog_version(value: dict[str, Any], key: str, label: str) -> str:
+    raw = _require_string(value, key, label)
+    if raw != raw.strip():
+        raise ReadinessError(f"{label}.{key} must not have surrounding whitespace")
+    _reject_non_ascii_context(raw, f"{label}.{key}")
+    _reject_secret_looking_identifier(raw, f"{label}.{key}")
+    return raw
 
 
 def _verify_xsd_profile_catalog_entries(
@@ -2530,7 +2586,7 @@ def _verify_xsd_profile_catalog_entries(
             _require_profile_id(skipped, "profile_id", label),
             _require_message_type(skipped, "message_type", label),
             _require_profile_direction(skipped, "direction", label),
-            _require_string(skipped, "version", label),
+            _require_profile_catalog_version(skipped, "version", label),
         )
         if MESSAGE_DEF_ID_RE.fullmatch(key[3]) is not None:
             _blocker(

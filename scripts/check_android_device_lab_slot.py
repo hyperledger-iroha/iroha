@@ -29,6 +29,8 @@ REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS: tuple[str, ...] = (
 )
 KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH = "evidence/signed-evidence.json"
 MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES = 16 * 1024 * 1024
+MAX_ANDROID_DEVICE_LAB_JSON_BYTES = 16 * 1024 * 1024
+MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES = 1024 * 1024
 KAGEMUSHA_RUNTIME_LOG_COMPLETE_MARKER = "kagemusha device-lab run complete"
 KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS: tuple[str, ...] = (
     "BUILD FAILED",
@@ -806,11 +808,25 @@ def parse_sha256_manifest(slot_path: Path) -> tuple[dict[str, str], list[str]]:
                 return entries, ["sha256sum.txt changed while being read"]
             if open_stat.st_nlink > 1:
                 return entries, ["sha256sum.txt must not be hardlinked"]
-            payload = handle.read()
+            if open_stat.st_size > MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES:
+                return entries, [
+                    "sha256sum.txt must be no more than "
+                    f"{MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES} bytes"
+                ]
+            chunks: list[bytes] = []
+            size = 0
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES:
+                    return entries, [
+                        "sha256sum.txt must be no more than "
+                        f"{MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES} bytes"
+                    ]
+                chunks.append(chunk)
             final_path_stat = manifest_path.lstat()
             if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
                 return entries, ["sha256sum.txt changed while being read"]
-        lines = payload.decode("utf-8").splitlines()
+        lines = b"".join(chunks).decode("utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
         return entries, ["sha256sum.txt could not be read"]
     for line_no, raw in enumerate(lines, start=1):
@@ -946,7 +962,21 @@ def _read_validated_manifest_artifact_bytes(
                 return None, [
                     f"sha256sum.txt references hardlinked artifact {display}"
                 ]
+            if open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                return None, [
+                    "sha256sum.txt references artifact "
+                    f"{display} must be no more than "
+                    f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                    return None, [
+                        "sha256sum.txt references artifact "
+                        f"{display} must be no more than "
+                        f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                    ]
                 chunks.append(chunk)
             final_path_stat = artifact_path.lstat()
             if (
@@ -1081,7 +1111,21 @@ def _read_validated_signed_evidence_artifact_bytes(
                 return None, [
                     f"signed evidence artifact digest references hardlinked artifact {display}"
                 ]
+            if open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                return None, [
+                    "signed evidence artifact digest references artifact "
+                    f"{display} must be no more than "
+                    f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                    return None, [
+                        "signed evidence artifact digest references artifact "
+                        f"{display} must be no more than "
+                        f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                    ]
                 chunks.append(chunk)
             final_path_stat = artifact_path.lstat()
             if (
@@ -1196,7 +1240,19 @@ def _read_validated_metadata_artifact_bytes(
                 ]
             if open_stat.st_nlink > 1:
                 return None, [f"{label} references hardlinked artifact {display}"]
+            if open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                return None, [
+                    f"{label} references artifact {display} must be no more than "
+                    f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                    return None, [
+                        f"{label} references artifact {display} must be no more than "
+                        f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                    ]
                 digest_chunks.append(chunk)
             final_path_stat = artifact_path.lstat()
             if (final_path_stat.st_dev, final_path_stat.st_ino) != expected_identity:
@@ -1326,6 +1382,18 @@ class DuplicateJsonKeyError(ValueError):
         super().__init__(key)
 
 
+class NonFiniteJsonConstantError(ValueError):
+    """Raised when JSON text uses a non-standard NaN/Infinity constant."""
+
+    def __init__(self, constant: str) -> None:
+        self.constant = constant
+        super().__init__(constant)
+
+
+def _reject_nonfinite_json_constant(constant: str) -> None:
+    raise NonFiniteJsonConstantError(constant)
+
+
 def _reject_duplicate_json_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     item: dict[str, Any] = {}
     for key, value in pairs:
@@ -1339,6 +1407,7 @@ def _loads_json_without_duplicate_keys(text: str) -> Any:
     return json.loads(
         text,
         object_pairs_hook=_reject_duplicate_json_object_pairs,
+        parse_constant=_reject_nonfinite_json_constant,
     )
 
 
@@ -1399,7 +1468,21 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
             if open_stat.st_nlink > 1:
                 errors.append(f"{label} must not be hardlinked")
                 return None
+            if open_stat.st_size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+                errors.append(
+                    f"{label} must be no more than "
+                    f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+                )
+                return None
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+                    errors.append(
+                        f"{label} must be no more than "
+                        f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+                    )
+                    return None
                 chunks.append(chunk)
             json_final_path_stat = path.lstat()
             if (json_final_path_stat.st_dev, json_final_path_stat.st_ino) != (
@@ -1418,6 +1501,9 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
         errors.append(
             f"{label} contains duplicate JSON object key {_display_path(exc.key)}"
         )
+        return None
+    except NonFiniteJsonConstantError as exc:
+        errors.append(f"{label} contains non-finite constant {exc.constant}")
         return None
     if not isinstance(data, dict):
         errors.append(f"{label} must be a JSON object")
@@ -2083,7 +2169,12 @@ def _canonical_signed_evidence_payload(evidence: dict[str, Any]) -> bytes:
         for key, value in evidence.items()
         if key not in {"signature", "signature_payload_sha256"}
     }
-    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
 
 
 def _parse_hex_bytes(
@@ -2272,6 +2363,8 @@ def _read_staged_bytes(
                 path_stat.st_dev,
                 path_stat.st_ino,
             ) != staged_expected_identity:
+                return None, [verification_error]
+            if open_stat.st_nlink > 1:
                 return None, [verification_error]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 chunks.append(chunk)
@@ -2642,7 +2735,11 @@ def validate_signed_evidence_artifact(
         errors=errors,
     )
 
-    payload = _canonical_signed_evidence_payload(evidence)
+    try:
+        payload = _canonical_signed_evidence_payload(evidence)
+    except ValueError:
+        errors.append("signed evidence artifact signature payload is not strict JSON")
+        return details
     expected_payload_digest = hashlib.sha256(payload).hexdigest()
     payload_digest = _require_lowercase_sha256_hex(
         evidence,
@@ -3381,7 +3478,19 @@ def _read_summary_output_text(
                 return None, ["--json-out changed while being read"]
             if open_stat.st_nlink > 1:
                 return None, ["--json-out must not be hardlinked"]
+            if open_stat.st_size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+                return None, [
+                    "--json-out must be no more than "
+                    f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+                    return None, [
+                        "--json-out must be no more than "
+                        f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+                    ]
                 chunks.append(chunk)
             final_path_stat = path.lstat()
             if (
@@ -3401,7 +3510,15 @@ def write_summary(path: Path, summary: dict) -> list[str]:
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
         return errors
-    summary_text = json.dumps(summary, indent=2) + "\n"
+    try:
+        summary_text = json.dumps(summary, indent=2, allow_nan=False) + "\n"
+    except ValueError:
+        return ["--json-out summary is not strict JSON"]
+    if len(summary_text.encode("utf-8")) > MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+        return [
+            "--json-out must be no more than "
+            f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+        ]
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

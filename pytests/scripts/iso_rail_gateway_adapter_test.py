@@ -334,7 +334,26 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertNotIn("rail-path-leak", message)
 
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        overlong_path = "out/" + ("a" * (ADAPTER.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
+            (
+                "raw overlong",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                overlong_path,
+                f"no longer than {ADAPTER.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "output overlong",
+                lambda raw: ADAPTER._reject_output_path_smuggling(Path(raw), "output path"),
+                overlong_path,
+                f"no longer than {ADAPTER.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "message overlong",
+                lambda raw: ADAPTER._validate_path_argument(raw, "--message path"),
+                overlong_path,
+                f"no longer than {ADAPTER.MAX_LOCAL_PATH_CHARS} characters",
+            ),
             (
                 "raw encoded dot",
                 lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),

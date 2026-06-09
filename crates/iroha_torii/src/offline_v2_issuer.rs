@@ -602,11 +602,8 @@ fn extract_body_auth(
     value: &Value,
 ) -> Result<(app_auth::CanonicalRequestBodyAuth<'_>, Vec<u8>), Error> {
     let account_id = required_string(value, "account_id")?;
-    let timestamp_ms = required_u64_with_code(
-        value,
-        "timestamp_ms",
-        "OFFLINE_V2_SIGNATURE_REQUIRED",
-    )?;
+    let timestamp_ms =
+        required_u64_with_code(value, "timestamp_ms", "OFFLINE_V2_SIGNATURE_REQUIRED")?;
     let nonce = required_string(value, "nonce")?;
     let signature_base64 = optional_string(value, "signature_base64");
     let witness_base64 = optional_string(value, "witness_base64");

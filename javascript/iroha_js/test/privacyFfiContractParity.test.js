@@ -2217,7 +2217,7 @@ test("native privacy FFI catalogs keep proofed SDK ledger mutations typed and pr
   }
 });
 
-test("native privacy FFI capabilities keep production gates fail-closed", () => {
+test("native privacy FFI capabilities accept internal evidence while defaulting fail-closed", () => {
   for (const [label, text] of [
     ["C bridge privacy FFI", source("crates/connect_norito_bridge/src/lib.rs")],
     ["JS NAPI privacy FFI", source("crates/iroha_js_host/src/lib.rs")],
@@ -2249,6 +2249,16 @@ test("native privacy FFI capabilities keep production gates fail-closed", () => 
     );
     assert.match(
       text,
+      /const\s+PRIVACY_PRODUCTION_EVIDENCE_HASH_PREFIX:\s*&str\s*=\s*"sha256:"[\s\S]*const\s+PRIVACY_PRODUCTION_LOCALNET_TARGET:\s*&str\s*=\s*"localnet"[\s\S]*const\s+PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT:\s*u8\s*=\s*4/,
+      `${label} must pin hash-addressed evidence and 4-peer localnet acceptance constants`,
+    );
+    assert.match(
+      text,
+      /struct\s+PrivacyProductionEvidenceRowV1[\s\S]*algorithm_id:\s*&'static str[\s\S]*chain_id:\s*&'static str[\s\S]*reviewer_identity:\s*&'static str[\s\S]*review_artifact_hash:\s*&'static str[\s\S]*review_artifact_signature:\s*&'static str[\s\S]*verifier_key_id:\s*&'static str[\s\S]*proof_family:\s*&'static str[\s\S]*public_inputs_schema:\s*Option<&'static str>[\s\S]*sdk_entrypoints:\s*Vec<&'static str>[\s\S]*required_state:\s*Vec<&'static str>[\s\S]*localnet_acceptance:\s*PrivacyProductionLocalnetEvidenceV1[\s\S]*gate_evidence:\s*Vec<PrivacyProductionGateEvidenceV1>/,
+      `${label} must model complete internal production evidence rows`,
+    );
+    assert.match(
+      text,
       /fn\s+privacy_production_gate_key_is_required\([^)]*\)\s*->\s*bool\s*\{[\s\S]*PRIVACY_PRODUCTION_GATE_REQUIREMENTS[\s\S]*required_key[\s\S]*\}/,
       `${label} must classify allowed production gate keys`,
     );
@@ -2259,8 +2269,23 @@ test("native privacy FFI capabilities keep production gates fail-closed", () => 
     );
     assert.match(
       text,
-      /fn\s+privacy_gate_statuses_match_requirements\([^)]*\)\s*->\s*bool\s*\{[\s\S]*zip\(PRIVACY_PRODUCTION_GATE_REQUIREMENTS\.iter\(\)\)[\s\S]*status\.key\.as_str\(\)\s*==\s*\*key[\s\S]*!status\.passed[\s\S]*\}/,
-      `${label} must require deterministic production gate status ordering`,
+      /fn\s+privacy_gate_statuses_match_requirements/,
+      `${label} must define production gate status-order validation`,
+    );
+    assert.match(
+      text,
+      /entry:\s*&PrivacyAlgorithmEntry[\s\S]*ready:\s*bool/,
+      `${label} gate status validation must receive the row and readiness state`,
+    );
+    assert.match(
+      text,
+      /zip\(PRIVACY_PRODUCTION_GATE_REQUIREMENTS\.iter\(\)\)[\s\S]*status\.key\.as_str\(\)\s*==\s*\*key/,
+      `${label} gate status validation must preserve deterministic production gate ordering`,
+    );
+    assert.match(
+      text,
+      /status\.passed\s*==\s*\(ready\s*&&\s*!privacy_production_gate_requirement_is_waived\(entry,\s*key\)\)/,
+      `${label} gate status validation must bind passed states to readiness and waived gates`,
     );
     assert.match(
       text,
@@ -2269,13 +2294,18 @@ test("native privacy FFI capabilities keep production gates fail-closed", () => 
     );
     assert.match(
       text,
-      /fn\s+privacy_production_gate_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*!gate\.ready[\s\S]*audit_references\.is_empty\(\)[\s\S]*PRIVACY_PRODUCTION_GATE_REQUIREMENTS\.len\(\)[\s\S]*required_gates\.len\(\)[\s\S]*privacy_gate_statuses_match_requirements[\s\S]*privacy_required_gate_keys_match_entry[\s\S]*privacy_gate_missing_reasons_match_requirements[\s\S]*!privacy_gate_status_keys_have_duplicates[\s\S]*!privacy_string_vec_has_duplicates\(&gate\.required_gates\)[\s\S]*privacy_production_gate_key_is_required[\s\S]*!status\.passed[\s\S]*privacy_production_gate_missing_reason_is_required[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ENGINE[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST[\s\S]*\}/,
-      `${label} must validate fail-closed production gate state`,
+      /fn\s+privacy_ready_gate_audit_references_are_valid\([^)]*\)\s*->\s*bool\s*\{[\s\S]*chain_id:[\s\S]*reviewer:[\s\S]*review_artifact_hash:[\s\S]*review_artifact_signature:[\s\S]*fuzz_artifact_hash:[\s\S]*performance_artifact_hash:[\s\S]*localnet_run_id:[\s\S]*privacy_production_localnet_run_id_is_valid/,
+      `${label} must validate ready-state audit references and 4-peer localnet evidence`,
     );
     assert.match(
       text,
-      /fn\s+privacy_capability_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_algorithm_entry[\s\S]*privacy_string_vec_matches_slice[\s\S]*!capability\.production_ready[\s\S]*privacy_production_gate_invariants_hold/,
-      `${label} must validate each advertised privacy capability row`,
+      /fn\s+privacy_production_gate_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_gate_statuses_match_requirements\(&gate\.gates,\s*entry,\s*gate\.ready\)[\s\S]*if\s+gate\.ready[\s\S]*gate\.missing\.is_empty\(\)[\s\S]*privacy_ready_gate_audit_references_are_valid[\s\S]*status\.passed[\s\S]*gate\.audit_references\.is_empty\(\)[\s\S]*privacy_gate_missing_reasons_match_requirements[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ENGINE[\s\S]*PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST[\s\S]*\}/,
+      `${label} must validate both evidence-ready and fail-closed production gate states`,
+    );
+    assert.match(
+      text,
+      /fn\s+privacy_capability_invariants_hold\([^)]*\)\s*->\s*bool\s*\{[\s\S]*privacy_algorithm_entry[\s\S]*production_entrypoints[\s\S]*if\s+capability\.production_ready[\s\S]*planned_entrypoints\.is_empty\(\)[\s\S]*privacy_string_vec_matches_vec[\s\S]*privacy_string_vec_matches_slice[\s\S]*capability\.production_ready\s*==\s*capability\.production_gate\.ready[\s\S]*privacy_production_gate_invariants_hold/,
+      `${label} must validate both evidence-ready and fail-closed capability rows`,
     );
     assert.match(
       text,
@@ -2329,8 +2359,43 @@ test("native privacy FFI capabilities keep production gates fail-closed", () => 
     );
     assert.match(
       text,
+      /fn\s+privacy_capabilities_with_production_evidence/,
+      `${label} must define evidence-backed production capability construction`,
+    );
+    assert.match(
+      text,
+      /privacy_production_evidence_for_entry/,
+      `${label} must select evidence through the production evidence validator`,
+    );
+    assert.match(
+      text,
+      /privacy_capability_from_entry/,
+      `${label} must build capability rows through the shared entry constructor`,
+    );
+    assert.match(
+      text,
+      /debug_assert!\(privacy_capabilities_invariants_hold\(&capabilities\)\)/,
+      `${label} must assert evidence-backed capability invariants before emission`,
+    );
+    assert.match(
+      text,
       /privacy_capabilities_result_invariants_are_fail_closed[\s\S]*privacy_capabilities_invariants_hold/,
       `${label} must test emitted fail-closed capability invariants`,
+    );
+    assert.match(
+      text,
+      /privacy_capabilities_accept_exact_internal_evidence_for_all_rows[\s\S]*privacy_capabilities_with_production_evidence[\s\S]*all rows with exact internal evidence must be admitted[\s\S]*buildZkAceAuthorizationProofV1[\s\S]*buildZkAceAuthorizedTransferInstruction/,
+      `${label} must test exact internal evidence admission for every catalog row including ZK-ACE`,
+    );
+    assert.match(
+      text,
+      /privacy_production_evidence_rejects_adversarial_zk_ace_bindings[\s\S]*wrong chain[\s\S]*mock chain marker[\s\S]*wrong verifier key[\s\S]*mutated public input schema[\s\S]*dev fixture entrypoint[\s\S]*local verifier entrypoint[\s\S]*three-peer localnet downgrade[\s\S]*replay acceptance[\s\S]*restart replay acceptance[\s\S]*bad review artifact hash[\s\S]*unsigned review artifact[\s\S]*missing required state/,
+      `${label} must test adversarial ZK-ACE production evidence rejection`,
+    );
+    assert.match(
+      text,
+      /privacy_production_evidence_rejects_missing_and_duplicate_rows[\s\S]*without expected chain binding[\s\S]*duplicate valid evidence rows must not admit readiness/,
+      `${label} must test missing chain binding and duplicate evidence rejection`,
     );
     assert.match(
       text,

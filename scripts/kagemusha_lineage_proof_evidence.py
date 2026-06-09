@@ -238,6 +238,15 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
     if pre_create_dir_errors:
         return pre_create_dir_errors
     try:
+        evidence_text = json.dumps(
+            evidence,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ) + "\n"
+    except ValueError:
+        return ["lineage proof evidence validation file is not strict JSON"]
+    try:
         artifact_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         return ["--artifact-dir could not be created for evidence validation"]
@@ -255,7 +264,7 @@ def validate_evidence_document(evidence: dict[str, Any], artifact_dir: Path) -> 
             delete=False,
         ) as handle:
             path = Path(handle.name)
-            handle.write(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+            handle.write(evidence_text)
     except OSError:
         if path is not None:
             try:
@@ -474,6 +483,8 @@ def _read_output_text(
     path: Path,
     expected_stat: os.stat_result,
     label: str,
+    *,
+    max_bytes: int | None = None,
 ) -> tuple[str | None, list[str]]:
     """Read helper output text without trusting a stale path."""
 
@@ -497,7 +508,13 @@ def _read_output_text(
                 return None, [f"{label} changed while being read"]
             if open_stat.st_nlink > 1:
                 return None, [f"{label} must not be hardlinked"]
+            if max_bytes is not None and open_stat.st_size > max_bytes:
+                return None, [f"{label} evidence exceeds maximum size"]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if max_bytes is not None and size > max_bytes:
+                    return None, [f"{label} evidence exceeds maximum size"]
                 chunks.append(chunk)
             final_path_stat = path.lstat()
             if (
@@ -517,7 +534,17 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     errors = validate_output_path(path, "--out")
     if errors:
         return errors
-    evidence_text = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+    try:
+        evidence_text = json.dumps(
+            evidence,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ) + "\n"
+    except ValueError:
+        return ["--out evidence is not strict JSON"]
+    if len(evidence_text.encode("utf-8")) > readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES:
+        return ["--out evidence exceeds maximum size"]
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -563,7 +590,12 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
         expected_stat = path.lstat()
     except (FileNotFoundError, OSError):
         return ["--out write verification failed"]
-    readback_text, readback_errors = _read_output_text(path, expected_stat, "--out")
+    readback_text, readback_errors = _read_output_text(
+        path,
+        expected_stat,
+        "--out",
+        max_bytes=readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES,
+    )
     if readback_errors:
         return readback_errors
     if readback_text != evidence_text:

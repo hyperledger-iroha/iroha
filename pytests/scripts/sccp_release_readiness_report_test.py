@@ -2337,6 +2337,12 @@ def test_release_readiness_report_guards_active_launch_checklist_schema_gate_inv
         in error
         for error in errors
     )
+    assert any(
+        "SCCP active-launch checklist schema source inventory" in error
+        and "missing marker: source verifier material hash must not reuse source adapter engine deployment hash"
+        in error
+        for error in errors
+    )
 
 
 def test_release_readiness_report_guards_release_manifest_readiness_flags_gate_inventory(

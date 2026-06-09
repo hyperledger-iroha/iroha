@@ -57,6 +57,55 @@ PRODUCTION_GATE_SUPPLEMENTAL_MISSING_REASONS = (
     PRODUCTION_GATE_MISSING_DEV_FIXTURE,
     PRODUCTION_GATE_MISSING_ALLOWLIST,
 )
+PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION = (
+    "iroha-privacy-production-evidence-registry-v1"
+)
+PRIVACY_PRODUCTION_REVIEW_ARTIFACT_KEYS = frozenset(
+    ("label", "uri", "signature")
+)
+PRIVACY_PRODUCTION_GATE_ARTIFACT_KEYS = frozenset(("label", "uri"))
+PRIVACY_PRODUCTION_RESULT_KEYS = frozenset(("passed", "artifact"))
+PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = frozenset(
+    (
+        "run_id",
+        "target",
+        "peer_count",
+        "smoke_passed",
+        "replay_rejected",
+        "restart_persistence_checked",
+        "restart_replay_rejected",
+        "state_recovery_passed",
+    )
+)
+PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = (
+    "rust_core",
+    "ffi",
+    "python",
+    "javascript",
+    "java_android",
+    "kotlin",
+    "swift",
+    "csharp",
+)
+PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS = frozenset(
+    (
+        "version",
+        "covered_algorithm_id",
+        "chain_id",
+        "reviewer_identity",
+        "review_artifact",
+        "verifier_key_id",
+        "proof_family",
+        "public_inputs_schema",
+        "sdk_entrypoints",
+        "required_state",
+        "fuzz_results",
+        "performance_results",
+        "localnet_run_id",
+        "localnet_acceptance",
+        "gate_evidence",
+    )
+)
 BACKEND_FAMILY_BY_ALGORITHM_ID = {
     "transparent-transfer": "none",
     "shield": "commitment-only",
@@ -2728,6 +2777,379 @@ def _production_gate_for_descriptor(descriptor: Mapping[str, Any]) -> dict[str, 
     }
 
 
+def _privacy_evidence_text_value(value: Any, *, limit: int = 256) -> str:
+    if not isinstance(value, str) or not value:
+        return ""
+    if len(value) > limit or not _is_clean_catalog_string(value):
+        return ""
+    return value
+
+
+def _privacy_evidence_hash_uri(value: Any) -> str:
+    text = _privacy_evidence_text_value(value, limit=256)
+    lowered = text.lower()
+    if lowered.startswith("sha256:"):
+        digest = lowered.removeprefix("sha256:")
+    elif lowered.startswith("urn:sha256:"):
+        digest = lowered.removeprefix("urn:sha256:")
+    elif lowered.startswith("hash://sha256/"):
+        digest = lowered.removeprefix("hash://sha256/")
+    else:
+        return ""
+    if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
+        return ""
+    return text
+
+
+def _privacy_evidence_artifact(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, Mapping) or set(value) != PRIVACY_PRODUCTION_GATE_ARTIFACT_KEYS:
+        return None
+    label = _privacy_evidence_text_value(value.get("label"), limit=160)
+    uri = _privacy_evidence_hash_uri(value.get("uri"))
+    if not label or not uri:
+        return None
+    return {"label": label, "uri": uri}
+
+
+def _privacy_evidence_review_artifact(value: Any) -> dict[str, str] | None:
+    if not isinstance(value, Mapping) or set(value) != PRIVACY_PRODUCTION_REVIEW_ARTIFACT_KEYS:
+        return None
+    label = _privacy_evidence_text_value(value.get("label"), limit=160)
+    uri = _privacy_evidence_hash_uri(value.get("uri"))
+    signature = _privacy_evidence_text_value(value.get("signature"), limit=512)
+    if not label or not uri or not signature:
+        return None
+    return {"label": label, "uri": uri, "signature": signature}
+
+
+def _privacy_evidence_result(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping) or set(value) != PRIVACY_PRODUCTION_RESULT_KEYS:
+        return None
+    if value.get("passed") is not True:
+        return None
+    artifact = _privacy_evidence_artifact(value.get("artifact"))
+    if artifact is None:
+        return None
+    return {"passed": True, "artifact": artifact}
+
+
+def _privacy_evidence_string_list(value: Any) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    result: list[str] = []
+    for item in value:
+        text = _privacy_evidence_text_value(item, limit=160)
+        if not text or text in result:
+            return None
+        result.append(text)
+    return result
+
+
+def _privacy_descriptor_production_sdk_entrypoints(
+    descriptor: Mapping[str, Any],
+) -> list[str]:
+    entrypoints: list[str] = []
+    for entrypoint in [
+        *descriptor.get("sdk_entrypoints", []),
+        *descriptor.get("planned_sdk_entrypoints", []),
+    ]:
+        if not isinstance(entrypoint, str):
+            continue
+        if _entrypoint_is_dev_fixture(entrypoint) or _entrypoint_is_local_verifier(entrypoint):
+            continue
+        if entrypoint not in entrypoints:
+            entrypoints.append(entrypoint)
+    return entrypoints
+
+
+def _privacy_evidence_sdk_entrypoints(
+    value: Any,
+    descriptor: Mapping[str, Any],
+) -> list[str] | None:
+    if not isinstance(value, Mapping):
+        return None
+    if set(value) != set(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES):
+        return None
+    expected = _privacy_descriptor_production_sdk_entrypoints(descriptor)
+    for surface in PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES:
+        entrypoints = _privacy_evidence_string_list(value.get(surface))
+        if entrypoints != expected:
+            return None
+        if any(
+            _entrypoint_is_dev_fixture(entrypoint)
+            or _entrypoint_is_local_verifier(entrypoint)
+            for entrypoint in entrypoints or []
+        ):
+            return None
+    return expected
+
+
+def _privacy_evidence_required_state_matches(
+    value: Any,
+    descriptor: Mapping[str, Any],
+) -> bool:
+    required_state = _privacy_evidence_string_list(value)
+    return required_state == list(descriptor.get("required_state", []))
+
+
+def _privacy_evidence_nullable_equals(value: Any, expected: Any) -> bool:
+    if expected is None:
+        return value is None
+    if not isinstance(expected, str):
+        return value == expected
+    return _privacy_evidence_text_value(value, limit=512) == expected
+
+
+def _privacy_evidence_localnet_acceptance(
+    value: Any,
+    *,
+    localnet_run_id: str,
+) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping) or set(value) != PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS:
+        return None
+    run_id = _privacy_evidence_text_value(value.get("run_id"), limit=160)
+    target = _privacy_evidence_text_value(value.get("target"), limit=32)
+    peer_count = value.get("peer_count")
+    if (
+        run_id != localnet_run_id
+        or target != "localnet"
+        or not isinstance(peer_count, int)
+        or isinstance(peer_count, bool)
+        or peer_count != 4
+    ):
+        return None
+    required_booleans = (
+        "smoke_passed",
+        "replay_rejected",
+        "restart_persistence_checked",
+        "restart_replay_rejected",
+        "state_recovery_passed",
+    )
+    if any(value.get(key) is not True for key in required_booleans):
+        return None
+    return {
+        "run_id": run_id,
+        "target": "localnet",
+        "peer_count": 4,
+        **{key: True for key in required_booleans},
+    }
+
+
+def _privacy_evidence_gate_artifacts(
+    value: Any,
+    descriptor: Mapping[str, Any],
+) -> dict[str, list[dict[str, str]]] | None:
+    required_gates = _production_gate_required_keys(descriptor)
+    if not isinstance(value, Mapping) or set(value) != set(required_gates):
+        return None
+    result: dict[str, list[dict[str, str]]] = {}
+    for key in required_gates:
+        items = value.get(key)
+        if not isinstance(items, list) or not items or len(items) > 8:
+            return None
+        artifacts: list[dict[str, str]] = []
+        for item in items:
+            artifact = _privacy_evidence_artifact(item)
+            if artifact is None:
+                return None
+            artifacts.append(artifact)
+        result[key] = artifacts
+    return result
+
+
+def _privacy_production_evidence_rows(value: Any) -> dict[str, dict[str, Any]]:
+    if value is None:
+        return {}
+    source = _canonicalize_value(value)
+    raw_rows: list[Any]
+    if (
+        isinstance(source, Mapping)
+        and source.get("version") == PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION
+        and isinstance(source.get("rows"), list)
+    ):
+        raw_rows = list(source["rows"])
+    elif isinstance(source, Mapping):
+        raw_rows = [
+            {**dict(row), "id": algorithm_id}
+            for algorithm_id, row in source.items()
+            if isinstance(algorithm_id, str) and isinstance(row, Mapping)
+        ]
+    else:
+        return {}
+
+    rows: dict[str, dict[str, Any]] = {}
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, Mapping):
+            continue
+        row = dict(raw_row)
+        row_id = row.get("id") or row.get("covered_algorithm_id")
+        if not isinstance(row_id, str):
+            continue
+        keys = set(row)
+        if keys == PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS | {"id"}:
+            row.pop("id", None)
+        elif keys != PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS:
+            continue
+        rows[row_id] = row
+    return rows
+
+
+def _privacy_trusted_production_evidence(
+    descriptor: Mapping[str, Any],
+    evidence_registry: Any,
+    *,
+    chain_id: str | None = None,
+) -> dict[str, Any] | None:
+    algorithm_id = descriptor.get("id")
+    if not isinstance(algorithm_id, str):
+        return None
+    source = _privacy_production_evidence_rows(evidence_registry).get(algorithm_id)
+    if source is None:
+        return None
+    if source.get("version") != PRODUCTION_GATE_VERSION:
+        return None
+    if source.get("covered_algorithm_id") != algorithm_id:
+        return None
+    evidence_chain_id = _privacy_evidence_text_value(source.get("chain_id"), limit=256)
+    if not evidence_chain_id or (chain_id is not None and evidence_chain_id != chain_id):
+        return None
+    reviewer_identity = _privacy_evidence_text_value(
+        source.get("reviewer_identity"),
+        limit=160,
+    )
+    localnet_run_id = _privacy_evidence_text_value(
+        source.get("localnet_run_id"),
+        limit=160,
+    )
+    review_artifact = _privacy_evidence_review_artifact(source.get("review_artifact"))
+    if not reviewer_identity or not localnet_run_id or review_artifact is None:
+        return None
+    if not _privacy_evidence_nullable_equals(
+        source.get("verifier_key_id"),
+        descriptor.get("verifier_key_id"),
+    ):
+        return None
+    if not _privacy_evidence_nullable_equals(
+        source.get("proof_family"),
+        descriptor.get("proof_family"),
+    ):
+        return None
+    if not _privacy_evidence_nullable_equals(
+        source.get("public_inputs_schema"),
+        descriptor.get("public_inputs_schema"),
+    ):
+        return None
+    sdk_entrypoints = _privacy_evidence_sdk_entrypoints(
+        source.get("sdk_entrypoints"),
+        descriptor,
+    )
+    if sdk_entrypoints is None:
+        return None
+    if not _privacy_evidence_required_state_matches(
+        source.get("required_state"),
+        descriptor,
+    ):
+        return None
+    fuzz_results = _privacy_evidence_result(source.get("fuzz_results"))
+    performance_results = _privacy_evidence_result(source.get("performance_results"))
+    if fuzz_results is None or performance_results is None:
+        return None
+    localnet_acceptance = _privacy_evidence_localnet_acceptance(
+        source.get("localnet_acceptance"),
+        localnet_run_id=localnet_run_id,
+    )
+    if localnet_acceptance is None:
+        return None
+    gate_evidence = _privacy_evidence_gate_artifacts(
+        source.get("gate_evidence"),
+        descriptor,
+    )
+    if gate_evidence is None:
+        return None
+    return {
+        "chain_id": evidence_chain_id,
+        "reviewer_identity": reviewer_identity,
+        "review_artifact": review_artifact,
+        "sdk_entrypoints": sdk_entrypoints,
+        "fuzz_results": fuzz_results,
+        "performance_results": performance_results,
+        "localnet_run_id": localnet_run_id,
+        "localnet_acceptance": localnet_acceptance,
+        "gate_evidence": gate_evidence,
+    }
+
+
+def _privacy_production_gate_from_evidence(
+    descriptor: Mapping[str, Any],
+    evidence: Mapping[str, Any],
+) -> dict[str, Any]:
+    required_gates = _production_gate_required_keys(descriptor)
+    required_gate_set = set(required_gates)
+    gates = {
+        key: key in required_gate_set
+        for key, _label in PRODUCTION_GATE_REQUIREMENTS
+    }
+    return {
+        "version": PRODUCTION_GATE_VERSION,
+        "ready": True,
+        "gates": gates,
+        "required_gates": required_gates,
+        "missing": [],
+        "audit_references": [dict(evidence["review_artifact"])],
+        "chain_id": evidence["chain_id"],
+        "reviewer_identity": evidence["reviewer_identity"],
+        "localnet_run_id": evidence["localnet_run_id"],
+        "localnet_acceptance": copy.deepcopy(evidence["localnet_acceptance"]),
+        "fuzz_results": copy.deepcopy(evidence["fuzz_results"]),
+        "performance_results": copy.deepcopy(evidence["performance_results"]),
+        "gate_evidence": copy.deepcopy(evidence["gate_evidence"]),
+    }
+
+
+def _with_privacy_production_evidence(
+    descriptor: Mapping[str, Any],
+    evidence_registry: Any,
+    *,
+    chain_id: str | None = None,
+) -> dict[str, Any]:
+    result = copy.deepcopy(dict(descriptor))
+    trusted_evidence = _privacy_trusted_production_evidence(
+        result,
+        evidence_registry,
+        chain_id=chain_id,
+    )
+    if trusted_evidence is None:
+        return result
+    result["implementation_stage"] = "production-hardened"
+    result["sdk_entrypoints"] = list(trusted_evidence["sdk_entrypoints"])
+    result["planned_sdk_entrypoints"] = []
+    result["status"] = "production-ready"
+    result["production_ready"] = True
+    result["production_gate"] = _privacy_production_gate_from_evidence(
+        result,
+        trusted_evidence,
+    )
+    return result
+
+
+def _with_privacy_production_evidence_registry(
+    descriptors: list[dict[str, Any]],
+    evidence_registry: Any,
+    *,
+    chain_id: str | None = None,
+) -> list[dict[str, Any]]:
+    if evidence_registry is None:
+        return descriptors
+    return [
+        _with_privacy_production_evidence(
+            descriptor,
+            evidence_registry,
+            chain_id=chain_id,
+        )
+        for descriptor in descriptors
+    ]
+
+
 def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> None:
     for field in _DERIVED_COMPATIBILITY_FIELDS:
         if field in descriptor:
@@ -4168,19 +4590,39 @@ _PRIVACY_ALGORITHM_DESCRIPTOR_BY_ID = {
 }
 
 
-def get_privacy_algorithm_descriptors() -> list[dict[str, Any]]:
+def get_privacy_algorithm_descriptors(
+    production_evidence: Any | None = None,
+    *,
+    chain_id: str | None = None,
+) -> list[dict[str, Any]]:
     """Return defensive-copy privacy algorithm descriptors."""
 
-    return copy.deepcopy(list(_PRIVACY_ALGORITHM_DESCRIPTORS))
+    descriptors = copy.deepcopy(list(_PRIVACY_ALGORITHM_DESCRIPTORS))
+    return _with_privacy_production_evidence_registry(
+        descriptors,
+        production_evidence,
+        chain_id=chain_id,
+    )
 
 
-def get_privacy_algorithm_descriptor(algorithm_id: str) -> dict[str, Any] | None:
+def get_privacy_algorithm_descriptor(
+    algorithm_id: str,
+    production_evidence: Any | None = None,
+    *,
+    chain_id: str | None = None,
+) -> dict[str, Any] | None:
     """Return one defensive-copy descriptor by id, or ``None`` if unknown."""
 
     if not isinstance(algorithm_id, str):
         return None
     descriptor = _PRIVACY_ALGORITHM_DESCRIPTOR_BY_ID.get(algorithm_id)
-    return copy.deepcopy(descriptor) if descriptor is not None else None
+    if descriptor is None:
+        return None
+    return _with_privacy_production_evidence(
+        descriptor,
+        production_evidence,
+        chain_id=chain_id,
+    )
 
 
 def get_privacy_criteria() -> list[str]:
@@ -4295,6 +4737,18 @@ def _callable_on_sis_hints(name: str) -> bool:
     return callable(getattr(sis_hints, name, None))
 
 
+def _planned_privacy_entrypoints_available(
+    algorithm_id: str,
+    probe: Any,
+) -> bool:
+    return all(
+        probe(entrypoint)
+        for entrypoint in REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+    )
+
+
 def _ml_dsa_available() -> bool:
     try:
         from .crypto import supported_crypto_algorithms
@@ -4317,7 +4771,12 @@ def _privacy_native_available() -> bool:
         return False
 
 
-def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
+def privacy_capabilities(
+    client: Any | None = None,
+    production_evidence: Any | None = None,
+    *,
+    chain_id: str | None = None,
+) -> dict[str, Any]:
     """Return SDK privacy catalog and implementation capability metadata."""
 
     zk_ace_register = _callable_on_instruction("register_zk_ace_identity_commitment")
@@ -4344,11 +4803,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     verange_envelope_builder = _callable_on_verange("buildVeRangeProofEnvelope")
     verange_dev_fixture = _callable_on_verange("buildVeRangeDevProofFixture")
     verange_local_verifier = _callable_on_verange("verifyVeRangeProofLocally")
-    verange_sdk_exports = (
-        verange_commitment_builder
-        and verange_envelope_builder
-        and verange_dev_fixture
-        and verange_local_verifier
+    verange_sdk_exports = _planned_privacy_entrypoints_available(
+        "verange-transparent-range-v1",
+        _callable_on_verange,
     )
     anonymous_pgc_receiver_set_builder = _callable_on_anonymous_pgc(
         "buildAnonymousPgcReceiverSet"
@@ -4359,10 +4816,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     anonymous_pgc_local_verifier = _callable_on_anonymous_pgc(
         "verifyAnonymousPgcDevProofLocally"
     )
-    anonymous_pgc_sdk_exports = (
-        anonymous_pgc_receiver_set_builder
-        and anonymous_pgc_dev_fixture
-        and anonymous_pgc_local_verifier
+    anonymous_pgc_sdk_exports = _planned_privacy_entrypoints_available(
+        "anonymous-pgc-k-out-of-n-v1",
+        _callable_on_anonymous_pgc,
     )
     zkat_policy_commitment_builder = _callable_on_zkat("buildZkAtPolicyCommitment")
     zkat_authenticator_envelope_builder = _callable_on_zkat(
@@ -4370,11 +4826,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     )
     zkat_dev_fixture = _callable_on_zkat("buildZkAtDevProofFixture")
     zkat_local_verifier = _callable_on_zkat("verifyZkAtAuthenticatorLocally")
-    zkat_sdk_exports = (
-        zkat_policy_commitment_builder
-        and zkat_authenticator_envelope_builder
-        and zkat_dev_fixture
-        and zkat_local_verifier
+    zkat_sdk_exports = _planned_privacy_entrypoints_available(
+        "zkat-policy-private-auth-v1",
+        _callable_on_zkat,
     )
     zk_ams_admission_batch_builder = _callable_on_zk_ams("buildZkAmsAdmissionBatch")
     zk_ams_proof_envelope_builder = _callable_on_zk_ams(
@@ -4382,11 +4836,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     )
     zk_ams_dev_fixture = _callable_on_zk_ams("buildZkAmsAdmissionDevProofFixture")
     zk_ams_local_verifier = _callable_on_zk_ams("verifyZkAmsAdmissionProofLocally")
-    zk_ams_sdk_exports = (
-        zk_ams_admission_batch_builder
-        and zk_ams_proof_envelope_builder
-        and zk_ams_dev_fixture
-        and zk_ams_local_verifier
+    zk_ams_sdk_exports = _planned_privacy_entrypoints_available(
+        "zk-ams-recursive-admission-v0",
+        _callable_on_zk_ams,
     )
     vega_predicate_commitment_builder = _callable_on_vega(
         "buildVegaCredentialPredicateCommitment"
@@ -4394,11 +4846,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     vega_proof_envelope_builder = _callable_on_vega("buildVegaCredentialProofEnvelope")
     vega_dev_fixture = _callable_on_vega("buildVegaCredentialDevProofFixture")
     vega_local_verifier = _callable_on_vega("verifyVegaCredentialProofLocally")
-    vega_sdk_exports = (
-        vega_predicate_commitment_builder
-        and vega_proof_envelope_builder
-        and vega_dev_fixture
-        and vega_local_verifier
+    vega_sdk_exports = _planned_privacy_entrypoints_available(
+        "vega-existing-credential-zk-v0",
+        _callable_on_vega,
     )
     silent_threshold_commitments_builder = _callable_on_silent_threshold(
         "buildSilentThresholdCredentialCommitments"
@@ -4412,11 +4862,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     silent_threshold_local_verifier = _callable_on_silent_threshold(
         "verifySilentThresholdCredentialProofLocally"
     )
-    silent_threshold_sdk_exports = (
-        silent_threshold_commitments_builder
-        and silent_threshold_envelope_builder
-        and silent_threshold_dev_fixture
-        and silent_threshold_local_verifier
+    silent_threshold_sdk_exports = _planned_privacy_entrypoints_available(
+        "silent-threshold-anoncred-v0",
+        _callable_on_silent_threshold,
     )
     zk_x509_identity_commitments_builder = _callable_on_zk_x509(
         "buildZkX509IdentityCommitments"
@@ -4430,11 +4878,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     zk_x509_identity_local_verifier = _callable_on_zk_x509(
         "verifyZkX509IdentityProofLocally"
     )
-    zk_x509_identity_sdk_exports = (
-        zk_x509_identity_commitments_builder
-        and zk_x509_identity_envelope_builder
-        and zk_x509_identity_dev_fixture
-        and zk_x509_identity_local_verifier
+    zk_x509_identity_sdk_exports = _planned_privacy_entrypoints_available(
+        "zk-x509-onchain-identity-v0",
+        _callable_on_zk_x509,
     )
     jindo_lattice_public_inputs_builder = _callable_on_jindo(
         "buildJindoLatticePublicInputs"
@@ -4448,11 +4894,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     jindo_lattice_local_verifier = _callable_on_jindo(
         "verifyJindoLatticeProofLocally"
     )
-    jindo_lattice_sdk_exports = (
-        jindo_lattice_public_inputs_builder
-        and jindo_lattice_proof_envelope_builder
-        and jindo_lattice_dev_fixture
-        and jindo_lattice_local_verifier
+    jindo_lattice_sdk_exports = _planned_privacy_entrypoints_available(
+        "jindo-lattice-pcs-zk-v0",
+        _callable_on_jindo,
     )
     sis_hints_credential_commitments_builder = _callable_on_sis_hints(
         "buildSisHintsCredentialCommitments"
@@ -4466,11 +4910,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     sis_hints_credential_local_verifier = _callable_on_sis_hints(
         "verifySisHintsCredentialProofLocally"
     )
-    sis_hints_credential_sdk_exports = (
-        sis_hints_credential_commitments_builder
-        and sis_hints_credential_envelope_builder
-        and sis_hints_credential_dev_fixture
-        and sis_hints_credential_local_verifier
+    sis_hints_credential_sdk_exports = _planned_privacy_entrypoints_available(
+        "sis-hints-anoncred-pq-v0",
+        _callable_on_sis_hints,
     )
     zk_ace_register_available = zk_ace_register and _callable_on_client(
         client, "register_zk_ace_identity_commitment_and_wait", default=True
@@ -4494,7 +4936,10 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     return {
         "python_sdk_available": True,
         "bridge_available": _privacy_native_available(),
-        "privacy_algorithms": get_privacy_algorithm_descriptors(),
+        "privacy_algorithms": get_privacy_algorithm_descriptors(
+            production_evidence,
+            chain_id=chain_id,
+        ),
         "privacy_criteria": get_privacy_criteria(),
         "transfer_asset_instruction": _callable_on_client(
             client, "transfer_asset_and_wait", default=True

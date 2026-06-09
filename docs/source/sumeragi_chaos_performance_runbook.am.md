@@ -74,8 +74,10 @@ and the A6 tracker in `docs/source/project_tracker/npos_sumeragi_phase_a.md`.
    ```
 
 3. Verify the reports now show the expected budgets listed in
-   `docs/source/sumeragi.md` (RBC delivery ≤ 3.6 s, commit ≤ 4.0 s, throughput
-   ≥ 2.7 MiB/s, queue depth ≤ 32, and zero P2P drops). Commit the regenerated
+   `docs/source/sumeragi.md` (30 s base RBC delivery budget plus 60 s
+   per peer beyond four and a 40 s RS16 premium, commit headroom ≤ 40 s,
+   throughput ≥ min(payload/delivery-budget, 0.1 MiB/s), queue depth ≤ 32,
+   and zero P2P drops). Commit the regenerated
    Markdown to keep the public evidence bundle current.
 
 ## 4. Targeted Chaos & Stress Harness

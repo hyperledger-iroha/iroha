@@ -8139,15 +8139,32 @@ class ToriiClient(_BaseToriiClient):
             return literal
         return f"{prefix}#{native_account_id}"
 
-    def privacy_capabilities(self) -> Dict[str, Any]:
+    def privacy_capabilities(
+        self,
+        production_evidence: Any | None = None,
+        *,
+        chain_id: str | None = None,
+    ) -> Dict[str, Any]:
         """Return SDK privacy catalog and implementation capability metadata."""
 
-        return _privacy_capabilities(self)
+        return _privacy_capabilities(
+            self,
+            production_evidence,
+            chain_id=chain_id,
+        )
 
-    def privacy_algorithm_descriptors(self) -> List[Dict[str, Any]]:
+    def privacy_algorithm_descriptors(
+        self,
+        production_evidence: Any | None = None,
+        *,
+        chain_id: str | None = None,
+    ) -> List[Dict[str, Any]]:
         """Return defensive-copy privacy algorithm descriptors."""
 
-        return get_privacy_algorithm_descriptors()
+        return get_privacy_algorithm_descriptors(
+            production_evidence,
+            chain_id=chain_id,
+        )
 
     @property
     def sorafs_alias_policy(self) -> SorafsAliasPolicy:

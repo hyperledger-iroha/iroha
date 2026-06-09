@@ -1,6 +1,6 @@
 # Sumeragi Evidence (Audit API)
 
-Temporary audit endpoints for Sumeragi evidence.
+Sumeragi evidence audit endpoints.
 
 - GET `/v1/sumeragi/evidence/count`
   - Returns the number of unique Evidence entries observed by this node.

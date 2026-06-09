@@ -39,6 +39,9 @@ Active launch readiness also treats source verifier material and
 source-adapter deployment as separate evidence roles: their canonical bytes32
 hashes must both be non-zero and must not reuse the same value before governed
 deployment or route-allowlist binding checks can pass.
+The release-readiness and release-bundle source inventory pins that
+role-separation helper and its governed-deployment plus route-allowlist
+hash-reuse regressions, so removing the guard becomes a public release blocker.
 The no-unresolved-blockers checklist also inspects the active lane's own
 blocker list instead of trusting only the top-level aggregate, so lane-local
 operator holds or malformed blocker entries keep release readiness blocked even

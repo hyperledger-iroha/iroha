@@ -520,6 +520,77 @@ const PRODUCTION_GATE_SUPPLEMENTAL_MISSING_REASONS = Object.freeze([
   PRODUCTION_GATE_MISSING_DEV_FIXTURE,
   PRODUCTION_GATE_MISSING_ALLOWLIST,
 ]);
+const PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION =
+  "iroha-privacy-production-evidence-registry-v1";
+const PRIVACY_PRODUCTION_REVIEW_ARTIFACT_KEYS = Object.freeze([
+  "label",
+  "uri",
+  "signature",
+]);
+const PRIVACY_PRODUCTION_GATE_ARTIFACT_KEYS = Object.freeze(["label", "uri"]);
+const PRIVACY_PRODUCTION_RESULT_KEYS = Object.freeze(["passed", "artifact"]);
+const PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS = Object.freeze([
+  "run_id",
+  "target",
+  "peer_count",
+  "smoke_passed",
+  "replay_rejected",
+  "restart_persistence_checked",
+  "restart_replay_rejected",
+  "state_recovery_passed",
+]);
+const PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = Object.freeze([
+  "rust_core",
+  "ffi",
+  "python",
+  "javascript",
+  "java_android",
+  "kotlin",
+  "swift",
+  "csharp",
+]);
+const PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS = Object.freeze([
+  "version",
+  "covered_algorithm_id",
+  "chain_id",
+  "reviewer_identity",
+  "review_artifact",
+  "verifier_key_id",
+  "proof_family",
+  "public_inputs_schema",
+  "sdk_entrypoints",
+  "required_state",
+  "fuzz_results",
+  "performance_results",
+  "localnet_run_id",
+  "localnet_acceptance",
+  "gate_evidence",
+]);
+const PRIVACY_PRODUCTION_EVIDENCE_KEY_MAP = Object.freeze({
+  coveredAlgorithmId: "covered_algorithm_id",
+  chainId: "chain_id",
+  reviewerIdentity: "reviewer_identity",
+  reviewArtifact: "review_artifact",
+  verifierKeyId: "verifier_key_id",
+  proofFamily: "proof_family",
+  publicInputsSchema: "public_inputs_schema",
+  sdkEntrypoints: "sdk_entrypoints",
+  requiredState: "required_state",
+  fuzzResults: "fuzz_results",
+  performanceResults: "performance_results",
+  localnetRunId: "localnet_run_id",
+  localnetAcceptance: "localnet_acceptance",
+  gateEvidence: "gate_evidence",
+  rustCore: "rust_core",
+  javaAndroid: "java_android",
+  runId: "run_id",
+  peerCount: "peer_count",
+  smokePassed: "smoke_passed",
+  replayRejected: "replay_rejected",
+  restartPersistenceChecked: "restart_persistence_checked",
+  restartReplayRejected: "restart_replay_rejected",
+  stateRecoveryPassed: "state_recovery_passed",
+});
 const BACKEND_FAMILY_BY_ALGORITHM_ID = Object.freeze({
   "transparent-transfer": "none",
   shield: "commitment-only",
@@ -2140,6 +2211,16 @@ function deepFreeze(value) {
   return Object.freeze(value);
 }
 
+function requiredProductionGateKeys(descriptor) {
+  const waived =
+    descriptor.id === "transparent-transfer"
+      ? new Set(TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS)
+      : new Set();
+  return PRODUCTION_GATE_REQUIREMENTS
+    .map(([key]) => key)
+    .filter((key) => !waived.has(key));
+}
+
 function productionGateForDescriptor(descriptor) {
   const gates = Object.fromEntries(
     PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, false]),
@@ -2172,6 +2253,401 @@ function productionGateForDescriptor(descriptor) {
     requiredGates,
     missing: dedupeStrings(missing),
     auditReferences: [],
+  };
+}
+
+function evidenceTextValue(value, limit = 256) {
+  if (typeof value !== "string" || value.length === 0) {
+    return "";
+  }
+  if (value.length > limit || !isCleanCatalogString(value)) {
+    return "";
+  }
+  return value;
+}
+
+function evidenceHashUri(value) {
+  const text = evidenceTextValue(value, 256);
+  const lowered = text.toLowerCase();
+  let digest = "";
+  if (lowered.startsWith("sha256:")) {
+    digest = lowered.slice("sha256:".length);
+  } else if (lowered.startsWith("urn:sha256:")) {
+    digest = lowered.slice("urn:sha256:".length);
+  } else if (lowered.startsWith("hash://sha256/")) {
+    digest = lowered.slice("hash://sha256/".length);
+  } else {
+    return "";
+  }
+  if (digest.length !== 64 || /[^0-9a-f]/.test(digest)) {
+    return "";
+  }
+  return text;
+}
+
+function setEquals(left, right) {
+  return left.size === right.size && [...left].every((item) => right.has(item));
+}
+
+function evidenceArtifact(value) {
+  if (
+    !isPlainObject(value) ||
+    !setEquals(new Set(Object.keys(value)), new Set(PRIVACY_PRODUCTION_GATE_ARTIFACT_KEYS))
+  ) {
+    return null;
+  }
+  const label = evidenceTextValue(value.label, 160);
+  const uri = evidenceHashUri(value.uri);
+  if (!label || !uri) {
+    return null;
+  }
+  return { label, uri };
+}
+
+function evidenceReviewArtifact(value) {
+  if (
+    !isPlainObject(value) ||
+    !setEquals(new Set(Object.keys(value)), new Set(PRIVACY_PRODUCTION_REVIEW_ARTIFACT_KEYS))
+  ) {
+    return null;
+  }
+  const label = evidenceTextValue(value.label, 160);
+  const uri = evidenceHashUri(value.uri);
+  const signature = evidenceTextValue(value.signature, 512);
+  if (!label || !uri || !signature) {
+    return null;
+  }
+  return { label, uri, signature };
+}
+
+function evidenceResult(value) {
+  if (
+    !isPlainObject(value) ||
+    !setEquals(new Set(Object.keys(value)), new Set(PRIVACY_PRODUCTION_RESULT_KEYS)) ||
+    value.passed !== true
+  ) {
+    return null;
+  }
+  const artifact = evidenceArtifact(value.artifact);
+  if (artifact === null) {
+    return null;
+  }
+  return { passed: true, artifact };
+}
+
+function evidenceStringList(value) {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const result = [];
+  for (const item of value) {
+    const text = evidenceTextValue(item, 160);
+    if (!text || result.includes(text)) {
+      return null;
+    }
+    result.push(text);
+  }
+  return result;
+}
+
+function descriptorProductionSdkEntrypoints(descriptor) {
+  const entrypoints = [];
+  for (const entrypoint of [
+    ...(descriptor.sdkEntrypoints ?? []),
+    ...(descriptor.plannedSdkEntrypoints ?? []),
+  ]) {
+    if (
+      typeof entrypoint !== "string" ||
+      entrypointIsDevFixture(entrypoint) ||
+      entrypointIsLocalVerifier(entrypoint)
+    ) {
+      continue;
+    }
+    if (!entrypoints.includes(entrypoint)) {
+      entrypoints.push(entrypoint);
+    }
+  }
+  return entrypoints;
+}
+
+function evidenceSdkEntrypoints(value, descriptor) {
+  if (
+    !isPlainObject(value) ||
+    !setEquals(new Set(Object.keys(value)), new Set(PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES))
+  ) {
+    return null;
+  }
+  const expected = descriptorProductionSdkEntrypoints(descriptor);
+  for (const surface of PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES) {
+    const entrypoints = evidenceStringList(value[surface]);
+    if (
+      entrypoints === null ||
+      entrypoints.length !== expected.length ||
+      entrypoints.some((entrypoint, index) => entrypoint !== expected[index]) ||
+      entrypoints.some(
+        (entrypoint) =>
+          entrypointIsDevFixture(entrypoint) || entrypointIsLocalVerifier(entrypoint),
+      )
+    ) {
+      return null;
+    }
+  }
+  return expected;
+}
+
+function evidenceRequiredStateMatches(value, descriptor) {
+  const requiredState = evidenceStringList(value);
+  const expected = descriptor.requiredState ?? [];
+  return (
+    requiredState !== null &&
+    requiredState.length === expected.length &&
+    requiredState.every((item, index) => item === expected[index])
+  );
+}
+
+function evidenceNullableEquals(value, expected) {
+  if (expected === null || expected === undefined) {
+    return value === null;
+  }
+  if (typeof expected !== "string") {
+    return value === expected;
+  }
+  return evidenceTextValue(value, 512) === expected;
+}
+
+function evidenceLocalnetAcceptance(value, localnetRunId) {
+  if (
+    !isPlainObject(value) ||
+    !setEquals(
+      new Set(Object.keys(value)),
+      new Set(PRIVACY_PRODUCTION_LOCALNET_ACCEPTANCE_KEYS),
+    )
+  ) {
+    return null;
+  }
+  const runId = evidenceTextValue(value.run_id, 160);
+  const target = evidenceTextValue(value.target, 32);
+  if (
+    runId !== localnetRunId ||
+    target !== "localnet" ||
+    !Number.isInteger(value.peer_count) ||
+    value.peer_count !== 4
+  ) {
+    return null;
+  }
+  const requiredBooleans = [
+    "smoke_passed",
+    "replay_rejected",
+    "restart_persistence_checked",
+    "restart_replay_rejected",
+    "state_recovery_passed",
+  ];
+  if (requiredBooleans.some((key) => value[key] !== true)) {
+    return null;
+  }
+  return Object.fromEntries([
+    ["run_id", runId],
+    ["target", "localnet"],
+    ["peer_count", 4],
+    ...requiredBooleans.map((key) => [key, true]),
+  ]);
+}
+
+function evidenceGateArtifacts(value, descriptor) {
+  const requiredGates = requiredProductionGateKeys(descriptor);
+  if (!isPlainObject(value) || !setEquals(new Set(Object.keys(value)), new Set(requiredGates))) {
+    return null;
+  }
+  const result = {};
+  for (const key of requiredGates) {
+    const items = value[key];
+    if (!Array.isArray(items) || items.length === 0 || items.length > 8) {
+      return null;
+    }
+    const artifacts = [];
+    for (const item of items) {
+      const artifact = evidenceArtifact(item);
+      if (artifact === null) {
+        return null;
+      }
+      artifacts.push(artifact);
+    }
+    result[key] = artifacts;
+  }
+  return result;
+}
+
+function canonicalEvidenceValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalEvidenceValue);
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [
+      PRIVACY_PRODUCTION_EVIDENCE_KEY_MAP[key] ?? key,
+      canonicalEvidenceValue(item),
+    ]),
+  );
+}
+
+function productionEvidenceRows(value) {
+  if (value === null || value === undefined) {
+    return {};
+  }
+  const source = canonicalEvidenceValue(value);
+  let rawRows;
+  if (
+    isPlainObject(source) &&
+    source.version === PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION &&
+    Array.isArray(source.rows)
+  ) {
+    rawRows = source.rows;
+  } else if (isPlainObject(source)) {
+    rawRows = Object.entries(source)
+      .filter(([algorithmId, row]) => typeof algorithmId === "string" && isPlainObject(row))
+      .map(([algorithmId, row]) => ({ ...row, id: algorithmId }));
+  } else {
+    return {};
+  }
+
+  const rows = {};
+  const rowKeys = new Set(PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS);
+  const rowKeysWithId = new Set([...PRIVACY_PRODUCTION_EVIDENCE_ROW_KEYS, "id"]);
+  for (const rawRow of rawRows) {
+    if (!isPlainObject(rawRow)) {
+      continue;
+    }
+    const row = { ...rawRow };
+    const rowId = row.id ?? row.covered_algorithm_id;
+    if (typeof rowId !== "string") {
+      continue;
+    }
+    const keys = new Set(Object.keys(row));
+    if (setEquals(keys, rowKeysWithId)) {
+      delete row.id;
+    } else if (!setEquals(keys, rowKeys)) {
+      continue;
+    }
+    rows[rowId] = row;
+  }
+  return rows;
+}
+
+function productionEvidenceChainId(options) {
+  if (!isPlainObject(options)) {
+    return null;
+  }
+  return evidenceTextValue(options.chainId ?? options.chain_id, 256) || null;
+}
+
+function trustedProductionEvidence(descriptor, evidenceRows, options = undefined) {
+  const source = evidenceRows[descriptor.id];
+  if (!isPlainObject(source) || source.version !== PRODUCTION_GATE_VERSION) {
+    return null;
+  }
+  if (source.covered_algorithm_id !== descriptor.id) {
+    return null;
+  }
+  const expectedChainId = productionEvidenceChainId(options);
+  const evidenceChainId = evidenceTextValue(source.chain_id, 256);
+  if (!evidenceChainId || (expectedChainId !== null && evidenceChainId !== expectedChainId)) {
+    return null;
+  }
+  const reviewerIdentity = evidenceTextValue(source.reviewer_identity, 160);
+  const localnetRunId = evidenceTextValue(source.localnet_run_id, 160);
+  const reviewArtifact = evidenceReviewArtifact(source.review_artifact);
+  if (!reviewerIdentity || !localnetRunId || reviewArtifact === null) {
+    return null;
+  }
+  if (!evidenceNullableEquals(source.verifier_key_id, descriptor.verifierKeyId)) {
+    return null;
+  }
+  if (!evidenceNullableEquals(source.proof_family, descriptor.proofFamily)) {
+    return null;
+  }
+  if (!evidenceNullableEquals(source.public_inputs_schema, descriptor.publicInputsSchema)) {
+    return null;
+  }
+  const sdkEntrypoints = evidenceSdkEntrypoints(source.sdk_entrypoints, descriptor);
+  if (sdkEntrypoints === null) {
+    return null;
+  }
+  if (!evidenceRequiredStateMatches(source.required_state, descriptor)) {
+    return null;
+  }
+  const fuzzResults = evidenceResult(source.fuzz_results);
+  const performanceResults = evidenceResult(source.performance_results);
+  if (fuzzResults === null || performanceResults === null) {
+    return null;
+  }
+  const localnetAcceptance = evidenceLocalnetAcceptance(
+    source.localnet_acceptance,
+    localnetRunId,
+  );
+  if (localnetAcceptance === null) {
+    return null;
+  }
+  const gateEvidence = evidenceGateArtifacts(source.gate_evidence, descriptor);
+  if (gateEvidence === null) {
+    return null;
+  }
+  return {
+    chainId: evidenceChainId,
+    reviewerIdentity,
+    reviewArtifact,
+    sdkEntrypoints,
+    fuzzResults,
+    performanceResults,
+    localnetRunId,
+    localnetAcceptance,
+    gateEvidence,
+  };
+}
+
+function productionGateFromEvidence(descriptor, evidence) {
+  const requiredGates = requiredProductionGateKeys(descriptor);
+  const requiredGateSet = new Set(requiredGates);
+  const gates = Object.fromEntries(
+    PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, requiredGateSet.has(key)]),
+  );
+  return {
+    version: PRODUCTION_GATE_VERSION,
+    ready: true,
+    gates,
+    requiredGates,
+    missing: [],
+    auditReferences: [
+      {
+        label: evidence.reviewArtifact.label,
+        url: evidence.reviewArtifact.uri,
+        uri: evidence.reviewArtifact.uri,
+        signature: evidence.reviewArtifact.signature,
+      },
+    ],
+    chainId: evidence.chainId,
+    reviewerIdentity: evidence.reviewerIdentity,
+    localnetRunId: evidence.localnetRunId,
+    localnetAcceptance: evidence.localnetAcceptance,
+    fuzzResults: evidence.fuzzResults,
+    performanceResults: evidence.performanceResults,
+    gateEvidence: evidence.gateEvidence,
+  };
+}
+
+function withProductionEvidence(descriptor, evidenceRows, options = undefined) {
+  const evidence = trustedProductionEvidence(descriptor, evidenceRows, options);
+  if (evidence === null) {
+    return descriptor;
+  }
+  return {
+    ...descriptor,
+    implementationStage: "production-hardened",
+    sdkEntrypoints: [...evidence.sdkEntrypoints],
+    plannedSdkEntrypoints: [],
+    productionReady: true,
+    productionGate: productionGateFromEvidence(descriptor, evidence),
   };
 }
 
@@ -4725,10 +5201,10 @@ const PRIVACY_ALGORITHMS = Object.freeze(validatePrivacyAlgorithmCatalog([
   }),
 ]));
 
-function cloneDescriptor(descriptor) {
+function cloneDescriptor(descriptor, evidenceRows = {}, options = undefined) {
   const productionGate = productionGateForDescriptor(descriptor);
   const backendFamily = backendFamilyForDescriptor(descriptor);
-  return deepFreeze({
+  return deepFreeze(withProductionEvidence({
     id: descriptor.id,
     name: descriptor.name,
     shortName: descriptor.shortName,
@@ -4757,26 +5233,39 @@ function cloneDescriptor(descriptor) {
     chainRequirements: [...descriptor.chainRequirements],
     productionReady: productionGate.ready,
     productionGate,
-  });
+  }, evidenceRows, options));
 }
 
 export function getPrivacyCriteria() {
   return Object.freeze([...PRIVACY_CRITERIA]);
 }
 
-export function getPrivacyAlgorithmDescriptors() {
-  return Object.freeze(PRIVACY_ALGORITHMS.map(cloneDescriptor));
+export function getPrivacyAlgorithmDescriptors(productionEvidence = null, options = undefined) {
+  const evidenceRows = productionEvidenceRows(productionEvidence);
+  return Object.freeze(
+    PRIVACY_ALGORITHMS.map((descriptor) =>
+      cloneDescriptor(descriptor, evidenceRows, options)
+    ),
+  );
 }
 
-export function getPrivacyAlgorithmDescriptor(id) {
-  return getPrivacyAlgorithmDescriptors().find((algorithm) => algorithm.id === id) ?? null;
+export function getPrivacyAlgorithmDescriptor(
+  id,
+  productionEvidence = null,
+  options = undefined,
+) {
+  return (
+    getPrivacyAlgorithmDescriptors(productionEvidence, options).find(
+      (algorithm) => algorithm.id === id,
+    ) ?? null
+  );
 }
 
-export function getPrivacyCapabilities() {
+export function getPrivacyCapabilities(productionEvidence = null, options = undefined) {
   return deepFreeze({
     javascriptSdkAvailable: true,
     bridgeAvailable: isPrivacyNativeAvailable() === true,
-    privacyAlgorithms: getPrivacyAlgorithmDescriptors(),
+    privacyAlgorithms: getPrivacyAlgorithmDescriptors(productionEvidence, options),
     privacyCriteria: getPrivacyCriteria(),
   });
 }

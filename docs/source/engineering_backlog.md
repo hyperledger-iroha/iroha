@@ -32,9 +32,10 @@ evidence unambiguous before production archiving.
 Archived child-command floating timeout values also reject Unicode digit
 confusables before Python numeric parsing can accept them.
 Canary runbook path strings and archived child-command local path values must
-remain printable ASCII, and production-readiness compact summary/config/receipt
-path strings replay the same guard, so Unicode-confusable path evidence cannot
-be planned or replayed into release archives.
+remain printable ASCII and capped by the 4096-character local path limit, while
+production-readiness compact summary/config/receipt path strings replay the
+stricter 2048-character archive cap, so Unicode-confusable or oversized path
+evidence cannot be planned or replayed into release archives.
 Archived canary child commands now also must keep the runner-emitted shape:
 Python interpreter, expected stage script path, then supported flags and their
 values. Interpreter version suffixes are ASCII-only, so Unicode digit
@@ -92,7 +93,10 @@ Local artifact path validators now also reject raw URI/drive prefixes,
 malformed percent escapes, and percent-encoded control/space, dot/separator,
 semicolon, URL delimiter, and percent bytes across raw CLI, output, runbook,
 XSD, trust, receipt, evidence, and readiness paths before those values are
-expanded, replayed, or archived.
+expanded, replayed, or archived. Direct local CLI/output/artifact path strings
+are capped at 4096 characters with label-only diagnostics before secret
+scanning, filesystem expansion, summary emission, child command construction, or
+archive replay.
 Canary runbook artifact paths now use the same narrow local-path scanner,
 including non-whitespace control-character rejection, before plan-only output
 or child command construction, while bearer-token file paths remain runtime
@@ -112,6 +116,14 @@ before field-specific replay.
 ISO URL port parser failures now report only label-level invalid-port
 diagnostics instead of including parser exception text that may contain the raw
 operator-provided port string.
+Notary and receipt replay clean metadata strings from audit indexes, persisted
+records, nullable context/metadata/history fields, and rail sidecars are capped
+at 4096 characters with label-only diagnostics before mismatch, source replay,
+or sidecar validation can retain oversized operator evidence.
+Canary runbook generic strings/lists and evidence replay clean strings/lists now
+share the same 4096-character label-only cap before runbook planning or archive
+validation can preserve oversized metadata; embedded trust DER base64 keeps its
+separate decoded-size guard.
 ISO URL host validators now reject secret-looking hostname labels and
 non-ASCII raw host labels, and non-port URL parser failures use label-only
 diagnostics before malformed URL text can be echoed by parser exceptions.
@@ -219,8 +231,8 @@ full metadata tuples, so invalid marker material is not reflected by follow-on
 consistency diagnostics.
 Trust-bundle preflight, evidence replay, and production-readiness compact trust
 profile IDs, override IDs, embedded signature policy strings, and trust-source
-authority/version provenance are capped before trust diagnostics can print or
-archive them.
+authority/version/timestamp provenance are capped before trust diagnostics can
+print or archive them.
 Receipt verifier, evidence, and readiness `receipt_kind` values reject
 secret-looking identifier-style markers and non-ASCII confusable spellings before
 unsupported-kind diagnostics or blockers can preserve forged archive values.
@@ -624,16 +636,18 @@ redistributable schemas, and official trust/revocation bundles.
 	  prover artifact bundles that do not match governed material before release
 	  prover tooling can hand typed material to the future arithmetic backend, and
 	  Core now pins those typed-material rejection cases at the runtime prover
-	  boundary. The full-bootstrap execution public-input schema and stable hash
-	  now also advertise the arithmetic trace private/public row policy and the
-	  proof-key-bound release prover input package.
+		  boundary. The full-bootstrap execution public-input schema and stable hash
+		  now also advertise the arithmetic trace private/public row policy, the
+		  proof-key-bound release prover input package, and release prover
+		  verifier-key binding.
 	  Full-mode bootstrap keys now also carry a domain-separated BFV public-key
 	  digest, and material/execution statement derivation rejects governed
 	  public-key drift before material hashing, witness hashing, or Core
 	  proof-helper execution.
 	  BFV-shaped native AIR envelopes now also preflight the canonical
-	  transcript label, statement-bound domain tag, STARK/FRI parameters, public
-	  digest binding, proof/commitment version tags, commitment/root shape,
+	  transcript label, nonzero statement hash, statement-bound domain tag,
+	  STARK/FRI parameters, public digest binding, proof/commitment version tags,
+	  commitment/root shape,
 		  opened row/path shape, Merkle path-to-root binding, FRI query-chain
 		  Merkle/fold validation, optional final-layer composition-value root/value
 		  authentication, AIR-to-FRI base value binding, opened public padding-row
@@ -650,8 +664,8 @@ redistributable schemas, and official trust/revocation bundles.
   payload preflight, canonical native proof-key circuit enforcement, governed
   material derivation from release artifacts, artifact-bound public typed
   material prover input validation, public typed execution prover input,
-  proof-key-bound prover package validation, caller verifier-key binding,
-  canonical row-major arithmetic trace material/digest validation, native BFV AIR metadata/privacy-boundary
+	  proof-key-bound prover package validation, public schema verifier-key binding,
+	  caller verifier-key binding, canonical row-major arithmetic trace material/digest validation, native BFV AIR metadata/privacy-boundary
   preflight, public typed execution witness material reconstruction,
   validation, hashing, self-describing material and execution statement
   material, or statement-recomputation policy path.
@@ -2507,12 +2521,15 @@ redistributable schemas, and official trust/revocation bundles.
   per-schema source repository/commit/path,
   SPDX license, source SHA-256, profile source-file SHA-256, and embedded
   catalog JSON SHA-256 values for release evidence provenance, cap source
-  repository URLs at 2048 characters, require exactly one active Rust
+  repository URLs and source paths at 2048 characters, require exactly one active Rust
   `DEFAULT_PROFILES_JSON` raw-string declaration while ignoring
   spoofed declarations in comments or unrelated strings, and fail closed
   on duplicated, malformed, or unknown-key profile/message/direction/version
-	  catalog entries. Manifest schema and fixture paths now fail closed on
-	  backslashes, leading-dash path segments, empty or dot segments, forbidden parent-segment forms, and
+	  catalog entries. Manifest schema paths, fixture paths, and fixture
+	  schema references now fail closed on non-ASCII characters, values longer
+	  than 2048 characters, URI/drive prefixes, malformed or smuggled percent
+	  escapes, backslashes, leading-dash path segments, empty or dot segments,
+	  forbidden parent-segment forms, and
   DTD/entity declarations before an XSD/profile summary is emitted. Schema
   `Document` declarations must also be unambiguous: exactly one top-level
   `Document` element whose type is exactly the local `Document` type, one
@@ -2533,7 +2550,7 @@ redistributable schemas, and official trust/revocation bundles.
   catalog source capped at 4 MiB and schema/fixture XML capped at 8 MiB before
 	  parsing, while optional `xmllint` stdout/stderr is drained through a 64 KiB
 	  cap and validator runtime is bounded by positive finite
-	  `--xmllint-timeout-secs`; successful validator output must be empty or the
+	  `--xmllint-timeout-secs` capped at 300 seconds; successful validator output must be empty or the
 	  normal `<fixture> validates` line, so warning-bearing success output fails
 	  closed before release evidence is emitted. Secret-looking and
 	  control-bearing validator diagnostics are redacted before error reporting.
@@ -3184,7 +3201,8 @@ redistributable schemas, and official trust/revocation bundles.
 	  byte lengths for the final rollup,
 		  rejects compact canary config paths, receipt paths, and child
 		  receipt-directory arguments with embedded whitespace, leading-dash path
-		  segments, semicolon path parameters, empty segments, raw backslashes, or traversal segments,
+		  segments, semicolon path parameters, empty segments, raw backslashes,
+		  traversal segments, or values longer than 2048 characters,
 	  rejects stale digest-correct archive inputs, rejects repeated or copied
   canary/trust summaries by path and `summary_sha256`,
   requires canary summaries to prove they were generated with
@@ -3270,7 +3288,8 @@ redistributable schemas, and official trust/revocation bundles.
   roots, canonical lowercase ISO message definition ids, schema path
   containment under the manifest tree, fixture path containment under the ISO
   fixture tree, manifest duplicates/path escapes, manifest schema/fixture path
-  and fixture schema-reference whitespace or semicolon smuggling, duplicate XML
+	  and fixture schema-reference whitespace, URI/drive-prefix, semicolon, or
+	  percent-escape smuggling, duplicate XML
   fixture SHA-256 values, optional `xmllint --nonet` XML schema validation for
   schema-backed fixtures, and digest-bound summaries while making reviewed
   missing-schema fixture exceptions explicit. All
@@ -3298,9 +3317,11 @@ redistributable schemas, and official trust/revocation bundles.
 	  Readiness also rejects archived reviewed gap reasons that are present but
 	  empty or non-string instead of treating them as absent, blocks schema-backed archived fixtures
 		  that still carry a missing-schema reason, and checked-in XSD source
-		  provenance, manifest schema, fixture, fixture schema-reference, and
-		  archived profile-catalog paths reject embedded whitespace, leading-dash
-		  path segments, or semicolon path parameters before summary emission and during readiness rechecks.
+			  provenance, manifest schema, fixture, fixture schema-reference, and
+			  archived profile-catalog paths reject non-ASCII characters, overlong
+			  source or relative paths, embedded whitespace, leading-dash path segments,
+			  semicolon path parameters, URI/drive prefixes, or malformed/smuggled
+			  percent escapes before summary emission and during readiness rechecks.
   Readiness also requires archived XSD summaries to retain the emitted manifest
   path and explicit profile-catalog object/null state.
 - Completed 2026-06-04: added `scripts/iso_production_readiness.py` as the
@@ -3323,7 +3344,7 @@ redistributable schemas, and official trust/revocation bundles.
   summaries, non-canonical or message-id-mismatched schema
 	  paths, leading-dash path tokens or segments, non-XML, absolute, empty-segment, dot-segment, or non-leading-parent
   fixture paths, schema-reference drift, unknown XSD summary fields, forged or
-	  non-canonical missing-schema/schema-only reviewed gap lists and reason
+	  non-canonical missing-schema/schema-only reviewed gap-list paths and reason
 	  strings, forged schema-only flags/reasons, stale missing-schema reasons on
 	  schema-backed fixtures, forged
   profile-catalog missing-version lists,

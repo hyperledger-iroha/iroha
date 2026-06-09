@@ -30513,6 +30513,17 @@ async fn finalize_pending_block_defers_until_da_payload_available() {
         epoch,
     };
 
+    #[cfg(feature = "telemetry")]
+    let (telemetry, da_gate_blocks_before) = {
+        let telemetry = actor.telemetry_handle().expect("telemetry enabled").clone();
+        let metrics = telemetry.metrics().await;
+        let before = metrics
+            .sumeragi_da_gate_block_total
+            .with_label_values(&[super::status::DaGateReasonSnapshot::MissingLocalData.as_str()])
+            .get();
+        (telemetry, before)
+    };
+
     let committed = actor.finalize_pending_block(lock, pending, None);
 
     assert!(
@@ -30536,6 +30547,19 @@ async fn finalize_pending_block_defers_until_da_payload_available() {
         matches!(pending_after.last_gate, Some(GateReason::MissingLocalData)),
         "missing DA payload should keep the finalize gate active"
     );
+    #[cfg(feature = "telemetry")]
+    {
+        let metrics = telemetry.metrics().await;
+        let da_gate_blocks_after = metrics
+            .sumeragi_da_gate_block_total
+            .with_label_values(&[super::status::DaGateReasonSnapshot::MissingLocalData.as_str()])
+            .get();
+        assert_eq!(
+            da_gate_blocks_after,
+            da_gate_blocks_before + 1,
+            "finalize should record exactly one DA gate telemetry block event"
+        );
+    }
 
     harness.shutdown.send();
 }
@@ -46044,6 +46068,72 @@ async fn defer_qc_if_block_missing_widens_retry_window_when_rbc_progresses() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn defer_qc_if_block_missing_widens_retry_window_for_incomplete_delivered_rbc_progress() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let mut block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x99; Hash::LENGTH]));
+    if actor.block_known_locally(block_hash) {
+        block_hash =
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9A; Hash::LENGTH]));
+    }
+    let height = 2u64;
+    let view = 0u64;
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers = BTreeSet::new();
+    let base_retry_window = actor.rebroadcast_cooldown();
+    let availability_timeout =
+        actor.availability_timeout(actor.quorum_timeout(actor.runtime_da_enabled()), true);
+    let expected_retry_window = base_retry_window
+        .saturating_mul(2)
+        .min(availability_timeout.max(base_retry_window));
+
+    let mut session = RbcSession::test_new(
+        2,
+        Some(Hash::new(b"incomplete-delivered-rbc-progress")),
+        None,
+        actor.epoch_for_height(height),
+    );
+    session.test_note_chunk(0, vec![0xCD], 0);
+    session.test_set_delivered(true);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert((block_hash, height, view), session);
+
+    let deferred = actor.defer_qc_if_block_missing(
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        &signers,
+        &topology,
+    );
+    assert!(
+        deferred,
+        "missing payload should still defer QC aggregation"
+    );
+
+    let stats = actor
+        .pending
+        .missing_block_requests
+        .get(&block_hash)
+        .expect("missing-block request recorded");
+    assert_eq!(
+        stats.retry_window, expected_retry_window,
+        "incomplete delivered RBC progress must keep the widened missing-block retry window"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn qc_missing_block_defer_recovers_authoritative_rbc_session_before_fetch() {
     let _local_removed_guard = LocalRemovedGuard::new(false);
     let mut consensus_cfg = test_sumeragi_config();
@@ -49994,6 +50084,23 @@ fn partial_rbc_session_keeps_payload_recovery_even_after_authoritative_stage_mar
     );
 }
 
+#[test]
+fn incomplete_delivered_rbc_session_keeps_payload_recovery() {
+    let mut session = RbcSession::test_new(
+        2,
+        Some(Hash::new(b"incomplete-delivered-payload")),
+        Some(Hash::new(b"incomplete-delivered-root")),
+        0,
+    );
+    session.test_note_chunk(0, vec![0xA5], 0);
+    session.test_set_delivered(true);
+
+    assert!(
+        session.allows_payload_recovery(),
+        "DELIVER without a complete local chunk set must still allow payload recovery"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_rbc_ready_hydrates_stub_session_from_pending_block() {
     let mut consensus_cfg = test_sumeragi_config();
@@ -51589,6 +51696,83 @@ async fn rebroadcast_stalled_rbc_payloads_prioritizes_urgent_near_tip_session() 
                 .deliver_rebroadcast_last_sent
                 .contains_key(&nonurgent_key),
         "non-urgent session should not preempt urgent near-tip session with budget=1"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn incomplete_delivered_near_tip_rbc_session_remains_backpressure_exempt() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let key = insert_active_pending_block(actor, 0);
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&key.0)
+        .expect("pending block exists");
+    let block = pending.block.clone();
+    let payload_hash = pending.payload_hash;
+
+    let mut session =
+        RbcSession::test_new(2, Some(payload_hash), None, actor.epoch_for_height(key.1));
+    session.test_set_block_header_and_signature(&block);
+    session.test_note_chunk(0, vec![0xB5], 0);
+    session.test_set_delivered(true);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(
+        key,
+        actor.effective_commit_topology(),
+        super::RbcRosterSource::Derived,
+    );
+
+    assert!(
+        actor.rbc_payload_backpressure_exempt(key),
+        "incomplete delivered near-tip sessions must remain eligible for payload repair under backpressure"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn incomplete_delivered_near_tip_rbc_session_still_requests_missing_chunks() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    actor.relay_backpressure.disable_for_tests();
+    actor.queue_drop_backpressure.reset_to_current();
+    actor.queue_block_backpressure.reset_to_current();
+    let key = insert_active_pending_block(actor, 0);
+    let block = actor
+        .pending
+        .pending_blocks
+        .get(&key.0)
+        .expect("pending block exists")
+        .block
+        .clone();
+
+    let mut session = RbcSession::test_new(
+        2,
+        Some(Hash::new(b"foreign-rbc-payload")),
+        None,
+        actor.epoch_for_height(key.1),
+    );
+    session.test_set_block_header_and_signature(&block);
+    session.test_note_chunk(0, vec![0xB6], 0);
+    session.test_set_delivered(true);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+    actor.record_rbc_session_roster(
+        key,
+        actor.effective_commit_topology(),
+        super::RbcRosterSource::Derived,
+    );
+
+    assert!(
+        actor.rebroadcast_stalled_rbc_payloads(Instant::now()),
+        "incomplete delivered near-tip sessions should still drive missing-chunk repair"
+    );
+    assert!(
+        actor.subsystems.da_rbc.rbc.chunk_repair.contains_key(&key),
+        "DELIVER without complete local chunks must not bypass RBC chunk repair"
     );
 
     harness.shutdown.send();
@@ -53399,6 +53583,67 @@ async fn record_rbc_session_roster_skips_update_after_deliver() {
         .expect("session");
     assert!(stored.delivered);
     assert_eq!(stored.deliver_signature, Some(vec![0xBB]));
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn record_rbc_session_roster_refreshes_incomplete_delivered_session() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.state.view().height() as u64 + 1;
+    let view = 0u64;
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xD4; Hash::LENGTH]));
+    let key = (block_hash, height, view);
+    let roster_a = actor.effective_commit_topology();
+    assert!(roster_a.len() > 1, "test requires multiple peers");
+    let mut roster_b = roster_a.clone();
+    roster_b.pop();
+    assert!(!roster_b.is_empty(), "roster should remain non-empty");
+
+    let epoch = actor.epoch_for_height(height);
+    let mut session = RbcSession::test_new(
+        2,
+        Some(Hash::new(b"incomplete-delivered-roster-refresh")),
+        None,
+        epoch,
+    );
+    session.ready_roster_hash = Some(roster_hash(&roster_a));
+    assert!(session.record_ready(0, vec![0xAA]));
+    session.sent_ready = true;
+    session.test_note_chunk(0, vec![0xD4], 0);
+    session.test_set_delivered(true);
+    session.deliver_sender = Some(0);
+    session.deliver_signature = Some(vec![0xBB]);
+    actor.subsystems.da_rbc.rbc.sessions.insert(key, session);
+
+    actor.record_rbc_session_roster(key, roster_a, super::RbcRosterSource::Derived);
+    actor.record_rbc_session_roster(key, roster_b.clone(), super::RbcRosterSource::Derived);
+
+    assert_eq!(
+        actor.subsystems.da_rbc.rbc.session_rosters.get(&key),
+        Some(&roster_b),
+        "incomplete delivered sessions should not freeze a stale roster"
+    );
+    assert_eq!(
+        actor.rbc_session_roster_source(key),
+        Some(super::RbcRosterSource::Derived)
+    );
+    let stored = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get(&key)
+        .expect("session stored");
+    assert!(stored.ready_signatures.is_empty());
+    assert_eq!(stored.ready_roster_hash, None);
+    assert!(!stored.sent_ready);
+    assert!(!stored.delivered);
+    assert!(stored.deliver_signature.is_none());
+    assert!(stored.deliver_sender.is_none());
 
     harness.shutdown.send();
 }
@@ -77688,85 +77933,6 @@ async fn retry_missing_block_requests_triggers_view_change_after_dwell() {
     assert_missing_request_migrated_to_frontier_slot(actor, block_hash, height, view);
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_payload_total, 0);
-
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after exact frontier body lane removes generic frontier dwell handoff"]
-async fn contiguous_frontier_missing_payload_dwell_hands_off_once_per_window() {
-    let mut harness = test_actor_harness(4).await;
-    let _worker_guard = super::status::worker_queue_test_guard();
-    let _proof_guard = super::status::view_change_proof_test_guard();
-    let _cause_guard = super::status::view_change_cause_test_guard();
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    let actor = &mut harness.actor;
-    actor.queue_drop_backpressure.reset_to_current();
-    actor.queue_block_backpressure.reset_to_current();
-
-    let height = actor.active_consensus_round_height();
-    assert_eq!(
-        height,
-        actor.committed_height_snapshot().saturating_add(1),
-        "test setup requires active round at contiguous frontier"
-    );
-    let view = 0_u64;
-    let now = Instant::now();
-    actor.phase_tracker.start_new_round(height, now);
-    actor.phase_tracker.on_view_change(height, view, now);
-
-    let frontier_window = actor.frontier_recovery_window();
-    let dwell_start = now
-        .checked_sub(
-            super::saturating_mul_duration(frontier_window, 2)
-                .saturating_add(Duration::from_millis(1)),
-        )
-        .unwrap_or(now);
-    let stale_progress = dwell_start
-        .checked_sub(actor.recovery_missing_block_height_ttl() + Duration::from_millis(1))
-        .unwrap_or(dwell_start);
-    let block_hash = insert_unresolved_missing_request_for_tests(
-        actor,
-        0xC1,
-        height,
-        0,
-        dwell_start,
-        stale_progress,
-    );
-
-    assert!(
-        actor.retry_missing_block_requests(now, None),
-        "initial contiguous-frontier dwell should hand off into frontier recovery"
-    );
-    let first_state = actor
-        .frontier_recovery
-        .expect("frontier recovery should be seeded by first dwell handoff");
-    let first_action_at = first_state
-        .last_action_at
-        .expect("first dwell handoff should perform one frontier recovery action");
-    assert_eq!(first_state.frontier_height, height);
-    assert_eq!(first_state.last_cause, "missing_payload");
-
-    let same_window = now.checked_add(Duration::from_millis(1)).unwrap_or(now);
-    let _ = actor.retry_missing_block_requests(same_window, None);
-    let second_state = actor
-        .frontier_recovery
-        .expect("frontier recovery should remain owned after same-window retry");
-    assert_eq!(
-        second_state.last_action_at,
-        Some(first_action_at),
-        "same-window dwell should not hand off a second time"
-    );
-    assert_eq!(
-        actor
-            .pending
-            .missing_block_requests
-            .get(&block_hash)
-            .and_then(|request| request.view_change_triggered_view),
-        None,
-        "same-window contiguous-frontier dwell should not mark a direct MissingPayload fallback"
-    );
 
     harness.shutdown.send();
 }
@@ -103975,586 +104141,6 @@ async fn on_block_commit_prunes_committed_frontier_slot() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_prefers_lowest_missing_height_over_tracked_round() {
-    use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-    let _guard = super::status::view_change_cause_test_guard();
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    actor.highest_qc = Some(sample_qc_ref(committed_height.saturating_add(10), 0));
-    let derived_height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let missing_height = committed_height.saturating_add(1);
-    let tracked_height = derived_height.saturating_add(4);
-    let current_view = 0_u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
-    let start = now
-        .checked_sub(timeout + availability_timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-
-    let missing_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7E; Hash::LENGTH]));
-    actor.pending.missing_block_requests.insert(
-        missing_hash,
-        super::MissingBlockRequest {
-            height: missing_height,
-            view: current_view,
-            phase: Phase::Commit,
-            priority: super::MissingBlockPriority::Consensus,
-            retry_window: Duration::from_millis(10),
-            view_change_window: Some(Duration::from_millis(10)),
-            first_seen: start,
-            last_requested: start,
-            last_dependency_progress: start,
-            last_rbc_observed: None,
-            last_view_change_triggered: None,
-            view_change_triggered_view: None,
-            attempts: 0,
-        },
-    );
-
-    actor
-        .phase_tracker
-        .on_view_change(tracked_height, current_view, start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height: missing_height,
-        view: current_view,
-        since: start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    actor.slot_tracker.proposals_seen.clear();
-    actor.subsystems.propose.last_missing_qc_reacquire_attempt =
-        Some((missing_height, current_view));
-
-    assert!(
-        actor.force_view_change_if_idle(now),
-        "idle timeout should rotate at the unresolved missing dependency height"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(missing_height),
-        Some(current_view.saturating_add(1))
-    );
-    assert_eq!(
-        actor.subsystems.propose.forced_view_after_timeout,
-        Some((missing_height, current_view.saturating_add(1)))
-    );
-
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 1);
-
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_reacquires_missing_qc_once_before_rotating() {
-    use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-    let _missing_guard = super::status::missing_block_fetch_test_guard();
-    let _view_guard = super::status::view_change_cause_test_guard();
-
-    super::status::reset_missing_block_fetch_counters_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0_u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
-    let start = now
-        .checked_sub(timeout + availability_timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-
-    let missing_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9A; Hash::LENGTH]));
-    actor.pending.missing_block_requests.insert(
-        missing_hash,
-        super::MissingBlockRequest {
-            height,
-            view: current_view,
-            phase: Phase::Commit,
-            priority: super::MissingBlockPriority::Consensus,
-            retry_window: Duration::from_millis(1),
-            view_change_window: Some(Duration::from_secs(1)),
-            first_seen: start,
-            last_requested: start,
-            last_dependency_progress: start,
-            last_rbc_observed: None,
-            last_view_change_triggered: None,
-            view_change_triggered_view: None,
-            attempts: 0,
-        },
-    );
-
-    let before = super::status::snapshot();
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "first missing-QC timeout should defer and issue bounded reacquire"
-    );
-    let after_first = super::status::snapshot();
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view),
-        "reacquire attempt should keep the current view"
-    );
-    assert_eq!(
-        after_first.consensus_missing_qc_reacquire_attempt_total,
-        before
-            .consensus_missing_qc_reacquire_attempt_total
-            .saturating_add(1)
-    );
-    assert_eq!(
-        after_first.consensus_missing_qc_reacquire_success_total,
-        before
-            .consensus_missing_qc_reacquire_success_total
-            .saturating_add(1)
-    );
-    assert_eq!(
-        after_first.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total
-    );
-    assert_eq!(
-        actor.subsystems.propose.last_missing_qc_reacquire_attempt,
-        Some((height, current_view)),
-        "reacquire attempt should be tracked for this round"
-    );
-
-    // Keep the round pinned to the same unresolved missing height; the first reacquire attempt
-    // may introduce additional dependency requests at lower heights.
-    actor
-        .pending
-        .missing_block_requests
-        .retain(|hash, request| *hash == missing_hash && request.height == height);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: start,
-    });
-
-    let rotate_at = now
-        .checked_add(timeout + missing_qc_window + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
-    assert!(
-        actor.force_view_change_if_idle(rotate_at),
-        "second timeout in the same view should rotate after bounded reacquire"
-    );
-    let after_second = super::status::snapshot();
-    assert_eq!(
-        after_second.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1)
-    );
-    assert_eq!(
-        after_second.consensus_missing_qc_reacquire_attempt_total,
-        after_first.consensus_missing_qc_reacquire_attempt_total,
-        "reacquire should run once per (height, view)"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
-    );
-
-    super::status::reset_missing_block_fetch_counters_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_reacquires_missing_qc_once_with_proposal_seen() {
-    use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-    let _missing_guard = super::status::missing_block_fetch_test_guard();
-    let _view_guard = super::status::view_change_cause_test_guard();
-
-    super::status::reset_missing_block_fetch_counters_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0_u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        true,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    actor
-        .slot_tracker
-        .proposals_seen
-        .insert((height, current_view));
-
-    let missing_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x9B; Hash::LENGTH]));
-    actor.pending.missing_block_requests.insert(
-        missing_hash,
-        super::MissingBlockRequest {
-            height,
-            view: current_view,
-            phase: Phase::Commit,
-            priority: super::MissingBlockPriority::Consensus,
-            retry_window: Duration::from_millis(1),
-            view_change_window: Some(Duration::from_secs(1)),
-            first_seen: start,
-            last_requested: start,
-            last_dependency_progress: start,
-            last_rbc_observed: None,
-            last_view_change_triggered: None,
-            view_change_triggered_view: None,
-            attempts: 0,
-        },
-    );
-
-    let before = super::status::snapshot();
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "proposal-seen missing-QC timeout should run one bounded dependency reacquire before rotating"
-    );
-    let after_first = super::status::snapshot();
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view),
-        "reacquire attempt should keep the current view"
-    );
-    assert_eq!(
-        after_first.consensus_missing_qc_reacquire_attempt_total,
-        before
-            .consensus_missing_qc_reacquire_attempt_total
-            .saturating_add(1)
-    );
-    assert_eq!(
-        after_first.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total
-    );
-    assert_eq!(
-        actor.subsystems.propose.last_missing_qc_reacquire_attempt,
-        Some((height, current_view)),
-        "reacquire attempt should be tracked for this round"
-    );
-
-    let replay_now = now.checked_add(Duration::from_millis(10)).unwrap_or(now);
-    actor.subsystems.propose.last_pacemaker_attempt = Some(replay_now);
-    assert!(
-        !actor.force_view_change_if_idle(replay_now),
-        "same-round proposal-seen timeout must not re-run missing-QC reacquire"
-    );
-    let after_second = super::status::snapshot();
-    assert_eq!(
-        after_second.consensus_missing_qc_reacquire_attempt_total,
-        after_first.consensus_missing_qc_reacquire_attempt_total,
-        "reacquire must stay bounded to one attempt per (height, view) when proposal is already seen"
-    );
-    assert_eq!(
-        after_second.missing_block_fetch_total, after_first.missing_block_fetch_total,
-        "same-round proposal-seen retries should not spam missing-block fetch planning"
-    );
-
-    super::status::reset_missing_block_fetch_counters_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_reacquires_after_repeated_missing_qc_timeout_without_backlog() {
-    use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-    let _missing_guard = super::status::missing_block_fetch_test_guard();
-    let _view_guard = super::status::view_change_cause_test_guard();
-
-    super::status::reset_missing_block_fetch_counters_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
-    let first_start = now
-        .checked_sub(timeout + availability_timeout + missing_qc_window + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor.phase_tracker.on_view_change(height, 0, first_start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: 0,
-        since: first_start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    actor.slot_tracker.proposals_seen.clear();
-
-    let before = super::status::snapshot();
-    assert!(
-        actor.force_view_change_if_idle(now),
-        "first missing-proposal timeout should rotate when no backlog signal is present"
-    );
-    let after_first = super::status::snapshot();
-    assert_eq!(actor.phase_tracker.current_view(height), Some(1));
-    assert_eq!(
-        after_first.view_change_causes.missing_qc_total,
-        before.view_change_causes.missing_qc_total.saturating_add(1)
-    );
-    assert_eq!(
-        after_first.consensus_missing_qc_reacquire_attempt_total,
-        before.consensus_missing_qc_reacquire_attempt_total,
-        "initial timeout should not trigger reacquire without backlog"
-    );
-
-    let second_now = now
-        .checked_add(timeout + Duration::from_millis(2))
-        .unwrap_or(now);
-    let second_start = second_now
-        .checked_sub(timeout + availability_timeout + Duration::from_millis(1))
-        .unwrap_or(second_now);
-    actor.phase_tracker.on_view_change(height, 1, second_start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: 1,
-        since: second_start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(second_now);
-    actor.slot_tracker.proposals_seen.clear();
-
-    assert!(
-        !actor.force_view_change_if_idle(second_now),
-        "repeated missing-proposal timeout should perform bounded dependency reacquire"
-    );
-    let after_second = super::status::snapshot();
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(1),
-        "reacquire attempt should keep the current view"
-    );
-    assert_eq!(
-        after_second.consensus_missing_qc_reacquire_attempt_total,
-        after_first
-            .consensus_missing_qc_reacquire_attempt_total
-            .saturating_add(1)
-    );
-    assert_eq!(
-        after_second.consensus_missing_qc_reacquire_success_total,
-        after_first
-            .consensus_missing_qc_reacquire_success_total
-            .saturating_add(1)
-    );
-    assert_eq!(
-        after_second.view_change_causes.missing_qc_total,
-        after_first.view_change_causes.missing_qc_total
-    );
-
-    let rotate_at = second_now
-        .checked_add(missing_qc_window + Duration::from_millis(1))
-        .unwrap_or(second_now);
-    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
-    assert!(
-        actor.force_view_change_if_idle(rotate_at),
-        "same-view timeout should rotate after bounded reacquire window is exhausted"
-    );
-    let after_third = super::status::snapshot();
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(2),
-        "rotation should advance to the next view after reacquire window"
-    );
-    assert_eq!(
-        after_third.view_change_causes.missing_qc_total,
-        after_second
-            .view_change_causes
-            .missing_qc_total
-            .saturating_add(1)
-    );
-
-    super::status::reset_missing_block_fetch_counters_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_ignores_aborted_pending() {
-    use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    let highest_qc = sample_qc_ref(committed_height, 0);
-    actor.highest_qc = Some(highest_qc);
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0u64;
-    let now = Instant::now();
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
-    let start = now
-        .checked_sub(timeout + availability_timeout + missing_qc_window + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
-
-    let pending_block = sample_block(height, 0, None);
-    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&pending_block));
-    let mut pending = PendingBlock::new(pending_block, payload_hash, height, current_view);
-    pending.mark_aborted();
-    actor
-        .pending
-        .pending_blocks
-        .insert(pending.block.hash(), pending);
-
-    assert!(
-        actor.force_view_change_if_idle(now),
-        "idle timeout should ignore aborted pending blocks"
-    );
-
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_skips_when_commit_inflight() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -104635,154 +104221,6 @@ async fn force_view_change_if_idle_skips_when_commit_inflight() {
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_defers_missing_qc_dependency_and_rotates_after_hard_cap() {
-    use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-    let _guard = super::status::view_change_cause_test_guard();
-    actor.config.recovery.rotate_after_reacquire_exhausted = false;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    let highest_qc = sample_qc_ref(committed_height, 0);
-    actor.highest_qc = Some(highest_qc);
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0u64;
-    let now = Instant::now();
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: start,
-    });
-    actor
-        .slot_tracker
-        .proposals_seen
-        .insert((height, current_view));
-
-    let missing_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"missing"));
-    actor.pending.missing_block_requests.insert(
-        missing_hash,
-        MissingBlockRequest {
-            height,
-            view: current_view,
-            phase: Phase::Commit,
-            priority: MissingBlockPriority::Consensus,
-            retry_window: Duration::from_secs(1),
-            view_change_window: Some(Duration::from_secs(1)),
-            first_seen: now,
-            last_requested: now,
-            last_dependency_progress: now,
-            last_rbc_observed: None,
-            last_view_change_triggered: None,
-            view_change_triggered_view: None,
-            attempts: 0,
-        },
-    );
-    actor.pending.pending_blocks.clear();
-    assert_eq!(
-        actor.queue.active_len(),
-        1,
-        "queued transactions should keep the idle timeout path active"
-    );
-    assert!(
-        actor.subsystems.commit.inflight.is_none(),
-        "idle timeout should not be blocked by commit inflight in this test"
-    );
-    assert!(
-        !actor.has_active_pending_blocks(),
-        "pending block cleanup should leave no active pending blocks"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view),
-        "test setup should operate on the active view"
-    );
-
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "idle view change should defer while same-height missing-QC dependency recovery is active"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view),
-        "dependency recovery defer should keep the current view"
-    );
-    assert!(
-        actor.subsystems.propose.last_missing_qc_reacquire_attempt == Some((height, current_view)),
-        "defer path should record one bounded reacquire attempt for the active round"
-    );
-
-    let hard_cap =
-        super::missing_qc_rotation_hard_cap(timeout, actor.recovery_missing_qc_reacquire_window());
-    let rotate_delay = hard_cap
-        .saturating_add(actor.canonical_frontier_reanchor_window())
-        .saturating_add(actor.missing_qc_height_stall_window())
-        .saturating_add(Duration::from_millis(1));
-    let reanchor_window = actor.canonical_frontier_reanchor_window();
-    let mut rotated = false;
-    for step in 0_u32..16_u32 {
-        let wait = rotate_delay.saturating_add(reanchor_window.saturating_mul(step));
-        let rotate_at = now.checked_add(wait).unwrap_or(now);
-        actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
-        if actor.force_view_change_if_idle(rotate_at) {
-            rotated = true;
-            break;
-        }
-    }
-    assert!(
-        rotated,
-        "idle view change should rotate after bounded same-height damping windows expire"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
-    );
-    assert_eq!(
-        actor.subsystems.propose.forced_view_after_timeout,
-        Some((height, current_view.saturating_add(1)))
-    );
-
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 1);
-    assert_eq!(snapshot.last_cause.as_deref(), Some("missing_qc"));
-
-    super::status::reset_view_change_cause_counters_for_tests();
-    super::status::reset_worker_loop_snapshot_for_tests();
     harness.shutdown.send();
 }
 
@@ -106101,8 +105539,7 @@ async fn force_view_change_if_idle_routes_empty_frontier_missing_qc_with_remote_
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_pacemaker_attempt()
-{
+async fn force_view_change_if_idle_rotates_nonleader_empty_frontier_after_pacemaker_timeout() {
     use std::borrow::Cow;
 
     let mut harness = test_actor_harness(4).await;
@@ -106176,7 +105613,7 @@ async fn force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_
         let search_limit = u64::try_from(effective_roster.len().saturating_mul(8))
             .unwrap_or(1)
             .max(1);
-        (0..search_limit)
+        (1..search_limit)
             .find(|candidate_view| {
                 let mut signature_topology =
                     super::network_topology::Topology::new(effective_roster.clone());
@@ -106244,23 +105681,24 @@ async fn force_view_change_if_idle_arms_nonleader_empty_frontier_recovery_after_
 
     let before = super::status::snapshot();
     assert!(
-        !actor.force_view_change_if_idle(now),
-        "a non-leader empty frontier should arm unified recovery before rotating"
+        actor.force_view_change_if_idle(now),
+        "a non-leader empty frontier should rotate after the missing proposal timeout"
     );
     let after = super::status::snapshot();
+    let next_view = current_view.saturating_add(1);
     assert_eq!(
         actor.phase_tracker.current_view(height),
-        Some(current_view),
-        "non-leader idle timeout should leave the local view unchanged on the first recovery pass"
+        Some(next_view),
+        "non-leader idle timeout should advance to the next view once the proposal timeout expires"
     );
     assert_eq!(
-        after.view_change_causes.missing_qc_total, before.view_change_causes.missing_qc_total,
-        "the first non-leader idle timeout should not count a MissingQc rotation"
+        after.view_change_causes.missing_qc_total,
+        before.view_change_causes.missing_qc_total.saturating_add(1),
+        "non-leader proposal-timeout rotation should count one MissingQc view change"
     );
     assert!(
-        actor.frontier_slot_is_exact_height(height)
-            || actor.frontier_recovery_exists_at_height(height),
-        "non-leader idle timeout should still leave contiguous-frontier recovery armed"
+        actor.frontier_missing_qc_liveness_active(height, next_view),
+        "non-leader proposal-timeout rotation should keep frontier proposal liveness active in the next view"
     );
 
     super::status::reset_view_change_cause_counters_for_tests();
@@ -110822,89 +110260,6 @@ async fn force_view_change_if_idle_keeps_empty_tx_queue_rbc_recovery_work() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_defers_after_queue_activity() {
-    use std::borrow::Cow;
-
-    let _worker_guard = super::status::worker_queue_test_guard();
-    super::status::reset_worker_loop_snapshot_for_tests();
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    let highest_qc = sample_qc_ref(committed_height, 0);
-    actor.highest_qc = Some(highest_qc);
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
-    let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "idle view change should not trigger immediately after queue becomes non-empty"
-    );
-    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
-    assert!(actor.queue_ready_since.is_some());
-
-    let after_timeout = now
-        .checked_add(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor.subsystems.propose.last_pacemaker_attempt = Some(after_timeout);
-    assert!(
-        !actor.force_view_change_if_idle(after_timeout),
-        "active queue backlog should hold view-change at the base timeout"
-    );
-
-    let later = now
-        .checked_add(timeout + availability_timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor.subsystems.propose.last_pacemaker_attempt = Some(later);
-    assert!(
-        actor.force_view_change_if_idle(later),
-        "idle view change should trigger after availability grace from queue activity"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
-    );
-
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_uses_residual_round_backlog_for_missing_qc_hysteresis() {
     use std::borrow::Cow;
 
@@ -110981,78 +110336,6 @@ async fn force_view_change_if_idle_uses_residual_round_backlog_for_missing_qc_hy
         actor.phase_tracker.current_view(height),
         Some(current_view),
         "hysteresis should hold the current view"
-    );
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 0);
-
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_treats_active_queue_len_as_backlog() {
-    use std::borrow::Cow;
-
-    let _worker_guard = super::status::worker_queue_test_guard();
-    super::status::reset_worker_loop_snapshot_for_tests();
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "first idle pass should seed queue-ready state for proposal-gap handling"
-    );
-
-    actor.subsystems.propose.last_pacemaker_attempt =
-        Some(now.checked_add(Duration::from_millis(1)).unwrap_or(now));
-    let after_timeout = now
-        .checked_add(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    assert!(
-        !actor.force_view_change_if_idle(after_timeout),
-        "active queue backlog should defer proposal-gap rotation before availability grace expires"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view),
-        "proposal-gap timeout should not rotate prematurely under active queue backlog"
     );
     let snapshot = super::status::snapshot().view_change_causes;
     assert_eq!(snapshot.missing_qc_total, 0);
@@ -111352,185 +110635,6 @@ async fn force_view_change_if_idle_defers_missing_qc_after_fresh_proposal_hint()
         "deferring after a fresh hint should not record a missing_qc rotation"
     );
 
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_allows_after_timeout_with_rbc_backlog() {
-    use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    let highest_qc = sample_qc_ref(committed_height, 0);
-    actor.highest_qc = Some(highest_qc);
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
-    let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-
-    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x22; 32]));
-    let session_key = Actor::session_key(&block_hash, height, current_view);
-    let payload_hash = Hash::new(b"rbc-payload");
-    let chunk_root = Hash::new(b"rbc-root");
-    let session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .insert(session_key, session);
-
-    let start = now
-        .checked_sub(timeout.saturating_sub(Duration::from_millis(1)))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "idle view change should not trigger before timeout while RBC backlog is unresolved"
-    );
-
-    super::status::reset_view_change_cause_counters_for_tests();
-    let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    let later = now
-        .checked_add(timeout + availability_timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor.subsystems.propose.last_pacemaker_attempt = Some(later);
-    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
-    assert!(
-        actor.force_view_change_if_idle(later),
-        "idle view change should trigger after timeout even if RBC backlog is unresolved"
-    );
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_defers_after_timeout_while_rbc_backlog_progresses() {
-    use std::borrow::Cow;
-
-    let _worker_guard = super::status::worker_queue_test_guard();
-    super::status::reset_worker_loop_snapshot_for_tests();
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    let highest_qc = sample_qc_ref(committed_height, 0);
-    actor.highest_qc = Some(highest_qc);
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor
-        .slot_tracker
-        .proposals_seen
-        .insert((height, current_view));
-
-    let parent_hash = actor.state.view().latest_block_hash();
-    let block = sample_block(height, current_view, parent_hash);
-    let block_hash = block.hash();
-    let session_key = Actor::session_key(&block_hash, height, current_view);
-    let payload_hash = Hash::new(b"rbc-progress-payload");
-    let chunk_root = Hash::new(b"rbc-progress-root");
-    let mut session = RbcSession::test_new(1, Some(payload_hash), Some(chunk_root), 0);
-    session.test_set_block_header_and_signature(&block);
-    actor
-        .subsystems
-        .da_rbc
-        .rbc
-        .sessions
-        .insert(session_key, session);
-
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::RbcChunks);
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "idle view change should defer while RBC backlog is actively progressing"
-    );
-
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::RbcChunks, 2);
-    let progress_window = actor
-        .payload_rebroadcast_cooldown()
-        .max(Duration::from_millis(250));
-    let later = now
-        .checked_add(progress_window + Duration::from_millis(1))
-        .unwrap_or(now);
-    assert!(
-        actor.force_view_change_if_idle(later),
-        "idle view change should resume once RBC progress grace elapses"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
-    );
-
-    super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
 }
@@ -111868,355 +110972,6 @@ async fn force_view_change_if_idle_defers_proposal_gap_with_vote_backlog_until_a
     );
 
     super::status::record_worker_queue_drain(super::status::WorkerQueueKind::Votes, 1);
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_dampens_repeated_proposal_gap_rotations_with_backlog() {
-    use std::borrow::Cow;
-
-    let _worker_guard = super::status::worker_queue_test_guard();
-    super::status::reset_worker_loop_snapshot_for_tests();
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    let highest_qc = sample_qc_ref(committed_height, 0);
-    actor.highest_qc = Some(highest_qc);
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let initial_frontier_proposal_grace =
-        actor.initial_frontier_proposal_grace(actor.runtime_da_enabled(), true);
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
-    let elapsed = timeout
-        .saturating_add(initial_frontier_proposal_grace)
-        .saturating_add(availability_timeout)
-        .saturating_add(missing_qc_window)
-        .saturating_add(Duration::from_millis(1));
-    let start = now.checked_sub(elapsed).unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
-
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "first proposal-gap timeout under backlog should defer once for bounded missing-QC reacquire"
-    );
-    let first_rotate_at = now.checked_add(Duration::from_millis(1)).unwrap_or(now);
-    actor.subsystems.propose.last_pacemaker_attempt = Some(first_rotate_at);
-    assert!(
-        actor.force_view_change_if_idle(first_rotate_at),
-        "second pass in the same view should rotate after bounded missing-QC reacquire"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
-    );
-
-    let next_view = current_view.saturating_add(1);
-    let second_now = first_rotate_at
-        .checked_add(Duration::from_millis(1))
-        .unwrap_or(first_rotate_at);
-    let second_start = second_now.checked_sub(elapsed).unwrap_or(second_now);
-    actor
-        .phase_tracker
-        .on_view_change(height, next_view, second_start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: next_view,
-        since: second_start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(second_now);
-
-    assert!(
-        !actor.force_view_change_if_idle(second_now),
-        "repeated proposal-gap timeout should be damped by backlog hysteresis"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(next_view),
-        "hysteresis should hold the view instead of rotating again immediately"
-    );
-
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(
-        snapshot.missing_qc_total, 1,
-        "only the first timeout should count while hysteresis holds"
-    );
-
-    super::status::record_worker_queue_drain(super::status::WorkerQueueKind::BlockPayload, 1);
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_missing_qc_same_height_backoff_applies_under_backlog() {
-    use std::borrow::Cow;
-
-    let _worker_guard = super::status::worker_queue_test_guard();
-    let _view_guard = super::status::view_change_cause_test_guard();
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-    actor.config.recovery.rotate_after_reacquire_exhausted = true;
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 2u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let initial_frontier_proposal_grace =
-        actor.initial_frontier_proposal_grace(actor.runtime_da_enabled(), true);
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
-    let elapsed = timeout
-        .saturating_add(initial_frontier_proposal_grace)
-        .saturating_add(availability_timeout)
-        .saturating_add(missing_qc_window)
-        .saturating_add(Duration::from_millis(1));
-    let start = now.checked_sub(elapsed).unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-
-    let missing_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x7A; Hash::LENGTH]));
-    actor.pending.missing_block_requests.insert(
-        missing_hash,
-        MissingBlockRequest {
-            height,
-            view: current_view,
-            phase: Phase::Commit,
-            priority: super::MissingBlockPriority::Consensus,
-            retry_window: Duration::from_secs(1),
-            view_change_window: Some(Duration::from_secs(1)),
-            first_seen: start,
-            last_requested: start,
-            last_dependency_progress: start,
-            last_rbc_observed: None,
-            last_view_change_triggered: None,
-            view_change_triggered_view: None,
-            attempts: 0,
-        },
-    );
-    assert!(
-        actor.has_residual_round_backlog_for_height(height),
-        "test setup should expose residual round backlog for same-height backoff"
-    );
-
-    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
-    actor.subsystems.propose.last_missing_qc_timeout_trigger =
-        Some(super::CachedSlotTimeoutTrigger {
-            height,
-            view: current_view.saturating_sub(1),
-            at: now.checked_sub(timeout / 2).unwrap_or(now),
-            streak: 1,
-        });
-
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "same-height missing_qc backoff should defer rotation while backlog remains unresolved"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view),
-        "same-height backoff should hold the current view"
-    );
-    assert_eq!(
-        super::status::snapshot()
-            .view_change_causes
-            .missing_qc_total,
-        0,
-        "backoff deferral should not increment missing_qc rotations"
-    );
-
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_missing_qc_same_height_backoff_applies_with_active_queue_backlog()
- {
-    use std::borrow::Cow;
-
-    let _worker_guard = super::status::worker_queue_test_guard();
-    let _view_guard = super::status::view_change_cause_test_guard();
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-    actor.config.recovery.rotate_after_reacquire_exhausted = true;
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 2u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
-    let elapsed = timeout
-        .saturating_add(availability_timeout)
-        .saturating_add(missing_qc_window)
-        .saturating_add(Duration::from_millis(1));
-    let start = now.checked_sub(elapsed).unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
-    actor.subsystems.propose.last_missing_qc_timeout_trigger =
-        Some(super::CachedSlotTimeoutTrigger {
-            height,
-            view: current_view.saturating_sub(1),
-            at: now.checked_sub(timeout / 2).unwrap_or(now),
-            streak: 1,
-        });
-
-    assert!(
-        !actor.has_residual_round_backlog_for_height(height),
-        "setup keeps worker backlog clear so active queue pressure alone drives same-height damping"
-    );
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "same-height backoff should defer when active queue backlog remains under missing-QC timeout pressure"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view),
-        "same-height backoff should hold the current view while queue backlog pressure persists"
-    );
-    assert_eq!(
-        super::status::snapshot()
-            .view_change_causes
-            .missing_qc_total,
-        0,
-        "backoff deferral should not increment missing_qc rotations"
-    );
-
-    let hard_cap = super::missing_qc_rotation_hard_cap(timeout, missing_qc_window);
-    let rotate_at = now
-        .checked_add(hard_cap.saturating_add(Duration::from_millis(1)))
-        .unwrap_or(now);
-    actor.subsystems.propose.last_pacemaker_attempt = Some(rotate_at);
-    assert!(
-        actor.force_view_change_if_idle(rotate_at),
-        "same-height rotation should proceed once bounded hard-cap damping expires"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1)),
-        "view should advance after hard-cap expiry"
-    );
-    assert_eq!(
-        super::status::snapshot()
-            .view_change_causes
-            .missing_qc_total,
-        1,
-        "exactly one missing_qc rotation should be recorded after hard-cap expiry"
-    );
-
     super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
     harness.shutdown.send();
@@ -113869,165 +112624,6 @@ async fn missing_qc_view_change_suppressed_when_canonical_reanchor_stride_window
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_prunes_stale_round_state_during_repeated_same_height_missing_qc()
-{
-    use std::borrow::Cow;
-
-    let _worker_guard = super::status::worker_queue_test_guard();
-    let _view_guard = super::status::view_change_cause_test_guard();
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let mut consensus_cfg = test_sumeragi_config();
-    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
-    consensus_cfg.da.enabled = true;
-    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
-    let actor = &mut harness.actor;
-    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
-    actor.config.recovery.rotate_after_reacquire_exhausted = true;
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    actor.highest_qc = Some(sample_qc_ref(committed_height, 0));
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 2u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let missing_qc_window = actor.recovery_missing_qc_reacquire_window();
-    let availability_timeout =
-        actor.availability_timeout(actor.commit_quorum_timeout(), actor.runtime_da_enabled());
-    let elapsed = timeout
-        .saturating_add(availability_timeout)
-        .saturating_add(missing_qc_window)
-        .saturating_add(Duration::from_millis(1));
-    let start = now.checked_sub(elapsed).unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: start,
-    });
-    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
-    actor.subsystems.propose.last_missing_qc_reacquire_attempt = Some((height, current_view));
-
-    let parent = actor.state.view().latest_block_hash();
-    let stale_block = sample_block(height, 0, parent);
-    let stale_hash = stale_block.hash();
-    actor
-        .kura
-        .store_block(stale_block.clone())
-        .expect("store stale block");
-    actor.pending.missing_block_requests.insert(
-        stale_hash,
-        MissingBlockRequest {
-            height,
-            view: 0,
-            phase: Phase::Commit,
-            priority: super::MissingBlockPriority::Consensus,
-            retry_window: Duration::from_secs(1),
-            view_change_window: Some(Duration::from_secs(1)),
-            first_seen: start,
-            last_requested: start,
-            last_dependency_progress: start,
-            last_rbc_observed: None,
-            last_view_change_triggered: None,
-            view_change_triggered_view: None,
-            attempts: 0,
-        },
-    );
-    actor.note_missing_block_height_attempt(
-        stale_hash,
-        height,
-        0,
-        super::MissingBlockRecoveryStage::ParentFetch,
-        None,
-        now,
-    );
-    let recovery_key = actor.missing_block_recovery_key_for_height(height);
-    assert!(
-        actor
-            .missing_block_height_recovery
-            .contains_key(&recovery_key),
-        "test setup should seed local missing-block recovery state"
-    );
-
-    let hard_cap = super::missing_qc_rotation_hard_cap(timeout, missing_qc_window);
-    actor.subsystems.propose.last_missing_qc_timeout_trigger =
-        Some(super::CachedSlotTimeoutTrigger {
-            height,
-            view: current_view.saturating_sub(1),
-            at: now
-                .checked_sub(hard_cap.saturating_add(Duration::from_millis(1)))
-                .unwrap_or(now),
-            streak: 1,
-        });
-
-    assert!(
-        actor.has_residual_round_backlog_for_height(height),
-        "test setup should expose residual round backlog"
-    );
-    assert!(
-        actor.force_view_change_if_idle(now),
-        "rotation should proceed after stale local cleanup on repeated same-height missing_qc"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1)),
-        "view should advance after cleanup and rotation"
-    );
-    assert!(
-        !actor
-            .pending
-            .missing_block_requests
-            .contains_key(&stale_hash),
-        "stale missing-block requests should be pruned during repeated same-height missing_qc"
-    );
-    assert!(
-        !actor
-            .missing_block_height_recovery
-            .contains_key(&recovery_key),
-        "height recovery budget should be cleared during repeated same-height missing_qc"
-    );
-    let timeout_marker = actor
-        .subsystems
-        .propose
-        .last_missing_qc_timeout_trigger
-        .expect("rotation should record a fresh timeout marker");
-    assert_eq!(
-        timeout_marker.height, height,
-        "rotation marker should track the active height after cleanup"
-    );
-    assert_eq!(
-        timeout_marker.streak, 0,
-        "cleanup should clear stale timeout streak before recording the next round marker"
-    );
-
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_no_actionable_dependency_rotates_after_base_timeout() {
     use std::borrow::Cow;
 
@@ -114105,247 +112701,6 @@ async fn force_view_change_if_idle_no_actionable_dependency_rotates_after_base_t
             || actor.frontier_recovery_exists_at_height(height),
         "base-timeout missing-QC recovery should leave exact-frontier recovery state armed"
     );
-
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_skips_when_consensus_queue_backpressure() {
-    use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    let _guard = super::status::view_change_cause_test_guard();
-
-    super::status::reset_view_change_cause_counters_for_tests();
-    super::status::reset_worker_loop_snapshot_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    let highest_qc = sample_qc_ref(committed_height, 0);
-    actor.highest_qc = Some(highest_qc);
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let start = now
-        .checked_sub(timeout.saturating_sub(Duration::from_millis(1)))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor
-        .slot_tracker
-        .proposals_seen
-        .insert((height, current_view));
-
-    actor.config.queues.block_payload = 1;
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
-
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "idle view change should not trigger before timeout while consensus queues are saturated"
-    );
-    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
-
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 0);
-    assert!(snapshot.last_cause.is_none());
-
-    super::status::reset_view_change_cause_counters_for_tests();
-    let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    assert!(
-        actor.force_view_change_if_idle(now),
-        "idle view change should trigger after timeout even if consensus queues are saturated"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
-    );
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 1);
-    assert_eq!(snapshot.last_cause.as_deref(), Some("missing_qc"));
-
-    super::status::reset_worker_loop_snapshot_for_tests();
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_defers_for_relay_backpressure_until_timeout() {
-    use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    let _guard = super::status::view_change_cause_test_guard();
-
-    super::status::reset_view_change_cause_counters_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    let highest_qc = sample_qc_ref(committed_height, 0);
-    actor.highest_qc = Some(highest_qc);
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let start = now
-        .checked_sub(timeout.saturating_sub(Duration::from_millis(1)))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor
-        .slot_tracker
-        .proposals_seen
-        .insert((height, current_view));
-
-    actor.relay_backpressure.reset_to_current();
-    iroha_p2p::network::inc_subscriber_queue_full_for_test(
-        iroha_p2p::network::message::Topic::Consensus,
-        1,
-    );
-
-    assert!(
-        !actor.force_view_change_if_idle(now),
-        "idle view change should not trigger before timeout while relay backpressure is active"
-    );
-    assert_eq!(actor.phase_tracker.current_view(height), Some(current_view));
-
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 0);
-    assert!(snapshot.last_cause.is_none());
-
-    super::status::reset_view_change_cause_counters_for_tests();
-    let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    assert!(
-        actor.force_view_change_if_idle(now),
-        "idle view change should trigger after timeout even if relay backpressure is active"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
-    );
-
-    super::status::reset_view_change_cause_counters_for_tests();
-    harness.shutdown.send();
-}
-
-#[tokio::test(flavor = "current_thread")]
-#[ignore = "obsolete after frontier-first recovery simplification"]
-async fn force_view_change_if_idle_ignores_consensus_queue_backlog() {
-    use std::borrow::Cow;
-
-    let mut harness = test_actor_harness(4).await;
-    let actor = &mut harness.actor;
-    let _guard = super::status::view_change_cause_test_guard();
-
-    super::status::reset_view_change_cause_counters_for_tests();
-    super::status::reset_worker_loop_snapshot_for_tests();
-
-    let tx = sample_transaction();
-    actor
-        .queue
-        .push(
-            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
-            actor.state.view(),
-        )
-        .expect("push tx");
-
-    let committed_height = actor.state.view().height() as u64;
-    let highest_qc = sample_qc_ref(committed_height, 0);
-    actor.highest_qc = Some(highest_qc);
-    let height = super::active_round_height(
-        actor.highest_qc,
-        actor.latest_committed_qc(),
-        committed_height,
-    );
-    let current_view = 0u64;
-    let now = Instant::now();
-    let timeout = super::idle_view_timeout(
-        false,
-        actor.commit_quorum_timeout(),
-        actor.subsystems.propose.pacemaker.propose_interval,
-        actor.runtime_da_enabled(),
-    );
-    let start = now
-        .checked_sub(timeout + Duration::from_millis(1))
-        .unwrap_or(now);
-    actor
-        .phase_tracker
-        .on_view_change(height, current_view, start);
-    actor.queue_ready_since = Some(super::QueueReadySince {
-        height,
-        view: current_view,
-        since: start,
-    });
-    actor
-        .slot_tracker
-        .proposals_seen
-        .insert((height, current_view));
-
-    super::status::record_worker_queue_enqueue(super::status::WorkerQueueKind::BlockPayload);
-
-    assert!(
-        actor.force_view_change_if_idle(now),
-        "idle view change should ignore consensus queue backlog"
-    );
-    assert_eq!(
-        actor.phase_tracker.current_view(height),
-        Some(current_view.saturating_add(1))
-    );
-
-    let snapshot = super::status::snapshot().view_change_causes;
-    assert_eq!(snapshot.missing_qc_total, 1);
-    assert_eq!(snapshot.last_cause.as_deref(), Some("missing_qc"));
 
     super::status::reset_worker_loop_snapshot_for_tests();
     super::status::reset_view_change_cause_counters_for_tests();
@@ -190326,6 +188681,163 @@ fn rbc_session_delivered_payload_matches_requires_complete_chunks() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn pending_block_validation_priority_requires_complete_rbc_delivery_evidence() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let _genesis_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let key = insert_active_pending_block(actor, 0);
+    let (block_hash, height, view) = key;
+
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block");
+    assert_eq!(
+        actor.pending_block_validation_priority_reason(block_hash, pending),
+        None,
+        "test setup should start without vote, QC, or RBC validation priority evidence"
+    );
+
+    let mut incomplete_session =
+        RbcSession::test_new(2, None, None, actor.epoch_for_height(height));
+    incomplete_session.test_note_chunk(0, vec![0xA0], 0);
+    incomplete_session.test_set_delivered(true);
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .insert(key, incomplete_session);
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block");
+    assert_eq!(
+        actor.pending_block_validation_priority_reason(block_hash, pending),
+        None,
+        "live RBC DELIVER evidence with missing chunks must not elevate validation priority"
+    );
+
+    actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .sessions
+        .get_mut(&key)
+        .expect("live session")
+        .test_note_chunk(1, vec![0xB0], 0);
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block");
+    assert_eq!(
+        actor.pending_block_validation_priority_reason(block_hash, pending),
+        Some("rbc_deliver"),
+        "complete live RBC DELIVER evidence should still elevate validation priority"
+    );
+
+    actor.subsystems.da_rbc.rbc.sessions.remove(&key);
+    actor.subsystems.da_rbc.rbc.status_handle.update(
+        super::rbc_status::Summary {
+            block_hash,
+            height,
+            view,
+            total_chunks: 2,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 1,
+            ready_count: 0,
+            delivered: true,
+            payload_hash: None,
+            recovered_from_disk: true,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        },
+        SystemTime::now(),
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block");
+    assert_eq!(
+        actor.pending_block_validation_priority_reason(block_hash, pending),
+        None,
+        "retained RBC DELIVER summaries with missing chunks must not elevate validation priority"
+    );
+
+    actor.subsystems.da_rbc.rbc.status_handle.update(
+        super::rbc_status::Summary {
+            block_hash,
+            height,
+            view,
+            total_chunks: 2,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 2,
+            ready_count: 0,
+            delivered: true,
+            payload_hash: None,
+            recovered_from_disk: true,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        },
+        SystemTime::now(),
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block");
+    assert_eq!(
+        actor.pending_block_validation_priority_reason(block_hash, pending),
+        Some("rbc_deliver"),
+        "complete retained RBC DELIVER summaries should still elevate validation priority"
+    );
+
+    harness.shutdown.send();
+}
+
+#[test]
+fn rbc_session_availability_incomplete_requires_complete_delivered_ready_evidence() {
+    let mut incomplete_delivered =
+        RbcSession::test_new(2, Some(Hash::new(b"incomplete-delivered")), None, 0);
+    incomplete_delivered.test_note_chunk(0, vec![0xA0], 0);
+    incomplete_delivered.test_set_delivered(true);
+    assert!(
+        super::rbc_session_availability_incomplete(&incomplete_delivered, false, 1),
+        "DELIVER with missing local chunks must still count as incomplete availability"
+    );
+
+    let mut complete_missing_ready =
+        RbcSession::test_new(2, Some(Hash::new(b"complete-missing-ready")), None, 0);
+    complete_missing_ready.test_note_chunk(0, b"chunk-0".to_vec(), 0);
+    complete_missing_ready.test_note_chunk(1, b"chunk-1".to_vec(), 0);
+    complete_missing_ready.test_set_delivered(true);
+    assert!(
+        super::rbc_session_availability_incomplete(&complete_missing_ready, false, 1),
+        "complete delivered chunks without READY quorum must still count as incomplete availability"
+    );
+
+    complete_missing_ready.record_ready(0, vec![0xB0]);
+    assert!(
+        !super::rbc_session_availability_incomplete(&complete_missing_ready, false, 1),
+        "complete delivered chunks with READY quorum should resolve availability"
+    );
+}
+
 #[test]
 fn rbc_session_from_persisted_drops_mismatched_chunks() {
     let key = session_key();
@@ -192338,6 +190850,42 @@ fn delivered_incomplete_rbc_session_keeps_backlog_pending_chunks() {
         dataspace.pending_chunks, 2,
         "DELIVER without complete local payload bytes must not hide missing dataspace chunks"
     );
+}
+
+#[test]
+fn delivered_incomplete_rbc_session_counts_generic_backlog_missing_chunks() {
+    let _rbc_guard = super::status::rbc_status_test_guard();
+    super::status::reset_rbc_backlog_stats_for_tests();
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x53; Hash::LENGTH]));
+    let key = (block_hash, 4, 0);
+    let mut session = RbcSession::test_new(4, Some(Hash::new(b"partial-delivery")), None, 0);
+    session.test_note_chunk(0, vec![0xC0], 0);
+    session.test_set_delivered(true);
+    let sessions = BTreeMap::from([(key, session)]);
+
+    Actor::update_rbc_backlog_snapshot(
+        &sessions,
+        &BTreeMap::new(),
+        (usize::MAX, usize::MAX),
+        Duration::from_secs(1),
+        16,
+        None,
+    );
+
+    let snapshot = super::status::rbc_backlog_snapshot();
+    assert_eq!(
+        snapshot.pending_sessions, 1,
+        "DELIVER without complete local chunks must still count as a pending backlog session"
+    );
+    assert_eq!(
+        snapshot.total_missing_chunks, 3,
+        "generic backlog totals must expose missing chunks for incomplete delivered sessions"
+    );
+    assert_eq!(snapshot.max_missing_chunks, 3);
+
+    super::status::reset_rbc_backlog_stats_for_tests();
 }
 
 #[test]

@@ -24,29 +24,45 @@ export function assertOfflineCashConfigurationSnapshotUsable(
   if (!snapshot || typeof snapshot !== "object") {
     throw new TypeError("offline cash configuration snapshot must be an object");
   }
-  if (!snapshot.offlinePaymentsEnabled) {
+  const checkedNowMs = finiteOfflineCashSnapshotNumber(nowMs, "nowMs");
+  if (snapshot.offlinePaymentsEnabled !== true) {
     throw new OfflineCashConfigurationSnapshotError(
       "offline_payments_disabled",
       "Offline cash is disabled in the cached configuration snapshot.",
     );
   }
-  if (String(snapshot.issuerPublicKeyBase64 ?? "").trim().length === 0) {
+  if (
+    typeof snapshot.issuerPublicKeyBase64 !== "string" ||
+    snapshot.issuerPublicKeyBase64.trim().length === 0
+  ) {
     throw new OfflineCashConfigurationSnapshotError(
       "missing_issuer_public_key",
       "Offline cash requires a cached issuer public key before offline exchange.",
     );
   }
   const expiresAtMs = snapshot.expiresAtMs;
-  if (expiresAtMs !== null && expiresAtMs !== undefined && Number(expiresAtMs) <= nowMs) {
+  if (
+    expiresAtMs !== null &&
+    expiresAtMs !== undefined &&
+    finiteOfflineCashSnapshotNumber(expiresAtMs, "expiresAtMs") <= checkedNowMs
+  ) {
     throw new OfflineCashConfigurationSnapshotError(
       "expired",
       `Offline cash configuration snapshot expired at ${expiresAtMs}.`,
     );
   }
+  const bridgeAbiVersion = snapshot.bridgeAbiVersion;
+  const checkedBridgeAbiVersion =
+    bridgeAbiVersion === null || bridgeAbiVersion === undefined
+      ? null
+      : finiteOfflineCashSnapshotNumber(bridgeAbiVersion, "bridgeAbiVersion");
+  const checkedRequiredBridgeAbiVersion =
+    requiredBridgeAbiVersion === null || requiredBridgeAbiVersion === undefined
+      ? null
+      : finiteOfflineCashSnapshotNumber(requiredBridgeAbiVersion, "requiredBridgeAbiVersion");
   if (
-    requiredBridgeAbiVersion !== null &&
-    requiredBridgeAbiVersion !== undefined &&
-    Number(snapshot.bridgeAbiVersion ?? -1) < Number(requiredBridgeAbiVersion)
+    checkedRequiredBridgeAbiVersion !== null &&
+    (checkedBridgeAbiVersion === null || checkedBridgeAbiVersion < checkedRequiredBridgeAbiVersion)
   ) {
     throw new OfflineCashConfigurationSnapshotError(
       "unsupported_bridge_abi",
@@ -54,6 +70,16 @@ export function assertOfflineCashConfigurationSnapshotUsable(
     );
   }
   return true;
+}
+
+function finiteOfflineCashSnapshotNumber(value, fieldName) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new OfflineCashConfigurationSnapshotError(
+      "malformed_snapshot",
+      `Offline cash configuration snapshot field ${fieldName} must be a finite number.`,
+    );
+  }
+  return value;
 }
 
 export function offlineCashAvailableTransportKinds(capabilities = {}) {

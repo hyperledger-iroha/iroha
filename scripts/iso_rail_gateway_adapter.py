@@ -44,6 +44,7 @@ DEFAULT_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024
 DEFAULT_RESPONSE_LIMIT_BYTES = 64 * 1024
 MAX_BEARER_TOKEN_BYTES = 8192
 MAX_HTTP_URL_CHARS = 2048
+MAX_LOCAL_PATH_CHARS = 4096
 MAX_SIDECAR_JSON_BYTES = 16 * 1024
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
@@ -459,6 +460,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
         raise AdapterError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise AdapterError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise AdapterError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -486,6 +489,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
 def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
     if not raw:
         raise AdapterError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise AdapterError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise AdapterError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -995,6 +1000,8 @@ def discover_messages(inbox_dir: Path) -> list[Path]:
 
 
 def _validate_path_argument(raw: str, label: str) -> None:
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise AdapterError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ch.isspace() for ch in raw):
         raise AdapterError(f"{label} must not contain whitespace")
     if raw.startswith("-"):
