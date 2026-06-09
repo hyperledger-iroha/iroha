@@ -415,10 +415,12 @@ Missing local tooling cannot mask unsafe operator path inputs, and signature
 verification preserves key-path validation failures
 separately from private/public key mismatches. Temporary
 OpenSSL staging writes use exclusive temporary files, flush and fsync staged
-payload/signature bytes, read them back before invoking OpenSSL, and report
-staging write, readback mismatch, signature output read failures, or non-64-byte
+payload/signature bytes, read them back with opened-file identity binding before
+invoking OpenSSL, and report staging write, readback mismatch, signature output
+read failures, or non-64-byte
 Ed25519 signature outputs as structured signer/verifier errors instead of
-tracebacks. Lower-level direct symlink, hardlink, and regular-file artifact
+tracebacks; signature output bytes are also read through opened-file identity
+binding before the 64-byte shape check. Lower-level direct symlink, hardlink, and regular-file artifact
 validators reject secret-looking slot paths before traversing, stat-ing, or
 classifying slot artifacts. The symlink validator now reports unreadable
 slot-metadata, artifact-directory, and nested-artifact metadata before alias

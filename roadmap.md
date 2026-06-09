@@ -695,9 +695,9 @@ and completed history lives in [`status.md`](./status.md).
 		  and pre-OpenSSL rejection of secret-looking key path strings while
 		  preserving key-path failures separately from private/public key mismatches
 		  and treating temporary OpenSSL staging/write/read failures as structured
-		  signer/verifier errors after fsynced staged-byte writes and readback
-		  verification, with non-64-byte Ed25519 signature outputs rejected before
-		  evidence assembly,
+		  signer/verifier errors after fsynced staged-byte writes and opened-file
+		  identity-bound readback verification, with signature output bytes also
+		  identity-bound before non-64-byte Ed25519 signature outputs are rejected,
 	  standalone scanner rejection of secret-looking `--root`/`--json-out`
 	  arguments before root discovery or summary writes, direct root-validator
 	  rejection of secret-looking paths and unreadable root metadata before slot
@@ -2510,8 +2510,9 @@ and completed history lives in [`status.md`](./status.md).
 	  ASCII-only rail `message_type` digit validation across direct receipt
 	  verification, evidence replay, readiness replay, and XSD profile catalogs,
 	  ASCII-only XSD profile-catalog `message_def_id` and version validation,
-	  overlong XSD profile-catalog profile IDs and enum values rejected before
-	  duplicate-ID, missing-schema-version, or unknown-value echo,
+	  overlong XSD profile-catalog profile IDs, enum values, and
+	  business-service entries rejected before duplicate-ID, missing-schema-version,
+	  unknown-value, or summary echo,
 	  overlong XSD/XML schema and fixture identifiers rejected before mismatch echo,
 	  plus generic evidence/readiness archive/canary kind, filename, or metadata
 	  mismatch blockers that do not print receipt kind values, receipt leaf names, or invalid metadata tuples,

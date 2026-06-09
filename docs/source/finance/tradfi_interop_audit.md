@@ -303,7 +303,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   such as rails, embedded signature policies, reference datasets,
   structured-address modes, and business services to be printable ASCII, applies
   the same profile-catalog scanner and overlong-value caps to identifier-style
-  strings such as profile ids, rejects secret-looking or non-ASCII schema and fixture `payload_root`
+  strings such as profile ids and business-service entries, rejects
+  secret-looking or non-ASCII schema and fixture `payload_root`
   values before namespace/root mismatch diagnostics can echo manifest-provided
   payload names, and rejects secret-looking or non-ASCII checked-in XSD
   `targetNamespace` attributes before schema namespace mismatch diagnostics can
@@ -690,6 +691,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   spellings before unknown-value diagnostics can print them.
   Profile-catalog profile IDs are capped before duplicate-ID or
   missing-schema-version diagnostics can print them.
+  Profile-catalog business-service entries are capped before overlong service
+  identifiers can be emitted or archived.
   XSD/XML schema and fixture identifiers are capped before schema/root mismatch
   diagnostics can print overlong ASCII payload names or namespace URIs.
   XSD profile-catalog `message_def_id` and version entries also require

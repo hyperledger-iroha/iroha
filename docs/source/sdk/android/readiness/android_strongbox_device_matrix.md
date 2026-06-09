@@ -159,7 +159,9 @@ Production release criteria:
 		  operator-local tokens cannot be echoed by key parsing diagnostics. Signature
 		  verification preserves key-path validation failures separately from
 		  private/public key mismatch failures, and temporary OpenSSL staging or
-		  signature-output failures become structured signer/verifier errors. The
+		  signature-output failures become structured signer/verifier errors after
+		  staged-byte readback and signature-output reads are bound to opened file
+		  identities. The
 		  signer helper also rejects secret-looking `--slot`, `--output`, and
 	  `--signer-key-id` runtime arguments before reading slot metadata.
 	  Device-lab JSON summaries also carry a local root label instead of the

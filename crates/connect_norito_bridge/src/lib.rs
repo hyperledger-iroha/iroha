@@ -892,6 +892,12 @@ const PRIVACY_PRODUCTION_GATE_REQUIREMENTS: &[(&str, &str)] = &[
         "internal cryptographic review signoff is missing",
     ),
 ];
+const PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS: &[&str] = &[
+    "real_proving",
+    "real_verification",
+    "witness_privacy_checks",
+    "verifier_fuzzing",
+];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
     (
@@ -1306,6 +1312,7 @@ struct PrivacyProductionGateV1 {
     version: String,
     ready: bool,
     gates: Vec<PrivacyProductionGateStatusV1>,
+    required_gates: Vec<String>,
     missing: Vec<String>,
     audit_references: Vec<String>,
 }
@@ -1358,7 +1365,23 @@ enum PrivacyProofOperationV1 {
     Verify,
 }
 
-fn privacy_production_gate() -> PrivacyProductionGateV1 {
+fn privacy_production_gate_requirement_is_waived(
+    entry: &PrivacyAlgorithmEntry,
+    key: &str,
+) -> bool {
+    entry.id == "transparent-transfer"
+        && PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS.contains(&key)
+}
+
+fn privacy_required_production_gate_keys(entry: &PrivacyAlgorithmEntry) -> Vec<String> {
+    PRIVACY_PRODUCTION_GATE_REQUIREMENTS
+        .iter()
+        .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
+        .map(|(key, _)| (*key).to_owned())
+        .collect()
+}
+
+fn privacy_production_gate(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionGateV1 {
     PrivacyProductionGateV1 {
         version: PRIVACY_PRODUCTION_GATE_VERSION.to_owned(),
         ready: false,
@@ -1369,8 +1392,10 @@ fn privacy_production_gate() -> PrivacyProductionGateV1 {
                 passed: false,
             })
             .collect(),
+        required_gates: privacy_required_production_gate_keys(entry),
         missing: PRIVACY_PRODUCTION_GATE_REQUIREMENTS
             .iter()
+            .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
             .map(|(_, label)| (*label).to_owned())
             .chain(
                 [
@@ -1407,7 +1432,7 @@ fn privacy_capabilities() -> PrivacyCapabilitiesV1 {
                     .map(|entrypoint| (*entrypoint).to_owned())
                     .collect(),
                 production_ready: false,
-                production_gate: privacy_production_gate(),
+                production_gate: privacy_production_gate(entry),
             })
             .collect(),
     };
@@ -1751,33 +1776,64 @@ fn privacy_gate_statuses_match_requirements(gates: &[PrivacyProductionGateStatus
             .all(|(status, (key, _))| status.key.as_str() == *key && !status.passed)
 }
 
-fn privacy_gate_missing_reasons_match_requirements(missing: &[String]) -> bool {
-    missing.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len() + 2
+fn privacy_required_gate_keys_match_entry(
+    required_gates: &[String],
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let expected = privacy_required_production_gate_keys(entry);
+    required_gates.len() == expected.len()
+        && required_gates
+            .iter()
+            .zip(expected.iter())
+            .all(|(required, expected)| required == expected)
+}
+
+fn privacy_gate_missing_reasons_match_requirements(
+    missing: &[String],
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let required_requirements = PRIVACY_PRODUCTION_GATE_REQUIREMENTS
+        .iter()
+        .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key));
+    let required_count = required_requirements.clone().count();
+
+    missing.len() == required_count + 2
         && missing
             .iter()
-            .take(PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len())
-            .zip(PRIVACY_PRODUCTION_GATE_REQUIREMENTS.iter())
+            .take(required_count)
+            .zip(required_requirements)
             .all(|(missing, (_, label))| missing.as_str() == *label)
-        && missing[PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len()].as_str()
-            == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE
-        && missing[PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len() + 1].as_str()
+        && missing[required_count].as_str() == PRIVACY_PRODUCTION_GATE_MISSING_ENGINE
+        && missing[required_count + 1].as_str()
             == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
 }
 
-fn privacy_production_gate_invariants_hold(gate: &PrivacyProductionGateV1) -> bool {
+fn privacy_production_gate_invariants_hold(
+    gate: &PrivacyProductionGateV1,
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let required_gate_count = privacy_required_production_gate_keys(entry).len();
+
     gate.version == PRIVACY_PRODUCTION_GATE_VERSION
         && !gate.ready
         && gate.audit_references.is_empty()
         && gate.gates.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len()
-        && gate.missing.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len() + 2
+        && gate.required_gates.len() == required_gate_count
+        && gate.missing.len() == required_gate_count + 2
         && privacy_gate_statuses_match_requirements(&gate.gates)
-        && privacy_gate_missing_reasons_match_requirements(&gate.missing)
+        && privacy_required_gate_keys_match_entry(&gate.required_gates, entry)
+        && privacy_gate_missing_reasons_match_requirements(&gate.missing, entry)
         && !privacy_gate_status_keys_have_duplicates(&gate.gates)
+        && !privacy_string_vec_has_duplicates(&gate.required_gates)
         && !privacy_string_vec_has_duplicates(&gate.missing)
         && gate.gates.iter().all(|status| {
             privacy_text_field_is_portable_identifier(&status.key)
                 && privacy_production_gate_key_is_required(&status.key)
                 && !status.passed
+        })
+        && gate.required_gates.iter().all(|key| {
+            privacy_text_field_is_portable_identifier(key)
+                && privacy_production_gate_key_is_required(key)
         })
         && gate
             .missing
@@ -1785,7 +1841,12 @@ fn privacy_production_gate_invariants_hold(gate: &PrivacyProductionGateV1) -> bo
             .all(|missing| privacy_production_gate_missing_reason_is_required(missing))
         && PRIVACY_PRODUCTION_GATE_REQUIREMENTS
             .iter()
+            .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
             .all(|(key, label)| {
+                gate.required_gates
+                    .iter()
+                    .any(|required| required.as_str() == *key)
+                    &&
                 gate.gates
                     .iter()
                     .any(|status| status.key.as_str() == *key && !status.passed)
@@ -1853,7 +1914,7 @@ fn privacy_capability_invariants_hold(capability: &PrivacyCapabilityV1) -> bool 
             &capability.planned_entrypoints,
         )
         && !capability.production_ready
-        && privacy_production_gate_invariants_hold(&capability.production_gate)
+        && privacy_production_gate_invariants_hold(&capability.production_gate, entry)
 }
 
 fn privacy_capabilities_invariants_hold(capabilities: &PrivacyCapabilitiesV1) -> bool {
@@ -24808,6 +24869,36 @@ mod tests {
             algorithm.algorithm_id == "orchard-halo2-actions-v1"
                 && algorithm.backend_family == "halo2-ipa-orchard"
         }));
+        let transparent = capabilities
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.algorithm_id == "transparent-transfer")
+            .expect("transparent transfer native capability must be advertised");
+        let transparent_entry = privacy_algorithm_entry("transparent-transfer")
+            .expect("transparent transfer catalog row");
+        assert_eq!(
+            transparent.production_gate.required_gates,
+            privacy_required_production_gate_keys(transparent_entry),
+            "transparent transfer must advertise only baseline transfer production gates",
+        );
+        assert!(
+            !transparent
+                .production_gate
+                .required_gates
+                .iter()
+                .any(|key| PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS
+                    .contains(&key.as_str())),
+            "transparent transfer must not require proof-only gates",
+        );
+        assert!(
+            !transparent.production_gate.missing.iter().any(|missing| {
+                missing == "real proving engine is not registered"
+                    || missing == "real verifier is not registered"
+                    || missing == "witness privacy checks are incomplete"
+                    || missing == "verifier fuzzing gate is incomplete"
+            }),
+            "transparent transfer must not report waived proof-only gates as missing",
+        );
         let zk_ace = capabilities
             .algorithms
             .iter()
@@ -24822,6 +24913,13 @@ mod tests {
         assert!(!zk_ace.production_gate.ready);
         assert!(zk_ace.production_gate.audit_references.is_empty());
         assert!(zk_ace.production_gate.gates.iter().all(|gate| !gate.passed));
+        let zk_ace_entry =
+            privacy_algorithm_entry("zk-ace-pq-authorization-v0").expect("ZK-ACE catalog row");
+        assert_eq!(
+            zk_ace.production_gate.required_gates,
+            privacy_required_production_gate_keys(zk_ace_entry),
+            "ZK-ACE must require the full production proof gate set",
+        );
         assert!(
             zk_ace
                 .production_gate
@@ -24856,6 +24954,14 @@ mod tests {
             assert!(algorithm.production_gate.missing.contains(
                 &"Iroha production allowlist is not enabled for this audited row".to_owned()
             ));
+            let entry = privacy_algorithm_entry(&algorithm.algorithm_id)
+                .expect("privacy capability row must be cataloged");
+            assert_eq!(
+                algorithm.production_gate.required_gates,
+                privacy_required_production_gate_keys(entry),
+                "native privacy required production gates drifted for {}",
+                algorithm.algorithm_id,
+            );
         }
     }
 
@@ -25188,8 +25294,10 @@ mod tests {
 
         assert!(privacy_capabilities_invariants_hold(&capabilities));
         assert!(capabilities.algorithms.iter().all(|algorithm| {
+            let entry = privacy_algorithm_entry(&algorithm.algorithm_id)
+                .expect("privacy capability row must be cataloged");
             !algorithm.production_ready
-                && privacy_production_gate_invariants_hold(&algorithm.production_gate)
+                && privacy_production_gate_invariants_hold(&algorithm.production_gate, entry)
         }));
     }
 
@@ -25308,6 +25416,47 @@ mod tests {
         assert!(
             !privacy_capability_invariants_hold(&duplicate_gate),
             "duplicate production gate keys must be rejected",
+        );
+
+        let mut missing_required_gate = base.clone();
+        missing_required_gate.production_gate.required_gates.clear();
+        assert!(
+            !privacy_capability_invariants_hold(&missing_required_gate),
+            "missing required production gate keys must be rejected",
+        );
+
+        let mut duplicate_required_gate = base.clone();
+        duplicate_required_gate
+            .production_gate
+            .required_gates
+            .push(duplicate_required_gate.production_gate.required_gates[0].clone());
+        assert!(
+            !privacy_capability_invariants_hold(&duplicate_required_gate),
+            "duplicate required production gate keys must be rejected",
+        );
+
+        let mut unknown_required_gate = base.clone();
+        unknown_required_gate.production_gate.required_gates[0] = "shadow_gate".to_owned();
+        assert!(
+            !privacy_capability_invariants_hold(&unknown_required_gate),
+            "unknown required production gate keys must be rejected",
+        );
+
+        let mut unportable_required_gate = base.clone();
+        unportable_required_gate.production_gate.required_gates[0] = "shadow gate".to_owned();
+        assert!(
+            !privacy_capability_invariants_hold(&unportable_required_gate),
+            "unportable required production gate keys must be rejected",
+        );
+
+        let mut forged_waived_required_gate = base.clone();
+        forged_waived_required_gate
+            .production_gate
+            .required_gates
+            .insert(0, "real_proving".to_owned());
+        assert!(
+            !privacy_capability_invariants_hold(&forged_waived_required_gate),
+            "transparent-transfer waived proof gates must not be reintroduced as required",
         );
 
         let mut extra_entrypoint = base.clone();

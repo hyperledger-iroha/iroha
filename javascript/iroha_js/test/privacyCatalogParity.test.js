@@ -52,6 +52,12 @@ const PRODUCTION_GATE_REQUIREMENTS = Object.freeze([
 const PRODUCTION_GATE_REQUIRED_REASONS = Object.freeze(
   PRODUCTION_GATE_REQUIREMENTS.map(([_key, reason]) => reason),
 );
+const TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS = Object.freeze([
+  "real_proving",
+  "real_verification",
+  "witness_privacy_checks",
+  "verifier_fuzzing",
+]);
 const SUPPLEMENTAL_FAIL_CLOSED_REASONS = Object.freeze([
   "implementation stage is not production-hardened",
   "planned SDK entrypoints remain",

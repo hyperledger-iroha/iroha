@@ -208,6 +208,8 @@ reference datasets, and structured-address modes also reject overlong ASCII
 spellings before unknown-value diagnostics can print them.
 Profile-catalog profile IDs are capped before duplicate-ID or
 missing-schema-version diagnostics can echo catalog-provided IDs.
+Profile-catalog business-service entries are capped before the catalog can
+emit or archive overlong service identifiers.
 XSD profile-catalog `message_def_id` and version entries use the same ASCII-only
 digit policy before missing-schema or skipped-version diagnostics can classify
 Unicode digit confusables as concrete ISO message IDs.

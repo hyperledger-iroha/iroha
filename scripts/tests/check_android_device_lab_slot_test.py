@@ -10156,20 +10156,23 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     ) -> None:
         original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
         original_run = evidence_signer.subprocess.run
-        original_read_bytes = Path.read_bytes
+        original_open = Path.open
 
-        def fake_run(*args, **kwargs):
+        def fake_run(command, *args, **kwargs):
+            out_path = Path(command[command.index("-out") + 1])
+            out_path.write_bytes(b"x" * device_lab.ED25519_SIGNATURE_BYTES)
             return subprocess.CompletedProcess(args=args, returncode=0)
 
-        def failing_signature_read(path: Path) -> bytes:
-            if path.name == "signature.bin":
+        def failing_signature_open(path: Path, *args, **kwargs):
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if path.name == "signature.bin" and "r" in mode:
                 raise OSError("simulated signature read failure")
-            return original_read_bytes(path)
+            return original_open(path, *args, **kwargs)
 
         try:
             device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
             evidence_signer.subprocess.run = fake_run
-            Path.read_bytes = failing_signature_read
+            Path.open = failing_signature_open
             with tempfile.TemporaryDirectory() as temp:
                 private_key = Path(temp) / "signing.pem"
                 private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
@@ -10183,7 +10186,54 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         finally:
             device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
             evidence_signer.subprocess.run = original_run
-            Path.read_bytes = original_read_bytes
+            Path.open = original_open
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["signature output could not be read"])
+
+    def test_sign_ed25519_rejects_signature_output_swap_after_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+        original_open = Path.open
+        replacement_signature = b"y" * device_lab.ED25519_SIGNATURE_BYTES
+
+        def fake_run(command, *args, **kwargs):
+            out_path = Path(command[command.index("-out") + 1])
+            out_path.write_bytes(b"x" * device_lab.ED25519_SIGNATURE_BYTES)
+            replacement_path = out_path.with_name("replacement-signature.bin")
+            replacement_path.write_bytes(replacement_signature)
+            return subprocess.CompletedProcess(args=command, returncode=0)
+
+        swapped = False
+
+        def swapping_signature_open(path: Path, *args, **kwargs):
+            nonlocal swapped
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if path.name == "signature.bin" and "r" in mode and not swapped:
+                path.with_name("replacement-signature.bin").replace(path)
+                swapped = True
+            return original_open(path, *args, **kwargs)
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = fake_run
+            Path.open = swapping_signature_open
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+            Path.open = original_open
 
         self.assertIsNone(signature)
         self.assertEqual(errors, ["signature output could not be read"])
@@ -10354,7 +10404,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     ) -> None:
         original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
         original_run = evidence_signer.subprocess.run
-        original_read_staged_bytes = device_lab._read_staged_bytes  # type: ignore[attr-defined]
+        original_read_staged_bytes = evidence_signer.device_lab._read_staged_bytes  # type: ignore[attr-defined]
 
         def unexpected_run(*args, **kwargs):
             raise AssertionError("OpenSSL should not run after staging readback drift")
@@ -10371,7 +10421,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         try:
             device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
             evidence_signer.subprocess.run = unexpected_run
-            device_lab._read_staged_bytes = drifting_payload_read  # type: ignore[attr-defined]
+            evidence_signer.device_lab._read_staged_bytes = drifting_payload_read  # type: ignore[attr-defined]
             with tempfile.TemporaryDirectory() as temp:
                 private_key = Path(temp) / "signing.pem"
                 private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
@@ -10385,7 +10435,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         finally:
             device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
             evidence_signer.subprocess.run = original_run
-            device_lab._read_staged_bytes = original_read_staged_bytes  # type: ignore[attr-defined]
+            evidence_signer.device_lab._read_staged_bytes = original_read_staged_bytes  # type: ignore[attr-defined]
 
         self.assertIsNone(signature)
         self.assertEqual(errors, ["signature payload staging verification failed"])
@@ -10830,45 +10880,79 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(temp_files, [])
 
     def test_write_summary_rejects_readback_mismatch(self) -> None:
-        original_read_text = Path.read_text
+        original_read_summary_output_text = device_lab._read_summary_output_text  # type: ignore[attr-defined]
 
         try:
             with tempfile.TemporaryDirectory() as temp:
                 summary_path = Path(temp) / "summary.json"
 
-                def mismatching_read_text(path: Path, *args, **kwargs) -> str:
+                def mismatching_read_summary_output_text(
+                    path: Path,
+                    expected_stat: os.stat_result,
+                ) -> tuple[str | None, list[str]]:
                     if path == summary_path:
-                        return '{"ok": true}\n'
-                    return original_read_text(path, *args, **kwargs)
+                        return '{"ok": true}\n', []
+                    return original_read_summary_output_text(path, expected_stat)
 
-                Path.read_text = mismatching_read_text
+                device_lab._read_summary_output_text = mismatching_read_summary_output_text  # type: ignore[attr-defined]
                 errors = device_lab.write_summary(summary_path, {"ok": False})
-                summary_text = original_read_text(summary_path, encoding="utf-8")
+                summary_text = summary_path.read_text(encoding="utf-8")
         finally:
-            Path.read_text = original_read_text
+            device_lab._read_summary_output_text = original_read_summary_output_text  # type: ignore[attr-defined]
 
         self.assertEqual(errors, ["--json-out write verification failed"])
         self.assertEqual(summary_text, '{\n  "ok": false\n}\n')
 
     def test_write_summary_rejects_readback_failure(self) -> None:
-        original_read_text = Path.read_text
+        original_read_summary_output_text = device_lab._read_summary_output_text  # type: ignore[attr-defined]
 
-        with tempfile.TemporaryDirectory() as temp:
-            summary_path = Path(temp) / "summary.json"
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
 
-            def failing_read_text(path: Path, *args, **kwargs) -> str:
-                if path == summary_path:
-                    raise OSError("simulated summary readback failure")
-                return original_read_text(path, *args, **kwargs)
+                def failing_read_summary_output_text(
+                    path: Path,
+                    expected_stat: os.stat_result,
+                ) -> tuple[str | None, list[str]]:
+                    if path == summary_path:
+                        return None, ["--json-out write verification failed"]
+                    return original_read_summary_output_text(path, expected_stat)
 
-            with mock.patch.object(Path, "read_text", failing_read_text):
+                device_lab._read_summary_output_text = failing_read_summary_output_text  # type: ignore[attr-defined]
                 errors = device_lab.write_summary(summary_path, {"ok": False})
-            summary_text = original_read_text(summary_path, encoding="utf-8")
-            temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
+                summary_text = summary_path.read_text(encoding="utf-8")
+                temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
+        finally:
+            device_lab._read_summary_output_text = original_read_summary_output_text  # type: ignore[attr-defined]
 
         self.assertEqual(errors, ["--json-out write verification failed"])
         self.assertEqual(summary_text, '{\n  "ok": false\n}\n')
         self.assertEqual(temp_files, [])
+
+    def test_write_summary_rejects_regular_file_swap_before_readback(self) -> None:
+        original_open = Path.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            summary_path = root / "summary.json"
+            replacement = root / "replacement-summary.json"
+            replacement.write_text('{"ok":true}\n', encoding="utf-8")
+            swapped = False
+
+            def swapping_open(path: Path, *args, **kwargs):
+                nonlocal swapped
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == summary_path and "r" in mode and not swapped:
+                    replacement.replace(summary_path)
+                    swapped = True
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", swapping_open):
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+            summary_text = summary_path.read_text(encoding="utf-8")
+
+        self.assertEqual(errors, ["--json-out changed while being read"])
+        self.assertEqual(summary_text, '{"ok":true}\n')
 
     def test_write_summary_rejects_symlink_swap_after_replace(self) -> None:
         original_validate = device_lab.validate_summary_output_path

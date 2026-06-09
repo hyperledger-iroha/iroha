@@ -40,6 +40,7 @@ export interface PrivacyProductionGate {
   readonly version: string;
   readonly ready: boolean;
   readonly gates: Readonly<Record<string, boolean>>;
+  readonly requiredGates: readonly string[];
   readonly missing: readonly string[];
   readonly auditReferences: readonly Readonly<{ label: string; url: string }>[];
 }

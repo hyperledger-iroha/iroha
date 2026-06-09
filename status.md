@@ -2,6 +2,54 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 Kagemusha signer signature-output read binding
+
+- Hardened the signing helper so OpenSSL `signature.bin` output is read through
+  an opened-file identity check before the Ed25519 64-byte shape check. Missing,
+  unreadable, non-regular, aliased, or post-OpenSSL swapped signature outputs
+  now fail as `signature output could not be read`.
+- Added a signature-output regular-file-swap regression and promoted the
+  signature output open-path binding into the production-readiness guard and
+  workflow alongside the existing read-failure and shape controls.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_signature_read_failure_after_openssl scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_signature_output_swap_after_openssl scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_short_signature_output_after_openssl`
+    (`3` tests passed, latest run 0.004s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`362` tests passed, latest run 9.094s)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 31.805s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha OpenSSL staged-byte readback binding
+
+- Hardened `_write_staged_bytes(...)` so OpenSSL payload/signature staging
+  captures the exclusive-write descriptor identity and validates readback through
+  the same opened-file identity before any verification or signing subprocess can
+  run. Staged path swaps now produce the existing staging verification errors
+  instead of letting replaced bytes reach OpenSSL.
+- Added a direct staged-file regular-swap regression, retargeted payload and
+  signature readback-mismatch tests to the staged-byte reader, and added the
+  staged-byte open-path binding negative control to the guard and workflow.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_verify_signature_rejects_payload_staging_readback_mismatch_before_openssl scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_verify_signature_rejects_signature_staging_readback_mismatch_before_openssl scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_staged_bytes_rejects_regular_file_swap_before_readback scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_sign_ed25519_rejects_payload_staging_readback_mismatch_before_openssl`
+    (`4` tests passed, latest run 0.067s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-staged-bytes-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`361` tests passed, latest run 9.149s)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 31.402s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
 ## 2026-06-09 Kagemusha signer output readback open-file binding
 
 - Hardened signer output write verification so `signed-evidence.json` and
@@ -3399,7 +3447,7 @@ Last updated: 2026-06-09
 - Started a smaller diagnostic
   `lineage-key-artifacts --profile init --opening-len 2` run under
   `target/kagemusha-diagnostic/`; as of the latest check it was still CPU-bound
-  after more than 135 minutes, had emitted no output after startup, and had not
+  after more than 150 minutes, had emitted no output after startup, and had not
   created partial artifact files.
 - Fixed the production-readiness guard after the source moved evidence artifact
   hashing to `_sha256_file_with_size(...)`: the stale direct `_sha256_file(...)`
@@ -4011,9 +4059,9 @@ Last updated: 2026-06-09
   policies, required reference datasets, structured-address modes, and business
   services, must now remain printable ASCII before unknown-value diagnostics or
   summary recording can preserve Unicode-confusable spellings. Core
-  profile-catalog IDs and enum values also reject overlong ASCII spellings before
-  duplicate-ID, missing-schema-version, or unknown-value diagnostics can print
-  them.
+  profile-catalog IDs, enum values, and business-service entries also reject
+  overlong ASCII spellings before duplicate-ID, missing-schema-version,
+  unknown-value, or summary diagnostics can print them.
 - XSD manifest `payload_root` values, checked-in schema `targetNamespace`
   attributes, schema payload element names/types, XML fixture namespace/name
   identifiers, and schema-root attribute names must now remain printable ASCII
@@ -4105,12 +4153,12 @@ Last updated: 2026-06-09
     (`2` tests passed, latest focused runs 0.002s and 0.018s)
   - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
     (`72` tests passed, latest run 0.395s)
-  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_id_is_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_shape_is_fail_closed`
-    (`4` tests passed, latest run 0.348s)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_id_is_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_business_services_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_shape_is_fail_closed`
+    (`5` tests passed, latest run 0.342s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_overlong_schema_and_fixture_identifiers_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_non_ascii_schema_and_fixture_identifiers_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_secret_looking_schema_and_fixture_payload_roots_are_rejected_without_echo`
     (`3` tests passed, latest run 0.030s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
-    (`81` tests passed, latest run 1.817s)
+    (`82` tests passed, latest run 1.753s)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_non_ascii_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_malformed_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_secret_material_in_sidecar_fields_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_unknown_sidecar_fields_are_rejected_before_network_delivery`
     (`4` tests passed, latest run 0.520s)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
@@ -4136,7 +4184,7 @@ Last updated: 2026-06-09
     (`3` tests passed, latest run 2.321s)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
   - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
-    (`743` tests passed, latest run 299.131s)
+    (`745` tests passed, latest run 298.822s)
 
 ## 2026-06-09 Kagemusha Reserved-lineage proof-log exactness guard
 

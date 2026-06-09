@@ -604,7 +604,12 @@ TEXT_REQUIREMENTS = {
         '        with path.open("xb") as handle:\n            handle.write(payload)\n            handle.flush()\n            os.fsync(handle.fileno())\n',
         "handle.flush()",
         "os.fsync(handle.fileno())",
-        "path.read_bytes() != payload",
+        "staged_stat = os.fstat(handle.fileno())",
+        "_read_staged_bytes",
+        'with path.open("rb") as handle:',
+        "staged_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+        "staged_open_identity = (open_stat.st_dev, open_stat.st_ino)",
+        "readback, readback_errors = _read_staged_bytes(",
         'def _verify_ed25519_signature(\n    *,\n    public_key_path: Path,\n    payload: bytes,\n    signature: bytes,\n    errors: list[str],\n    label: str = "trusted signer public key",\n) -> None:\n    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return\n    openssl = _require_openssl(errors)\n',
         "signature verification staging files could not be written",
         "signature verification staged payload did not match input",
@@ -778,7 +783,12 @@ TEXT_REQUIREMENTS = {
         "signature command could not be run",
         '            except OSError:\n                errors.append("signature command could not be run")\n                return None\n',
         "signature temporary directory could not be created",
+        "_read_signature_output",
         "signature output could not be read",
+        '    except OSError:\n        errors.append("signature output could not be read")\n        return None\n    return b"".join(chunks)\n',
+        "signature_output_expected_identity = (",
+        "signature_output_expected_identity = (\n        expected_stat.st_dev,\n        expected_stat.st_ino,\n    )",
+        "signature_output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "signature output must be 64 bytes",
         "len(signature) != device_lab.ED25519_SIGNATURE_BYTES",
         'if verify_errors == ["signed evidence artifact signature verification failed"]:\n        errors.append(\n            "private key did not produce a signature accepted by the signer public key"\n        )\n    elif verify_errors:\n        errors.extend(verify_errors)\n',
@@ -1780,6 +1790,7 @@ TEXT_REQUIREMENTS = {
         "test_verify_signature_rejects_staging_write_failure_before_openssl",
         "test_verify_signature_rejects_payload_staging_readback_mismatch_before_openssl",
         "test_verify_signature_rejects_signature_staging_readback_mismatch_before_openssl",
+        "test_write_staged_bytes_rejects_regular_file_swap_before_readback",
         "test_verify_signature_rejects_tempdir_failure_before_staging",
         "test_verify_signature_rejects_spawn_failure_after_staging",
         "test_private_public_pair_preserves_public_key_path_error_before_mismatch",
@@ -1898,6 +1909,9 @@ TEXT_REQUIREMENTS = {
         "test_sign_ed25519_rejects_private_key_hardlink_metadata_failure_before_openssl",
         "test_sign_ed25519_rejects_payload_staging_write_failure_before_openssl",
         "test_sign_ed25519_rejects_payload_staging_readback_mismatch_before_openssl",
+        "test_sign_ed25519_rejects_signature_read_failure_after_openssl",
+        "test_sign_ed25519_rejects_signature_output_swap_after_openssl",
+        "test_sign_ed25519_rejects_short_signature_output_after_openssl",
         "test_sign_ed25519_rejects_tempdir_failure_before_payload_staging",
         "test_sign_ed25519_rejects_spawn_failure_after_payload_staging",
         "test_sign_ed25519_rejects_invalid_private_key_after_openssl_failure",
@@ -2644,10 +2658,12 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-openssl-spawn-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-openssl-invalid-key",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-staging-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-staged-bytes-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-tempdir-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-spawn-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-read-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-staging-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-tempdir-failure",
@@ -4598,6 +4614,17 @@ if mode == "--negative-control-android-device-lab-signature-verify-staging-write
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-staged-bytes-open-path-binding":
+    run_negative_control(
+        "Android device-lab staged bytes open-path binding gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "staged_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+            "staged_expected_identity = (open_stat.st_dev, open_stat.st_ino)",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-signature-verify-tempdir-failure":
     run_negative_control(
         "Android device-lab signature verification tempdir failure gate",
@@ -4636,8 +4663,19 @@ if mode == "--negative-control-android-device-lab-signing-helper-signature-read-
         "Android device-lab signed evidence helper signature read-failure gate",
         lambda: override_text(
             "scripts/sign_android_device_lab_evidence.py",
-            '            try:\n                return signature_path.read_bytes()\n            except OSError:\n                errors.append("signature output could not be read")\n                return None\n',
-            "            return signature_path.read_bytes()\n",
+            '    except OSError:\n        errors.append("signature output could not be read")\n        return None\n    return b"".join(chunks)\n',
+            '    except OSError:\n        return None\n    return b"".join(chunks)\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-signature-open-path-binding":
+    run_negative_control(
+        "Android device-lab signed evidence helper signature open-path binding gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "signature_output_expected_identity = (\n        expected_stat.st_dev,\n        expected_stat.st_ino,\n    )",
+            "signature_output_expected_identity = (\n        open_stat.st_dev,\n        open_stat.st_ino,\n    )",
         ),
     )
     raise SystemExit(0)

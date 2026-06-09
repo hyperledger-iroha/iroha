@@ -35,6 +35,12 @@ PRODUCTION_GATE_REQUIREMENTS = (
     ("performance_gates", "performance gate is incomplete"),
     ("external_audit", "internal cryptographic review signoff is missing"),
 )
+TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS = (
+    "real_proving",
+    "real_verification",
+    "witness_privacy_checks",
+    "verifier_fuzzing",
+)
 PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE = (
     "implementation stage is not production-hardened"
 )
@@ -2680,9 +2686,24 @@ def _dedupe_strings(items: list[str]) -> list[str]:
     return deduped
 
 
+def _production_gate_required_keys(descriptor: Mapping[str, Any]) -> list[str]:
+    waived = (
+        set(TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS)
+        if descriptor.get("id") == "transparent-transfer"
+        else set()
+    )
+    return [key for key, _label in PRODUCTION_GATE_REQUIREMENTS if key not in waived]
+
+
 def _production_gate_for_descriptor(descriptor: Mapping[str, Any]) -> dict[str, Any]:
     flags = {key: False for key, _label in PRODUCTION_GATE_REQUIREMENTS}
-    missing = [label for _key, label in PRODUCTION_GATE_REQUIREMENTS]
+    required_gates = _production_gate_required_keys(descriptor)
+    required_gate_set = set(required_gates)
+    missing = [
+        label
+        for key, label in PRODUCTION_GATE_REQUIREMENTS
+        if key in required_gate_set
+    ]
 
     if descriptor.get("implementation_stage") != "production-hardened":
         missing.append(PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE)
@@ -2701,6 +2722,7 @@ def _production_gate_for_descriptor(descriptor: Mapping[str, Any]) -> dict[str, 
         "version": PRODUCTION_GATE_VERSION,
         "ready": False,
         "gates": flags,
+        "required_gates": required_gates,
         "missing": deduped_missing,
         "audit_references": [],
     }

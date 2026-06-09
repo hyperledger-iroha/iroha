@@ -501,6 +501,12 @@ const PRODUCTION_GATE_REQUIREMENTS = Object.freeze([
   Object.freeze(["performance_gates", "performance gate is incomplete"]),
   Object.freeze(["external_audit", "internal cryptographic review signoff is missing"]),
 ]);
+const TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS = Object.freeze([
+  "real_proving",
+  "real_verification",
+  "witness_privacy_checks",
+  "verifier_fuzzing",
+]);
 const PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE =
   "implementation stage is not production-hardened";
 const PRODUCTION_GATE_MISSING_PLANNED_SDK = "planned SDK entrypoints remain";
@@ -2138,7 +2144,17 @@ function productionGateForDescriptor(descriptor) {
   const gates = Object.fromEntries(
     PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, false]),
   );
-  const missing = PRODUCTION_GATE_REQUIREMENTS.map(([_key, label]) => label);
+  const waived =
+    descriptor.id === "transparent-transfer"
+      ? new Set(TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS)
+      : new Set();
+  const requiredGates = PRODUCTION_GATE_REQUIREMENTS
+    .map(([key]) => key)
+    .filter((key) => !waived.has(key));
+  const requiredGateSet = new Set(requiredGates);
+  const missing = PRODUCTION_GATE_REQUIREMENTS
+    .filter(([key]) => requiredGateSet.has(key))
+    .map(([_key, label]) => label);
   if (descriptor.implementationStage !== "production-hardened") {
     missing.push(PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE);
   }
@@ -2153,6 +2169,7 @@ function productionGateForDescriptor(descriptor) {
     version: PRODUCTION_GATE_VERSION,
     ready: false,
     gates,
+    requiredGates,
     missing: dedupeStrings(missing),
     auditReferences: [],
   };
