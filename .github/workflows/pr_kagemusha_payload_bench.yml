@@ -420,8 +420,11 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-file-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-write-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-strict-json-write
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-verification
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-post-write-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-secret-paths
@@ -443,9 +446,11 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-discovery-read-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-discover-slots-is-dir-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-discover-slots-entry-metadata-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-nonfinite-json-constants
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-ancestor
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-file-metadata-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-read-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-parse-direct-slot-secret-paths
@@ -457,8 +462,10 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-read-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-open-path-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-relative-ancestor-is-symlink-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-shape-terminal
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-direct-helper-slot-secret-paths
@@ -507,10 +514,12 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-name-safety
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-artifact-schema
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-digest-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-is-file-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-read-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-digest-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-read-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-transcript-artifact-digest-preflight
@@ -520,17 +529,24 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-openssl-invalid-key
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-staging-write-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-staged-bytes-open-path-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-staged-bytes-hardlink-readback
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-tempdir-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-spawn-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-canonical-payload-strict-json
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-canonical-payload-strict-json
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-read-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-open-path-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-output-hardlink
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-output-read-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-staging-write-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-tempdir-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-spawn-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-invalid-private-key
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-write
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-strict-json-write
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-json-write-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-ancestor
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-is-dir-preflight
@@ -546,10 +562,13 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-leaf-missing
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-file-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-read-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-output-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-write
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-size-limit
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-write-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-verification
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-failure
@@ -558,11 +577,13 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-parent-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-digest-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-file-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-read-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-digest-preflight
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-digest-artifact-file-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-read-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-secret-paths
@@ -608,6 +629,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-read-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-non-utf8-read
+          ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-aliases
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-dangling-alias
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-ancestor
@@ -621,8 +643,10 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-direct-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-write-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-strict-json-write
+          ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-verification
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-write-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure
@@ -666,7 +690,9 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-strict-json-write
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-post-write-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-verify-existing
@@ -719,6 +745,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-artifact-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-prefix-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-dir-create-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-strict-json-write
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-write-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-secret-paths
@@ -735,6 +762,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-output-preflight-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-dir-aliases
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-dir-create-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-strict-json-write
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-write-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-input-corridor

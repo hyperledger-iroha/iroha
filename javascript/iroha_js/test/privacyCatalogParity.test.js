@@ -2602,7 +2602,8 @@ function assertRustNativeProductionGateParity(pythonCatalog) {
   }
 
   for (const source of RUST_PRIVACY_ALGORITHM_SOURCES) {
-    const contract = extractRustPrivacyProductionGateContract(fileText(source.path), source.label);
+    const sourceText = fileText(source.path);
+    const contract = extractRustPrivacyProductionGateContract(sourceText, source.label);
     assert.equal(
       contract.version,
       PRODUCTION_GATE_VERSION,
@@ -2630,13 +2631,15 @@ function assertRustNativeProductionGateParity(pythonCatalog) {
       );
     }
     for (const requiredSnippet of [
+      "fn privacy_capabilities_with_production_evidence",
       "version: PRIVACY_FFI_VERSION_V1",
       "gate_version: PRIVACY_PRODUCTION_GATE_VERSION.to_owned()",
       "production_ready: false",
       "production_gate: privacy_production_gate(entry)",
+      "privacy_capabilities_with_production_evidence(&[], None)",
     ]) {
       assert.ok(
-        contract.capabilitiesBlock.includes(requiredSnippet),
+        sourceText.includes(requiredSnippet),
         `${source.label} native privacy capabilities must contain ${requiredSnippet}`,
       );
     }

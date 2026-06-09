@@ -99,6 +99,7 @@ MAX_SCHEMA_BYTES = 8 * 1024 * 1024
 MAX_FIXTURE_XML_BYTES = 8 * 1024 * 1024
 MAX_XMLLINT_OUTPUT_BYTES = 64 * 1024
 MAX_XMLLINT_TIMEOUT_SECS = 300.0
+MAX_LOCAL_PATH_CHARS = 4096
 MAX_SOURCE_REPOSITORY_CHARS = 2048
 MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
@@ -314,6 +315,10 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
         raise FixtureManifestError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters"
+        )
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -341,6 +346,10 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
 def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
     if not raw:
         raise FixtureManifestError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters"
+        )
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
     if raw != raw.strip():

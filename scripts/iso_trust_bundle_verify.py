@@ -45,6 +45,7 @@ MAX_DER_BYTES = 1024 * 1024
 MAX_DER_BASE64_CHARS = ((MAX_DER_BYTES + 2) // 3) * 4
 MAX_BUNDLE_JSON_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_URL_CHARS = 2048
+MAX_LOCAL_PATH_CHARS = 4096
 MAX_PROFILE_ID_CHARS = 128
 MAX_TRUST_POLICY_CHARS = 128
 MAX_TRUST_SOURCE_TEXT_CHARS = 256
@@ -244,6 +245,10 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
         raise TrustBundleError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise TrustBundleError(
+            f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters"
+        )
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise TrustBundleError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -271,6 +276,10 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
 def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
     if not raw:
         raise TrustBundleError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise TrustBundleError(
+            f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters"
+        )
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise TrustBundleError(f"{label} must not contain control characters")
     if raw != raw.strip():

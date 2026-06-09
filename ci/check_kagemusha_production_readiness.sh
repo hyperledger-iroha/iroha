@@ -434,6 +434,8 @@ TEXT_REQUIREMENTS = {
         "telemetry/status.ndjson",
         "logs/runtime.log",
         "MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
+        "MAX_ANDROID_DEVICE_LAB_JSON_BYTES",
+        "MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES",
         "validate_required_kagemusha_slot_artifact_shapes",
         "KAGEMUSHA_RUNTIME_LOG_COMPLETE_MARKER",
         "KAGEMUSHA_RUNTIME_LOG_FAILURE_MARKERS",
@@ -515,9 +517,13 @@ TEXT_REQUIREMENTS = {
         "slot id {_display_path(slot_id)!r} must be a single safe directory name",
         'if SECRET_RE.search(str(root)):\n        return False, ["device-lab root path must not contain secret-looking material"]',
         "DuplicateJsonKeyError",
+        "NonFiniteJsonConstantError",
+        "_reject_nonfinite_json_constant",
         "_reject_duplicate_json_object_pairs",
         "object_pairs_hook=_reject_duplicate_json_object_pairs",
+        "parse_constant=_reject_nonfinite_json_constant",
         "contains duplicate JSON object key",
+        "contains non-finite constant",
         "validate_no_slot_symlink_artifacts",
         'def validate_no_slot_symlink_artifacts(slot_path: Path, errors: list[str]) -> None:\n    """Reject symlinked slot metadata, directories, and evidence artifacts."""\n\n    if _reject_secret_slot_path(slot_path, errors):\n        return\n',
         '        try:\n            mode = path.lstat().st_mode\n        except FileNotFoundError:\n            continue\n        except OSError:\n            _append_error_once(errors, f"{relative} file metadata could not be read")\n            continue\n        if stat.S_ISLNK(mode):\n            errors.append(f"{relative} must not be a symlink")\n',
@@ -547,6 +553,7 @@ TEXT_REQUIREMENTS = {
         'root_errors = _validate_manifest_slot_path(slot_path)\n    if root_errors:\n        return root_errors\n',
         '        try:\n            candidate = Path.cwd() / path\n        except OSError:\n            return [f"{label} metadata could not be read"]\n',
         "ancestor_mode = ancestor.lstat().st_mode",
+        '        except OSError:\n            errors.append(f"{label} metadata could not be read")\n            break\n',
         "except FileNotFoundError:\n            continue",
         "if stat.S_ISLNK(ancestor_mode):",
         '    try:\n        manifest_stat = manifest_path.lstat()\n    except FileNotFoundError:\n        return entries, ["missing sha256sum.txt"]\n    except OSError:\n        return entries, ["sha256sum.txt file metadata could not be read"]\n',
@@ -558,7 +565,9 @@ TEXT_REQUIREMENTS = {
         "expected_identity = (manifest_stat.st_dev, manifest_stat.st_ino)",
         "open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "sha256sum.txt changed while being read",
-        'lines = payload.decode("utf-8").splitlines()',
+        "open_stat.st_size > MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES",
+        "size > MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES",
+        'lines = b"".join(chunks).decode("utf-8").splitlines()',
         '    except (OSError, UnicodeDecodeError):\n        return entries, ["sha256sum.txt could not be read"]\n',
         "sha256sum.txt could not be read",
         "def _has_manifest_file_shape_error(errors: list[str]) -> bool:",
@@ -589,6 +598,8 @@ TEXT_REQUIREMENTS = {
         "def _read_validated_manifest_artifact_bytes(",
         "manifest_expected_identity = (\n                expected_stat.st_dev,\n                expected_stat.st_ino,\n            )",
         "sha256sum.txt references artifact changed while being read",
+        "open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
+        "size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
         'artifact_path, artifact_stat, errors = _validate_manifest_artifact_for_digest(\n        slot_path,\n        relative,\n    )',
         "sha256sum.txt references artifact that could not be read",
         "sha256sum.txt references artifact file metadata could not be read",
@@ -621,6 +632,7 @@ TEXT_REQUIREMENTS = {
         'with path.open("rb") as handle:',
         "staged_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "staged_open_identity = (open_stat.st_dev, open_stat.st_ino)",
+        "            if open_stat.st_nlink > 1:\n                return None, [verification_error]\n",
         "readback, readback_errors = _read_staged_bytes(",
         'def _verify_ed25519_signature(\n    *,\n    public_key_path: Path,\n    payload: bytes,\n    signature: bytes,\n    errors: list[str],\n    label: str = "trusted signer public key",\n) -> None:\n    if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):\n        return\n    openssl = _require_openssl(errors)\n',
         "signature verification staging files could not be written",
@@ -647,6 +659,8 @@ TEXT_REQUIREMENTS = {
         "def _read_validated_metadata_artifact_bytes(",
         "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         'f"{label} references artifact changed while being read {display}"',
+        'f"{label} references artifact {display} must be no more than "',
+        "    except OSError:\n        return None, [unreadable_error]\n",
         'artifact_path, artifact_stat, errors = _validate_metadata_artifact_for_read(\n        slot_path,\n        relative,\n        label,\n        missing_error,\n    )',
         'artifact_bytes, read_errors = _read_validated_metadata_artifact_bytes(',
         "def _should_read_optional_text_artifact(",
@@ -706,6 +720,7 @@ TEXT_REQUIREMENTS = {
         "signed evidence artifact contains unexpected field {_display_path(field)}",
         "signer_public_key_sha256",
         "signature_payload_sha256",
+        "signed evidence artifact signature payload is not strict JSON",
         "trusted signer public key required for Kagemusha production evidence",
         "signed evidence artifact signature verification failed",
         "must be a valid OpenSSL public key",
@@ -720,6 +735,8 @@ TEXT_REQUIREMENTS = {
         "signed evidence artifact digest references artifact that could not be read",
         "signed evidence artifact digest references artifact changed",
         "signed_evidence_expected_identity = (\n                expected_stat.st_dev,\n                expected_stat.st_ino,\n            )",
+        'signed evidence artifact digest references artifact "\n                    f"{display} must be no more than "',
+        "f\"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes\"",
         'artifact_path, artifact_stat, errors = _validate_signed_evidence_artifact_for_digest(\n        slot_path,\n        relative,\n    )\n    if errors:\n        return None, errors\n',
         'payload, read_errors = _read_validated_signed_evidence_artifact_bytes(',
         "actual_digest, digest_errors = _signed_evidence_artifact_sha256(",
@@ -756,9 +773,14 @@ TEXT_REQUIREMENTS = {
         "summary_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "summary_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "--json-out changed while being read",
+        '            if open_stat.st_size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES:\n                return None, [\n                    "--json-out must be no more than "\n                    f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"\n                ]\n',
+        '                if size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES:\n                    return None, [\n                        "--json-out must be no more than "\n                        f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"\n                    ]\n',
         "readback_text, readback_errors = _read_summary_output_text(path, expected_stat)",
         "readback_text != summary_text",
         "--json-out write verification failed",
+        "json.dumps(summary, indent=2, allow_nan=False)",
+        "--json-out summary is not strict JSON",
+        "len(summary_text.encode(\"utf-8\")) > MAX_ANDROID_DEVICE_LAB_JSON_BYTES",
         '    except OSError:\n        return None, ["--json-out write verification failed"]\n',
         '    errors = validate_summary_output_path(path, "--json-out")\n    if errors:\n        return errors\n    try:\n        expected_stat = path.lstat()\n',
         '    try:\n        output_mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return []\n    except OSError:\n        return [f"{label} file metadata could not be read"]\n',
@@ -775,6 +797,8 @@ TEXT_REQUIREMENTS = {
         "json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "json_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "json_path_stat = path.lstat()",
+        "open_stat.st_size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES",
+        "size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES",
         'errors.append(f"{label} changed while being read")',
         'data = _loads_json_without_duplicate_keys(b"".join(chunks).decode("utf-8"))',
         'except (OSError, UnicodeDecodeError):\n        errors.append(f"{label} could not be read")\n        return None',
@@ -789,6 +813,7 @@ TEXT_REQUIREMENTS = {
         "device_lab.SIGNED_EVIDENCE_SLOT_INT_FIELDS",
         "slot.json native_bridge_abi_version must be an integer",
         "private key did not produce a signature accepted by the signer public key",
+        "signed evidence payload is not strict JSON",
         "_secret_key_path_error",
         "if device_lab.SECRET_RE.search(str(path)):",
         "path must not contain secret-looking material",
@@ -808,6 +833,9 @@ TEXT_REQUIREMENTS = {
         "signature_output_expected_identity = (",
         "signature_output_expected_identity = (\n        expected_stat.st_dev,\n        expected_stat.st_ino,\n    )",
         "signature_output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
+        "            if open_stat.st_nlink > 1:\n                errors.append(\"signature output could not be read\")\n                return None\n",
+        "read_limit = device_lab.ED25519_SIGNATURE_BYTES + 1",
+        "chunk = handle.read(read_limit - size)",
         "signature output must be 64 bytes",
         "len(signature) != device_lab.ED25519_SIGNATURE_BYTES",
         'if verify_errors == ["signed evidence artifact signature verification failed"]:\n        errors.append(\n            "private key did not produce a signature accepted by the signer public key"\n        )\n    elif verify_errors:\n        errors.extend(verify_errors)\n',
@@ -825,6 +853,10 @@ TEXT_REQUIREMENTS = {
         "signed evidence output path must stay under evidence/",
         "signed evidence output path must be",
         "_validate_json_output_path",
+        "json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)",
+        'return [f"{label} is not strict JSON"]',
+        'if len(text.encode("utf-8")) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:',
+        'f"{label} must be no more than "',
         'def _validate_json_output_path(path: Path, label: str) -> list[str]:\n    """Validate a signer-controlled output immediately before writing."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} must not contain secret-looking material"]\n',
         '    parent_exists, parent_errors = _validate_json_output_parent(path, label)\n    errors.extend(parent_errors)\n    if errors:\n        return errors\n',
         '    errors.extend(\n        device_lab.validate_no_symlink_ancestors(\n            path,\n            f"{label} ancestor directory",\n        )\n    )\n    if errors:\n        return errors\n    if not parent_exists:\n',
@@ -843,17 +875,25 @@ TEXT_REQUIREMENTS = {
         "_output_file_sha256",
         'errors = _validate_existing_json_output_path(path, label)\n    if errors:\n        return None, errors\n',
         "_read_existing_output_bytes",
-        "payload, read_errors = _read_existing_output_bytes(path, expected_stat, label)",
+        "max_bytes: int | None = None",
+        "byte_limit = (",
+        "payload, read_errors = _read_existing_output_bytes(",
         'with path.open("rb") as handle:',
         "signer_output_expected_identity = (",
+        "signer_output_expected_identity = (\n                expected_stat.st_dev,\n                expected_stat.st_ino,\n            )",
         "signer_output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         'return None, [f"{label} changed while being read"]',
+        "open_stat.st_size > byte_limit",
+        "size > byte_limit",
         'except OSError:\n        return None, [f"{label} could not be read"]',
         'artifact_digest, digest_errors = _output_file_sha256(\n        output_path,\n        "signed evidence output path",\n    )',
         "_write_json(output_path, evidence, \"signed evidence output path\")",
         "_write_text",
-        "_write_text(slot_path / \"sha256sum.txt\"",
+        'slot_path / "sha256sum.txt"',
+        'manifest_text = "\\n".join(lines) + "\\n"',
+        "max_bytes=device_lab.MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES",
         "_write_text_atomic",
+        'if len(text.encode("utf-8")) > byte_limit:',
         "tempfile.NamedTemporaryFile(",
         "handle.flush()",
         "os.fsync(handle.fileno())",
@@ -863,7 +903,7 @@ TEXT_REQUIREMENTS = {
         "readback_text != text",
         "write verification failed",
         '    errors = _validate_existing_json_output_path(path, label)\n    if errors:\n        return errors\n    try:\n        expected_stat = path.lstat()\n',
-        '    readback_text, readback_errors = _read_existing_output_text(\n        path,\n        expected_stat,\n        label,\n    )\n    if readback_errors:\n        return readback_errors\n    if readback_text != text:',
+        '    readback_text, readback_errors = _read_existing_output_text(\n        path,\n        expected_stat,\n        label,\n        max_bytes=max_bytes,\n    )\n    if readback_errors:\n        return readback_errors\n    if readback_text != text:',
         "_preflight_slot_metadata_reads",
         "_validate_slot_path_boundary",
         "Validate slot paths before any signer-controlled metadata is parsed",
@@ -887,6 +927,8 @@ TEXT_REQUIREMENTS = {
         "_read_validated_slot_artifact_bytes",
         "signer_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "slot artifact {display} changed while being read",
+        "open_stat.st_size > device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
+        "size > device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
         '    try:\n        artifact_stat = artifact_path.lstat()\n    except FileNotFoundError:\n        return None, None, [f"slot artifact {display} is missing"]\n    except OSError:\n        return None, None, [f"slot artifact {display} file metadata could not be read"]\n    if stat.S_ISLNK(artifact_stat.st_mode):\n        return None, None, [f"slot artifact {display} must not be a symlink"]\n',
         '    try:\n        link_count = artifact_path.stat().st_nlink\n    except OSError:\n        return None, None, [\n            f"slot artifact {display} hardlink metadata could not be read"\n        ]\n',
         "slot artifact {display} could not be read",
@@ -932,6 +974,7 @@ TEXT_REQUIREMENTS = {
         "LINEAGE_PROOF_EVIDENCE_SUMMARY_LABEL",
         "COMPACT_KEY_EVIDENCE_SUMMARY_LABEL",
         "MAX_ABI6_MANIFEST_JSON_BYTES",
+        "MAX_REPO_SOURCE_MARKER_BYTES = 8 * 1024 * 1024",
         "MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
         "MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES",
         "LINEAGE_PROOF_EVIDENCE_FIELDS",
@@ -968,6 +1011,7 @@ TEXT_REQUIREMENTS = {
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return None, [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n    return file_stat, []\n\n\ndef _validate_repo_source_marker_file_for_read(\n',
         "validate_repo_source_marker_file",
         "def _validate_repo_source_marker_file_for_read(",
+        'def _validate_repo_source_marker_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject checked-in marker files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
         '    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
         '    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        errors.append(f"{label} is missing")\n        return None, errors\n    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return None, errors\n    if stat.S_ISLNK(file_stat.st_mode):\n        errors.append(f"{label} must not be a symlink")\n        return None, errors\n    if not stat.S_ISREG(file_stat.st_mode):\n        errors.append(f"{label} must be a regular file")\n        return None, errors\n',
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        errors.append(f"{label} hardlink metadata could not be read")\n        return None, errors\n    if link_count > 1:\n        errors.append(f"{label} must not be hardlinked")\n    if errors:\n        return None, errors\n    return file_stat, []\n\n\ndef validate_repo_source_marker_file(path: Path, label: str) -> list[str]:',
@@ -978,6 +1022,9 @@ TEXT_REQUIREMENTS = {
         "marker_path_stat = path.lstat()",
         "marker_final_path_stat = path.lstat()",
         'f"{label} changed while being read"',
+        "if open_stat.st_size > MAX_REPO_SOURCE_MARKER_BYTES:",
+        "if size > MAX_REPO_SOURCE_MARKER_BYTES:",
+        'f"{label} must be no more than {MAX_REPO_SOURCE_MARKER_BYTES} bytes"',
         'return b"".join(chunks).decode("utf-8"), []',
         'except UnicodeDecodeError:\n        return None, [unreadable_error]',
         'unreadable_error = "ABI-7 source marker file could not be read"\n        text, file_errors = _repo_source_marker_text(\n            path,\n            label,\n            unreadable_error,\n        )',
@@ -1249,6 +1296,7 @@ TEXT_REQUIREMENTS = {
         "--max-signed-at-future-skew-seconds",
         "min_signed_at_utc",
         "max_signed_at_utc",
+        "MAX_READINESS_SUMMARY_JSON_BYTES",
         "validate_summary_output_path",
         'secret_blocker = _secret_looking_path_blocker(\n        str(path),\n        label="--summary-out",\n        code=SUMMARY_OUT_PATH_INVALID_CODE,\n    )\n    if secret_blocker is not None:\n        return [secret_blocker]\n',
         '    parent_exists, parent_blockers = _validate_summary_output_parent(path)\n    if parent_blockers:\n        return parent_blockers\n',
@@ -1263,6 +1311,7 @@ TEXT_REQUIREMENTS = {
         "write_blockers = write_summary",
         "allow_nan=False",
         "--summary-out summary is not strict JSON",
+        'if len(summary_text.encode("utf-8")) > MAX_READINESS_SUMMARY_JSON_BYTES:',
         "--summary-out could not be written",
         "tempfile.NamedTemporaryFile(",
         "handle.flush()",
@@ -1272,6 +1321,9 @@ TEXT_REQUIREMENTS = {
         "summary_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "summary_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "--summary-out changed while being read",
+        "if open_stat.st_size > MAX_READINESS_SUMMARY_JSON_BYTES:",
+        "if size > MAX_READINESS_SUMMARY_JSON_BYTES:",
+        'f"--summary-out must be no more than {MAX_READINESS_SUMMARY_JSON_BYTES} bytes"',
         "readback_text, readback_errors = _read_summary_output_text(path, expected_stat)",
         "readback_text != summary_text",
         "--summary-out write verification failed",
@@ -1363,8 +1415,11 @@ TEXT_REQUIREMENTS = {
         "--artifact-dir must not be a symlink",
         'f"{label} ancestor directory"',
         "write_errors = write_evidence(out_path, evidence)",
-        "allow_nan=False",
-        "--out evidence is not strict JSON",
+        """            allow_nan=False,
+        ) + "\\n"
+    except ValueError:
+        return ["--out evidence is not strict JSON"]
+""",
         "--out could not be written",
         "tempfile.NamedTemporaryFile(",
         "handle.flush()",
@@ -1377,7 +1432,12 @@ TEXT_REQUIREMENTS = {
         'except OSError:\n        return None, [f"{label} write verification failed"]',
         'except UnicodeDecodeError:\n        return None, [f"{label} write verification failed"]',
         '    try:\n        expected_stat = path.lstat()\n    except (FileNotFoundError, OSError):\n        return ["--out write verification failed"]\n',
-        'readback_text, readback_errors = _read_output_text(path, expected_stat, "--out")',
+        """readback_text, readback_errors = _read_output_text(
+        path,
+        expected_stat,
+        "--out",
+        max_bytes=readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES,
+    )""",
         "readback_text != evidence_text",
         "--out write verification failed",
         '    errors = validate_output_path(path, "--out")\n    if errors:\n        return errors\n    try:\n        expected_stat = path.lstat()',
@@ -1385,6 +1445,9 @@ TEXT_REQUIREMENTS = {
         "wrote evidence",
         "pre_create_dir_errors = validate_artifact_dir_path(artifact_dir)",
         '    try:\n        artifact_dir.mkdir(parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
+        '    except ValueError:\n        return ["lineage proof evidence validation file is not strict JSON"]\n',
+        "len(evidence_text.encode(\"utf-8\")) > readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
+        "max_bytes=readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
         "lineage proof evidence validation file could not be written",
         '    except OSError:\n        if path is not None:\n            try:\n                path.unlink(missing_ok=True)\n            except OSError:\n                pass\n        return ["lineage proof evidence validation file could not be written"]\n',
         '    try:\n        path.unlink(missing_ok=True)\n    except OSError:\n        return ["lineage proof evidence validation file could not be removed"]\n',
@@ -1439,6 +1502,9 @@ TEXT_REQUIREMENTS = {
         "artifact_dir.mkdir(parents=True, exist_ok=True)",
         "post_create_dir_errors = validate_artifact_dir_path(artifact_dir)",
         "--artifact-dir could not be created for evidence validation",
+        '    except ValueError:\n        return ["recursive compact key evidence validation file is not strict JSON"]\n',
+        "len(evidence_text.encode(\"utf-8\")) > readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES",
+        "max_bytes=readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES",
         'def validate_artifact_dir_path(artifact_dir: Path) -> list[str]:\n    """Reject artifact directories that could alias external release bytes."""\n\n    secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")\n    if secret_error is not None:\n        return [secret_error]\n',
         '    try:\n        artifact_dir_mode = artifact_dir.lstat().st_mode\n    except FileNotFoundError:\n        artifact_dir_mode = None\n    except OSError:\n        return ["--artifact-dir metadata could not be read"]\n',
         'secret_error = _secret_path_error(str(artifact_dir), "--artifact-dir")',
@@ -1452,8 +1518,11 @@ TEXT_REQUIREMENTS = {
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
         "validate_output_path",
         "write_errors = write_evidence(out_path, evidence)",
-        "allow_nan=False",
-        "--out evidence is not strict JSON",
+        """            allow_nan=False,
+        ) + "\\n"
+    except ValueError:
+        return ["--out evidence is not strict JSON"]
+""",
         "--out could not be written",
         "tempfile.NamedTemporaryFile(",
         "handle.flush()",
@@ -1466,7 +1535,12 @@ TEXT_REQUIREMENTS = {
         'except OSError:\n        return None, [f"{label} write verification failed"]',
         'except UnicodeDecodeError:\n        return None, [f"{label} write verification failed"]',
         '    try:\n        expected_stat = path.lstat()\n    except (FileNotFoundError, OSError):\n        return ["--out write verification failed"]\n',
-        'readback_text, readback_errors = _read_output_text(path, expected_stat, "--out")',
+        """readback_text, readback_errors = _read_output_text(
+        path,
+        expected_stat,
+        "--out",
+        max_bytes=readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES,
+    )""",
         "readback_text != evidence_text",
         "--out write verification failed",
         '    errors = validate_output_path(path, "--out")\n    if errors:\n        return errors\n    try:\n        expected_stat = path.lstat()',
@@ -1532,6 +1606,7 @@ TEXT_REQUIREMENTS = {
         "_read_local_json_text",
         "_validate_local_file_for_read",
         "MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES",
+        "MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES",
         'text, read_blockers = _read_local_json_text(',
         "release_json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "release_json_open_identity = (open_stat.st_dev, open_stat.st_ino)",
@@ -1617,6 +1692,9 @@ TEXT_REQUIREMENTS = {
         "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "--out changed while being read",
+        "if open_stat.st_size > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:",
+        "if size > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:",
+        'f"--out must be no more than {MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES} bytes"',
         "readback, readback_blockers = _read_output_text(path, expected_stat)",
         '    try:\n        expected_stat = path.lstat()\n    except (FileNotFoundError, OSError):\n        return [\n            _release_bundle_out_blocker("--out could not be read back after writing")\n        ]\n',
         "os.open(path.parent, os.O_RDONLY)",
@@ -1625,6 +1703,7 @@ TEXT_REQUIREMENTS = {
         "--out readback did not match the generated manifest",
         "allow_nan=False",
         "release bundle manifest is not strict JSON",
+        'if len(manifest_text.encode("utf-8")) > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:',
         "check_lineage_proof_evidence",
         "check_compact_key_evidence",
         "check_android_device_lab",
@@ -1660,6 +1739,8 @@ TEXT_REQUIREMENTS = {
         "test_verify_sha256_manifest_reports_top_level_listing_failure",
         "test_required_signed_evidence_digest_paths_reports_top_level_listing_failure",
         "test_signer_manifest_rewrite_rejects_top_level_listing_failure",
+        "test_load_json_rejects_nonfinite_json_constant",
+        "test_load_json_rejects_oversized_json_before_parse",
         "test_load_json_rejects_non_utf8_bytes_without_traceback",
         "test_parse_sha256_manifest_rejects_secret_slot_path_directly_before_parse",
         "test_parse_sha256_manifest_rejects_symlinked_slot_root_directly_before_parse",
@@ -1669,6 +1750,7 @@ TEXT_REQUIREMENTS = {
         "test_parse_sha256_manifest_rejects_file_metadata_failure_before_read",
         "test_parse_sha256_manifest_rejects_hardlink_metadata_failure_before_read",
         "test_parse_sha256_manifest_rejects_non_utf8_bytes_without_traceback",
+        "test_parse_sha256_manifest_rejects_oversized_manifest_before_parse",
         "test_parse_sha256_manifest_rejects_regular_file_swap_after_preflight",
         "test_verify_sha256_manifest_rejects_secret_slot_path_directly_before_traversal",
         "test_verify_sha256_manifest_rejects_symlinked_slot_root_directly_before_parse",
@@ -1680,6 +1762,7 @@ TEXT_REQUIREMENTS = {
         "test_manifest_artifact_digest_rejects_secret_relative_path_directly",
         "test_manifest_artifact_digest_rejects_symlink_directly",
         "test_manifest_artifact_digest_rejects_hardlink_directly",
+        "test_manifest_artifact_digest_rejects_oversized_artifact_directly",
         "test_manifest_artifact_digest_rejects_file_metadata_failure",
         "test_manifest_artifact_digest_uses_lstat_before_relative_ancestor_is_symlink_preflight",
         "test_manifest_artifact_digest_rejects_read_failure_after_preflight",
@@ -1690,6 +1773,7 @@ TEXT_REQUIREMENTS = {
         "test_d2d_transcript_binding_rejects_secret_slot_path_directly_before_artifact_read",
         "test_wallet_transcript_binding_rejects_secret_slot_path_directly_before_artifact_read",
         "test_metadata_artifact_digest_rejects_file_metadata_failure",
+        "test_metadata_artifact_digest_rejects_oversized_artifact_after_preflight",
         "test_metadata_artifact_digest_rejects_read_failure_after_preflight",
         "test_metadata_artifact_digest_rejects_symlink_swap_after_preflight",
         "test_metadata_artifact_digest_rejects_regular_file_swap_after_preflight",
@@ -1698,6 +1782,7 @@ TEXT_REQUIREMENTS = {
         "test_d2d_transcript_rejects_symlinked_queue_before_digest_read",
         "test_d2d_transcript_uses_lstat_before_queue_is_file_preflight",
         "test_required_artifact_shapes_rejects_secret_slot_path_directly_before_stat",
+        "test_required_artifact_shapes_rejects_oversized_artifact_directly",
         "test_required_artifact_shapes_reports_required_artifact_metadata_failure",
         "test_required_artifact_shapes_uses_lstat_before_is_file_preflight",
         "test_required_status_artifact_rejects_symlink_before_text_read",
@@ -1816,6 +1901,7 @@ TEXT_REQUIREMENTS = {
         "test_signed_evidence_artifact_digest_rejects_secret_relative_path_directly",
         "test_signed_evidence_artifact_digest_rejects_symlink_directly",
         "test_signed_evidence_artifact_digest_rejects_hardlink_directly",
+        "test_signed_evidence_artifact_digest_rejects_oversized_artifact_directly",
         "test_signed_evidence_artifact_digest_rejects_file_metadata_failure",
         "test_signed_evidence_artifact_digest_rejects_read_failure_after_preflight",
         "test_signed_evidence_artifact_digest_rejects_regular_file_swap_after_preflight",
@@ -1833,6 +1919,7 @@ TEXT_REQUIREMENTS = {
         "test_production_metadata_rejects_untrusted_signed_evidence_key",
         "test_production_metadata_rejects_trusted_signer_public_key_symlinked_ancestor_from_direct_map",
         "test_production_metadata_rejects_signed_evidence_payload_hash_drift",
+        "test_signed_evidence_canonical_payload_rejects_nonfinite_json",
         "test_production_metadata_rejects_signed_evidence_signature_drift",
         "test_json_summary_reports_kagemusha_matrix_and_signer_pins",
         "test_json_summary_does_not_leak_trusted_signer_key_paths",
@@ -1850,11 +1937,14 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_rejects_parent_create_failure_before_write",
         "test_write_summary_rejects_file_metadata_failure_before_write",
         "test_write_summary_rejects_hardlink_metadata_failure_before_write",
+        "test_write_summary_rejects_nonfinite_json_before_write",
+        "test_write_summary_rejects_oversized_json_before_write",
         "test_write_summary_rejects_write_failure_after_preflight",
         "test_write_summary_preserves_existing_output_on_replace_failure",
         "test_write_summary_rejects_symlink_swap_before_replace",
         "test_write_summary_rejects_readback_mismatch",
         "test_write_summary_rejects_readback_failure",
+        "test_read_summary_output_rejects_oversized_readback",
         "test_write_summary_rejects_regular_file_swap_before_readback",
         "test_write_summary_rejects_symlink_swap_after_replace",
         "test_write_summary_rechecks_parent_after_create_before_write",
@@ -1863,6 +1953,7 @@ TEXT_REQUIREMENTS = {
         "test_standard_matrix_requires_every_kagemusha_device_family",
         "test_standard_matrix_accepts_all_kagemusha_device_families",
         "test_signer_helper_generates_validator_accepted_evidence",
+        "test_signer_helper_rejects_nonfinite_canonical_payload_before_signing",
         "test_signer_helper_rejects_mismatched_private_and_public_keys",
         "test_trusted_signer_public_key_rejects_symlink_without_path_leak",
         "test_trusted_signer_public_key_rejects_secret_looking_path_without_leak",
@@ -1877,6 +1968,7 @@ TEXT_REQUIREMENTS = {
         "test_verify_signature_rejects_payload_staging_readback_mismatch_before_openssl",
         "test_verify_signature_rejects_signature_staging_readback_mismatch_before_openssl",
         "test_write_staged_bytes_rejects_regular_file_swap_before_readback",
+        "test_write_staged_bytes_rejects_hardlink_created_before_readback",
         "test_verify_signature_rejects_tempdir_failure_before_staging",
         "test_verify_signature_rejects_spawn_failure_after_staging",
         "test_private_public_pair_preserves_public_key_path_error_before_mismatch",
@@ -1912,11 +2004,14 @@ TEXT_REQUIREMENTS = {
         "test_signer_write_json_rejects_hardlink_metadata_failure_before_write",
         "test_signer_write_json_rejects_file_metadata_failure_before_write",
         "test_signer_write_json_rejects_secret_output_path_directly_without_write",
+        "test_signer_write_json_rejects_nonfinite_json_before_write",
+        "test_signer_write_json_rejects_oversized_json_before_write",
         "test_signer_write_json_rejects_write_failure_after_preflight",
         "test_signer_write_json_preserves_existing_output_on_replace_failure",
         "test_signer_write_json_rejects_symlink_swap_before_replace",
         "test_signer_write_json_rejects_readback_mismatch",
         "test_signer_write_json_rejects_readback_failure",
+        "test_signer_write_json_rejects_oversized_readback_after_replace",
         "test_signer_write_json_rejects_regular_file_swap_before_readback",
         "test_signer_write_json_rejects_symlink_swap_after_replace",
         "test_signer_write_json_rejects_parent_create_failure_before_write",
@@ -1928,6 +2023,7 @@ TEXT_REQUIREMENTS = {
         "test_signer_output_digest_rejects_missing_leaf_before_read",
         "test_signer_output_digest_rejects_symlinked_leaf_after_write",
         "test_signer_output_digest_rejects_hardlinked_leaf_after_write",
+        "test_signer_output_digest_rejects_oversized_output_after_write",
         "test_signer_output_digest_rejects_hardlink_metadata_failure_after_write",
         "test_signer_output_digest_rejects_file_metadata_failure_after_write",
         "test_signer_output_digest_rejects_read_failure_after_preflight",
@@ -1937,12 +2033,15 @@ TEXT_REQUIREMENTS = {
         "test_signer_write_text_rejects_dangling_symlinked_manifest_leaf_before_write",
         "test_signer_write_text_rejects_hardlinked_manifest_leaf_before_write",
         "test_signer_write_text_rejects_secret_manifest_path_directly_without_write",
+        "test_signer_write_text_rejects_oversized_manifest_before_write",
         "test_signer_write_text_rejects_write_failure_after_preflight",
         "test_signer_write_text_preserves_existing_output_on_replace_failure",
         "test_signer_write_text_rejects_symlink_swap_before_replace",
         "test_signer_write_text_rejects_readback_mismatch",
         "test_signer_write_text_rejects_readback_failure",
+        "test_signer_write_text_rejects_oversized_readback_after_replace",
         "test_signer_write_text_rejects_symlink_swap_after_replace",
+        "test_rewrite_sha256_manifest_rejects_oversized_manifest_before_write",
         "test_rewrite_sha256_manifest_rejects_symlinked_artifact_when_called_directly",
         "test_rewrite_sha256_manifest_rejects_hardlinked_manifest_when_called_directly",
         "test_rewrite_sha256_manifest_rejects_secret_looking_artifact_when_called_directly",
@@ -1952,6 +2051,7 @@ TEXT_REQUIREMENTS = {
         "test_signer_slot_artifact_digest_rejects_secret_relative_path_directly",
         "test_signer_slot_artifact_digest_rejects_symlink_directly",
         "test_signer_slot_artifact_digest_rejects_hardlink_directly",
+        "test_signer_slot_artifact_digest_rejects_oversized_artifact_directly",
         "test_signer_slot_artifact_digest_rejects_hardlink_metadata_failure_after_preflight",
         "test_signer_slot_artifact_digest_rejects_file_metadata_failure_after_preflight",
         "test_signer_slot_artifact_digest_rejects_read_failure_after_preflight",
@@ -1997,6 +2097,8 @@ TEXT_REQUIREMENTS = {
         "test_sign_ed25519_rejects_payload_staging_readback_mismatch_before_openssl",
         "test_sign_ed25519_rejects_signature_read_failure_after_openssl",
         "test_sign_ed25519_rejects_signature_output_swap_after_openssl",
+        "test_sign_ed25519_rejects_signature_output_hardlink_after_openssl",
+        "test_sign_ed25519_reads_only_shape_bound_signature_output_after_openssl",
         "test_sign_ed25519_rejects_short_signature_output_after_openssl",
         "test_sign_ed25519_rejects_tempdir_failure_before_payload_staging",
         "test_sign_ed25519_rejects_spawn_failure_after_payload_staging",
@@ -2044,6 +2146,8 @@ TEXT_REQUIREMENTS = {
         "test_repo_source_marker_text_rejects_hardlink_metadata_failure_before_read",
         "test_repo_source_marker_text_rejects_file_metadata_failure_before_read",
         "test_repo_source_marker_text_rejects_non_utf8_without_traceback",
+        "test_repo_source_marker_text_rejects_oversized_marker_before_decode",
+        "test_repo_source_marker_text_accepts_large_checked_in_marker",
         "test_abi7_fail_closed_rejects_symlinked_source_marker_file",
         "test_abi7_fail_closed_rejects_hardlinked_source_marker_file",
         "test_abi7_fail_closed_rejects_non_utf8_source_marker_without_traceback",
@@ -2127,13 +2231,16 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_output_preflight_rejects_hardlink_metadata_failure_before_write",
         "test_compact_key_write_evidence_rejects_write_failure_after_preflight",
         "test_compact_key_write_evidence_rejects_nonfinite_json_before_write",
+        "test_compact_key_write_evidence_rejects_oversized_json_before_write",
         "test_compact_key_write_evidence_preserves_existing_output_on_replace_failure",
         "test_compact_key_write_evidence_rejects_readback_mismatch",
         "test_compact_key_write_evidence_rejects_readback_failure",
+        "test_compact_key_write_evidence_rejects_oversized_readback_after_replace",
         "test_compact_key_write_evidence_rejects_regular_file_swap_before_readback",
         "test_compact_key_write_evidence_rejects_symlink_swap_before_replace",
         "test_compact_key_write_evidence_rejects_symlink_swap_after_replace",
         "test_compact_key_evidence_document_validator_rejects_artifact_dir_create_failure_after_preflight",
+        "test_compact_key_evidence_document_validator_rejects_nonfinite_json_before_write",
         "test_compact_key_evidence_document_validator_rejects_temp_write_failure_after_preflight",
         "test_compact_key_evidence_document_validator_rejects_temp_cleanup_failure",
         "test_compact_key_artifact_dir_validator_rejects_secret_path_directly",
@@ -2264,6 +2371,8 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_output_overwriting_evidence",
         "test_write_release_bundle_preserves_existing_output_on_replace_failure",
         "test_write_release_bundle_rejects_nonfinite_manifest_before_write",
+        "test_write_release_bundle_rejects_oversized_manifest_before_write",
+        "test_write_release_bundle_rejects_oversized_readback_after_replace",
         "test_write_release_bundle_rejects_readback_mismatch",
         "test_write_release_bundle_rejects_readback_failure",
         "test_write_release_bundle_rejects_regular_file_swap_before_readback",
@@ -2321,6 +2430,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_evidence_document_validator_rejects_symlinked_artifact_dir",
         "test_lineage_proof_evidence_document_validator_rejects_secret_artifact_dir",
         "test_lineage_proof_evidence_document_validator_rejects_artifact_dir_create_failure_after_preflight",
+        "test_lineage_proof_evidence_document_validator_rejects_nonfinite_json_before_write",
         "test_lineage_proof_evidence_document_validator_rejects_temp_write_failure_after_preflight",
         "test_lineage_proof_evidence_document_validator_rejects_temp_cleanup_failure",
         "test_lineage_proof_artifact_dir_validator_rejects_secret_path_directly",
@@ -2366,9 +2476,11 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_write_evidence_rejects_secret_output_path_before_write",
         "test_lineage_proof_write_evidence_rejects_write_failure_after_preflight",
         "test_lineage_proof_write_evidence_rejects_nonfinite_json_before_write",
+        "test_lineage_proof_write_evidence_rejects_oversized_json_before_write",
         "test_lineage_proof_write_evidence_preserves_existing_output_on_replace_failure",
         "test_lineage_proof_write_evidence_rejects_readback_mismatch",
         "test_lineage_proof_write_evidence_rejects_readback_failure",
+        "test_lineage_proof_write_evidence_rejects_oversized_readback_after_replace",
         "test_lineage_proof_write_evidence_rejects_regular_file_swap_before_readback",
         "test_lineage_proof_write_evidence_rejects_symlink_swap_before_replace",
         "test_lineage_proof_write_evidence_rejects_symlink_swap_after_replace",
@@ -2407,6 +2519,8 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_rejects_hardlink_metadata_failure_before_write",
         "test_write_summary_rejects_write_failure_after_preflight",
         "test_write_summary_rejects_nonfinite_json_before_write",
+        "test_write_summary_rejects_oversized_json_before_write",
+        "test_write_summary_rejects_oversized_readback_after_replace",
         "test_write_summary_preserves_existing_output_on_replace_failure",
         "test_write_summary_rejects_symlink_swap_before_replace",
         "test_write_summary_rejects_readback_mismatch",
@@ -2674,8 +2788,11 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-strict-json-write",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-direct-secret-paths",
@@ -2688,6 +2805,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-main-root-exists-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-rollup-root-exists-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-duplicate-json-keys",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-nonfinite-json-constants",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-symlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-root-ancestor-symlink",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-ancestor-cwd-failure",
@@ -2700,6 +2818,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-ancestor",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-file-metadata-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-load-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-parse-direct-slot-secret-paths",
@@ -2711,6 +2830,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-read-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-relative-ancestor-is-symlink-preflight",
@@ -2761,10 +2881,12 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-slot-name-safety",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-artifact-schema",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-digest-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-is-file-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-digest-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-metadata-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-transcript-artifact-digest-preflight",
@@ -2774,17 +2896,24 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-public-key-openssl-invalid-key",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-staging-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-staged-bytes-open-path-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-staged-bytes-hardlink-readback",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-tempdir-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signature-verify-spawn-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signed-evidence-canonical-payload-strict-json",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-canonical-payload-strict-json",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-open-path-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-output-hardlink",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-output-read-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-staging-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-tempdir-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-spawn-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-signature-invalid-private-key",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-write",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-strict-json-write",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-json-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-ancestor",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-parent-is-dir-preflight",
@@ -2800,21 +2929,26 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-leaf-missing",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-file-metadata-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-output-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-write",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-size-limit",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-parent-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-digest-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-digest-preflight",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-digest-artifact-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-read-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-secret-paths",
@@ -2860,6 +2994,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-read-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-non-utf8-read",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-source-marker-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-dangling-alias",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-ancestor",
@@ -2873,8 +3008,10 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-strict-json-write",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure",
@@ -2928,6 +3065,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-dir-create-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-validation-temp-cleanup-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-secret-paths",
@@ -2944,6 +3082,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-output-preflight-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-dir-aliases",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-dir-create-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-write-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-validation-temp-cleanup-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-input-corridor",
@@ -2984,7 +3123,9 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-strict-json-write",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-input-path-preflight",
@@ -3304,8 +3445,8 @@ if mode == "--negative-control-kagemusha-readiness-json-open-path-binding":
         "Kagemusha readiness JSON open-path binding",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            'digest, text, read_errors = _sha256_text_file(\n        path,\n        label,\n        f"{label} could not be read",\n    )',
-            'digest, text, read_errors = _sha256_text_file_unbound(\n        path,\n        label,\n        f"{label} could not be read",\n    )',
+            'digest, text, read_errors = _sha256_text_file(\n        path,\n        label,\n        f"{label} could not be read",\n        max_bytes=max_bytes,\n        too_large_error=size_error,\n    )',
+            'digest, text, read_errors = _sha256_text_file_unbound(\n        path,\n        label,\n        f"{label} could not be read",\n        max_bytes=max_bytes,\n        too_large_error=size_error,\n    )',
         ),
     )
     raise SystemExit(0)
@@ -3315,8 +3456,8 @@ if mode == "--negative-control-kagemusha-readiness-source-marker-direct-secret-p
         "Kagemusha readiness source marker direct secret-path gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            'def validate_repo_source_marker_file(path: Path, label: str) -> list[str]:\n    """Reject checked-in marker files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} path must not contain secret-looking material"]\n',
-            'def validate_repo_source_marker_file(path: Path, label: str) -> list[str]:\n    """Reject checked-in marker files that could alias external bytes."""\n\n',
+            'def _validate_repo_source_marker_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject checked-in marker files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
+            'def _validate_repo_source_marker_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject checked-in marker files that could alias external bytes."""\n\n',
         ),
     )
     raise SystemExit(0)
@@ -3326,7 +3467,7 @@ if mode == "--negative-control-kagemusha-readiness-source-marker-hardlink-metada
         "Kagemusha readiness source marker hardlink metadata failure gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        errors.append(f"{label} hardlink metadata could not be read")\n        return errors\n    if link_count > 1:\n        errors.append(f"{label} must not be hardlinked")\n',
+            '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        errors.append(f"{label} hardlink metadata could not be read")\n        return None, errors\n    if link_count > 1:\n        errors.append(f"{label} must not be hardlinked")\n    if errors:\n        return None, errors\n    return file_stat, []\n\n\ndef validate_repo_source_marker_file(path: Path, label: str) -> list[str]:',
             '    link_count = path.stat().st_nlink\n    if link_count > 1:\n        errors.append(f"{label} must not be hardlinked")\n',
         ),
     )
@@ -3337,8 +3478,8 @@ if mode == "--negative-control-kagemusha-readiness-source-marker-file-metadata-f
         "Kagemusha readiness source marker file metadata failure gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return errors\n',
-            '    except OSError:\n        errors.append(f"{label} is missing")\n        return errors\n',
+            '    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        errors.append(f"{label} is missing")\n        return None, errors\n    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return None, errors\n    if stat.S_ISLNK(file_stat.st_mode):\n        errors.append(f"{label} must not be a symlink")\n        return None, errors\n    if not stat.S_ISREG(file_stat.st_mode):\n        errors.append(f"{label} must be a regular file")\n        return None, errors\n',
+            '    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        errors.append(f"{label} is missing")\n        return None, errors\n    if stat.S_ISLNK(file_stat.st_mode):\n        errors.append(f"{label} must not be a symlink")\n        return None, errors\n    if not stat.S_ISREG(file_stat.st_mode):\n        errors.append(f"{label} must be a regular file")\n        return None, errors\n',
         ),
     )
     raise SystemExit(0)
@@ -3372,6 +3513,17 @@ if mode == "--negative-control-kagemusha-readiness-source-marker-non-utf8-read":
             "scripts/kagemusha_production_readiness.py",
             '    except UnicodeDecodeError:\n        return None, [unreadable_error]\n',
             '    except UnicodeDecodeError:\n        return "", []\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-kagemusha-readiness-source-marker-size-limit":
+    run_negative_control(
+        "Kagemusha readiness source marker size-limit gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "if open_stat.st_size > MAX_REPO_SOURCE_MARKER_BYTES:",
+            "if False and open_stat.st_size > MAX_REPO_SOURCE_MARKER_BYTES:",
         ),
     )
     raise SystemExit(0)
@@ -3684,6 +3836,28 @@ if mode == "--negative-control-android-device-lab-json-output-write-failure":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-json-output-strict-json-write":
+    run_negative_control(
+        "Android device-lab JSON summary strict JSON write gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "json.dumps(summary, indent=2, allow_nan=False)",
+            "json.dumps(summary, indent=2)",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-json-output-size-limit":
+    run_negative_control(
+        "Android device-lab JSON summary output size-limit gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    if len(summary_text.encode("utf-8")) > MAX_ANDROID_DEVICE_LAB_JSON_BYTES:\n        return [\n            "--json-out must be no more than "\n            f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"\n        ]\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-json-output-readback-verification":
     run_negative_control(
         "Android device-lab JSON summary output readback gate",
@@ -3702,6 +3876,17 @@ if mode == "--negative-control-android-device-lab-json-output-readback-failure":
             "scripts/check_android_device_lab_slot.py",
             '    except OSError:\n        return None, ["--json-out write verification failed"]\n',
             "    except OSError:\n        return None, []\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-json-output-readback-size-limit":
+    run_negative_control(
+        "Android device-lab JSON summary output readback size-limit gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '            if open_stat.st_size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES:\n                return None, [\n                    "--json-out must be no more than "\n                    f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"\n                ]\n',
+            "",
         ),
     )
     raise SystemExit(0)
@@ -3838,6 +4023,17 @@ if mode == "--negative-control-android-device-lab-duplicate-json-keys":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-nonfinite-json-constants":
+    run_negative_control(
+        "Android device-lab non-finite JSON constant gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "parse_constant=_reject_nonfinite_json_constant",
+            "parse_constant=float",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-root-symlink":
     run_negative_control(
         "Android device-lab root symlink gate",
@@ -3899,7 +4095,7 @@ if mode == "--negative-control-android-device-lab-ancestor-exists-preflight":
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
             "        try:\n            ancestor_mode = ancestor.lstat().st_mode\n",
-            "        if not ancestor.exists():\n            continue\n        try:\n            ancestor_mode = ancestor.lstat().st_mode\n",
+            "        if not ancestor.exists():\n            continue\n        try:\n            ancestor_mode = ancestor.stat().st_mode\n",
         ),
     )
     raise SystemExit(0)
@@ -3966,6 +4162,17 @@ if mode == "--negative-control-android-device-lab-json-load-file-metadata-failur
             "scripts/check_android_device_lab_slot.py",
             '    try:\n        expected_stat = path.lstat()\n    except FileNotFoundError:\n        errors.append(f"missing {label}")\n        return None\n    except OSError:\n        errors.append(f"{label} file metadata could not be read")\n        return None\n',
             '    expected_stat = path.lstat()\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-json-load-size-limit":
+    run_negative_control(
+        "Android device-lab JSON loader size-limit gate",
+        lambda: override_text_all(
+            "scripts/check_android_device_lab_slot.py",
+            "open_stat.st_size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES",
+            "False",
         ),
     )
     raise SystemExit(0)
@@ -4063,8 +4270,8 @@ if mode == "--negative-control-android-device-lab-manifest-file-metadata-failure
         "Android device-lab manifest file metadata failure gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    try:\n        manifest_mode = manifest_path.lstat().st_mode\n    except FileNotFoundError:\n        return entries, ["missing sha256sum.txt"]\n    except OSError:\n        return entries, ["sha256sum.txt file metadata could not be read"]\n',
-            '    try:\n        manifest_mode = manifest_path.lstat().st_mode\n    except FileNotFoundError:\n        return entries, ["missing sha256sum.txt"]\n',
+            '    try:\n        manifest_stat = manifest_path.lstat()\n    except FileNotFoundError:\n        return entries, ["missing sha256sum.txt"]\n    except OSError:\n        return entries, ["sha256sum.txt file metadata could not be read"]\n',
+            '    try:\n        manifest_stat = manifest_path.lstat()\n    except FileNotFoundError:\n        return entries, ["missing sha256sum.txt"]\n',
         ),
     )
     raise SystemExit(0)
@@ -4087,6 +4294,17 @@ if mode == "--negative-control-android-device-lab-manifest-read-failure":
             "scripts/check_android_device_lab_slot.py",
             '    except (OSError, UnicodeDecodeError):\n        return entries, ["sha256sum.txt could not be read"]\n',
             '    except UnicodeDecodeError:\n        return entries, ["sha256sum.txt could not be read"]\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-manifest-size-limit":
+    run_negative_control(
+        "Android device-lab manifest size-limit gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "open_stat.st_size > MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES",
+            "False",
         ),
     )
     raise SystemExit(0)
@@ -4272,7 +4490,7 @@ if mode == "--negative-control-android-device-lab-manifest-verify-symlink-direct
         "Android device-lab manifest verifier symlink directory gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    display = _display_path(safe_relative)\n    artifact_path = slot_path / safe_relative\n    if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:\n        return None, [\n            "sha256sum.txt references artifact under symlink directory "\n            f"{display}"\n        ]\n',
+            '    display = _display_path(safe_relative)\n    artifact_path = slot_path / safe_relative\n    if _slot_relative_symlink_ancestor(slot_path, safe_relative) is not None:\n        return None, None, [\n            "sha256sum.txt references artifact under symlink directory "\n            f"{display}"\n        ]\n',
             '    display = _display_path(safe_relative)\n    artifact_path = slot_path / safe_relative\n',
         ),
     )
@@ -4358,7 +4576,7 @@ if mode == "--negative-control-android-device-lab-slot-directory-traversal-failu
 if mode == "--negative-control-android-device-lab-symlink-artifacts":
     run_negative_control(
         "Android device-lab symlink artifact gate",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/check_android_device_lab_slot.py",
             "sha256sum.txt references symlink artifact",
             "sha256sum.txt accepts symlink artifact",
@@ -4402,7 +4620,7 @@ if mode == "--negative-control-android-device-lab-symlink-artifact-nested-metada
 if mode == "--negative-control-android-device-lab-regular-file-artifacts":
     run_negative_control(
         "Android device-lab regular-file artifact gate",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/check_android_device_lab_slot.py",
             "sha256sum.txt references non-regular artifact",
             "sha256sum.txt accepts non-regular artifact",
@@ -4479,7 +4697,7 @@ if mode == "--negative-control-android-device-lab-slot-artifact-symlink-prefligh
 if mode == "--negative-control-android-device-lab-hardlink-artifacts":
     run_negative_control(
         "Android device-lab hardlink artifact gate",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/check_android_device_lab_slot.py",
             "sha256sum.txt references hardlinked artifact",
             "sha256sum.txt accepts hardlinked artifact",
@@ -4641,6 +4859,17 @@ if mode == "--negative-control-android-device-lab-signed-evidence-artifact-diges
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-signed-evidence-artifact-size-limit":
+    run_negative_control(
+        "Android device-lab signed evidence artifact digest size-limit gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '            if open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:\n                return None, [\n                    "signed evidence artifact digest references artifact "\n                    f"{display} must be no more than "\n                    f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"\n                ]\n',
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-signed-evidence-artifact-is-file-preflight":
     run_negative_control(
         "Android device-lab signed evidence artifact is_file preflight gate",
@@ -4685,6 +4914,17 @@ if mode == "--negative-control-android-device-lab-metadata-artifact-digest-prefl
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-metadata-artifact-size-limit":
+    run_negative_control(
+        "Android device-lab metadata artifact digest size-limit gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '            if open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:\n                return None, [\n                    f"{label} references artifact {display} must be no more than "\n                    f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"\n                ]\n            size = 0\n            for chunk in iter(lambda: handle.read(1024 * 1024), b""):\n                size += len(chunk)\n                if size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:\n                    return None, [\n                        f"{label} references artifact {display} must be no more than "\n                        f"{MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"\n                    ]\n                digest_chunks.append(chunk)\n',
+            '            for chunk in iter(lambda: handle.read(1024 * 1024), b""):\n                digest_chunks.append(chunk)\n',
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-metadata-artifact-read-failure":
     run_negative_control(
         "Android device-lab metadata artifact digest read-failure gate",
@@ -4699,7 +4939,7 @@ if mode == "--negative-control-android-device-lab-metadata-artifact-read-failure
 if mode == "--negative-control-android-device-lab-metadata-artifact-open-path-binding":
     run_negative_control(
         "Android device-lab metadata artifact open-path binding gate",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/check_android_device_lab_slot.py",
             "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
             "expected_identity = (open_stat.st_dev, open_stat.st_ino)",
@@ -4784,6 +5024,17 @@ if mode == "--negative-control-android-device-lab-staged-bytes-open-path-binding
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-staged-bytes-hardlink-readback":
+    run_negative_control(
+        "Android device-lab staged bytes hardlink readback gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "            if open_stat.st_nlink > 1:\n                return None, [verification_error]\n",
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-signature-verify-tempdir-failure":
     run_negative_control(
         "Android device-lab signature verification tempdir failure gate",
@@ -4806,6 +5057,17 @@ if mode == "--negative-control-android-device-lab-signature-verify-spawn-failure
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-signed-evidence-canonical-payload-strict-json":
+    run_negative_control(
+        "Android device-lab signed evidence canonical payload strict JSON gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "signed evidence artifact signature payload is not strict JSON",
+            "signed evidence artifact signature payload allows non-strict JSON",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-signing-helper":
     run_negative_control(
         "Android device-lab signed evidence helper",
@@ -4813,6 +5075,17 @@ if mode == "--negative-control-android-device-lab-signing-helper":
             "scripts/sign_android_device_lab_evidence.py",
             "device_lab._canonical_signed_evidence_payload",
             "json.dumps",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-canonical-payload-strict-json":
+    run_negative_control(
+        "Android device-lab signing helper canonical payload strict JSON gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "signed evidence payload is not strict JSON",
+            "signed evidence payload allows non-strict JSON",
         ),
     )
     raise SystemExit(0)
@@ -4835,6 +5108,28 @@ if mode == "--negative-control-android-device-lab-signing-helper-signature-open-
             "scripts/sign_android_device_lab_evidence.py",
             "signature_output_expected_identity = (\n        expected_stat.st_dev,\n        expected_stat.st_ino,\n    )",
             "signature_output_expected_identity = (\n        open_stat.st_dev,\n        open_stat.st_ino,\n    )",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-signature-output-hardlink":
+    run_negative_control(
+        "Android device-lab signed evidence helper signature output hardlink gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "            if open_stat.st_nlink > 1:\n                errors.append(\"signature output could not be read\")\n                return None\n",
+            "",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-signature-output-read-limit":
+    run_negative_control(
+        "Android device-lab signed evidence helper signature output read-limit gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "read_limit = device_lab.ED25519_SIGNATURE_BYTES + 1",
+            "read_limit = 1024 * 1024",
         ),
     )
     raise SystemExit(0)
@@ -4901,6 +5196,28 @@ if mode == "--negative-control-android-device-lab-signing-helper-output-write":
             "scripts/sign_android_device_lab_evidence.py",
             '_write_json(output_path, evidence, "signed evidence output path")',
             '_write_json(output_path, evidence, "unchecked signed evidence output path")',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-output-strict-json-write":
+    run_negative_control(
+        "Android device-lab signed evidence helper strict JSON write gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "json.dumps(payload, indent=2, sort_keys=True, allow_nan=False)",
+            "json.dumps(payload, indent=2, sort_keys=True)",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-output-size-limit":
+    run_negative_control(
+        "Android device-lab signed evidence helper output size-limit gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            'if len(text.encode("utf-8")) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:',
+            'if False and len(text.encode("utf-8")) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:',
         ),
     )
     raise SystemExit(0)
@@ -5073,7 +5390,7 @@ if mode == "--negative-control-android-device-lab-signing-helper-output-digest-f
 if mode == "--negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure":
     run_negative_control(
         "Android device-lab signed evidence helper output digest hardlink metadata failure gate",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/sign_android_device_lab_evidence.py",
             '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
             '    link_count = path.stat().st_nlink\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
@@ -5088,6 +5405,17 @@ if mode == "--negative-control-android-device-lab-signing-helper-output-digest-f
             "scripts/sign_android_device_lab_evidence.py",
             '    except OSError:\n        return [f"{label} file metadata could not be read"]\n',
             "    except OSError:\n        return []\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-output-digest-size-limit":
+    run_negative_control(
+        "Android device-lab signed evidence helper output digest size-limit gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "open_stat.st_size > byte_limit",
+            "False",
         ),
     )
     raise SystemExit(0)
@@ -5130,8 +5458,30 @@ if mode == "--negative-control-android-device-lab-signing-helper-manifest-write"
         "Android device-lab signed evidence helper manifest write gate",
         lambda: override_text(
             "scripts/sign_android_device_lab_evidence.py",
-            '_write_text(slot_path / "sha256sum.txt"',
-            '_write_text(slot_path / "sha256sum.unchecked"',
+            'return _write_text(\n        slot_path / "sha256sum.txt",',
+            'return _write_text(\n        slot_path / "sha256sum.unchecked",',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-manifest-size-limit":
+    run_negative_control(
+        "Android device-lab signed evidence helper manifest size-limit gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "max_bytes=device_lab.MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES,",
+            "max_bytes=None,",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-text-size-limit":
+    run_negative_control(
+        "Android device-lab signed evidence helper text size-limit gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            'if len(text.encode("utf-8")) > byte_limit:',
+            'if False and len(text.encode("utf-8")) > byte_limit:',
         ),
     )
     raise SystemExit(0)
@@ -5224,6 +5574,17 @@ if mode == "--negative-control-android-device-lab-signing-helper-slot-artifact-d
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-android-device-lab-signing-helper-slot-artifact-size-limit":
+    run_negative_control(
+        "Android device-lab signed evidence helper slot artifact size-limit gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "open_stat.st_size > device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
+            "False",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-android-device-lab-signing-helper-slot-artifact-hardlink-metadata-failure":
     run_negative_control(
         "Android device-lab signed evidence helper slot artifact hardlink metadata failure gate",
@@ -5273,8 +5634,19 @@ if mode == "--negative-control-android-device-lab-manifest-artifact-digest-prefl
         "Android device-lab manifest artifact digest preflight gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    artifact_path, errors = _validate_manifest_artifact_for_digest(slot_path, relative)\n    if errors:\n        return None, errors\n    assert artifact_path is not None\n',
-            "    artifact_path = slot_path / relative\n",
+            '    artifact_path, artifact_stat, errors = _validate_manifest_artifact_for_digest(\n        slot_path,\n        relative,\n    )\n    if errors:\n        return None, errors\n    assert artifact_path is not None and artifact_stat is not None\n',
+            "    artifact_path = slot_path / relative\n    artifact_stat = artifact_path.lstat()\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-manifest-artifact-size-limit":
+    run_negative_control(
+        "Android device-lab manifest artifact size-limit gate",
+        lambda: override_text_all(
+            "scripts/check_android_device_lab_slot.py",
+            "open_stat.st_size > MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES",
+            "False",
         ),
     )
     raise SystemExit(0)
@@ -5295,8 +5667,8 @@ if mode == "--negative-control-android-device-lab-manifest-artifact-read-failure
         "Android device-lab manifest artifact digest read-failure gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    try:\n        payload = artifact_path.read_bytes()\n    except OSError:\n        return None, [\n            "sha256sum.txt references artifact that could not be read "\n            f"{_display_path(relative)}"\n        ]\n    return hashlib.sha256(payload).hexdigest(), []\n',
-            "    return hashlib.sha256(artifact_path.read_bytes()).hexdigest(), []\n",
+            '    except OSError:\n        return None, [\n            "sha256sum.txt references artifact that could not be read "\n            f"{display}"\n        ]\n',
+            "    except OSError:\n        return None, []\n",
         ),
     )
     raise SystemExit(0)
@@ -5690,7 +6062,7 @@ if mode == "--negative-control-kagemusha-readiness-android-root-discovery-read-f
 if mode == "--negative-control-kagemusha-readiness-summary-output-aliases":
     run_negative_control(
         "Kagemusha readiness summary output alias gate",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/kagemusha_production_readiness.py",
             "--summary-out must not be a symlink",
             "--summary-out may be a symlink",
@@ -5830,6 +6202,17 @@ if mode == "--negative-control-kagemusha-readiness-summary-output-strict-json-wr
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-kagemusha-readiness-summary-output-size-limit":
+    run_negative_control(
+        "Kagemusha readiness summary output size-limit gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            'if len(summary_text.encode("utf-8")) > MAX_READINESS_SUMMARY_JSON_BYTES:',
+            'if False and len(summary_text.encode("utf-8")) > MAX_READINESS_SUMMARY_JSON_BYTES:',
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-kagemusha-readiness-summary-output-readback-verification":
     run_negative_control(
         "Kagemusha readiness summary output readback gate",
@@ -5848,6 +6231,17 @@ if mode == "--negative-control-kagemusha-readiness-summary-output-readback-failu
             "scripts/kagemusha_production_readiness.py",
             '    except OSError:\n        return None, [\n            _summary_out_blocker("--summary-out write verification failed")\n        ]\n',
             "    except OSError:\n        return None, []\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-kagemusha-readiness-summary-output-readback-size-limit":
+    run_negative_control(
+        "Kagemusha readiness summary output readback size-limit gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "if open_stat.st_size > MAX_READINESS_SUMMARY_JSON_BYTES:",
+            "if False and open_stat.st_size > MAX_READINESS_SUMMARY_JSON_BYTES:",
         ),
     )
     raise SystemExit(0)
@@ -5877,7 +6271,7 @@ if mode == "--negative-control-kagemusha-readiness-summary-output-post-write-pre
 if mode == "--negative-control-lineage-key-release-tooling":
     run_negative_control(
         "Reserved-lineage key release tooling",
-        lambda: override_text(
+        lambda: override_text_all(
             "crates/iroha_cli/src/zk.rs",
             "record_out: Option<std::path::PathBuf>",
             "record_archive_out: Option<std::path::PathBuf>",
@@ -6126,6 +6520,17 @@ if mode == "--negative-control-release-bundle-strict-json-write":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-release-bundle-output-size-limit":
+    run_negative_control(
+        "Kagemusha release bundle output size limit",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            'if len(manifest_text.encode("utf-8")) > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:',
+            'if False and len(manifest_text.encode("utf-8")) > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:',
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-release-bundle-output-readback-failure":
     run_negative_control(
         "Kagemusha release bundle output readback failure gate",
@@ -6133,6 +6538,17 @@ if mode == "--negative-control-release-bundle-output-readback-failure":
             "scripts/kagemusha_release_bundle.py",
             '    except OSError:\n        return None, [\n            _release_bundle_out_blocker("--out could not be read back after writing")\n        ]\n',
             "    except OSError:\n        return None, []\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-output-readback-size-limit":
+    run_negative_control(
+        "Kagemusha release bundle output readback size limit",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "if open_stat.st_size > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:",
+            "if False and open_stat.st_size > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:",
         ),
     )
     raise SystemExit(0)
@@ -6175,8 +6591,8 @@ if mode == "--negative-control-release-bundle-verify-existing-preflight":
         "Kagemusha release bundle verify-existing path preflight",
         lambda: override_text(
             "scripts/kagemusha_release_bundle.py",
-            'existing_bundle_path,\n        bundle_root,\n        "Kagemusha release bundle manifest",',
-            'existing_bundle_path,\n        bundle_root,\n        "Kagemusha release bundle manifest disabled",',
+            'existing_bundle_path,\n            bundle_root,\n            "Kagemusha release bundle manifest",',
+            'existing_bundle_path,\n            bundle_root,\n            "Kagemusha release bundle manifest disabled",',
         ),
     )
     raise SystemExit(0)
@@ -6472,8 +6888,8 @@ if mode == "--negative-control-lineage-proof-helper-strict-json-write":
         "Reserved-lineage proof evidence helper strict JSON writer",
         lambda: override_text(
             "scripts/kagemusha_lineage_proof_evidence.py",
-            "allow_nan=False",
-            "allow_nan=True",
+            '            allow_nan=False,\n        ) + "\\n"\n    except ValueError:\n        return ["--out evidence is not strict JSON"]\n',
+            '            allow_nan=True,\n        ) + "\\n"\n    except ValueError:\n        return ["--out evidence is not strict JSON"]\n',
         ),
     )
     raise SystemExit(0)
@@ -6616,8 +7032,8 @@ if mode == "--negative-control-compact-key-helper-strict-json-write":
         "ABI-7 recursive compact key evidence helper strict JSON writer",
         lambda: override_text(
             "scripts/kagemusha_recursive_compact_key_evidence.py",
-            "allow_nan=False",
-            "allow_nan=True",
+            '            allow_nan=False,\n        ) + "\\n"\n    except ValueError:\n        return ["--out evidence is not strict JSON"]\n',
+            '            allow_nan=True,\n        ) + "\\n"\n    except ValueError:\n        return ["--out evidence is not strict JSON"]\n',
         ),
     )
     raise SystemExit(0)
@@ -6702,6 +7118,17 @@ if mode == "--negative-control-compact-key-helper-validation-dir-create-failure"
             "scripts/kagemusha_recursive_compact_key_evidence.py",
             '    try:\n        artifact_dir.mkdir(parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
             '    artifact_dir.mkdir(parents=True, exist_ok=True)\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-helper-validation-strict-json-write":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence helper validation strict JSON gate",
+        lambda: override_text(
+            "scripts/kagemusha_recursive_compact_key_evidence.py",
+            "recursive compact key evidence validation file is not strict JSON",
+            "recursive compact key evidence validation file allows non-strict JSON",
         ),
     )
     raise SystemExit(0)
@@ -6885,6 +7312,17 @@ if mode == "--negative-control-lineage-proof-helper-validation-dir-create-failur
             "scripts/kagemusha_lineage_proof_evidence.py",
             '    try:\n        artifact_dir.mkdir(parents=True, exist_ok=True)\n    except OSError:\n        return ["--artifact-dir could not be created for evidence validation"]\n',
             '    artifact_dir.mkdir(parents=True, exist_ok=True)\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-lineage-proof-helper-validation-strict-json-write":
+    run_negative_control(
+        "Reserved-lineage proof evidence helper validation strict JSON gate",
+        lambda: override_text(
+            "scripts/kagemusha_lineage_proof_evidence.py",
+            "lineage proof evidence validation file is not strict JSON",
+            "lineage proof evidence validation file allows non-strict JSON",
         ),
     )
     raise SystemExit(0)
@@ -7240,7 +7678,7 @@ if mode == "--negative-control-compact-key-evidence-filename":
 if mode == "--negative-control-json-duplicate-keys":
     run_negative_control(
         "Kagemusha readiness duplicate JSON key gate",
-        lambda: override_text(
+        lambda: override_text_all(
             "scripts/kagemusha_production_readiness.py",
             "object_pairs_hook=_reject_duplicate_json_object_pairs",
             "object_pairs_hook=dict",

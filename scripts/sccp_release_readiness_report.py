@@ -811,6 +811,27 @@ def _all_lanes_route_canary_scalar_gate_inventory_errors(
         ]
 
 
+def _all_lanes_evidence_root_schema_gate_inventory_errors(
+    inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
+) -> list[str]:
+    """Return source-inventory errors for all-lanes evidence-root schemas."""
+
+    try:
+        verifier = _load_release_bundle_verify_helpers()
+        helper = getattr(
+            verifier,
+            "_all_lanes_evidence_root_schema_inventory_errors",
+        )
+        if inventory is None:
+            return list(helper())
+        return list(helper(inventory))
+    except Exception as exc:  # pragma: no cover - exercised through blocker text.
+        return [
+            "SCCP all-lanes evidence-root schema source inventory "
+            f"cannot run release-bundle verifier helper: {exc}"
+        ]
+
+
 def _all_lanes_governed_blocker_schema_gate_inventory_errors(
     inventory: tuple[tuple[str | Path, tuple[str, ...]], ...] | None = None,
 ) -> list[str]:
@@ -4109,6 +4130,9 @@ def _build_report(
     all_lanes_route_canary_scalar_gate_blockers = (
         _all_lanes_route_canary_scalar_gate_inventory_errors()
     )
+    all_lanes_evidence_root_schema_gate_blockers = (
+        _all_lanes_evidence_root_schema_gate_inventory_errors()
+    )
     all_lanes_governed_blocker_schema_gate_blockers = (
         _all_lanes_governed_blocker_schema_gate_inventory_errors()
     )
@@ -4298,6 +4322,14 @@ def _build_report(
                 else "blocked"
             ),
             "validation_blockers": all_lanes_route_canary_scalar_gate_blockers,
+        },
+        "all_lanes_evidence_root_schema_gate": {
+            "validation_status": (
+                "passed"
+                if not all_lanes_evidence_root_schema_gate_blockers
+                else "blocked"
+            ),
+            "validation_blockers": all_lanes_evidence_root_schema_gate_blockers,
         },
         "all_lanes_governed_blocker_schema_gate": {
             "validation_status": (
@@ -4759,6 +4791,7 @@ def _build_report(
         and not tron_route_config_canonical_manifest_gate_blockers
         and not tron_runtime_route_manifest_gate_blockers
         and not all_lanes_route_canary_scalar_gate_blockers
+        and not all_lanes_evidence_root_schema_gate_blockers
         and not all_lanes_governed_blocker_schema_gate_blockers
         and not all_lanes_release_checklist_exact_boolean_gate_blockers
         and not active_launch_checklist_schema_gate_blockers
@@ -4831,6 +4864,7 @@ def _build_report(
     blockers.extend(tron_route_config_canonical_manifest_gate_blockers)
     blockers.extend(tron_runtime_route_manifest_gate_blockers)
     blockers.extend(all_lanes_route_canary_scalar_gate_blockers)
+    blockers.extend(all_lanes_evidence_root_schema_gate_blockers)
     blockers.extend(all_lanes_governed_blocker_schema_gate_blockers)
     blockers.extend(all_lanes_release_checklist_exact_boolean_gate_blockers)
     blockers.extend(active_launch_checklist_schema_gate_blockers)
@@ -5388,8 +5422,9 @@ def _render_markdown(report: dict[str, Any], *, max_blockers_per_lane: int) -> s
             "- SCCP TRON route-config canonical-manifest source inventory must pin canonical JSON string, lowercase bytes32, canonical Base58 address, and network metadata rejection before governed TAIRA XOR overlays can satisfy production readiness.",
             "- SCCP TRON runtime route-manifest source inventory must pin the TRON runtime route-manifest parser, mainnet metadata checks, dynamic destination-binding recomputation, and post-deploy anchor rejection before runtime config evidence can satisfy production readiness.",
             "- SCCP all-lanes route-canary scalar source inventory must pin canonical status/evidence-source schema blockers before all-lanes release-checklist route-canary readiness can pass.",
+            "- SCCP all-lanes evidence-root schema source inventory must pin malformed evidence root, unknown section, and non-string section-key blockers before all-lanes evidence can satisfy production readiness.",
             "- SCCP all-lanes governed blocker schema source inventory must pin destination-rollout and route-allowlist blocker container rejection before governed evidence can satisfy production readiness.",
-            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
+            "- SCCP all-lanes release-checklist exact-boolean source inventory must pin exact checklist-item aggregation, record-presence gates, CLI production-ready exits, source-adapter gate hash/audit replay rejection, and route-canary hash replay rejection before all-lanes evidence can satisfy production readiness.",
             "- SCCP active-launch checklist schema source inventory must pin the active launch checklist ready value, malformed lane metadata, and verifier recomputation before production readiness can pass.",
             "- SCCP release manifest readiness-flags source inventory must pin exact boolean manifest generation, verifier boolean rejection, manifest/report equality checks, and all-lanes readiness recomputation before published bundle readiness can pass.",
             "- SCCP release manifest artifact-set/order source inventory must pin required artifact paths, manifest-root exclusion, unmanifested artifact/directory rejection, report-referenced artifact closure, and canonical attachment order before published bundle readiness can pass.",

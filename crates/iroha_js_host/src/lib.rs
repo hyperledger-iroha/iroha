@@ -10303,6 +10303,9 @@ const PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS: &[&str] = &[
     "witness_privacy_checks",
     "verifier_fuzzing",
 ];
+const PRIVACY_PRODUCTION_EVIDENCE_HASH_PREFIX: &str = "sha256:";
+const PRIVACY_PRODUCTION_LOCALNET_TARGET: &str = "localnet";
+const PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT: u8 = 4;
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
     (
@@ -10770,6 +10773,42 @@ enum PrivacyProofOperationV1 {
     Verify,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrivacyProductionGateEvidenceV1 {
+    key: &'static str,
+    artifact_hash: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PrivacyProductionLocalnetEvidenceV1 {
+    run_id: &'static str,
+    target: &'static str,
+    peer_count: u8,
+    smoke_passed: bool,
+    replay_rejected: bool,
+    restart_persistence_checked: bool,
+    restart_replay_rejected: bool,
+    state_recovery_passed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PrivacyProductionEvidenceRowV1 {
+    algorithm_id: &'static str,
+    chain_id: &'static str,
+    reviewer_identity: &'static str,
+    review_artifact_hash: &'static str,
+    review_artifact_signature: &'static str,
+    verifier_key_id: &'static str,
+    proof_family: &'static str,
+    public_inputs_schema: Option<&'static str>,
+    sdk_entrypoints: Vec<&'static str>,
+    required_state: Vec<&'static str>,
+    fuzz_artifact_hash: &'static str,
+    performance_artifact_hash: &'static str,
+    localnet_acceptance: PrivacyProductionLocalnetEvidenceV1,
+    gate_evidence: Vec<PrivacyProductionGateEvidenceV1>,
+}
+
 fn privacy_production_gate_requirement_is_waived(entry: &PrivacyAlgorithmEntry, key: &str) -> bool {
     entry.id == "transparent-transfer"
         && PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS.contains(&key)
@@ -10781,6 +10820,425 @@ fn privacy_required_production_gate_keys(entry: &PrivacyAlgorithmEntry) -> Vec<S
         .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
         .map(|(key, _)| (*key).to_owned())
         .collect()
+}
+
+fn privacy_expected_verifier_key_id(entry: &PrivacyAlgorithmEntry) -> &'static str {
+    match entry.id {
+        "transparent-transfer" => "none",
+        "shield" => "zk::Shield",
+        "confidential-transfer-v2" => "confidential_transfer_v2",
+        "unshield" => "confidential_unshield_v3",
+        "asset-hidden-confidential-transfer-v1" => "asset_hidden_transfer_v1",
+        "zk-ace-pq-authorization-v0" => "zk_ace_pq_authorization_v0",
+        "anonymous-pgc-k-out-of-n-v1" => "anonymous_pgc_k_out_of_n_v1",
+        "verange-transparent-range-v1" => "verange_transparent_range_v1",
+        "zkat-policy-private-auth-v1" => "zkat_policy_private_auth_v1",
+        "zk-ams-recursive-admission-v0" => "zk_ams_recursive_admission_v0",
+        "vega-existing-credential-zk-v0" => "vega_existing_credential_zk_v0",
+        "silent-threshold-anoncred-v0" => "silent_threshold_anoncred_v0",
+        "zk-x509-onchain-identity-v0" => "zk_x509_onchain_identity_v0",
+        "jindo-lattice-pcs-zk-v0" => "jindo_lattice_pcs_zk_v0",
+        "sis-hints-anoncred-pq-v0" => "sis_hints_anoncred_pq_v0",
+        "orchard-halo2-actions-v1" => "orchard_halo2_action_bundle_v1",
+        "penumbra-masp-v1" => "penumbra_masp_v1",
+        "monero-fcmp-plus-plus-v1" => "monero_fcmp_plus_plus_v1",
+        "miden-stark-note-v1" => "miden_stark_note_v1",
+        "aztec-private-rollup-v1" => "aztec_private_kernel_v1",
+        "pq-masp-stark-v0" => "pq_masp_stark_v0",
+        _ => "",
+    }
+}
+
+fn privacy_expected_public_inputs_schema(entry: &PrivacyAlgorithmEntry) -> Option<&'static str> {
+    match entry.id {
+        "transparent-transfer" => None,
+        "shield" => Some("asset,from,amount,note_commitment"),
+        "confidential-transfer-v2" => Some(
+            "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,asset_tag,chain_tag",
+        ),
+        "unshield" => Some(
+            "input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,change_commitment_0,root,public_amount,asset_tag,chain_tag",
+        ),
+        "asset-hidden-confidential-transfer-v1" => Some(
+            "pool_id,asset_set_root,input_commitment_0,input_commitment_1,nullifier_0,nullifier_1,output_commitment_0,output_commitment_1,root,chain_tag",
+        ),
+        "zk-ace-pq-authorization-v0" => Some(
+            "identity_commitment,tx_digest,chain_id,domain_separator,action_class,replay_nullifier,policy_hash,from,to,asset,amount,verifier_key_id",
+        ),
+        "anonymous-pgc-k-out-of-n-v1" => Some(
+            "anonymity_set_root,tx_digest,balance_commitments,receiver_set_commitment,receiver_ciphertext_commitments,receiver_threshold,receiver_count,link_tag,range_commitments,chain_id,domain_separator",
+        ),
+        "verange-transparent-range-v1" => {
+            Some("commitments,range_parameters,aggregation_count,domain_separator,payload_digest")
+        }
+        "zkat-policy-private-auth-v1" => Some(
+            "policy_commitment,tx_digest,account_id,action_class,domain_separator,policy_epoch",
+        ),
+        "zk-ams-recursive-admission-v0" => Some(
+            "issuer_root,admission_batch_root,admission_nullifiers,anonymous_account_commitments,recursive_admission_digest,domain_separator",
+        ),
+        "vega-existing-credential-zk-v0" => Some(
+            "issuer_commitment,credential_schema,predicate_commitment,subject_binding,expiration_epoch,domain_separator",
+        ),
+        "silent-threshold-anoncred-v0" => Some(
+            "issuer_set_commitment,threshold_policy_hash,credential_showing_commitment,showing_nullifier,verifier_policy_hash,domain_separator",
+        ),
+        "zk-x509-onchain-identity-v0" => Some(
+            "ca_root_commitment,certificate_policy_hash,revocation_root,subject_commitment,address_binding,domain_separator",
+        ),
+        "jindo-lattice-pcs-zk-v0" => {
+            Some("commitment,opening_claim,query_set,parameter_hash,domain_separator")
+        }
+        "sis-hints-anoncred-pq-v0" => Some(
+            "issuer_commitment,credential_commitment,showing_policy_hash,parameter_hash,domain_separator",
+        ),
+        "orchard-halo2-actions-v1" => {
+            Some("anchor,nullifiers,cmx,value_commitments,binding_signature")
+        }
+        "penumbra-masp-v1" => Some(
+            "state_commitment_anchor,nullifiers,note_commitments,balance_commitment,asset_id_commitment",
+        ),
+        "monero-fcmp-plus-plus-v1" => Some(
+            "membership_root,key_image_or_link_tag,amount_commitments,range_commitments,spend_authorization,chain_tag",
+        ),
+        "miden-stark-note-v1" => Some(
+            "account_id,initial_account_commitment,final_account_commitment,input_note_nullifiers,output_note_hashes,reference_block",
+        ),
+        "aztec-private-rollup-v1" => Some(
+            "note_hashes,nullifiers,encrypted_logs,public_call_requests,private_kernel_commitment,rollup_state_roots",
+        ),
+        "pq-masp-stark-v0" => Some(
+            "pool_id,asset_set_root,nullifier_set,output_commitments,root,chain_tag,pq_policy_hash",
+        ),
+        _ => None,
+    }
+}
+
+fn privacy_expected_required_state(entry: &PrivacyAlgorithmEntry) -> &'static [&'static str] {
+    match entry.id {
+        "transparent-transfer"
+        | "shield"
+        | "confidential-transfer-v2"
+        | "unshield"
+        | "asset-hidden-confidential-transfer-v1" => &[],
+        "zk-ace-pq-authorization-v0" => &[
+            "registered ZK-ACE identity commitment",
+            "source-account allowlist",
+            "authorization policy hash registry",
+            "active ZK-ACE verifier key",
+            "chain/domain binding state",
+            "transfer digest binding",
+            "replay nullifier uniqueness set",
+            "identity rotation/revocation registry",
+            "STARK/FRI verifier parameter floors",
+            "wallet identity witness and replay-secret store",
+        ],
+        "anonymous-pgc-k-out-of-n-v1" => &[
+            "anonymous account commitment set",
+            "recent anonymity-set roots",
+            "spent link-tag set",
+            "range-proof verifier parameters",
+            "wallet account blinding and receiver recovery metadata",
+        ],
+        "verange-transparent-range-v1" => &[
+            "range-proof verifier parameters",
+            "VeRange verifier key registry",
+            "range commitment domain separators",
+            "maximum aggregation policy",
+        ],
+        "zkat-policy-private-auth-v1" => &[
+            "policy commitment registry",
+            "policy epoch state",
+            "authorization replay guard",
+            "authorization verifier registry",
+            "wallet policy witness store",
+        ],
+        "zk-ams-recursive-admission-v0" => &[
+            "issuer root registry",
+            "admission nullifier set",
+            "anonymous account commitment registry",
+            "recursive verifier parameters",
+            "recursive admission verifier key registry",
+            "wallet admission witness store",
+        ],
+        "vega-existing-credential-zk-v0" => &[
+            "credential issuer registry",
+            "supported credential schema registry",
+            "predicate registry",
+            "revocation or expiration policy",
+            "wallet credential predicate witness store",
+            "credential predicate commitment registry",
+            "credential predicate verifier key registry",
+        ],
+        "silent-threshold-anoncred-v0" => &[
+            "threshold issuer registry",
+            "credential parameter registry",
+            "verifier policy registry",
+            "credential showing nullifier policy",
+            "wallet credential showing witness store",
+            "credential showing commitment registry",
+            "anonymous credential verifier key registry",
+        ],
+        "zk-x509-onchain-identity-v0" => &[
+            "trusted CA root registry",
+            "certificate policy registry",
+            "revocation root registry",
+            "identity proof verifier",
+            "wallet certificate witness store",
+            "certificate subject commitment registry",
+            "ZK-X.509 verifier key registry",
+        ],
+        "jindo-lattice-pcs-zk-v0" => &[
+            "lattice PCS parameter registry",
+            "backend verifier implementation",
+            "lattice PCS verifier key registry",
+            "benchmark fixtures",
+        ],
+        "sis-hints-anoncred-pq-v0" => &[
+            "lattice credential parameter registry",
+            "issuer parameter registry",
+            "credential showing verifier",
+            "wallet lattice credential witness store",
+            "lattice credential commitment registry",
+            "lattice credential verifier key registry",
+        ],
+        "orchard-halo2-actions-v1" => &[
+            "Orchard note commitment tree",
+            "Orchard nullifier set",
+            "Orchard action-bundle verifier key registry",
+            "wallet Orchard witness store",
+        ],
+        "penumbra-masp-v1" => &[
+            "multi-asset state commitment tree",
+            "typed nullifier set",
+            "Groth16 spend/output verifier key registry",
+            "wallet asset metadata witness store",
+        ],
+        "monero-fcmp-plus-plus-v1" => &[
+            "full-output-set commitment accumulator",
+            "spent link-tag set",
+            "FCMP++ verifier key registry",
+            "wallet output ownership scan state",
+        ],
+        "miden-stark-note-v1" => &[
+            "private note hash database",
+            "input note nullifier set",
+            "account commitment state",
+            "STARK VM verifier key registry",
+            "wallet private note witness store",
+        ],
+        "aztec-private-rollup-v1" => &[
+            "private note-hash tree",
+            "nullifier tree",
+            "encrypted log delivery store",
+            "private-kernel verifier key registry",
+            "wallet private execution witness store",
+        ],
+        "pq-masp-stark-v0" => &[
+            "PQ MASP asset-set commitment root",
+            "PQ nullifier set",
+            "ML-KEM encrypted note payload store",
+            "wallet PQ note witness store",
+        ],
+        _ => &[],
+    }
+}
+
+fn privacy_expected_production_sdk_entrypoints(entry: &PrivacyAlgorithmEntry) -> Vec<String> {
+    entry
+        .sdk_entrypoints
+        .iter()
+        .chain(entry.planned_entrypoints.iter())
+        .filter(|entrypoint| {
+            !privacy_entrypoint_is_dev_fixture(entrypoint)
+                && !privacy_entrypoint_is_local_verifier(entrypoint)
+        })
+        .fold(Vec::new(), |mut acc, entrypoint| {
+            if !acc.iter().any(|existing| existing == entrypoint) {
+                acc.push((*entrypoint).to_owned());
+            }
+            acc
+        })
+}
+
+fn privacy_evidence_public_text_is_clean(value: &str, max_len: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max_len
+        && value.trim() == value
+        && value
+            .bytes()
+            .all(|byte| matches!(byte, 0x20..=0x7e) && byte != b'\\')
+}
+
+fn privacy_evidence_text_has_non_production_marker(value: &str) -> bool {
+    let compact = privacy_compact_ascii_lowercase(value);
+    compact.contains("devfixture")
+        || compact.contains("devprooffixture")
+        || compact.contains("localonly")
+        || compact.contains("mock")
+}
+
+fn privacy_production_evidence_hash_is_valid(value: &str) -> bool {
+    let Some(digest) = value.strip_prefix(PRIVACY_PRODUCTION_EVIDENCE_HASH_PREFIX) else {
+        return false;
+    };
+
+    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn privacy_production_review_signature_is_valid(value: &str) -> bool {
+    let Some(signature) = value.strip_prefix("ed25519:") else {
+        return false;
+    };
+
+    privacy_evidence_public_text_is_clean(value, 512)
+        && !privacy_evidence_text_has_non_production_marker(value)
+        && signature.len() == 128
+        && signature.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn privacy_production_localnet_run_id_is_valid(value: &str) -> bool {
+    if !privacy_evidence_public_text_is_clean(value, 160)
+        || privacy_evidence_text_has_non_production_marker(value)
+        || value.contains("..")
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b':' | b'-'))
+    {
+        return false;
+    }
+
+    let compact = value.replace('_', "-").to_ascii_lowercase();
+    compact.contains("4-peer") || compact.contains("4peer")
+}
+
+fn privacy_production_localnet_evidence_is_valid(
+    acceptance: PrivacyProductionLocalnetEvidenceV1,
+) -> bool {
+    privacy_production_localnet_run_id_is_valid(acceptance.run_id)
+        && acceptance.target == PRIVACY_PRODUCTION_LOCALNET_TARGET
+        && acceptance.peer_count == PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT
+        && acceptance.smoke_passed
+        && acceptance.replay_rejected
+        && acceptance.restart_persistence_checked
+        && acceptance.restart_replay_rejected
+        && acceptance.state_recovery_passed
+}
+
+fn privacy_string_slice_matches_vec(values: &[&'static str], expected: &[String]) -> bool {
+    values.len() == expected.len()
+        && values
+            .iter()
+            .zip(expected.iter())
+            .all(|(value, expected)| *value == expected.as_str())
+}
+
+fn privacy_string_slice_matches_slice(values: &[&'static str], expected: &[&'static str]) -> bool {
+    values.len() == expected.len()
+        && values
+            .iter()
+            .zip(expected.iter())
+            .all(|(value, expected)| *value == *expected)
+}
+
+fn privacy_production_gate_evidence_has_duplicate_keys(
+    evidence: &[PrivacyProductionGateEvidenceV1],
+) -> bool {
+    evidence.iter().enumerate().any(|(index, gate)| {
+        evidence[index + 1..]
+            .iter()
+            .any(|other| other.key == gate.key)
+    })
+}
+
+fn privacy_production_gate_evidence_is_valid(
+    entry: &PrivacyAlgorithmEntry,
+    evidence: &[PrivacyProductionGateEvidenceV1],
+) -> bool {
+    let required_gates = privacy_required_production_gate_keys(entry);
+    evidence.len() == required_gates.len()
+        && !privacy_production_gate_evidence_has_duplicate_keys(evidence)
+        && evidence
+            .iter()
+            .zip(required_gates.iter())
+            .all(|(gate, expected_key)| {
+                gate.key == expected_key
+                    && privacy_text_field_is_portable_identifier(gate.key)
+                    && privacy_production_gate_key_is_required(gate.key)
+                    && privacy_production_evidence_hash_is_valid(gate.artifact_hash)
+            })
+}
+
+fn privacy_production_evidence_sdk_entrypoints_are_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    let expected_entrypoints = privacy_expected_production_sdk_entrypoints(entry);
+    privacy_string_slice_matches_vec(&row.sdk_entrypoints, &expected_entrypoints)
+        && !privacy_string_slice_has_duplicates(&row.sdk_entrypoints)
+        && row.sdk_entrypoints.iter().all(|entrypoint| {
+            privacy_sdk_entrypoint_is_portable(entrypoint)
+                && !privacy_entrypoint_is_dev_fixture(entrypoint)
+                && !privacy_entrypoint_is_local_verifier(entrypoint)
+                && !privacy_exposed_label_claims_production_readiness(entrypoint)
+        })
+}
+
+fn privacy_production_evidence_required_state_is_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+    entry: &PrivacyAlgorithmEntry,
+) -> bool {
+    privacy_string_slice_matches_slice(&row.required_state, privacy_expected_required_state(entry))
+        && !privacy_string_slice_has_duplicates(&row.required_state)
+        && row
+            .required_state
+            .iter()
+            .all(|item| privacy_evidence_public_text_is_clean(item, 256))
+}
+
+fn privacy_production_evidence_row_is_valid(
+    row: &PrivacyProductionEvidenceRowV1,
+    entry: &PrivacyAlgorithmEntry,
+    chain_id: Option<&str>,
+) -> bool {
+    let Some(expected_chain_id) = chain_id else {
+        return false;
+    };
+
+    row.algorithm_id == entry.id
+        && row.chain_id == expected_chain_id
+        && privacy_text_field_is_portable_identifier(row.chain_id)
+        && !privacy_evidence_text_has_non_production_marker(row.chain_id)
+        && !privacy_exposed_label_claims_production_readiness(row.algorithm_id)
+        && privacy_evidence_public_text_is_clean(row.reviewer_identity, 160)
+        && !privacy_evidence_text_has_non_production_marker(row.reviewer_identity)
+        && privacy_production_evidence_hash_is_valid(row.review_artifact_hash)
+        && privacy_production_review_signature_is_valid(row.review_artifact_signature)
+        && row.verifier_key_id == privacy_expected_verifier_key_id(entry)
+        && privacy_text_field_is_portable_identifier(row.verifier_key_id)
+        && row.proof_family == entry.proof_family
+        && row.public_inputs_schema == privacy_expected_public_inputs_schema(entry)
+        && privacy_production_evidence_sdk_entrypoints_are_valid(row, entry)
+        && privacy_production_evidence_required_state_is_valid(row, entry)
+        && privacy_production_evidence_hash_is_valid(row.fuzz_artifact_hash)
+        && privacy_production_evidence_hash_is_valid(row.performance_artifact_hash)
+        && privacy_production_localnet_evidence_is_valid(row.localnet_acceptance)
+        && privacy_production_gate_evidence_is_valid(entry, &row.gate_evidence)
+}
+
+fn privacy_production_evidence_for_entry<'a>(
+    entry: &PrivacyAlgorithmEntry,
+    evidence: &'a [PrivacyProductionEvidenceRowV1],
+    chain_id: Option<&str>,
+) -> Option<&'a PrivacyProductionEvidenceRowV1> {
+    let mut valid_row = None;
+    for row in evidence.iter().filter(|row| row.algorithm_id == entry.id) {
+        if !privacy_production_evidence_row_is_valid(row, entry, chain_id) || valid_row.is_some() {
+            return None;
+        }
+        valid_row = Some(row);
+    }
+    valid_row
 }
 
 fn privacy_production_gate(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionGateV1 {
@@ -10812,34 +11270,99 @@ fn privacy_production_gate(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionGa
     }
 }
 
-fn privacy_capabilities() -> PrivacyCapabilitiesV1 {
+fn privacy_production_gate_from_evidence(
+    entry: &PrivacyAlgorithmEntry,
+    evidence: &PrivacyProductionEvidenceRowV1,
+) -> PrivacyProductionGateV1 {
+    PrivacyProductionGateV1 {
+        version: PRIVACY_PRODUCTION_GATE_VERSION.to_owned(),
+        ready: true,
+        gates: PRIVACY_PRODUCTION_GATE_REQUIREMENTS
+            .iter()
+            .map(|(key, _)| PrivacyProductionGateStatusV1 {
+                key: (*key).to_owned(),
+                passed: !privacy_production_gate_requirement_is_waived(entry, key),
+            })
+            .collect(),
+        required_gates: privacy_required_production_gate_keys(entry),
+        missing: Vec::new(),
+        audit_references: vec![
+            format!("chain_id:{}", evidence.chain_id),
+            format!("reviewer:{}", evidence.reviewer_identity),
+            format!("review_artifact_hash:{}", evidence.review_artifact_hash),
+            format!(
+                "review_artifact_signature:{}",
+                evidence.review_artifact_signature
+            ),
+            format!("fuzz_artifact_hash:{}", evidence.fuzz_artifact_hash),
+            format!(
+                "performance_artifact_hash:{}",
+                evidence.performance_artifact_hash
+            ),
+            format!("localnet_run_id:{}", evidence.localnet_acceptance.run_id),
+        ],
+    }
+}
+
+fn privacy_capability_from_entry(
+    entry: &PrivacyAlgorithmEntry,
+    evidence: Option<&PrivacyProductionEvidenceRowV1>,
+) -> PrivacyCapabilityV1 {
+    if let Some(evidence) = evidence {
+        return PrivacyCapabilityV1 {
+            algorithm_id: entry.id.to_owned(),
+            proof_family: entry.proof_family.to_owned(),
+            backend_family: entry.backend_family.to_owned(),
+            sdk_entrypoints: privacy_expected_production_sdk_entrypoints(entry),
+            planned_entrypoints: Vec::new(),
+            production_ready: true,
+            production_gate: privacy_production_gate_from_evidence(entry, evidence),
+        };
+    }
+
+    PrivacyCapabilityV1 {
+        algorithm_id: entry.id.to_owned(),
+        proof_family: entry.proof_family.to_owned(),
+        backend_family: entry.backend_family.to_owned(),
+        sdk_entrypoints: entry
+            .sdk_entrypoints
+            .iter()
+            .map(|entrypoint| (*entrypoint).to_owned())
+            .collect(),
+        planned_entrypoints: entry
+            .planned_entrypoints
+            .iter()
+            .map(|entrypoint| (*entrypoint).to_owned())
+            .collect(),
+        production_ready: false,
+        production_gate: privacy_production_gate(entry),
+    }
+}
+
+fn privacy_capabilities_with_production_evidence(
+    evidence: &[PrivacyProductionEvidenceRowV1],
+    chain_id: Option<&str>,
+) -> PrivacyCapabilitiesV1 {
     debug_assert!(privacy_algorithm_catalog_invariants_hold());
     let capabilities = PrivacyCapabilitiesV1 {
         version: PRIVACY_FFI_VERSION_V1,
         gate_version: PRIVACY_PRODUCTION_GATE_VERSION.to_owned(),
         algorithms: PRIVACY_ALGORITHM_ENTRIES
             .iter()
-            .map(|entry| PrivacyCapabilityV1 {
-                algorithm_id: entry.id.to_owned(),
-                proof_family: entry.proof_family.to_owned(),
-                backend_family: entry.backend_family.to_owned(),
-                sdk_entrypoints: entry
-                    .sdk_entrypoints
-                    .iter()
-                    .map(|entrypoint| (*entrypoint).to_owned())
-                    .collect(),
-                planned_entrypoints: entry
-                    .planned_entrypoints
-                    .iter()
-                    .map(|entrypoint| (*entrypoint).to_owned())
-                    .collect(),
-                production_ready: false,
-                production_gate: privacy_production_gate(entry),
+            .map(|entry| {
+                privacy_capability_from_entry(
+                    entry,
+                    privacy_production_evidence_for_entry(entry, evidence, chain_id),
+                )
             })
             .collect(),
     };
     debug_assert!(privacy_capabilities_invariants_hold(&capabilities));
     capabilities
+}
+
+fn privacy_capabilities() -> PrivacyCapabilitiesV1 {
+    privacy_capabilities_with_production_evidence(&[], None)
 }
 
 fn privacy_algorithm_entry(algorithm_id: &str) -> Option<&'static PrivacyAlgorithmEntry> {
@@ -10882,12 +11405,16 @@ fn privacy_entrypoint_name(entrypoint: &str) -> &str {
     entrypoint.rsplit('.').next().unwrap_or(entrypoint)
 }
 
-fn privacy_entrypoint_compact_lowercase(entrypoint: &str) -> String {
-    entrypoint
+fn privacy_compact_ascii_lowercase(value: &str) -> String {
+    value
         .bytes()
         .filter(|byte| byte.is_ascii_alphanumeric())
         .map(|byte| char::from(byte.to_ascii_lowercase()))
         .collect()
+}
+
+fn privacy_entrypoint_compact_lowercase(entrypoint: &str) -> String {
+    privacy_compact_ascii_lowercase(entrypoint)
 }
 
 fn privacy_exposed_label_claims_production_readiness(value: &str) -> bool {
@@ -11139,6 +11666,14 @@ fn privacy_string_vec_matches_slice(values: &[String], expected: &[&'static str]
             .all(|(value, expected)| value.as_str() == *expected)
 }
 
+fn privacy_string_vec_matches_vec(values: &[String], expected: &[String]) -> bool {
+    values.len() == expected.len()
+        && values
+            .iter()
+            .zip(expected.iter())
+            .all(|(value, expected)| value == expected)
+}
+
 fn privacy_string_vecs_overlap(left: &[String], right: &[String]) -> bool {
     left.iter()
         .any(|candidate| right.iter().any(|other| other == candidate))
@@ -11166,12 +11701,20 @@ fn privacy_production_gate_missing_reason_is_required(missing: &str) -> bool {
         || missing == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
 }
 
-fn privacy_gate_statuses_match_requirements(gates: &[PrivacyProductionGateStatusV1]) -> bool {
+fn privacy_gate_statuses_match_requirements(
+    gates: &[PrivacyProductionGateStatusV1],
+    entry: &PrivacyAlgorithmEntry,
+    ready: bool,
+) -> bool {
     gates.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len()
         && gates
             .iter()
             .zip(PRIVACY_PRODUCTION_GATE_REQUIREMENTS.iter())
-            .all(|(status, (key, _))| status.key.as_str() == *key && !status.passed)
+            .all(|(status, (key, _))| {
+                status.key.as_str() == *key
+                    && status.passed
+                        == (ready && !privacy_production_gate_requirement_is_waived(entry, key))
+            })
 }
 
 fn privacy_required_gate_keys_match_entry(
@@ -11205,33 +11748,113 @@ fn privacy_gate_missing_reasons_match_requirements(
         && missing[required_count + 1].as_str() == PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST
 }
 
+fn privacy_ready_gate_audit_references_are_valid(audit_references: &[String]) -> bool {
+    if audit_references.len() != 7
+        || privacy_string_vec_has_duplicates(audit_references)
+        || !audit_references
+            .iter()
+            .all(|reference| privacy_evidence_public_text_is_clean(reference, 768))
+        || audit_references
+            .iter()
+            .any(|reference| privacy_evidence_text_has_non_production_marker(reference))
+    {
+        return false;
+    }
+
+    let Some(chain_id) = audit_references[0].strip_prefix("chain_id:") else {
+        return false;
+    };
+    let Some(reviewer) = audit_references[1].strip_prefix("reviewer:") else {
+        return false;
+    };
+    let Some(review_hash) = audit_references[2].strip_prefix("review_artifact_hash:") else {
+        return false;
+    };
+    let Some(review_signature) = audit_references[3].strip_prefix("review_artifact_signature:")
+    else {
+        return false;
+    };
+    let Some(fuzz_hash) = audit_references[4].strip_prefix("fuzz_artifact_hash:") else {
+        return false;
+    };
+    let Some(performance_hash) = audit_references[5].strip_prefix("performance_artifact_hash:")
+    else {
+        return false;
+    };
+    let Some(localnet_run_id) = audit_references[6].strip_prefix("localnet_run_id:") else {
+        return false;
+    };
+
+    privacy_text_field_is_portable_identifier(chain_id)
+        && !privacy_evidence_text_has_non_production_marker(chain_id)
+        && privacy_evidence_public_text_is_clean(reviewer, 160)
+        && !privacy_evidence_text_has_non_production_marker(reviewer)
+        && privacy_production_evidence_hash_is_valid(review_hash)
+        && privacy_production_review_signature_is_valid(review_signature)
+        && privacy_production_evidence_hash_is_valid(fuzz_hash)
+        && privacy_production_evidence_hash_is_valid(performance_hash)
+        && privacy_production_localnet_run_id_is_valid(localnet_run_id)
+}
+
 fn privacy_production_gate_invariants_hold(
     gate: &PrivacyProductionGateV1,
     entry: &PrivacyAlgorithmEntry,
 ) -> bool {
     let required_gate_count = privacy_required_production_gate_keys(entry).len();
 
-    gate.version == PRIVACY_PRODUCTION_GATE_VERSION
-        && !gate.ready
-        && gate.audit_references.is_empty()
+    if !(gate.version == PRIVACY_PRODUCTION_GATE_VERSION
         && gate.gates.len() == PRIVACY_PRODUCTION_GATE_REQUIREMENTS.len()
         && gate.required_gates.len() == required_gate_count
-        && gate.missing.len() == required_gate_count + 2
-        && privacy_gate_statuses_match_requirements(&gate.gates)
+        && privacy_gate_statuses_match_requirements(&gate.gates, entry, gate.ready)
         && privacy_required_gate_keys_match_entry(&gate.required_gates, entry)
-        && privacy_gate_missing_reasons_match_requirements(&gate.missing, entry)
         && !privacy_gate_status_keys_have_duplicates(&gate.gates)
         && !privacy_string_vec_has_duplicates(&gate.required_gates)
-        && !privacy_string_vec_has_duplicates(&gate.missing)
         && gate.gates.iter().all(|status| {
             privacy_text_field_is_portable_identifier(&status.key)
                 && privacy_production_gate_key_is_required(&status.key)
-                && !status.passed
         })
         && gate.required_gates.iter().all(|key| {
             privacy_text_field_is_portable_identifier(key)
                 && privacy_production_gate_key_is_required(key)
-        })
+        }))
+    {
+        return false;
+    }
+
+    if gate.ready {
+        return gate.missing.is_empty()
+            && privacy_ready_gate_audit_references_are_valid(&gate.audit_references)
+            && PRIVACY_PRODUCTION_GATE_REQUIREMENTS
+                .iter()
+                .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
+                .all(|(key, _)| {
+                    gate.required_gates
+                        .iter()
+                        .any(|required| required.as_str() == *key)
+                        && gate
+                            .gates
+                            .iter()
+                            .any(|status| status.key.as_str() == *key && status.passed)
+                })
+            && PRIVACY_PRODUCTION_GATE_REQUIREMENTS
+                .iter()
+                .filter(|(key, _)| privacy_production_gate_requirement_is_waived(entry, key))
+                .all(|(key, _)| {
+                    !gate
+                        .required_gates
+                        .iter()
+                        .any(|required| required.as_str() == *key)
+                        && gate
+                            .gates
+                            .iter()
+                            .any(|status| status.key.as_str() == *key && !status.passed)
+                });
+    }
+
+    gate.audit_references.is_empty()
+        && gate.missing.len() == required_gate_count + 2
+        && privacy_gate_missing_reasons_match_requirements(&gate.missing, entry)
+        && !privacy_string_vec_has_duplicates(&gate.missing)
         && gate
             .missing
             .iter()
@@ -11240,13 +11863,13 @@ fn privacy_production_gate_invariants_hold(
             .iter()
             .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
             .all(|(key, label)| {
-                gate.gates
+                gate.required_gates
                     .iter()
-                    .any(|status| status.key.as_str() == *key && !status.passed)
+                    .any(|required| required.as_str() == *key)
                     && gate
-                        .required_gates
+                        .gates
                         .iter()
-                        .any(|required| required.as_str() == *key)
+                        .any(|status| status.key.as_str() == *key && !status.passed)
                     && gate
                         .missing
                         .iter()
@@ -11274,6 +11897,21 @@ fn privacy_capability_invariants_hold(capability: &PrivacyCapabilityV1) -> bool 
     let Some(entry) = privacy_algorithm_entry(&capability.algorithm_id) else {
         return false;
     };
+    let production_entrypoints = privacy_expected_production_sdk_entrypoints(entry);
+    let sdk_entrypoints_match = if capability.production_ready {
+        capability.planned_entrypoints.is_empty()
+            && privacy_string_vec_matches_vec(&capability.sdk_entrypoints, &production_entrypoints)
+            && capability.sdk_entrypoints.iter().all(|entrypoint| {
+                !privacy_entrypoint_is_dev_fixture(entrypoint)
+                    && !privacy_entrypoint_is_local_verifier(entrypoint)
+            })
+    } else {
+        privacy_string_vec_matches_slice(&capability.sdk_entrypoints, entry.sdk_entrypoints)
+            && privacy_string_vec_matches_slice(
+                &capability.planned_entrypoints,
+                entry.planned_entrypoints,
+            )
+    };
 
     privacy_algorithm_id_is_portable(&capability.algorithm_id)
         && !privacy_exposed_label_claims_production_readiness(&capability.algorithm_id)
@@ -11283,11 +11921,7 @@ fn privacy_capability_invariants_hold(capability: &PrivacyCapabilityV1) -> bool 
         && capability.backend_family.as_str() == entry.backend_family
         && privacy_vk_ref_backend_family_is_portable(&capability.backend_family)
         && !privacy_exposed_label_claims_production_readiness(&capability.backend_family)
-        && privacy_string_vec_matches_slice(&capability.sdk_entrypoints, entry.sdk_entrypoints)
-        && privacy_string_vec_matches_slice(
-            &capability.planned_entrypoints,
-            entry.planned_entrypoints,
-        )
+        && sdk_entrypoints_match
         && capability
             .sdk_entrypoints
             .iter()
@@ -11310,7 +11944,7 @@ fn privacy_capability_invariants_hold(capability: &PrivacyCapabilityV1) -> bool 
             &capability.sdk_entrypoints,
             &capability.planned_entrypoints,
         )
-        && !capability.production_ready
+        && capability.production_ready == capability.production_gate.ready
         && privacy_production_gate_invariants_hold(&capability.production_gate, entry)
 }
 
@@ -14383,6 +15017,107 @@ mod tests {
         }
     }
 
+    const PRIVACY_TEST_PRODUCTION_CHAIN_ID: &str = "boi-privacy-4peer-chain";
+    const PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID: &str = "boi-privacy-4peer-localnet-2026-01-02";
+    const PRIVACY_TEST_PRODUCTION_HASH: &str =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const PRIVACY_TEST_PRODUCTION_SIGNATURE: &str = "ed25519:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    fn privacy_test_production_entrypoints(entry: &PrivacyAlgorithmEntry) -> Vec<&'static str> {
+        entry
+            .sdk_entrypoints
+            .iter()
+            .chain(entry.planned_entrypoints.iter())
+            .copied()
+            .filter(|entrypoint| {
+                !privacy_entrypoint_is_dev_fixture(entrypoint)
+                    && !privacy_entrypoint_is_local_verifier(entrypoint)
+            })
+            .fold(Vec::new(), |mut acc, entrypoint| {
+                if !acc.iter().any(|existing| existing == &entrypoint) {
+                    acc.push(entrypoint);
+                }
+                acc
+            })
+    }
+
+    fn privacy_test_gate_evidence(
+        entry: &PrivacyAlgorithmEntry,
+    ) -> Vec<PrivacyProductionGateEvidenceV1> {
+        PRIVACY_PRODUCTION_GATE_REQUIREMENTS
+            .iter()
+            .filter(|(key, _)| !privacy_production_gate_requirement_is_waived(entry, key))
+            .map(|(key, _)| PrivacyProductionGateEvidenceV1 {
+                key,
+                artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+            })
+            .collect()
+    }
+
+    fn privacy_test_evidence_row(entry: &PrivacyAlgorithmEntry) -> PrivacyProductionEvidenceRowV1 {
+        PrivacyProductionEvidenceRowV1 {
+            algorithm_id: entry.id,
+            chain_id: PRIVACY_TEST_PRODUCTION_CHAIN_ID,
+            reviewer_identity: "boi-crypto-reviewer-1",
+            review_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+            review_artifact_signature: PRIVACY_TEST_PRODUCTION_SIGNATURE,
+            verifier_key_id: privacy_expected_verifier_key_id(entry),
+            proof_family: entry.proof_family,
+            public_inputs_schema: privacy_expected_public_inputs_schema(entry),
+            sdk_entrypoints: privacy_test_production_entrypoints(entry),
+            required_state: privacy_expected_required_state(entry).to_vec(),
+            fuzz_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+            performance_artifact_hash: PRIVACY_TEST_PRODUCTION_HASH,
+            localnet_acceptance: PrivacyProductionLocalnetEvidenceV1 {
+                run_id: PRIVACY_TEST_PRODUCTION_LOCALNET_RUN_ID,
+                target: PRIVACY_PRODUCTION_LOCALNET_TARGET,
+                peer_count: PRIVACY_PRODUCTION_LOCALNET_PEER_COUNT,
+                smoke_passed: true,
+                replay_rejected: true,
+                restart_persistence_checked: true,
+                restart_replay_rejected: true,
+                state_recovery_passed: true,
+            },
+            gate_evidence: privacy_test_gate_evidence(entry),
+        }
+    }
+
+    fn assert_zk_ace_evidence_rejected<F>(case: &str, mutate: F)
+    where
+        F: FnOnce(&mut PrivacyProductionEvidenceRowV1),
+    {
+        let entry =
+            privacy_algorithm_entry("zk-ace-pq-authorization-v0").expect("ZK-ACE catalog row");
+        let mut row = privacy_test_evidence_row(entry);
+        mutate(&mut row);
+
+        assert!(
+            !privacy_production_evidence_row_is_valid(
+                &row,
+                entry,
+                Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID)
+            ),
+            "{case} evidence row must be rejected before capability admission",
+        );
+        let capabilities = privacy_capabilities_with_production_evidence(
+            &[row],
+            Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID),
+        );
+        let zk_ace = capabilities
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.algorithm_id == entry.id)
+            .expect("ZK-ACE capability row");
+        assert!(
+            !zk_ace.production_ready,
+            "{case} must keep ZK-ACE fail-closed",
+        );
+        assert!(
+            !zk_ace.production_gate.ready,
+            "{case} gate must fail closed"
+        );
+    }
+
     #[test]
     fn privacy_capabilities_are_norito_v1_and_fail_closed() {
         let mut encoded = privacy_capabilities_v1()
@@ -14494,6 +15229,186 @@ mod tests {
                 algorithm.algorithm_id,
             );
         }
+    }
+
+    #[test]
+    fn privacy_capabilities_accept_exact_internal_evidence_for_all_rows() {
+        let evidence = PRIVACY_ALGORITHM_ENTRIES
+            .iter()
+            .map(privacy_test_evidence_row)
+            .collect::<Vec<_>>();
+
+        let capabilities = privacy_capabilities_with_production_evidence(
+            &evidence,
+            Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID),
+        );
+
+        assert!(privacy_capabilities_invariants_hold(&capabilities));
+        assert_eq!(
+            capabilities.algorithms.len(),
+            PRIVACY_ALGORITHM_ENTRIES.len()
+        );
+        assert!(
+            capabilities
+                .algorithms
+                .iter()
+                .all(|algorithm| algorithm.production_ready && algorithm.production_gate.ready),
+            "all rows with exact internal evidence must be admitted",
+        );
+
+        for algorithm in &capabilities.algorithms {
+            let entry = privacy_algorithm_entry(&algorithm.algorithm_id)
+                .expect("production-ready capability row must be cataloged");
+            assert!(algorithm.planned_entrypoints.is_empty());
+            assert_eq!(
+                algorithm.sdk_entrypoints,
+                privacy_expected_production_sdk_entrypoints(entry),
+                "production capabilities must expose the complete filtered SDK surface for {}",
+                algorithm.algorithm_id,
+            );
+            assert!(algorithm.production_gate.missing.is_empty());
+            assert_eq!(
+                algorithm.production_gate.required_gates,
+                privacy_required_production_gate_keys(entry),
+            );
+            assert_eq!(algorithm.production_gate.audit_references.len(), 7);
+            for status in &algorithm.production_gate.gates {
+                assert_eq!(
+                    status.passed,
+                    !privacy_production_gate_requirement_is_waived(entry, &status.key),
+                    "ready gate status drifted for {} / {}",
+                    algorithm.algorithm_id,
+                    status.key,
+                );
+            }
+        }
+
+        let transparent = capabilities
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.algorithm_id == "transparent-transfer")
+            .expect("transparent transfer capability");
+        for waived_key in PRIVACY_TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS {
+            assert!(
+                !transparent
+                    .production_gate
+                    .required_gates
+                    .iter()
+                    .any(|required| required == waived_key),
+                "transparent transfer must keep proof-only gate {waived_key} waived",
+            );
+            assert!(
+                transparent
+                    .production_gate
+                    .gates
+                    .iter()
+                    .any(|status| status.key == *waived_key && !status.passed),
+                "transparent transfer must not mark proof-only gate {waived_key} passed",
+            );
+        }
+
+        let zk_ace = capabilities
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.algorithm_id == "zk-ace-pq-authorization-v0")
+            .expect("ZK-ACE capability");
+        assert!(
+            zk_ace
+                .sdk_entrypoints
+                .contains(&"buildZkAceAuthorizationProofV1".to_owned())
+        );
+        assert!(
+            zk_ace
+                .sdk_entrypoints
+                .contains(&"buildZkAceAuthorizedTransferInstruction".to_owned())
+        );
+    }
+
+    #[test]
+    fn privacy_production_evidence_rejects_adversarial_zk_ace_bindings() {
+        assert_zk_ace_evidence_rejected("wrong chain", |row| {
+            row.chain_id = "boi-privacy-other-4peer-chain";
+        });
+        assert_zk_ace_evidence_rejected("mock chain marker", |row| {
+            row.chain_id = "mock-privacy-4peer-chain";
+        });
+        assert_zk_ace_evidence_rejected("wrong verifier key", |row| {
+            row.verifier_key_id = "shadow_zk_ace_verifier";
+        });
+        assert_zk_ace_evidence_rejected("mutated public input schema", |row| {
+            row.public_inputs_schema = Some("identity_commitment,tx_digest,chain_id");
+        });
+        assert_zk_ace_evidence_rejected("dev fixture entrypoint", |row| {
+            row.sdk_entrypoints.push("buildZkAceDevProofFixture");
+        });
+        assert_zk_ace_evidence_rejected("local verifier entrypoint", |row| {
+            row.sdk_entrypoints.push("verifyZkAceProofLocally");
+        });
+        assert_zk_ace_evidence_rejected("three-peer localnet downgrade", |row| {
+            row.localnet_acceptance.peer_count = 3;
+        });
+        assert_zk_ace_evidence_rejected("replay acceptance", |row| {
+            row.localnet_acceptance.replay_rejected = false;
+        });
+        assert_zk_ace_evidence_rejected("restart replay acceptance", |row| {
+            row.localnet_acceptance.restart_replay_rejected = false;
+        });
+        assert_zk_ace_evidence_rejected("mock localnet run", |row| {
+            row.localnet_acceptance.run_id = "mock-privacy-4peer-localnet-2026-01-02";
+        });
+        assert_zk_ace_evidence_rejected("missing production gate evidence", |row| {
+            row.gate_evidence.pop();
+        });
+        assert_zk_ace_evidence_rejected("duplicated production gate evidence", |row| {
+            row.gate_evidence.push(row.gate_evidence[0]);
+        });
+        assert_zk_ace_evidence_rejected("bad review artifact hash", |row| {
+            row.review_artifact_hash = "sha256:not-a-hex-digest";
+        });
+        assert_zk_ace_evidence_rejected("unsigned review artifact", |row| {
+            row.review_artifact_signature = "ed25519:bbbb";
+        });
+        assert_zk_ace_evidence_rejected("mock reviewer identity", |row| {
+            row.reviewer_identity = "mock-crypto-reviewer";
+        });
+        assert_zk_ace_evidence_rejected("missing required state", |row| {
+            row.required_state.pop();
+        });
+    }
+
+    #[test]
+    fn privacy_production_evidence_rejects_missing_and_duplicate_rows() {
+        let entry =
+            privacy_algorithm_entry("zk-ace-pq-authorization-v0").expect("ZK-ACE catalog row");
+        let row = privacy_test_evidence_row(entry);
+
+        let no_chain_capabilities = privacy_capabilities_with_production_evidence(&[row], None);
+        let zk_ace = no_chain_capabilities
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.algorithm_id == entry.id)
+            .expect("ZK-ACE capability row");
+        assert!(
+            !zk_ace.production_ready,
+            "evidence cannot admit production readiness without expected chain binding",
+        );
+
+        let duplicate_capabilities = privacy_capabilities_with_production_evidence(
+            &[
+                privacy_test_evidence_row(entry),
+                privacy_test_evidence_row(entry),
+            ],
+            Some(PRIVACY_TEST_PRODUCTION_CHAIN_ID),
+        );
+        let duplicate_zk_ace = duplicate_capabilities
+            .algorithms
+            .iter()
+            .find(|algorithm| algorithm.algorithm_id == entry.id)
+            .expect("ZK-ACE capability row");
+        assert!(
+            !duplicate_zk_ace.production_ready,
+            "duplicate valid evidence rows must not admit readiness",
+        );
     }
 
     #[test]

@@ -302,6 +302,9 @@ also be ordinary non-symlink, non-hardlinked files with symlink-free ancestors
 before their contents can satisfy readiness, with ABI-6 manifest JSON and
 marker text decoded from the same opened regular files after path-identity
 revalidation and the ABI-6 manifest JSON capped at 1 MiB before parsing,
+while ABI-7 and Reserved-lineage marker text reads are capped at 2 MiB so
+large checked-in Rust bridge files remain bounded without becoming false
+readiness blockers,
 then hashes and parses the local proof log from the same opened regular file
 and re-checks that it
 contains the passing cargo result for the production Reserved-lineage test
@@ -385,8 +388,9 @@ source marker text reads also rerun the source-marker file validator immediately
 before loading marker text and bind the opened read to that preflight `lstat()`
 identity, so symlink, hardlink, non-regular, secret-bearing, or post-preflight
 regular-file source aliases cannot satisfy readiness markers after an earlier
-check. Unreadable source-marker leaf metadata, unreadable marker bytes, or
-non-UTF-8 ABI-7 and Reserved-lineage marker files return
+check. Source-marker text reads are capped at 2 MiB using opened-file metadata
+and streamed byte counts. Unreadable source-marker leaf metadata, unreadable
+marker bytes, or non-UTF-8 ABI-7 and Reserved-lineage marker files return
 structured blockers instead of raw decode errors. The
 ABI-7 compact section also extracts the relevant Rust function bodies before
 trusting the checked-in source: compact record preflight must reject malformed
@@ -406,7 +410,11 @@ Android signing helper runs the slot/artifact symlink, hardlink, and
 regular-file preflight before parsing `slot.json`, and classifies the slot
 directory plus its parent with `lstat()` so unreadable slot or parent metadata
 fails closed before metadata-derived output paths, signatures, or manifest
-refreshes can start from an aliased slot bundle. Scanner and signing-helper direct calls also route top-level slot
+refreshes can start from an aliased slot bundle. The shared Android device-lab
+JSON loader rejects duplicate keys and non-standard `NaN`/`Infinity` constants
+before slot metadata, attestation, signed evidence, D2D handoff, or
+wallet-integrity schema validation, and caps those JSON inputs at 16 MiB from
+the opened file metadata and streamed byte count. Scanner and signing-helper direct calls also route top-level slot
 artifact enumeration through the same guarded list helper, so a post-validation
 slot directory listing failure becomes `slot directory could not be listed`
 instead of a traceback or a partial manifest rewrite. Runtime private-key and signer public-key paths are validated for
@@ -419,11 +427,13 @@ verification preserves key-path validation failures
 separately from private/public key mismatches. Temporary
 OpenSSL staging writes use exclusive temporary files, flush and fsync staged
 payload/signature bytes, read them back with opened-file identity binding before
-invoking OpenSSL, and report staging write, readback mismatch, signature output
+invoking OpenSSL, reject staged files that gain hardlink aliases before
+readback, and report staging write, readback mismatch, signature output
 read failures, or non-64-byte
 Ed25519 signature outputs as structured signer/verifier errors instead of
 tracebacks; signature output bytes are also read through opened-file identity
-binding before the 64-byte shape check. Lower-level direct symlink, hardlink, and regular-file artifact
+binding and hardlink rejection, bounded to one byte beyond the 64-byte Ed25519
+shape, before the shape check. Lower-level direct symlink, hardlink, and regular-file artifact
 validators reject secret-looking slot paths before traversing, stat-ing, or
 classifying slot artifacts. The symlink validator now reports unreadable
 slot-metadata, artifact-directory, and nested-artifact metadata before alias
@@ -437,7 +447,7 @@ the signed-evidence artifact binding also classify artifacts with `lstat()`
 before any `is_file()` preflight. Signed-evidence `artifact_digests` and the
 `slot.json`-referenced
 metadata/text reads bind those artifacts to the opened regular file before
-hashing or decoding bytes. Direct signer metadata-loader and SHA-256 manifest rewrite helper calls
+hashing or decoding bytes and cap those reads at 16 MiB. Direct signer metadata-loader and SHA-256 manifest rewrite helper calls
 also reject secret-looking slot paths and unreadable slot or parent metadata
 before metadata parsing, artifact traversal, hashing, or manifest writes. The lower-level signer artifact-digest
 builder reruns that slot preflight before hashing required signed-evidence
@@ -446,7 +456,8 @@ paths, and the per-artifact digest helper rechecks each relative artifact path
 for secret-looking names, unreadable leaf metadata, symlinks, hardlinks, and
 non-regular files immediately before digest reads used by signed evidence and
 manifest rewrites, then binds each digest read to the opened regular-file
-identity. Low-level signer output writers also
+identity and caps each signer-side slot-artifact digest read at 16 MiB.
+Low-level signer output writers also
 reject secret-looking signed-evidence and manifest paths before creating output
 parents or writing files, convert absolute signed-evidence output path resolver
 failures into `signed evidence output path could not be resolved`, reject
@@ -457,16 +468,24 @@ rerun parent and ancestor checks after creating missing output parents, write
 temporary files, atomically replace the final outputs, read them back before
 success through opened-file identity binding, and preserve existing outputs if
 replacement fails. The
+signer JSON outputs for `signed-evidence.json` and `slot.json` also reject
+serialized JSON above 16 MiB before creating temporary files and enforce the
+same cap during opened-file readback.
 signing helper revalidates the signed-evidence output as a regular non-symlink,
 non-hardlinked file before hashing it back into `slot.json`, then binds that
-digest read to the opened file identity. Direct SHA-256 manifest parser and verifier helper
+digest read to the opened file identity and caps the readback at 16 MiB using
+opened-file metadata and streamed byte counts. `sha256sum.txt` manifest rewrites
+also reject text above the 1 MiB manifest cap before temporary-file creation and
+during opened-file readback. Direct SHA-256 manifest parser and verifier helper
 calls reject secret-looking slot paths, unreadable slot-root metadata,
 symlinked slot roots, and symlinked slot ancestors before parsing
 `sha256sum.txt` or traversing slot artifacts. Direct
 parser and verifier calls also reject unreadable-metadata and hardlinked
 `sha256sum.txt` manifests before reading manifest bytes or discovering slot
 files, and the parser binds `sha256sum.txt` bytes to the opened file identity
-so post-preflight regular-file swaps fail closed. Direct slot-file discovery reports unreadable slot-root and
+so post-preflight regular-file swaps fail closed; manifest bytes are capped at
+1 MiB using both opened-file metadata and streamed byte counts before UTF-8
+decoding. Direct slot-file discovery reports unreadable slot-root and
 artifact-directory metadata through caller error lists, returns no artifacts for
 secret-looking slot paths, symlinked slot ancestors, missing roots,
 non-directory roots, or symlinked slot roots before traversal, and skips
@@ -475,7 +494,7 @@ manifest verification rejects entries under symlinked artifact directories
 before reading or hashing bytes, and the manifest artifact digest helper
 revalidates each `sha256sum.txt` entry for secret-looking names, symlinks,
 hardlinks, and non-regular files immediately before hashing, then binds the
-digest read to the opened file identity. Direct
+digest read to the opened file identity and caps it at 16 MiB. Direct
 attestation, D2D handoff, wallet-integrity,
 required-artifact, signed-evidence, and production-metadata validator helper
 calls reject the same slot paths before parsing artifacts, reading transcript
@@ -484,8 +503,8 @@ verification also revalidates required artifact paths for secret-looking names,
 symlinks, hardlinks, and non-regular files immediately before hashing the bytes
 claimed by `artifact_digests`, including the `slot.json` release APK,
 attestation certificate-chain, D2D handoff, and wallet-integrity transcript
-paths, and binds each digest to the opened file identity so post-preflight
-regular-file swaps fail closed. The Android device-lab root validator
+paths, and binds each digest to the opened file identity with a 16 MiB cap so
+post-preflight regular-file swaps fail closed. The Android device-lab root validator
 also rejects secret-looking paths and unreadable root metadata before slot
 discovery, and scan_slot(...) rejects unreadable slot directory or parent metadata
 before slot traversal. Scanner and rollup missing-root decisions also consume
@@ -496,7 +515,9 @@ classifies summary output parents with `lstat()` before any `Path.is_dir()`
 preflight, rechecks created output parents before writing JSON, writes
 `--json-out` through a fsynced same-directory temporary file, atomically replaces
 the final summary, reads it back through opened-file identity binding before
-success, and preserves an existing summary if replacement fails. The signed-evidence helper also
+success, caps the serialized summary before temporary-file creation and the
+opened-file readback at 16 MiB, and preserves an existing summary if replacement
+fails. The signed-evidence helper also
 classifies signer-controlled output parents with `lstat()` before write or
 read-back digest preflight, so unreadable parent metadata stays a structured
 signer blocker instead of being hidden by `Path.is_dir()`.
@@ -520,7 +541,7 @@ also classifies slot-relative ancestor directories with
 `Path.is_symlink()`. Slot-metadata digest checks also revalidate `slot.json`-referenced
 attestation-chain, offline-wallet APK, and signed-evidence artifact paths before
 reading bytes for SHA-256 comparison, then bind the bytes to the opened file
-identity so post-preflight regular-file swaps fail closed. D2D handoff and
+identity with a 16 MiB cap so post-preflight regular-file swaps fail closed. D2D handoff and
 wallet-integrity transcript bindings, including `queue/pending_queue.json`, use
 the same digest-time revalidation before comparing SHA-256 values. Required
 status NDJSON and runtime log marker checks also revalidate their slot-relative
@@ -657,11 +678,12 @@ artifact inventory.
 Secret-looking trusted signer key paths are rejected before key loading.
 Newly-created release-bundle output parents are revalidated before writing so a
 symlinked parent cannot be introduced during output creation. The manifest is
-written through a fsynced temporary file in the target directory, atomically
-replaced into place, synced at the parent directory where supported, and read
-back through opened-file identity binding before success is reported, and `--out` cannot
-overwrite any readiness summary, evidence JSON, proof log, key artifact, or
-Android signed-evidence file already hash-bound into the manifest.
+rejected above 16 MiB before any temporary output is created, written through a
+fsynced temporary file in the target directory, atomically replaced into place,
+synced at the parent directory where supported, and read back through
+opened-file identity binding with the same 16 MiB cap before success is
+reported, and `--out` cannot overwrite any readiness summary, evidence JSON,
+proof log, key artifact, or Android signed-evidence file already hash-bound into the manifest.
 
 The helper rejects a symlinked or unreadable-metadata `--artifact-dir` and
 refuses to write `lineage-proof-evidence.json` through symlinked, hardlinked,
@@ -674,9 +696,24 @@ evidence JSON. It also requires `recursive-compact-key-artifacts.log` beside the
 key artifacts and verifies that the canonical generator summary sizes match the
 local `.vk`, `.pk`, key-artifacts package, verifier-keys package, and
 `.record.norito` files.
-The readiness summary writer, both evidence helpers, and the release-bundle
-writer serialize with strict JSON; non-finite values such as `NaN` or
+The readiness summary writer, Android device-lab summary writer, Android
+signed-evidence helper, both evidence helpers, and the release-bundle writer
+serialize with strict JSON; non-finite values such as `NaN` and
 `Infinity` fail before any temporary release output is created.
+The lineage and compact-key evidence helpers apply the same strict JSON
+serialization before creating validation scratch files under `--artifact-dir`.
+The readiness summary writer enforces a 16 MiB `--summary-out` cap before
+temporary-file creation and during final opened-file readback. The lineage and
+compact-key evidence helpers also enforce the readiness evidence JSON byte caps
+before creating `--out` temporary files and again while reading back the opened
+output file after atomic replacement, so oversized same-inode output growth
+cannot be accepted as a verified write.
+The release-bundle writer applies the same pattern to its manifest output with
+a 16 MiB cap before temporary-file creation and during final opened-file
+readback.
+Android signed-evidence canonical signature payloads also serialize with strict
+JSON before hashing, signing, or verification, so non-standard constants cannot
+become signed bytes.
 Readiness enforces the production proof-log and compact generator-log byte caps
 from the opened file metadata used for hashing and decoding, so a separate
 path-size lookup cannot satisfy the size gate for replacement log bytes.

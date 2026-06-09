@@ -69,6 +69,8 @@ MAX_PERSISTED_RECORD_JSON_BYTES = 1024 * 1024
 MAX_RAIL_XML_BYTES = 4 * 1024 * 1024
 MAX_RAIL_SIDECAR_JSON_BYTES = 16 * 1024
 MAX_HTTP_URL_CHARS = 2048
+MAX_LOCAL_PATH_CHARS = 4096
+MAX_CLEAN_STRING_CHARS = 4096
 LOCAL_REBINDING_HOST_SUFFIXES = {"localtest.me", "lvh.me", "nip.io", "sslip.io", "vcap.me"}
 RESERVED_PLACEHOLDER_HOST_SUFFIXES = {
     "example",
@@ -380,6 +382,8 @@ def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
 def _reject_raw_cli_path_smuggling(raw: str, label: str) -> None:
     if not raw:
         raise ReceiptError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise ReceiptError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReceiptError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -906,6 +910,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
 def _require_clean_string(value: Any, label: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ReceiptError(f"{label} must be a non-empty string")
+    if len(value) > MAX_CLEAN_STRING_CHARS:
+        raise ReceiptError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise ReceiptError(f"{label} must not contain control characters")
     if value != value.strip():
@@ -934,6 +940,8 @@ def _require_optional_nonsecret_clean_string(value: Any, label: str) -> str | No
 
 def _require_clean_path_string(value: Any, label: str) -> str:
     path = _require_clean_string(value, label)
+    if len(path) > MAX_LOCAL_PATH_CHARS:
+        raise ReceiptError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ch.isspace() for ch in path):
         raise ReceiptError(f"{label} must not contain whitespace")
     if path.startswith("-"):
@@ -1611,6 +1619,8 @@ def _normalize_optional_string(
         return None
     if not isinstance(value, str) or not value.strip():
         raise ReceiptError(f"{label} must be null or a non-empty string")
+    if len(value) > MAX_CLEAN_STRING_CHARS:
+        raise ReceiptError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise ReceiptError(f"{label} must not contain control characters")
     if value != value.strip():
@@ -1661,6 +1671,8 @@ def _normalize_sidecar_optional_string(
     value = sidecar[key]
     if not isinstance(value, str) or not value.strip():
         raise ReceiptError(f"{label} must be a non-empty string")
+    if len(value) > MAX_CLEAN_STRING_CHARS:
+        raise ReceiptError(f"{label} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise ReceiptError(f"{label} must not contain control characters")
     if value != value.strip():

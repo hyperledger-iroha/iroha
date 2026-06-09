@@ -2143,6 +2143,60 @@ def test_release_readiness_report_guards_all_lanes_route_canary_scalar_gate_inve
     )
 
 
+def test_release_readiness_report_guards_all_lanes_evidence_root_schema_gate_inventory(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must pin all-lanes evidence-root schemas."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    assert report._all_lanes_evidence_root_schema_gate_inventory_errors() == []
+
+    sparse_script = tmp_path / "sccp_all_lanes_evidence.py"
+    sparse_script.write_text(
+        "def _evidence_bundle_root_errors(records: Any):\n",
+        encoding="utf-8",
+    )
+    errors = report._all_lanes_evidence_root_schema_gate_inventory_errors(
+        (
+            (
+                sparse_script,
+                verifier.ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS[0][1],
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP all-lanes evidence-root schema source inventory" in error
+        and str(sparse_script) in error
+        and "missing marker: evidence bundle root must be an object" in error
+        for error in errors
+    )
+
+    required_test_markers = verifier.ALL_LANES_EVIDENCE_ROOT_SCHEMA_MARKERS[1][1]
+    removed_marker = "def test_all_lanes_evidence_rejects_non_string_section_keys"
+    sparse_tests = tmp_path / "sccp_all_lanes_evidence_test.py"
+    sparse_tests.write_text(
+        "\n".join(marker for marker in required_test_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+    errors = report._all_lanes_evidence_root_schema_gate_inventory_errors(
+        (
+            (
+                sparse_tests,
+                required_test_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP all-lanes evidence-root schema source inventory" in error
+        and str(sparse_tests) in error
+        and f"missing marker: {removed_marker}" in error
+        for error in errors
+    )
+
+
 def test_release_readiness_report_guards_all_lanes_governed_blocker_schema_gate_inventory(
     tmp_path: Path,
 ) -> None:
@@ -2184,7 +2238,7 @@ def test_release_readiness_report_guards_all_lanes_governed_blocker_schema_gate_
 def test_release_readiness_report_guards_all_lanes_release_checklist_exact_boolean_gate_inventory(
     tmp_path: Path,
 ) -> None:
-    """Readiness source inventory must pin all-lanes exact-boolean checks."""
+    """Readiness source inventory must pin all-lanes checklist checks."""
 
     report = load_report_module()
     verifier = load_verify_helpers()
@@ -2217,6 +2271,33 @@ def test_release_readiness_report_guards_all_lanes_release_checklist_exact_boole
         "SCCP all-lanes release-checklist exact-boolean source inventory" in error
         and 'missing marker: return 0 if summary["production_ready"] is True else 1'
         in error
+        for error in errors
+    )
+
+    required_test_markers = verifier.ALL_LANES_RELEASE_CHECKLIST_EXACT_BOOLEAN_MARKERS[
+        1
+    ][1]
+    removed_marker = (
+        "def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay"
+    )
+    sparse_tests = tmp_path / "sccp_all_lanes_evidence_test.py"
+    sparse_tests.write_text(
+        "\n".join(marker for marker in required_test_markers if marker != removed_marker),
+        encoding="utf-8",
+    )
+    errors = report._all_lanes_release_checklist_exact_boolean_gate_inventory_errors(
+        (
+            (
+                sparse_tests,
+                required_test_markers,
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP all-lanes release-checklist exact-boolean source inventory" in error
+        and str(sparse_tests) in error
+        and f"missing marker: {removed_marker}" in error
         for error in errors
     )
 
@@ -5618,6 +5699,46 @@ def test_release_readiness_report_blocks_missing_all_lanes_governed_blocker_sche
     }
 
 
+def test_release_readiness_report_blocks_missing_all_lanes_evidence_root_schema_gate(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Production readiness must fail when all-lanes evidence-root guards drift."""
+
+    evidence, _ = write_complete_evidence(tmp_path)
+    native_bundle = write_native_evm_prover_bundle(tmp_path, evidence)
+    report = load_report_module()
+    blocker = (
+        "SCCP all-lanes evidence-root schema source inventory "
+        "scripts/sccp_all_lanes_evidence.py missing marker: "
+        "evidence bundle root must be an object"
+    )
+    monkeypatch.setattr(
+        report,
+        "_all_lanes_evidence_root_schema_gate_inventory_errors",
+        lambda: [blocker],
+    )
+
+    readiness = report._build_report(
+        [evidence],
+        ["all=passed"],
+        [],
+        require_phase_evidence=False,
+        native_evm_prover_bundle=native_bundle,
+    )
+
+    assert readiness["production_ready"] is False
+    assert blocker in readiness["blockers"]
+    assert readiness["source_inventory"]["all_lanes_evidence_root_schema_gate"] == {
+        "validation_status": "blocked",
+        "validation_blockers": [blocker],
+    }
+    assert readiness["source_inventory"]["all_lanes_route_canary_scalar_gate"] == {
+        "validation_status": "passed",
+        "validation_blockers": [],
+    }
+
+
 def test_release_readiness_report_blocks_missing_all_lanes_release_checklist_exact_boolean_gate(
     tmp_path: Path,
     monkeypatch,
@@ -8458,6 +8579,7 @@ def test_release_readiness_report_blocks_without_evidence_or_corridor_results(
     assert "`contract-smoke` | missing" in completed.stdout
     assert "`core-admission`" in completed.stdout
     assert "packaged `dist`, and TypeScript declaration exports" in completed.stdout
+    assert "source-adapter gate hash/audit replay rejection" in completed.stdout
 
 
 def test_release_readiness_json_tracks_corridor_phase_results(tmp_path: Path) -> None:

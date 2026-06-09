@@ -288,9 +288,11 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   enforces canonical lowercase ISO message definition ids and path
   containment for schema/fixture entries, rejects manifest schema paths,
   fixture paths, and fixture schema references longer than 2048 characters or
-  with non-ASCII characters, backslashes, embedded whitespace, leading-dash
-  path segments, semicolon path parameters, empty segments, dot segments, or
-  forbidden parent segments, rejects copied XML fixtures with duplicate
+  with non-ASCII characters, URI/drive prefixes, malformed percent escapes,
+  percent-encoded control/space, dot/separator, semicolon, URL delimiter, or
+  percent bytes, backslashes, embedded whitespace, leading-dash path segments,
+  semicolon path parameters, empty segments, dot segments, or forbidden parent
+  segments, rejects copied XML fixtures with duplicate
   fixture SHA-256 values, optionally validates schema-backed XML fixtures
   against their checked-in XSDs with `xmllint --nonet`, optionally
   parses the embedded default rail profile catalog and records which concrete
@@ -598,7 +600,10 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   reject raw URI or drive prefixes, malformed percent escapes, and
   percent-encoded control/space, dot/separator, semicolon, URL delimiter, and
   percent bytes before path expansion, summary emission, archive replay, or
-  child command construction.
+  child command construction. Direct local CLI/output/artifact path strings are
+  capped at 4096 characters with label-only diagnostics before secret scanning,
+  filesystem expansion, summary emission, child command construction, or archive
+  replay.
   Secret-looking field-name markers
   also cover hyphenated `private-key` and underscore-form `x_iroha_signature`
   spellings across ISO validators, and receipt JSON secret-field scans recurse
@@ -610,6 +615,14 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   Archived receipt source paths, including rail XML/sidecar paths, notary anchor
   paths, and notary store directories, also reject narrow secret-looking
   identifiers before missing-source or mismatch diagnostics can echo them.
+  Notary and receipt replay clean metadata strings from audit indexes,
+  persisted records, nullable context/metadata/history fields, and rail sidecars
+  are capped at 4096 characters with label-only diagnostics before mismatch,
+  source replay, or sidecar validation can retain oversized operator evidence.
+  Canary runbook generic strings/lists and evidence replay clean strings/lists
+  share the same 4096-character label-only cap before runbook planning or
+  archive validation can preserve oversized metadata; embedded trust DER base64
+  keeps its separate decoded-size guard.
   Canary runbooks,
   trust bundles, evidence/readiness summaries, XSD manifests, profile catalogs,
   schema files, XML fixtures, and receipt archive directories must reject
@@ -633,9 +646,11 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   redacted from planned command output. Canary child stdout/stderr previews
   also reject identifier-style secret-looking material and unsafe control
   characters before summary emission.
-  Canary runbook path strings, archived child-command local path values, and
-  production-readiness compact summary/config/receipt path strings must also
-  remain printable ASCII before planning, evidence replay, or release archival.
+  Canary runbook path strings and archived child-command local path values must
+  also remain printable ASCII and capped by the 4096-character local path limit
+  before planning or evidence replay, while production-readiness compact
+  summary/config/receipt path strings keep the stricter 2048-character archive
+  cap before release archival.
   XSD `xmllint` diagnostics redact key/value secret material,
   identifier-style secret-looking validator output, unsafe control characters,
   and non-ASCII material before reporting schema-validation failures.
@@ -797,7 +812,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   secret-looking-free with a 1024-character cap in direct XSD summaries and
   production-readiness replay, and production readiness rejects digest-correct
   archived XSD summaries whose reviewed gap reasons are present but empty,
-  non-string, or overlong, or whose
+  non-string, or overlong, or whose copied missing-schema/schema-only gap-list
+  entries carry non-canonical paths or reviewed reasons, or whose
   schema-backed fixtures still carry a missing-schema reason. Rejected XSD manifest and archived summary path
   validation errors report label-only failures without echoing raw path values
   that may contain secret-looking segments. Checked-in XSD source provenance
@@ -1316,12 +1332,13 @@ blocked-source replay across repeated XSD summaries, blocked-source
 redistribution marker strength, canonical relative schema paths whose filenames match
 `message_def_id`, fixture paths that remain printable-ASCII relative
 forward-slash XML paths no longer than 2048 characters and without leading
-dashes, empty, dot, or non-leading parent segments,
+dashes, URI/drive prefixes, malformed or smuggled percent escapes, empty, dot,
+or non-leading parent segments,
 schema-backed/missing-schema consistency, and schema-backed fixture XML
 schema-validation proof. It also rechecks profile-catalog source digests,
 version coverage counts, canonical profile ids, ISO family message types,
 allowed directions, message-definition family binding, and missing-version
-entries, plus skipped family-version shape and profile catalog count
+entries, plus skipped family-version alias canonicality and profile catalog count
 consistency, rejects unknown XSD summary fields across strict flags,
 schema/fixture/gap/profile-catalog entries,
 and the XSD preflight rejects unknown keys in source profile/message catalog

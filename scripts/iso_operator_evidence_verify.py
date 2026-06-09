@@ -91,6 +91,8 @@ MAX_TIMESTAMP_CHARS = 128
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_RECEIPT_VERIFIER_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_HTTP_URL_CHARS = 2048
+MAX_LOCAL_PATH_CHARS = 4096
+MAX_CLEAN_STRING_CHARS = 4096
 DEFAULT_RECEIPT_VERIFIER_TIMEOUT_SECS = 300.0
 PLACEHOLDER_TRUST_SOURCE_MARKERS = (
     "dummy",
@@ -550,6 +552,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
         raise EvidenceError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise EvidenceError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise EvidenceError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -577,6 +581,8 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
 def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
     if not raw:
         raise EvidenceError(f"{label} must be a non-empty path")
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise EvidenceError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise EvidenceError(f"{label} must not contain control characters")
     if raw != raw.strip():
@@ -1083,6 +1089,8 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise EvidenceError(f"{label}.{key} must be a non-empty string")
+    if len(raw) > MAX_CLEAN_STRING_CHARS:
+        raise EvidenceError(f"{label}.{key} must be no longer than {MAX_CLEAN_STRING_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise EvidenceError(f"{label}.{key} must not contain control characters")
     if raw != raw.strip():
@@ -1368,12 +1376,22 @@ def _required_sha256_list(value: dict[str, Any], key: str, label: str) -> list[s
     return result
 
 
-def _required_clean_string_list(value: dict[str, Any], key: str, label: str) -> list[str]:
+def _required_clean_string_list(
+    value: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    max_chars: int | None = MAX_CLEAN_STRING_CHARS,
+) -> list[str]:
     items = _require_list(value.get(key), f"{label}.{key}")
     result: list[str] = []
     for offset, item in enumerate(items):
         if not isinstance(item, str) or not item.strip():
             raise EvidenceError(f"{label}.{key}[{offset}] must be a non-empty string")
+        if max_chars is not None and len(item) > max_chars:
+            raise EvidenceError(
+                f"{label}.{key}[{offset}] must be no longer than {max_chars} characters"
+            )
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
             raise EvidenceError(f"{label}.{key}[{offset}] must not contain control characters")
         if item != item.strip():
@@ -1421,7 +1439,7 @@ def _required_canonical_base64_list(
     key: str,
     label: str,
 ) -> list[str]:
-    items = _required_clean_string_list(value, key, label)
+    items = _required_clean_string_list(value, key, label, max_chars=None)
     if len(items) > MAX_TRUST_DER_BLOBS:
         raise EvidenceError(
             f"{label}.{key} must not contain more than {MAX_TRUST_DER_BLOBS} entries"
@@ -1629,6 +1647,8 @@ def _validate_artifact_path(raw: str, label: str) -> str:
 
 
 def _reject_path_smuggling(raw: str, label: str) -> None:
+    if len(raw) > MAX_LOCAL_PATH_CHARS:
+        raise EvidenceError(f"{label} must be no longer than {MAX_LOCAL_PATH_CHARS} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise EvidenceError(f"{label} must not contain control characters")
     if any(ord(ch) > 0x7E for ch in raw):

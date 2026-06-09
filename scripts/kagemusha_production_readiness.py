@@ -38,8 +38,10 @@ ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"
 LINEAGE_PROOF_EVIDENCE_SUMMARY_LABEL = "<lineage-proof-evidence>"
 COMPACT_KEY_EVIDENCE_SUMMARY_LABEL = "<recursive-compact-key-evidence>"
 MAX_ABI6_MANIFEST_JSON_BYTES = 1024 * 1024
+MAX_REPO_SOURCE_MARKER_BYTES = 8 * 1024 * 1024
 MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = 16 * 1024 * 1024
 MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES = 16 * 1024 * 1024
+MAX_READINESS_SUMMARY_JSON_BYTES = 16 * 1024 * 1024
 EXPECTED_LINEAGE_PROOF_OPENING_LEN = 128
 EXPECTED_LINEAGE_PROOF_IPA_K = 8
 EXPECTED_LINEAGE_PROOF_BACKEND = "halo2/ipa"
@@ -683,7 +685,17 @@ def _repo_source_marker_text(
                 return None, [f"{label} changed while being read"]
             if open_stat.st_nlink > 1:
                 return None, [f"{label} must not be hardlinked"]
+            if open_stat.st_size > MAX_REPO_SOURCE_MARKER_BYTES:
+                return None, [
+                    f"{label} must be no more than {MAX_REPO_SOURCE_MARKER_BYTES} bytes"
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_REPO_SOURCE_MARKER_BYTES:
+                    return None, [
+                        f"{label} must be no more than {MAX_REPO_SOURCE_MARKER_BYTES} bytes"
+                    ]
                 chunks.append(chunk)
             marker_final_path_stat = path.lstat()
             if (marker_final_path_stat.st_dev, marker_final_path_stat.st_ino) != (
@@ -3429,7 +3441,21 @@ def _read_summary_output_text(
                 ]
             if open_stat.st_nlink > 1:
                 return None, [_summary_out_blocker("--summary-out must not be hardlinked")]
+            if open_stat.st_size > MAX_READINESS_SUMMARY_JSON_BYTES:
+                return None, [
+                    _summary_out_blocker(
+                        f"--summary-out must be no more than {MAX_READINESS_SUMMARY_JSON_BYTES} bytes"
+                    )
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_READINESS_SUMMARY_JSON_BYTES:
+                    return None, [
+                        _summary_out_blocker(
+                            f"--summary-out must be no more than {MAX_READINESS_SUMMARY_JSON_BYTES} bytes"
+                        )
+                    ]
                 chunks.append(chunk)
             final_path_stat = path.lstat()
             if (
@@ -3469,6 +3495,12 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
             blocker(
                 SUMMARY_OUT_PATH_INVALID_CODE,
                 "--summary-out summary is not strict JSON",
+            )
+        ]
+    if len(summary_text.encode("utf-8")) > MAX_READINESS_SUMMARY_JSON_BYTES:
+        return [
+            _summary_out_blocker(
+                f"--summary-out must be no more than {MAX_READINESS_SUMMARY_JSON_BYTES} bytes"
             )
         ]
     tmp_path: Path | None = None

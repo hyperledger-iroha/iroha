@@ -2405,6 +2405,97 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(out.exists())
         self.assertEqual(temp_outputs, [])
 
+    def test_write_release_bundle_rejects_oversized_manifest_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            bundle = {
+                "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                "ready": True,
+                "evidence": {},
+                "blockers": [],
+            }
+            manifest_text = (
+                json.dumps(bundle, indent=2, sort_keys=True, allow_nan=False) + "\n"
+            )
+            limit = len(manifest_text.encode("utf-8")) - 1
+
+            with mock.patch.object(
+                release_bundle,
+                "MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES",
+                limit,
+            ):
+                errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(
+            [error["code"] for error in errors],
+            ["kagemusha_release_bundle_out_invalid"],
+        )
+        self.assertIn(
+            f"--out must be no more than {limit} bytes",
+            {error["message"] for error in errors},
+        )
+        self.assertFalse(out.exists())
+        self.assertEqual(temp_outputs, [])
+
+    def test_write_release_bundle_rejects_oversized_readback_after_replace(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            bundle = {
+                "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                "ready": True,
+                "evidence": {},
+                "blockers": [],
+            }
+            manifest_text = (
+                json.dumps(bundle, indent=2, sort_keys=True, allow_nan=False) + "\n"
+            )
+            limit = len(manifest_text.encode("utf-8")) + 4
+            original_open = Path.open
+            mutated = False
+
+            def appending_open(path: Path, *args: object, **kwargs: object):
+                nonlocal mutated
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == out and "r" in str(mode) and not mutated:
+                    with original_open(path, "a", encoding="utf-8") as handle:
+                        handle.write("X" * 16)
+                    mutated = True
+                return original_open(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    release_bundle,
+                    "MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES",
+                    limit,
+                ),
+                mock.patch.object(Path, "open", appending_open),
+            ):
+                errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
+            written = out.read_text(encoding="utf-8")
+
+        self.assertTrue(mutated)
+        self.assertGreater(
+            len(written.encode("utf-8")),
+            len(manifest_text.encode("utf-8")),
+        )
+        self.assertEqual(
+            [error["code"] for error in errors],
+            ["kagemusha_release_bundle_out_invalid"],
+        )
+        self.assertIn(
+            f"--out must be no more than {limit} bytes",
+            {error["message"] for error in errors},
+        )
+
     def test_write_release_bundle_rejects_readback_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             bundle_root = Path(temp) / "bundle"
@@ -4984,6 +5075,52 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIsNone(text)
         self.assertEqual(errors, ["ABI-7 source marker file could not be read"])
 
+    def test_repo_source_marker_text_rejects_oversized_marker_before_decode(
+        self,
+    ) -> None:
+        original_max = readiness.MAX_REPO_SOURCE_MARKER_BYTES
+        try:
+            readiness.MAX_REPO_SOURCE_MARKER_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                marker_path = Path(temp) / "repo" / "crates/iroha_core/src/zk.rs"
+                marker_path.parent.mkdir(parents=True)
+                marker_path.write_text(
+                    "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE\n",
+                    encoding="utf-8",
+                )
+
+                text, errors = readiness._repo_source_marker_text(
+                    marker_path,
+                    "ABI-7 core marker file",
+                    "ABI-7 source marker file could not be read",
+                )
+        finally:
+            readiness.MAX_REPO_SOURCE_MARKER_BYTES = original_max
+
+        self.assertIsNone(text)
+        self.assertEqual(errors, ["ABI-7 core marker file must be no more than 8 bytes"])
+
+    def test_repo_source_marker_text_accepts_large_checked_in_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            marker = "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE"
+            marker_path = Path(temp) / "repo" / "crates/connect_norito_bridge/src/lib.rs"
+            marker_path.parent.mkdir(parents=True)
+            marker_path.write_text(
+                marker + "\n" + ("x" * (1024 * 1024)),
+                encoding="utf-8",
+            )
+
+            text, errors = readiness._repo_source_marker_text(
+                marker_path,
+                "ABI-7 bridge marker file",
+                "ABI-7 source marker file could not be read",
+            )
+
+        self.assertEqual(errors, [])
+        self.assertIsNotNone(text)
+        assert text is not None
+        self.assertIn(marker, text)
+
     def test_abi7_fail_closed_rejects_symlinked_source_marker_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -7211,6 +7348,28 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(out.exists())
         self.assertEqual(temp_outputs, [])
 
+    def test_compact_key_write_evidence_rejects_oversized_json_before_write(
+        self,
+    ) -> None:
+        evidence = {"schema": "test"}
+        rendered = json.dumps(evidence, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        old_limit = compact_key_helper.readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES
+        try:
+            compact_key_helper.readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES = (
+                len(rendered) - 1
+            )
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+
+                errors = compact_key_helper.write_evidence(out, evidence)
+                temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+        finally:
+            compact_key_helper.readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES = old_limit
+
+        self.assertEqual(errors, ["--out evidence exceeds maximum size"])
+        self.assertFalse(out.exists())
+        self.assertEqual(temp_outputs, [])
+
     def test_compact_key_write_evidence_preserves_existing_output_on_replace_failure(
         self,
     ) -> None:
@@ -7241,10 +7400,17 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 path: Path,
                 expected_stat: os.stat_result,
                 label: str,
+                *,
+                max_bytes: int | None = None,
             ) -> tuple[str | None, list[str]]:
                 if path == out:
                     return '{"schema": "tampered"}\n', []
-                return original_read_output_text(path, expected_stat, label)
+                return original_read_output_text(
+                    path,
+                    expected_stat,
+                    label,
+                    max_bytes=max_bytes,
+                )
 
             with mock.patch.object(
                 compact_key_helper,
@@ -7269,10 +7435,17 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 path: Path,
                 expected_stat: os.stat_result,
                 label: str,
+                *,
+                max_bytes: int | None = None,
             ) -> tuple[str | None, list[str]]:
                 if path == out:
                     return None, ["--out write verification failed"]
-                return original_read_output_text(path, expected_stat, label)
+                return original_read_output_text(
+                    path,
+                    expected_stat,
+                    label,
+                    max_bytes=max_bytes,
+                )
 
             with mock.patch.object(
                 compact_key_helper,
@@ -7286,6 +7459,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, ["--out write verification failed"])
         self.assertEqual(final_text, '{\n  "schema": "test"\n}\n')
         self.assertEqual(temp_outputs, [])
+
+    def test_compact_key_write_evidence_rejects_oversized_readback_after_replace(
+        self,
+    ) -> None:
+        evidence = {"schema": "test"}
+        rendered = json.dumps(evidence, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        original_open = Path.open
+        old_limit = compact_key_helper.readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            mutated = False
+
+            def appending_open(path: Path, *args, **kwargs):
+                nonlocal mutated
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == out and "r" in str(mode) and not mutated:
+                    with original_open(path, "a", encoding="utf-8") as handle:
+                        handle.write("X" * 16)
+                    mutated = True
+                return original_open(path, *args, **kwargs)
+
+            try:
+                compact_key_helper.readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES = (
+                    len(rendered) + 4
+                )
+                with mock.patch.object(
+                    Path,
+                    "open",
+                    appending_open,
+                ):
+                    errors = compact_key_helper.write_evidence(out, evidence)
+                final_size = out.stat().st_size
+            finally:
+                compact_key_helper.readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES = old_limit
+
+        self.assertTrue(mutated)
+        self.assertEqual(errors, ["--out evidence exceeds maximum size"])
+        self.assertGreater(final_size, len(rendered))
 
     def test_compact_key_write_evidence_rejects_regular_file_swap_before_readback(
         self,
@@ -7408,6 +7620,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 ["--artifact-dir could not be created for evidence validation"],
             )
             self.assertFalse(artifact_dir.exists())
+
+    def test_compact_key_evidence_document_validator_rejects_nonfinite_json_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "compact"
+
+            errors = compact_key_helper.validate_evidence_document(
+                {"schema": "test", "elapsed_seconds": float("nan")},
+                artifact_dir,
+            )
+
+        self.assertEqual(
+            errors,
+            ["recursive compact key evidence validation file is not strict JSON"],
+        )
+        self.assertFalse(artifact_dir.exists())
 
     def test_compact_key_evidence_document_validator_rejects_temp_write_failure_after_preflight(
         self,
@@ -9328,6 +9557,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             )
             self.assertFalse(artifact_dir.exists())
 
+    def test_lineage_proof_evidence_document_validator_rejects_nonfinite_json_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            artifact_dir = Path(temp) / "artifacts"
+
+            errors = evidence_helper.validate_evidence_document(
+                {"schema": "test", "elapsed_seconds": float("nan")},
+                artifact_dir,
+            )
+
+        self.assertEqual(
+            errors,
+            ["lineage proof evidence validation file is not strict JSON"],
+        )
+        self.assertFalse(artifact_dir.exists())
+
     def test_lineage_proof_evidence_document_validator_rejects_temp_write_failure_after_preflight(
         self,
     ) -> None:
@@ -10646,6 +10892,28 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(out.exists())
         self.assertEqual(temp_outputs, [])
 
+    def test_lineage_proof_write_evidence_rejects_oversized_json_before_write(
+        self,
+    ) -> None:
+        evidence = {"schema": "test"}
+        rendered = json.dumps(evidence, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        old_limit = evidence_helper.readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES
+        try:
+            evidence_helper.readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = (
+                len(rendered) - 1
+            )
+            with tempfile.TemporaryDirectory() as temp:
+                out = Path(temp) / "lineage-proof-evidence.json"
+
+                errors = evidence_helper.write_evidence(out, evidence)
+                temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+        finally:
+            evidence_helper.readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = old_limit
+
+        self.assertEqual(errors, ["--out evidence exceeds maximum size"])
+        self.assertFalse(out.exists())
+        self.assertEqual(temp_outputs, [])
+
     def test_lineage_proof_write_evidence_preserves_existing_output_on_replace_failure(
         self,
     ) -> None:
@@ -10676,10 +10944,17 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 path: Path,
                 expected_stat: os.stat_result,
                 label: str,
+                *,
+                max_bytes: int | None = None,
             ) -> tuple[str | None, list[str]]:
                 if path == out:
                     return '{"schema": "tampered"}\n', []
-                return original_read_output_text(path, expected_stat, label)
+                return original_read_output_text(
+                    path,
+                    expected_stat,
+                    label,
+                    max_bytes=max_bytes,
+                )
 
             with mock.patch.object(
                 evidence_helper,
@@ -10704,10 +10979,17 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 path: Path,
                 expected_stat: os.stat_result,
                 label: str,
+                *,
+                max_bytes: int | None = None,
             ) -> tuple[str | None, list[str]]:
                 if path == out:
                     return None, ["--out write verification failed"]
-                return original_read_output_text(path, expected_stat, label)
+                return original_read_output_text(
+                    path,
+                    expected_stat,
+                    label,
+                    max_bytes=max_bytes,
+                )
 
             with mock.patch.object(
                 evidence_helper,
@@ -10721,6 +11003,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, ["--out write verification failed"])
         self.assertEqual(final_text, '{\n  "schema": "test"\n}\n')
         self.assertEqual(temp_outputs, [])
+
+    def test_lineage_proof_write_evidence_rejects_oversized_readback_after_replace(
+        self,
+    ) -> None:
+        evidence = {"schema": "test"}
+        rendered = json.dumps(evidence, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        original_open = Path.open
+        old_limit = evidence_helper.readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / "lineage-proof-evidence.json"
+            mutated = False
+
+            def appending_open(path: Path, *args, **kwargs):
+                nonlocal mutated
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == out and "r" in str(mode) and not mutated:
+                    with original_open(path, "a", encoding="utf-8") as handle:
+                        handle.write("X" * 16)
+                    mutated = True
+                return original_open(path, *args, **kwargs)
+
+            try:
+                evidence_helper.readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = (
+                    len(rendered) + 4
+                )
+                with mock.patch.object(
+                    Path,
+                    "open",
+                    appending_open,
+                ):
+                    errors = evidence_helper.write_evidence(out, evidence)
+                final_size = out.stat().st_size
+            finally:
+                evidence_helper.readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = old_limit
+
+        self.assertTrue(mutated)
+        self.assertEqual(errors, ["--out evidence exceeds maximum size"])
+        self.assertGreater(final_size, len(rendered))
 
     def test_lineage_proof_write_evidence_rejects_regular_file_swap_before_readback(
         self,
@@ -11782,6 +12103,81 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 {
                     "code": "kagemusha_summary_out_path_invalid",
                     "message": "--summary-out summary is not strict JSON",
+                }
+            ],
+        )
+
+    def test_write_summary_rejects_oversized_json_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
+            summary_text = (
+                json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n"
+            )
+            limit = len(summary_text.encode("utf-8")) - 1
+
+            with mock.patch.object(
+                readiness,
+                "MAX_READINESS_SUMMARY_JSON_BYTES",
+                limit,
+            ):
+                errors = readiness.write_summary(summary_path, summary)
+            temp_outputs = list(summary_path.parent.glob(f".{summary_path.name}.*.tmp"))
+
+        self.assertFalse(summary_path.exists())
+        self.assertEqual(temp_outputs, [])
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": f"--summary-out must be no more than {limit} bytes",
+                }
+            ],
+        )
+
+    def test_write_summary_rejects_oversized_readback_after_replace(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
+            summary_text = (
+                json.dumps(summary, indent=2, sort_keys=True, allow_nan=False) + "\n"
+            )
+            limit = len(summary_text.encode("utf-8")) + 4
+            original_open = Path.open
+            mutated = False
+
+            def appending_open(path: Path, *args: object, **kwargs: object):
+                nonlocal mutated
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == summary_path and "r" in str(mode) and not mutated:
+                    with original_open(path, "a", encoding="utf-8") as handle:
+                        handle.write("X" * 16)
+                    mutated = True
+                return original_open(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    readiness,
+                    "MAX_READINESS_SUMMARY_JSON_BYTES",
+                    limit,
+                ),
+                mock.patch.object(Path, "open", appending_open),
+            ):
+                errors = readiness.write_summary(summary_path, summary)
+            written = summary_path.read_text(encoding="utf-8")
+
+        self.assertTrue(mutated)
+        self.assertGreater(
+            len(written.encode("utf-8")),
+            len(summary_text.encode("utf-8")),
+        )
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": f"--summary-out must be no more than {limit} bytes",
                 }
             ],
         )

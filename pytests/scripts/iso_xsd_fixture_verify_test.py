@@ -339,7 +339,23 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
+            overlong_path = "out/" + ("a" * (VERIFIER.MAX_LOCAL_PATH_CHARS + 1))
             cases = (
+                (
+                    "raw overlong",
+                    lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                    overlong_path,
+                    f"no longer than {VERIFIER.MAX_LOCAL_PATH_CHARS} characters",
+                ),
+                (
+                    "output overlong",
+                    lambda raw: VERIFIER._reject_output_path_smuggling(
+                        Path(raw),
+                        "output path",
+                    ),
+                    overlong_path,
+                    f"no longer than {VERIFIER.MAX_LOCAL_PATH_CHARS} characters",
+                ),
                 (
                     "raw encoded dot",
                     lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),

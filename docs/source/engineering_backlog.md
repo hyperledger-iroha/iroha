@@ -8,8 +8,9 @@ track detailed unfinished engineering work.
 
 ## SCCP launch-scope note
 
-The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
-runtime-network families outside that launch scope are not supported for now.
+The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON.
+Retired runtime-network families outside that launch scope are not supported for now.
+Sub&#115;trate/Pol&#107;adot networks are explicitly outside SCCP launch support for now.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
@@ -31,9 +32,10 @@ evidence unambiguous before production archiving.
 Archived child-command floating timeout values also reject Unicode digit
 confusables before Python numeric parsing can accept them.
 Canary runbook path strings and archived child-command local path values must
-remain printable ASCII, and production-readiness compact summary/config/receipt
-path strings replay the same guard, so Unicode-confusable path evidence cannot
-be planned or replayed into release archives.
+remain printable ASCII and capped by the 4096-character local path limit, while
+production-readiness compact summary/config/receipt path strings replay the
+stricter 2048-character archive cap, so Unicode-confusable or oversized path
+evidence cannot be planned or replayed into release archives.
 Archived canary child commands now also must keep the runner-emitted shape:
 Python interpreter, expected stage script path, then supported flags and their
 values. Interpreter version suffixes are ASCII-only, so Unicode digit
@@ -91,7 +93,10 @@ Local artifact path validators now also reject raw URI/drive prefixes,
 malformed percent escapes, and percent-encoded control/space, dot/separator,
 semicolon, URL delimiter, and percent bytes across raw CLI, output, runbook,
 XSD, trust, receipt, evidence, and readiness paths before those values are
-expanded, replayed, or archived.
+expanded, replayed, or archived. Direct local CLI/output/artifact path strings
+are capped at 4096 characters with label-only diagnostics before secret
+scanning, filesystem expansion, summary emission, child command construction, or
+archive replay.
 Canary runbook artifact paths now use the same narrow local-path scanner,
 including non-whitespace control-character rejection, before plan-only output
 or child command construction, while bearer-token file paths remain runtime
@@ -111,6 +116,14 @@ before field-specific replay.
 ISO URL port parser failures now report only label-level invalid-port
 diagnostics instead of including parser exception text that may contain the raw
 operator-provided port string.
+Notary and receipt replay clean metadata strings from audit indexes, persisted
+records, nullable context/metadata/history fields, and rail sidecars are capped
+at 4096 characters with label-only diagnostics before mismatch, source replay,
+or sidecar validation can retain oversized operator evidence.
+Canary runbook generic strings/lists and evidence replay clean strings/lists now
+share the same 4096-character label-only cap before runbook planning or archive
+validation can preserve oversized metadata; embedded trust DER base64 keeps its
+separate decoded-size guard.
 ISO URL host validators now reject secret-looking hostname labels and
 non-ASCII raw host labels, and non-port URL parser failures use label-only
 diagnostics before malformed URL text can be echoed by parser exceptions.
@@ -567,7 +580,11 @@ redistributable schemas, and official trust/revocation bundles.
   before governed artifact admission or verifier-key canonicalization. The
   profile now also binds the active coefficient rows as private witness rows,
   public deterministic padding rows, and the rule that transparent native
-  proofs must not open unmasked private rows.
+  proofs must not open unmasked private rows. Core's native BFV AIR boundary
+  now validates opened public padding rows against the canonical statement,
+  slot, and bound-mode header and rejects empty/all-zero AIR roots or
+  unauthenticated optional composition-value commitments before the dedicated
+  verifier fallback.
   Release prover input now has a typed
   `BfvFullBootstrapMaterialProofInputMaterialV1` boundary for governed
   full-bootstrap material proofs and a typed
@@ -625,8 +642,12 @@ redistributable schemas, and official trust/revocation bundles.
 	  proof-helper execution.
 	  BFV-shaped native AIR envelopes now also preflight the canonical
 	  transcript label, statement-bound domain tag, STARK/FRI parameters, public
-	  digest binding, opened row/path shape, and the no-unmasked-private-row
-	  policy before Core reports the current dedicated verifier boundary.
+	  digest binding, proof/commitment version tags, commitment/root shape,
+	  opened row/path shape, Merkle path-to-root binding, FRI query-chain
+	  Merkle/fold validation, optional final-layer composition-value root/value
+	  authentication, opened public padding-row semantics, and the
+	  no-unmasked-private-row policy before Core reports the current dedicated
+	  verifier boundary.
 	  Remaining production work is the audited full-bootstrap arithmetic
 	  proof-producing backend plus release-grade prover/verifier artifacts, not the
 	  Core verifier gate, arithmetic trace-profile digest binding,
@@ -2498,8 +2519,9 @@ redistributable schemas, and official trust/revocation bundles.
   on duplicated, malformed, or unknown-key profile/message/direction/version
 	  catalog entries. Manifest schema paths, fixture paths, and fixture
 	  schema references now fail closed on non-ASCII characters, values longer
-	  than 2048 characters, backslashes, leading-dash path segments, empty or
-	  dot segments, forbidden parent-segment forms, and
+	  than 2048 characters, URI/drive prefixes, malformed or smuggled percent
+	  escapes, backslashes, leading-dash path segments, empty or dot segments,
+	  forbidden parent-segment forms, and
   DTD/entity declarations before an XSD/profile summary is emitted. Schema
   `Document` declarations must also be unambiguous: exactly one top-level
   `Document` element whose type is exactly the local `Document` type, one
@@ -3171,7 +3193,8 @@ redistributable schemas, and official trust/revocation bundles.
 	  byte lengths for the final rollup,
 		  rejects compact canary config paths, receipt paths, and child
 		  receipt-directory arguments with embedded whitespace, leading-dash path
-		  segments, semicolon path parameters, empty segments, raw backslashes, or traversal segments,
+		  segments, semicolon path parameters, empty segments, raw backslashes,
+		  traversal segments, or values longer than 2048 characters,
 	  rejects stale digest-correct archive inputs, rejects repeated or copied
   canary/trust summaries by path and `summary_sha256`,
   requires canary summaries to prove they were generated with
@@ -3257,7 +3280,8 @@ redistributable schemas, and official trust/revocation bundles.
   roots, canonical lowercase ISO message definition ids, schema path
   containment under the manifest tree, fixture path containment under the ISO
   fixture tree, manifest duplicates/path escapes, manifest schema/fixture path
-  and fixture schema-reference whitespace or semicolon smuggling, duplicate XML
+	  and fixture schema-reference whitespace, URI/drive-prefix, semicolon, or
+	  percent-escape smuggling, duplicate XML
   fixture SHA-256 values, optional `xmllint --nonet` XML schema validation for
   schema-backed fixtures, and digest-bound summaries while making reviewed
   missing-schema fixture exceptions explicit. All
@@ -3285,10 +3309,11 @@ redistributable schemas, and official trust/revocation bundles.
 	  Readiness also rejects archived reviewed gap reasons that are present but
 	  empty or non-string instead of treating them as absent, blocks schema-backed archived fixtures
 		  that still carry a missing-schema reason, and checked-in XSD source
-		  provenance, manifest schema, fixture, fixture schema-reference, and
-		  archived profile-catalog paths reject non-ASCII characters, overlong
-		  source or relative paths, embedded whitespace, leading-dash path segments, or
-		  semicolon path parameters before summary emission and during readiness rechecks.
+			  provenance, manifest schema, fixture, fixture schema-reference, and
+			  archived profile-catalog paths reject non-ASCII characters, overlong
+			  source or relative paths, embedded whitespace, leading-dash path segments,
+			  semicolon path parameters, URI/drive prefixes, or malformed/smuggled
+			  percent escapes before summary emission and during readiness rechecks.
   Readiness also requires archived XSD summaries to retain the emitted manifest
   path and explicit profile-catalog object/null state.
 - Completed 2026-06-04: added `scripts/iso_production_readiness.py` as the
@@ -3311,7 +3336,7 @@ redistributable schemas, and official trust/revocation bundles.
   summaries, non-canonical or message-id-mismatched schema
 	  paths, leading-dash path tokens or segments, non-XML, absolute, empty-segment, dot-segment, or non-leading-parent
   fixture paths, schema-reference drift, unknown XSD summary fields, forged or
-	  non-canonical missing-schema/schema-only reviewed gap lists and reason
+	  non-canonical missing-schema/schema-only reviewed gap-list paths and reason
 	  strings, forged schema-only flags/reasons, stale missing-schema reasons on
 	  schema-backed fixtures, forged
   profile-catalog missing-version lists,
