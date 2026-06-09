@@ -2,6 +2,61 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 Kagemusha readiness summary strict JSON writer
+
+- Hardened `scripts/kagemusha_production_readiness.py` so
+  `write_summary(...)` serializes with `allow_nan=False` and returns a
+  structured `--summary-out` blocker before temporary output creation when a
+  summary contains non-finite `NaN`/`Infinity` values.
+- Added a direct summary-writer regression and promoted the strict JSON summary
+  writer into the production-readiness guard and PR workflow negative controls.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_rejects_nonfinite_json_before_write`
+    (`1` test passed, latest run 0.001s)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-strict-json-write`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`404` tests passed, latest run 41.923s)
+
+## 2026-06-09 Kagemusha strict JSON writers
+
+- Hardened the Reserved-lineage evidence helper, ABI-7 compact-key evidence
+  helper, and release-bundle writer to serialize with `allow_nan=False`, so
+  non-finite `NaN`/`Infinity` values fail before temporary release output files
+  are created.
+- Added direct writer regressions for lineage evidence, compact-key evidence,
+  and release-bundle manifests, and promoted strict JSON writer checks into the
+  production-readiness guard and PR workflow negative controls.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_write_evidence_rejects_nonfinite_json_before_write scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_write_evidence_rejects_nonfinite_json_before_write scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_rejects_nonfinite_manifest_before_write`
+    (`3` tests passed, latest run 0.002s)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-strict-json-write`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-strict-json-write`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-strict-json-write`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`403` tests passed, latest run 35.150s)
+
+## 2026-06-09 Kagemusha release-bundle JSON size caps
+
+- Hardened `scripts/kagemusha_release_bundle.py` so local JSON inputs used for
+  release-bundle creation and `--verify-existing` manifest comparison are capped
+  before decoding, using the same opened-file metadata and streamed byte count
+  as the path-identity revalidation.
+- Added release-bundle regressions for oversized readiness-summary JSON and
+  oversized existing bundle-manifest JSON, and promoted the cap into the
+  production-readiness guard and PR workflow negative controls.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_load_local_json_rejects_oversized_input scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_kagemusha_release_bundle_verify_existing_rejects_oversized_manifest_json`
+    (`2` tests passed, latest run 0.375s)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-local-json-size-limit`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`400` tests passed, latest run 32.840s)
+
 ## 2026-06-09 Kagemusha JSON evidence size caps
 
 - Hardened `scripts/kagemusha_production_readiness.py` so the checked-in ABI-6
@@ -3825,6 +3880,11 @@ Last updated: 2026-06-09
   builder. The Python SDK now exports the transfer/redeem wire-name constants
   and rejects wrong-schema archives locally instead of relying on the PyO3 layer
   to discover a type mismatch later.
+- Hardened the direct `iroha_js_host` transaction JSON decoder for
+  `KagemushaInstructionArchive`: after base64 decode, the host now re-encodes
+  the archive and requires byte-for-byte canonical standard base64 text before
+  decoding the typed instruction. Direct native-host JSON callers now share the
+  same base64 boundary that the public JavaScript helper enforces.
 - Made `lineage-key-artifacts` observable during expensive key generation:
   the command now prints verifier/proving/package stages, writes optional
   verifier-key and verifier-record outputs before proving-key derivation, writes
@@ -3832,8 +3892,11 @@ Last updated: 2026-06-09
   final key package. The already-running LEN=2 diagnostic uses the old binary and
   was left untouched.
 - Promoted the JS/Python schema validation, strict JS base64 coverage, and
-  lineage keygen stage markers into the SDK parity and production-readiness
-  source guards.
+  JS-host canonical base64 coverage, plus lineage keygen stage markers, into the
+  SDK parity and production-readiness source guards.
+- Restored the PR payload-bench workflow invocations for the lineage-proof
+  helper, compact-key helper, and release-bundle strict JSON write negative
+  controls so the production-readiness workflow inventory matches the guard.
 - Validation:
   - `CARGO_BUILD_JOBS=1 cargo build -p iroha_cli --bin iroha`
   - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
@@ -3848,6 +3911,9 @@ Last updated: 2026-06-09
     (blocked only by the known missing external evidence listed above)
   - `node --test javascript/iroha_js/test/transactionBuilder.test.js`
     (`3` Kagemusha tests passed, `31` native-addon tests skipped)
+  - `cargo test -p iroha_js_host kagemusha_instruction_archive_json_rejects_adversarial_inputs --lib -- --test-threads=1`
+    (`1` test passed; existing unrelated `iroha_core` warning emitted)
+  - `cargo fmt -p iroha_js_host --check`
   - `PYTHONPATH=/Users/mtakemiya/dev/iroha/python/iroha_python/src:/Users/mtakemiya/dev/iroha/python/norito_py/src:/Users/mtakemiya/dev/iroha/python PYTHONDONTWRITEBYTECODE=1 /tmp/iroha-kagemusha-python-sdk-venv/bin/python -m pytest -q tests/kagemusha_test.py`
     from `python/iroha_python` (`44` tests passed, latest run 2.92s)
   - `python3 -m py_compile python/iroha_python/src/iroha_python/kagemusha.py python/iroha_python/src/iroha_python/__init__.py python/iroha_python/tests/kagemusha_test.py`
@@ -4469,6 +4535,9 @@ Last updated: 2026-06-09
 - Checked-in and blocked-candidate XSD source provenance paths must now remain
   printable ASCII and no longer than 2048 characters before direct XSD
   summaries or production-readiness replay can preserve them.
+- XSD manifest schema paths, fixture paths, and fixture schema references must
+  now remain printable ASCII and no longer than 2048 characters before direct
+  summaries or production-readiness replay can preserve relative path evidence.
 - Optional XSD `xmllint` schema validation timeouts are now capped at 300
   seconds in addition to being positive and finite, so oversized timeout values
   fail before a validator child can be launched.
@@ -4580,10 +4649,12 @@ Last updated: 2026-06-09
     (`3` tests passed, latest run 0.030s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_schema_source_paths_reject_non_ascii_and_overlong_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_xsd_source_paths_reject_non_ascii_and_overlong_without_echo`
     (`2` tests passed, latest run 1.184s)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_manifest_relative_paths_reject_non_ascii_and_overlong_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_xsd_relative_paths_reject_non_ascii_and_overlong_without_echo`
+    (`2` tests passed, latest run 1.138s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_xmllint_timeout_cli_rejects_overlarge_values_without_echo`
     (`1` test passed, latest run 0.002s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
-    (`84` tests passed, latest run 1.894s)
+    (`85` tests passed, latest run 2.005s)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_non_ascii_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_malformed_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_secret_material_in_sidecar_fields_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_unknown_sidecar_fields_are_rejected_before_network_delivery`
     (`4` tests passed, latest run 0.520s)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
@@ -4597,7 +4668,7 @@ Last updated: 2026-06-09
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_reviewed_xsd_gap_reasons_are_length_capped_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_xsd_reviewed_gap_reasons_are_length_capped_without_echo`
     (`2` tests passed, latest run 1.137s)
   - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
-    (`149` tests passed, latest run 144.095s)
+    (`150` tests passed, latest run 153.190s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test pytests.scripts.iso_production_readiness_test`
     (`216` tests passed, latest run 142.120s)
   - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test pytests.scripts.iso_operator_evidence_verify_test pytests.scripts.iso_production_readiness_test pytests.scripts.iso_xsd_fixture_verify_test`
@@ -4613,7 +4684,7 @@ Last updated: 2026-06-09
     (`3` tests passed, latest run 2.321s)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
   - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
-    (`757` tests passed, latest run 302.480s)
+    (`759` tests passed, latest run 307.508s)
 
 ## 2026-06-09 Kagemusha Reserved-lineage proof-log exactness guard
 
@@ -59021,16 +59092,18 @@ Last updated: 2026-06-09
     (`183` passed, latest run 45.376s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_schema_source_paths_reject_non_ascii_and_overlong_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_xsd_source_paths_reject_non_ascii_and_overlong_without_echo`
     (`2` passed, latest run 1.184s)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_manifest_relative_paths_reject_non_ascii_and_overlong_without_echo pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_xsd_relative_paths_reject_non_ascii_and_overlong_without_echo`
+    (`2` passed, latest run 1.138s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_xmllint_timeout_cli_rejects_overlarge_values_without_echo`
     (`1` passed, latest run 0.002s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
-    (`84` passed, latest run 1.894s)
+    (`85` passed, latest run 2.005s)
   - `python3 -m unittest pytests.scripts.iso_production_readiness_test`
-    (`149` passed, latest run 144.095s)
+    (`150` passed, latest run 153.190s)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
     (passed)
   - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
-    (`757` passed, latest run 302.480s)
+    (`759` passed, latest run 307.508s)
   - `git diff --check -- scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md`
     (passed)
   - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md`

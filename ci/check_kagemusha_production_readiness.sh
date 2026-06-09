@@ -70,6 +70,8 @@ TEXT_REQUIREMENTS = {
         "symlink-free ancestors before its",
         "MiB evidence JSON cap",
         "ABI-6 manifest is likewise capped at 1 MiB",
+        "readiness-summary",
+        "release-bundle JSON writers also reject non-finite",
         "symlink-ancestor `--repo-root` aliases",
         "symlink-free key-path ancestors",
         "secret-looking key path strings",
@@ -195,6 +197,10 @@ TEXT_REQUIREMENTS = {
         "last-key-wins evidence packets",
         "ABI-6 manifest JSON capped at 1 MiB",
         "capped at 16 MiB before parsing",
+        "readiness summary writer",
+        "serialize with strict JSON",
+        "non-finite values such as `NaN`",
+        "`Infinity` fail before any temporary release output",
         "stops before loading any readiness JSON",
         "`--out` cannot",
         "already hash-bound into the manifest",
@@ -1255,6 +1261,8 @@ TEXT_REQUIREMENTS = {
         "if stat.S_ISLNK(summary_output_mode):",
         "if not stat.S_ISREG(summary_output_mode):",
         "write_blockers = write_summary",
+        "allow_nan=False",
+        "--summary-out summary is not strict JSON",
         "--summary-out could not be written",
         "tempfile.NamedTemporaryFile(",
         "handle.flush()",
@@ -1355,6 +1363,8 @@ TEXT_REQUIREMENTS = {
         "--artifact-dir must not be a symlink",
         'f"{label} ancestor directory"',
         "write_errors = write_evidence(out_path, evidence)",
+        "allow_nan=False",
+        "--out evidence is not strict JSON",
         "--out could not be written",
         "tempfile.NamedTemporaryFile(",
         "handle.flush()",
@@ -1442,6 +1452,8 @@ TEXT_REQUIREMENTS = {
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
         "validate_output_path",
         "write_errors = write_evidence(out_path, evidence)",
+        "allow_nan=False",
+        "--out evidence is not strict JSON",
         "--out could not be written",
         "tempfile.NamedTemporaryFile(",
         "handle.flush()",
@@ -1611,6 +1623,8 @@ TEXT_REQUIREMENTS = {
         "os.fsync(parent_fd)",
         '    except OSError:\n        return None, [\n            _release_bundle_out_blocker("--out could not be read back after writing")\n        ]\n',
         "--out readback did not match the generated manifest",
+        "allow_nan=False",
+        "release bundle manifest is not strict JSON",
         "check_lineage_proof_evidence",
         "check_compact_key_evidence",
         "check_android_device_lab",
@@ -2112,6 +2126,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_output_preflight_rejects_file_metadata_failure_before_write",
         "test_compact_key_output_preflight_rejects_hardlink_metadata_failure_before_write",
         "test_compact_key_write_evidence_rejects_write_failure_after_preflight",
+        "test_compact_key_write_evidence_rejects_nonfinite_json_before_write",
         "test_compact_key_write_evidence_preserves_existing_output_on_replace_failure",
         "test_compact_key_write_evidence_rejects_readback_mismatch",
         "test_compact_key_write_evidence_rejects_readback_failure",
@@ -2248,6 +2263,7 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_outside_evidence_before_scanners",
         "test_kagemusha_release_bundle_rejects_output_overwriting_evidence",
         "test_write_release_bundle_preserves_existing_output_on_replace_failure",
+        "test_write_release_bundle_rejects_nonfinite_manifest_before_write",
         "test_write_release_bundle_rejects_readback_mismatch",
         "test_write_release_bundle_rejects_readback_failure",
         "test_write_release_bundle_rejects_regular_file_swap_before_readback",
@@ -2349,6 +2365,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_output_preflight_rejects_hardlink_metadata_failure_before_write",
         "test_lineage_proof_write_evidence_rejects_secret_output_path_before_write",
         "test_lineage_proof_write_evidence_rejects_write_failure_after_preflight",
+        "test_lineage_proof_write_evidence_rejects_nonfinite_json_before_write",
         "test_lineage_proof_write_evidence_preserves_existing_output_on_replace_failure",
         "test_lineage_proof_write_evidence_rejects_readback_mismatch",
         "test_lineage_proof_write_evidence_rejects_readback_failure",
@@ -2389,6 +2406,7 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_rejects_file_metadata_failure_before_write",
         "test_write_summary_rejects_hardlink_metadata_failure_before_write",
         "test_write_summary_rejects_write_failure_after_preflight",
+        "test_write_summary_rejects_nonfinite_json_before_write",
         "test_write_summary_preserves_existing_output_on_replace_failure",
         "test_write_summary_rejects_symlink_swap_before_replace",
         "test_write_summary_rejects_readback_mismatch",
@@ -2854,6 +2872,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding",
@@ -2893,6 +2912,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-early-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-open-path-binding",
@@ -2902,6 +2922,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-early-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-open-path-binding",
@@ -2962,6 +2983,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-local-json-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-post-write-preflight",
@@ -5797,6 +5819,17 @@ if mode == "--negative-control-kagemusha-readiness-summary-output-write-failure"
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-kagemusha-readiness-summary-output-strict-json-write":
+    run_negative_control(
+        "Kagemusha readiness summary output strict JSON writer",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "allow_nan=False",
+            "allow_nan=True",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-kagemusha-readiness-summary-output-readback-verification":
     run_negative_control(
         "Kagemusha readiness summary output readback gate",
@@ -6078,6 +6111,17 @@ if mode == "--negative-control-release-bundle-atomic-output":
             "scripts/kagemusha_release_bundle.py",
             "os.replace(tmp_path, path)",
             'path.write_text(manifest_text, encoding="utf-8")',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-strict-json-write":
+    run_negative_control(
+        "Kagemusha release bundle strict JSON writer",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "allow_nan=False",
+            "allow_nan=True",
         ),
     )
     raise SystemExit(0)
@@ -6423,6 +6467,17 @@ if mode == "--negative-control-lineage-proof-helper-output-write-failure":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-helper-strict-json-write":
+    run_negative_control(
+        "Reserved-lineage proof evidence helper strict JSON writer",
+        lambda: override_text(
+            "scripts/kagemusha_lineage_proof_evidence.py",
+            "allow_nan=False",
+            "allow_nan=True",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-helper-output-readback-verification":
     run_negative_control(
         "Reserved-lineage proof evidence helper output readback gate",
@@ -6552,6 +6607,17 @@ if mode == "--negative-control-compact-key-helper-output-write-failure":
             "scripts/kagemusha_recursive_compact_key_evidence.py",
             "os.replace(tmp_path, path)",
             'path.write_text(evidence_text, encoding="utf-8")',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-helper-strict-json-write":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence helper strict JSON writer",
+        lambda: override_text(
+            "scripts/kagemusha_recursive_compact_key_evidence.py",
+            "allow_nan=False",
+            "allow_nan=True",
         ),
     )
     raise SystemExit(0)

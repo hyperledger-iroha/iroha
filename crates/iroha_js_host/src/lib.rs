@@ -7328,6 +7328,12 @@ fn kagemusha_instruction_archive_from_json(value: json::Value) -> napi::Result<I
             format!("invalid KagemushaInstructionArchive.bytes_base64: {err}"),
         )
     })?;
+    if STANDARD.encode(&archive) != bytes_base64 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "KagemushaInstructionArchive.bytes_base64 must be canonical standard base64",
+        ));
+    }
     ensure_kagemusha_recursive_archive_len(archive.len(), "Kagemusha instruction archive")?;
     match instruction_type {
         "KagemushaTransfer" => {
@@ -22049,6 +22055,22 @@ mod tests {
                     r#","extra":true"#,
                 ),
                 "KagemushaInstructionArchive contains unexpected field",
+            ),
+            (
+                kagemusha_instruction_archive_json(
+                    "KagemushaTransfer",
+                    &STANDARD.encode(&transfer_archive).trim_end_matches('='),
+                    "",
+                ),
+                "invalid KagemushaInstructionArchive.bytes_base64",
+            ),
+            (
+                kagemusha_instruction_archive_json(
+                    "KagemushaTransfer",
+                    &format!(" {}", STANDARD.encode(&transfer_archive)),
+                    "",
+                ),
+                "invalid KagemushaInstructionArchive.bytes_base64",
             ),
         ];
 

@@ -287,8 +287,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   success line so warning-bearing successful validator output fails closed,
   enforces canonical lowercase ISO message definition ids and path
   containment for schema/fixture entries, rejects manifest schema paths,
-  fixture paths, and fixture schema references with backslashes, embedded
-  whitespace, leading-dash path segments, semicolon path parameters, empty segments, dot segments, or
+  fixture paths, and fixture schema references longer than 2048 characters or
+  with non-ASCII characters, backslashes, embedded whitespace, leading-dash
+  path segments, semicolon path parameters, empty segments, dot segments, or
   forbidden parent segments, rejects copied XML fixtures with duplicate
   fixture SHA-256 values, optionally validates schema-backed XML fixtures
   against their checked-in XSDs with `xmllint --nonet`, optionally
@@ -1313,8 +1314,9 @@ digests, cross-summary schema/fixture path and digest replay, normalized
 blocked-source evidence, blocked-source-to-current-gap consistency, plus
 blocked-source replay across repeated XSD summaries, blocked-source
 redistribution marker strength, canonical relative schema paths whose filenames match
-`message_def_id`, fixture paths that remain relative forward-slash XML paths
-without leading dashes, empty, dot, or non-leading parent segments,
+`message_def_id`, fixture paths that remain printable-ASCII relative
+forward-slash XML paths no longer than 2048 characters and without leading
+dashes, empty, dot, or non-leading parent segments,
 schema-backed/missing-schema consistency, and schema-backed fixture XML
 schema-validation proof. It also rechecks profile-catalog source digests,
 version coverage counts, canonical profile ids, ISO family message types,

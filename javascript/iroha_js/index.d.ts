@@ -42,8 +42,27 @@ export interface PrivacyProductionGate {
   readonly gates: Readonly<Record<string, boolean>>;
   readonly requiredGates: readonly string[];
   readonly missing: readonly string[];
-  readonly auditReferences: readonly Readonly<{ label: string; url: string }>[];
+  readonly auditReferences: readonly Readonly<{
+    label: string;
+    url: string;
+    uri?: string;
+    signature?: string;
+  }>[];
+  readonly chainId?: string;
+  readonly reviewerIdentity?: string;
+  readonly localnetRunId?: string;
+  readonly localnetAcceptance?: JsonValue;
+  readonly fuzzResults?: JsonValue;
+  readonly performanceResults?: JsonValue;
+  readonly gateEvidence?: JsonValue;
 }
+
+export interface PrivacyProductionEvidenceOptions {
+  readonly chainId?: string | null;
+  readonly chain_id?: string | null;
+}
+
+export type PrivacyProductionEvidenceRegistry = JsonValue | null;
 
 export type PrivacyAlgorithmCategory =
   | "payment"
@@ -99,11 +118,19 @@ export interface PrivacyCapabilities {
 }
 
 export function getPrivacyCriteria(): readonly PrivacyCriterionKey[];
-export function getPrivacyAlgorithmDescriptors(): readonly PrivacyAlgorithmDescriptor[];
+export function getPrivacyAlgorithmDescriptors(
+  productionEvidence?: PrivacyProductionEvidenceRegistry,
+  options?: PrivacyProductionEvidenceOptions,
+): readonly PrivacyAlgorithmDescriptor[];
 export function getPrivacyAlgorithmDescriptor(
   id: string,
+  productionEvidence?: PrivacyProductionEvidenceRegistry,
+  options?: PrivacyProductionEvidenceOptions,
 ): PrivacyAlgorithmDescriptor | null;
-export function getPrivacyCapabilities(): PrivacyCapabilities;
+export function getPrivacyCapabilities(
+  productionEvidence?: PrivacyProductionEvidenceRegistry,
+  options?: PrivacyProductionEvidenceOptions,
+): PrivacyCapabilities;
 export function validatePrivacyAlgorithmDescriptor(
   descriptor: unknown,
   index?: number,
@@ -13697,7 +13724,8 @@ export class OfflineCashConfigurationSnapshotError extends Error {
     | "offline_payments_disabled"
     | "missing_issuer_public_key"
     | "expired"
-    | "unsupported_bridge_abi";
+    | "unsupported_bridge_abi"
+    | "malformed_snapshot";
 }
 
 export function assertOfflineCashConfigurationSnapshotUsable(

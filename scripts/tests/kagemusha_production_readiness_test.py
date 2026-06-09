@@ -2374,6 +2374,37 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(final_text, "stale manifest\n")
         self.assertEqual(temp_outputs, [])
 
+    def test_write_release_bundle_rejects_nonfinite_manifest_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            errors = release_bundle.write_release_bundle(
+                out,
+                {
+                    "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                    "generated_at_utc": float("nan"),
+                    "ready": True,
+                    "evidence": {},
+                    "blockers": [],
+                },
+                bundle_root,
+            )
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(
+            [error["code"] for error in errors],
+            ["kagemusha_release_bundle_out_invalid"],
+        )
+        self.assertIn(
+            "release bundle manifest is not strict JSON",
+            {error["message"] for error in errors},
+        )
+        self.assertFalse(out.exists())
+        self.assertEqual(temp_outputs, [])
+
     def test_write_release_bundle_rejects_readback_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             bundle_root = Path(temp) / "bundle"
@@ -7164,6 +7195,22 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(out.exists())
         self.assertEqual(temp_outputs, [])
 
+    def test_compact_key_write_evidence_rejects_nonfinite_json_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+
+            errors = compact_key_helper.write_evidence(
+                out,
+                {"schema": "test", "elapsed_seconds": float("nan")},
+            )
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(errors, ["--out evidence is not strict JSON"])
+        self.assertFalse(out.exists())
+        self.assertEqual(temp_outputs, [])
+
     def test_compact_key_write_evidence_preserves_existing_output_on_replace_failure(
         self,
     ) -> None:
@@ -10583,6 +10630,22 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(out.exists())
         self.assertEqual(temp_outputs, [])
 
+    def test_lineage_proof_write_evidence_rejects_nonfinite_json_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / "lineage-proof-evidence.json"
+
+            errors = evidence_helper.write_evidence(
+                out,
+                {"schema": "test", "elapsed_seconds": float("nan")},
+            )
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(errors, ["--out evidence is not strict JSON"])
+        self.assertFalse(out.exists())
+        self.assertEqual(temp_outputs, [])
+
     def test_lineage_proof_write_evidence_preserves_existing_output_on_replace_failure(
         self,
     ) -> None:
@@ -11693,6 +11756,32 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 {
                     "code": "kagemusha_summary_out_path_invalid",
                     "message": "--summary-out could not be written",
+                }
+            ],
+        )
+
+    def test_write_summary_rejects_nonfinite_json_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+
+            errors = readiness.write_summary(
+                summary_path,
+                {
+                    "schema": readiness.SUMMARY_SCHEMA,
+                    "ready": False,
+                    "elapsed": float("nan"),
+                },
+            )
+            temp_outputs = list(summary_path.parent.glob(f".{summary_path.name}.*.tmp"))
+
+        self.assertFalse(summary_path.exists())
+        self.assertEqual(temp_outputs, [])
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out summary is not strict JSON",
                 }
             ],
         )

@@ -1806,10 +1806,15 @@ def _validate_relative_path(
     *,
     allow_parent_segments: bool,
 ) -> Path:
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
     if "\\" in raw:
         raise FixtureManifestError(f"{label} must use forward slashes")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label} must not contain control characters")
+    _reject_non_ascii_identifier(raw, label)
     if any(ch.isspace() for ch in raw):
         raise FixtureManifestError(f"{label} must not contain whitespace")
     if raw.startswith("-"):

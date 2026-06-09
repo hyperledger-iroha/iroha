@@ -3457,7 +3457,20 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
     errors = validate_summary_output_path(path)
     if errors:
         return errors
-    summary_text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    try:
+        summary_text = json.dumps(
+            summary,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ) + "\n"
+    except ValueError:
+        return [
+            blocker(
+                SUMMARY_OUT_PATH_INVALID_CODE,
+                "--summary-out summary is not strict JSON",
+            )
+        ]
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

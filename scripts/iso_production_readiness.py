@@ -1474,10 +1474,15 @@ def _validate_schema_source_path(raw: str, label: str) -> str:
 
 
 def _validate_fixture_summary_path(raw: str, label: str) -> str:
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
     if "\\" in raw:
         raise ReadinessError(f"{label} must use forward slashes")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label} must not contain control characters")
+    _reject_non_ascii_context(raw, label)
     if raw != raw.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
     if any(ch.isspace() for ch in raw):

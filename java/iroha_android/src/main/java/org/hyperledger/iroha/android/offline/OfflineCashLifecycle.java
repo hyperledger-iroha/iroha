@@ -68,9 +68,14 @@ public final class OfflineCashLifecycle {
   }
 
   public static final class ConfigurationSnapshot {
+    private final String chainId;
+    private final String assetDefinitionId;
     private final boolean offlinePaymentsEnabled;
     private final String issuerPublicKeyBase64;
     private final Integer bridgeAbiVersion;
+    private final String artifactSetId;
+    private final String circuitId;
+    private final long createdAtMs;
     private final Long expiresAtMs;
 
     public ConfigurationSnapshot(
@@ -78,10 +83,73 @@ public final class OfflineCashLifecycle {
         final String issuerPublicKeyBase64,
         final Integer bridgeAbiVersion,
         final Long expiresAtMs) {
+      this(
+          null,
+          null,
+          offlinePaymentsEnabled,
+          issuerPublicKeyBase64,
+          bridgeAbiVersion,
+          null,
+          null,
+          0L,
+          expiresAtMs);
+    }
+
+    public ConfigurationSnapshot(
+        final String chainId,
+        final String assetDefinitionId,
+        final boolean offlinePaymentsEnabled,
+        final String issuerPublicKeyBase64,
+        final Integer bridgeAbiVersion,
+        final String artifactSetId,
+        final String circuitId,
+        final long createdAtMs,
+        final Long expiresAtMs) {
+      this.chainId = chainId;
+      this.assetDefinitionId = assetDefinitionId;
       this.offlinePaymentsEnabled = offlinePaymentsEnabled;
       this.issuerPublicKeyBase64 = issuerPublicKeyBase64;
       this.bridgeAbiVersion = bridgeAbiVersion;
+      this.artifactSetId = artifactSetId;
+      this.circuitId = circuitId;
+      this.createdAtMs = createdAtMs;
       this.expiresAtMs = expiresAtMs;
+    }
+
+    public String chainId() {
+      return chainId;
+    }
+
+    public String assetDefinitionId() {
+      return assetDefinitionId;
+    }
+
+    public boolean offlinePaymentsEnabled() {
+      return offlinePaymentsEnabled;
+    }
+
+    public String issuerPublicKeyBase64() {
+      return issuerPublicKeyBase64;
+    }
+
+    public Integer bridgeAbiVersion() {
+      return bridgeAbiVersion;
+    }
+
+    public String artifactSetId() {
+      return artifactSetId;
+    }
+
+    public String circuitId() {
+      return circuitId;
+    }
+
+    public long createdAtMs() {
+      return createdAtMs;
+    }
+
+    public Long expiresAtMs() {
+      return expiresAtMs;
     }
 
     public void requireUsableForOfflineExchange(
@@ -150,6 +218,17 @@ public final class OfflineCashLifecycle {
       this.auditReceiptSynchronizer = auditReceiptSynchronizer;
     }
 
+    public Controller(
+        final OfflineNoteWallet wallet, final AuditReceiptSynchronizer auditReceiptSynchronizer) {
+      this(new OfflineNoteWalletAdapter(wallet), auditReceiptSynchronizer);
+    }
+
+    public Controller(
+        final OfflineBearerCashWallet wallet,
+        final AuditReceiptSynchronizer auditReceiptSynchronizer) {
+      this(new OfflineBearerCashWalletAdapter(wallet), auditReceiptSynchronizer);
+    }
+
     public CompletableFuture<Boolean> syncPendingAuditReceiptsIfNeeded() {
       if (auditReceiptSynchronizer == null) {
         return CompletableFuture.completedFuture(false);
@@ -186,6 +265,97 @@ public final class OfflineCashLifecycle {
 
     public CompletableFuture<Object> redeem(final Object note, final String recipient) {
       return wallet.redeem(note, recipient);
+    }
+  }
+
+  private static final class OfflineNoteWalletAdapter implements Wallet {
+    private final OfflineNoteWallet wallet;
+
+    private OfflineNoteWalletAdapter(final OfflineNoteWallet wallet) {
+      this.wallet = Objects.requireNonNull(wallet, "wallet");
+    }
+
+    @Override
+    public CompletableFuture<Object> load(final String assetDefinitionId, final String amount) {
+      return wallet.load(assetDefinitionId, amount).thenApply(note -> (Object) note);
+    }
+
+    @Override
+    public Object prepareReceive(final String assetDefinitionId, final String amount) {
+      return wallet.prepareReceive(assetDefinitionId, amount);
+    }
+
+    @Override
+    public Object createPayment(final Object receiveRequest) {
+      if (!(receiveRequest instanceof OfflineNoteReceiveRequest)) {
+        throw new IllegalArgumentException("receiveRequest must be OfflineNoteReceiveRequest");
+      }
+      return wallet.pay((OfflineNoteReceiveRequest) receiveRequest);
+    }
+
+    @Override
+    public Object acceptPayment(final Object paymentToken) {
+      if (!(paymentToken instanceof OfflineNotePaymentToken)) {
+        throw new IllegalArgumentException("paymentToken must be OfflineNotePaymentToken");
+      }
+      return wallet.accept((OfflineNotePaymentToken) paymentToken);
+    }
+
+    @Override
+    public CompletableFuture<Object> redeem(final Object note, final String recipient) {
+      if (!(note instanceof OfflineNoteWalletNote)) {
+        throw new IllegalArgumentException("note must be OfflineNoteWalletNote");
+      }
+      final OfflineNoteWalletNote walletNote = (OfflineNoteWalletNote) note;
+      final CompletableFuture<OfflineNoteWalletNote> result =
+          recipient == null ? wallet.redeem(walletNote) : wallet.redeem(walletNote, recipient);
+      return result.thenApply(redeemed -> (Object) redeemed);
+    }
+  }
+
+  private static final class OfflineBearerCashWalletAdapter implements Wallet {
+    private final OfflineBearerCashWallet wallet;
+
+    private OfflineBearerCashWalletAdapter(final OfflineBearerCashWallet wallet) {
+      this.wallet = Objects.requireNonNull(wallet, "wallet");
+    }
+
+    @Override
+    public CompletableFuture<Object> load(final String assetDefinitionId, final String amount) {
+      return wallet.load(assetDefinitionId, amount).thenApply(note -> (Object) note);
+    }
+
+    @Override
+    public Object prepareReceive(final String assetDefinitionId, final String amount) {
+      return wallet.prepareReceive(assetDefinitionId, amount);
+    }
+
+    @Override
+    public Object createPayment(final Object receiveRequest) {
+      if (!(receiveRequest instanceof OfflineBearerCashReceiveRequestV1)) {
+        throw new IllegalArgumentException(
+            "receiveRequest must be OfflineBearerCashReceiveRequestV1");
+      }
+      return wallet.pay((OfflineBearerCashReceiveRequestV1) receiveRequest);
+    }
+
+    @Override
+    public Object acceptPayment(final Object paymentToken) {
+      if (!(paymentToken instanceof OfflineBearerCashPaymentTokenV1)) {
+        throw new IllegalArgumentException("paymentToken must be OfflineBearerCashPaymentTokenV1");
+      }
+      return wallet.accept((OfflineBearerCashPaymentTokenV1) paymentToken);
+    }
+
+    @Override
+    public CompletableFuture<Object> redeem(final Object note, final String recipient) {
+      if (!(note instanceof OfflineBearerCashNote)) {
+        throw new IllegalArgumentException("note must be OfflineBearerCashNote");
+      }
+      final OfflineBearerCashNote bearerNote = (OfflineBearerCashNote) note;
+      final CompletableFuture<OfflineBearerCashNote> result =
+          recipient == null ? wallet.redeem(bearerNote) : wallet.redeem(bearerNote, recipient);
+      return result.thenApply(redeemed -> (Object) redeemed);
     }
   }
 }

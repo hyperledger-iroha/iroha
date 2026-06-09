@@ -1383,6 +1383,7 @@ test("Kagemusha JavaScript instruction transaction builder stays wired", () => {
       "KagemushaTransfer",
       "RedeemKagemushaRecursive",
       'ensure_kagemusha_recursive_archive_len(archive.len(), "Kagemusha instruction archive")',
+      "KagemushaInstructionArchive.bytes_base64 must be canonical standard base64",
       "build_transaction_from_instructions_json_accepts_kagemusha_instruction_archive",
       "kagemusha_instruction_archive_json_rejects_adversarial_inputs",
     ],

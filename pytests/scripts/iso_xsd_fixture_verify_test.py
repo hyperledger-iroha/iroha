@@ -3770,6 +3770,74 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     self.assertNotIn(hidden, stderr)
 
+    def test_manifest_relative_paths_reject_non_ascii_and_overlong_without_echo(self):
+        hidden_unicode = "unicod\u0435-manifest-path"
+        hidden_long = "x" * (VERIFIER.MAX_SOURCE_PATH_CHARS + 1)
+        cases = (
+            (
+                lambda manifest: manifest["schemas"][0].__setitem__(
+                    "path",
+                    f"iso/{hidden_unicode}/fooo.001.001.01.xsd",
+                ),
+                "schemas[0].path must use printable ASCII",
+                hidden_unicode,
+            ),
+            (
+                lambda manifest: manifest["schemas"][0].__setitem__(
+                    "path",
+                    "iso/" + hidden_long + "/fooo.001.001.01.xsd",
+                ),
+                "schemas[0].path must be no longer than 2048 characters",
+                hidden_long,
+            ),
+            (
+                lambda manifest: manifest["fixtures"][0].__setitem__(
+                    "path",
+                    f"../{hidden_unicode}/foo_fixture.xml",
+                ),
+                "fixtures[0].path must use printable ASCII",
+                hidden_unicode,
+            ),
+            (
+                lambda manifest: manifest["fixtures"][0].__setitem__(
+                    "path",
+                    "../" + hidden_long + "/foo_fixture.xml",
+                ),
+                "fixtures[0].path must be no longer than 2048 characters",
+                hidden_long,
+            ),
+            (
+                lambda manifest: manifest["fixtures"][0].__setitem__(
+                    "schema",
+                    f"iso/{hidden_unicode}/fooo.001.001.01.xsd",
+                ),
+                "fixtures[0].schema must use printable ASCII",
+                hidden_unicode,
+            ),
+            (
+                lambda manifest: manifest["fixtures"][0].__setitem__(
+                    "schema",
+                    "iso/" + hidden_long + "/fooo.001.001.01.xsd",
+                ),
+                "fixtures[0].schema must be no longer than 2048 characters",
+                hidden_long,
+            ),
+        )
+        for offset, (mutate, message, hidden) in enumerate(cases):
+            with self.subTest(offset=offset):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest = minimal_manifest()
+                    mutate(manifest)
+                    manifest_path = write_minimal_tree(root, manifest)
+
+                    rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
     def test_blocked_schema_source_provenance_and_markers_are_rejected(self):
         cases = []
 

@@ -868,7 +868,9 @@ and completed history lives in [`status.md`](./status.md).
 		  release-bundle, and Android scanner/signer mismatch/read-failure/open-path/regular-file-swap regressions, post-rename output
 		  revalidation pinned by symlink-swap regressions, and parent-directory sync
 		  to avoid trusting partial lineage, compact package, evidence, or summary
-		  artifacts after interrupted generator runs.
+		  artifacts after interrupted generator runs. The readiness-summary,
+		  evidence-helper, and release-bundle JSON writers also reject non-finite
+		  `NaN`/`Infinity` values before creating temporary outputs.
 	  The Kagemusha release
 	  bundle manifest now uses
 	  `iroha.kagemusha.production_release_bundle.v1` to recompute the checked-in
@@ -2800,8 +2802,8 @@ and completed history lives in [`status.md`](./status.md).
 	  empty/non-string archived reviewed reasons in both the XSD preflight and readiness rollup,
 	  rejecting stale missing-schema reasons
 		  on schema-backed archived fixtures, rejecting embedded
-		  non-ASCII characters, overlong source paths, whitespace, leading-dash
-		  path segments, or semicolon path parameters in checked-in XSD source provenance,
+		  non-ASCII characters, overlong source or relative paths, whitespace,
+		  leading-dash path segments, or semicolon path parameters in checked-in XSD source provenance,
 		  rejects omitted checked-in and blocked-source `source` keys separately
 		  from explicit null source objects,
 		  manifest schema, fixture, fixture schema-reference, and archived

@@ -1,5 +1,11 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.suspendCoroutine
+
 object OfflineCashTransportKinds {
     const val QR: String = "qr"
     const val NFC: String = "nfc"
@@ -77,6 +83,11 @@ class OfflineCashLifecycleController(
     private val wallet: OfflineCashLifecycleWallet,
     private val auditReceiptSynchronizer: OfflineCashAuditReceiptSynchronizer? = null,
 ) {
+    constructor(
+        wallet: OfflineNoteWallet,
+        auditReceiptSynchronizer: OfflineCashAuditReceiptSynchronizer? = null,
+    ) : this(OfflineNoteWalletLifecycleAdapter(wallet), auditReceiptSynchronizer)
+
     suspend fun syncPendingAuditReceiptsIfNeeded(): Boolean {
         val synchronizer = auditReceiptSynchronizer ?: return false
         if (!synchronizer.hasPendingAuditReceipts()) return false
@@ -98,3 +109,52 @@ class OfflineCashLifecycleController(
 
     suspend fun redeem(note: Any, recipient: String? = null): Any? = wallet.redeem(note, recipient)
 }
+
+private class OfflineNoteWalletLifecycleAdapter(
+    private val wallet: OfflineNoteWallet,
+) : OfflineCashLifecycleWallet {
+    override suspend fun load(assetDefinitionId: String, amount: String): Any? =
+        wallet.load(assetDefinitionId, amount).awaitOfflineCash()
+
+    override fun prepareReceive(assetDefinitionId: String, amount: String): Any? =
+        wallet.prepareReceive(assetDefinitionId, amount)
+
+    override fun createPayment(receiveRequest: Any): Any? {
+        require(receiveRequest is OfflineNoteReceiveRequest) {
+            "receiveRequest must be OfflineNoteReceiveRequest"
+        }
+        return wallet.pay(receiveRequest)
+    }
+
+    override fun acceptPayment(paymentToken: Any): Any? {
+        require(paymentToken is OfflineNotePaymentToken) {
+            "paymentToken must be OfflineNotePaymentToken"
+        }
+        return wallet.accept(paymentToken)
+    }
+
+    override suspend fun redeem(note: Any, recipient: String?): Any? {
+        require(note is OfflineNoteWalletNote) {
+            "note must be OfflineNoteWalletNote"
+        }
+        return if (recipient == null) {
+            wallet.redeem(note).awaitOfflineCash()
+        } else {
+            wallet.redeem(note, recipient).awaitOfflineCash()
+        }
+    }
+}
+
+private suspend fun <T> CompletableFuture<T>.awaitOfflineCash(): T =
+    suspendCoroutine { continuation ->
+        whenComplete { value, error ->
+            if (error != null) {
+                continuation.resumeWithException(unwrapOfflineCashCompletion(error))
+            } else {
+                continuation.resume(value)
+            }
+        }
+    }
+
+private fun unwrapOfflineCashCompletion(error: Throwable): Throwable =
+    if (error is CompletionException && error.cause != null) error.cause!! else error

@@ -159,7 +159,7 @@ internal object AndroidFixtureSupport {
 
         val metadata = payload["metadata"]?.let { raw ->
             asMap(raw, "$name.payload.metadata").mapValues { (_, value) ->
-                JsonValue.string(value?.toString() ?: "null")
+                jsonValue(value)
             }
         } ?: emptyMap<String, JsonValue>()
 
@@ -183,6 +183,14 @@ internal object AndroidFixtureSupport {
     private fun optionalString(value: Any?): String? {
         val string = value as? String ?: return null
         return string
+    }
+
+    private fun jsonValue(value: Any?): JsonValue = when (value) {
+        null -> JsonValue.raw("null")
+        is String -> JsonValue.string(value)
+        is Number -> JsonValue.raw(value.toString())
+        is Boolean -> JsonValue.bool(value)
+        else -> error("Unsupported metadata JSON value type: ${value::class}")
     }
 
     private fun requiredLong(value: Any?, field: String): Long {

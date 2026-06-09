@@ -2496,8 +2496,10 @@ redistributable schemas, and official trust/revocation bundles.
   `DEFAULT_PROFILES_JSON` raw-string declaration while ignoring
   spoofed declarations in comments or unrelated strings, and fail closed
   on duplicated, malformed, or unknown-key profile/message/direction/version
-	  catalog entries. Manifest schema and fixture paths now fail closed on
-	  backslashes, leading-dash path segments, empty or dot segments, forbidden parent-segment forms, and
+	  catalog entries. Manifest schema paths, fixture paths, and fixture
+	  schema references now fail closed on non-ASCII characters, values longer
+	  than 2048 characters, backslashes, leading-dash path segments, empty or
+	  dot segments, forbidden parent-segment forms, and
   DTD/entity declarations before an XSD/profile summary is emitted. Schema
   `Document` declarations must also be unambiguous: exactly one top-level
   `Document` element whose type is exactly the local `Document` type, one
@@ -3285,7 +3287,7 @@ redistributable schemas, and official trust/revocation bundles.
 		  that still carry a missing-schema reason, and checked-in XSD source
 		  provenance, manifest schema, fixture, fixture schema-reference, and
 		  archived profile-catalog paths reject non-ASCII characters, overlong
-		  source paths, embedded whitespace, leading-dash path segments, or
+		  source or relative paths, embedded whitespace, leading-dash path segments, or
 		  semicolon path parameters before summary emission and during readiness rechecks.
   Readiness also requires archived XSD summaries to retain the emitted manifest
   path and explicit profile-catalog object/null state.

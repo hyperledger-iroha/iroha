@@ -542,7 +542,15 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     errors = validate_output_path(path, "--out")
     if errors:
         return errors
-    evidence_text = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+    try:
+        evidence_text = json.dumps(
+            evidence,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ) + "\n"
+    except ValueError:
+        return ["--out evidence is not strict JSON"]
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

@@ -2961,6 +2961,89 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_xsd_relative_paths_reject_non_ascii_and_overlong_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            hidden_unicode = "unicod\u0435-readiness-path"
+            hidden_long = "x" * (READINESS.MAX_SOURCE_PATH_CHARS + 1)
+            cases = (
+                (
+                    lambda body: body["schemas"][0].__setitem__(
+                        "path",
+                        f"iso/{hidden_unicode}/fooo.001.001.01.xsd",
+                    ),
+                    "schemas[0].path must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: body["schemas"][0].__setitem__(
+                        "path",
+                        "iso/" + hidden_long + "/fooo.001.001.01.xsd",
+                    ),
+                    "schemas[0].path must be no longer than 2048 characters",
+                    hidden_long,
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "path",
+                        f"../{hidden_unicode}/foo_fixture.xml",
+                    ),
+                    "fixtures[0].path must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "path",
+                        "../" + hidden_long + "/foo_fixture.xml",
+                    ),
+                    "fixtures[0].path must be no longer than 2048 characters",
+                    hidden_long,
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "schema",
+                        f"iso/{hidden_unicode}/fooo.001.001.01.xsd",
+                    ),
+                    "fixtures[0].schema must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: body["fixtures"][0].__setitem__(
+                        "schema",
+                        "iso/" + hidden_long + "/fooo.001.001.01.xsd",
+                    ),
+                    "fixtures[0].schema must be no longer than 2048 characters",
+                    hidden_long,
+                ),
+            )
+            for offset, (mutate, message, hidden) in enumerate(cases):
+                with self.subTest(offset=offset):
+                    body = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    mutate(body)
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"malformed-xsd-relative-path-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
     def test_rejected_xsd_summary_paths_do_not_echo_secret_absolute_paths(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

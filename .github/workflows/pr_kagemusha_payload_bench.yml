@@ -620,6 +620,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-direct-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-write-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-strict-json-write
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-verification
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-open-path-binding
@@ -664,6 +665,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-local-json-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-strict-json-write
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-post-write-preflight
@@ -697,6 +699,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-early-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-write-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-strict-json-write
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-verification
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-output-readback-open-path-binding
@@ -708,6 +711,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-early-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-write-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-strict-json-write
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-verification
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-output-readback-open-path-binding

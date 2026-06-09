@@ -1938,7 +1938,20 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
                 "--out must not overwrite bundled evidence input",
             )
         ]
-    manifest_text = json.dumps(bundle, indent=2, sort_keys=True) + "\n"
+    try:
+        manifest_text = json.dumps(
+            bundle,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ) + "\n"
+    except ValueError:
+        return [
+            _blocker(
+                "kagemusha_release_bundle_out_invalid",
+                "release bundle manifest is not strict JSON",
+            )
+        ]
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

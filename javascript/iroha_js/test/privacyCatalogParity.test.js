@@ -64,6 +64,18 @@ const SUPPLEMENTAL_FAIL_CLOSED_REASONS = Object.freeze([
   "dev fixture entrypoints are not production entrypoints",
   "Iroha production allowlist is not enabled for this audited row",
 ]);
+const PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION =
+  "iroha-privacy-production-evidence-registry-v1";
+const PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES = Object.freeze([
+  "rust_core",
+  "ffi",
+  "python",
+  "javascript",
+  "java_android",
+  "kotlin",
+  "swift",
+  "csharp",
+]);
 const POST_QUANTUM_REQUIRED_SOURCE_URLS = Object.freeze([
   "https://csrc.nist.gov/pubs/fips/203/final",
   "https://csrc.nist.gov/pubs/fips/204/final",
@@ -1331,6 +1343,88 @@ function entrypointIsProductionProofBuilder(entrypoint) {
     !entrypointIsProofHelper(entrypoint) &&
     !entrypointIsDevFixture(entrypoint)
   );
+}
+
+function productionTestArtifact(label) {
+  const digest = Buffer.from(label).toString("hex").slice(0, 64).padEnd(64, "0");
+  return { label, uri: `sha256:${digest}` };
+}
+
+function productionEvidenceEntrypoints(descriptor) {
+  const entrypoints = [];
+  for (const entrypoint of [
+    ...(descriptor.sdkEntrypoints ?? []),
+    ...(descriptor.plannedSdkEntrypoints ?? []),
+  ]) {
+    if (entrypointIsDevFixture(entrypoint) || entrypointIsLocalVerifier(entrypoint)) {
+      continue;
+    }
+    if (!entrypoints.includes(entrypoint)) {
+      entrypoints.push(entrypoint);
+    }
+  }
+  return entrypoints;
+}
+
+function productionEvidenceRow(descriptor, { chainId, localnetRunId }) {
+  const entrypoints = productionEvidenceEntrypoints(descriptor);
+  return {
+    version: PRODUCTION_GATE_VERSION,
+    coveredAlgorithmId: descriptor.id,
+    chainId,
+    reviewerIdentity: "crypto-reviewer@internal.example",
+    reviewArtifact: {
+      ...productionTestArtifact(`${descriptor.id}-review`),
+      signature: `minisign:${descriptor.id}`,
+    },
+    verifierKeyId: descriptor.verifierKeyId,
+    proofFamily: descriptor.proofFamily,
+    publicInputsSchema: descriptor.publicInputsSchema,
+    sdkEntrypoints: Object.fromEntries(
+      PRIVACY_PRODUCTION_SDK_ENTRYPOINT_SURFACES.map((surface) => [
+        surface,
+        [...entrypoints],
+      ]),
+    ),
+    requiredState: [...(descriptor.requiredState ?? [])],
+    fuzzResults: {
+      passed: true,
+      artifact: productionTestArtifact(`${descriptor.id}-fuzz`),
+    },
+    performanceResults: {
+      passed: true,
+      artifact: productionTestArtifact(`${descriptor.id}-perf`),
+    },
+    localnetRunId,
+    localnetAcceptance: {
+      runId: localnetRunId,
+      target: "localnet",
+      peerCount: 4,
+      smokePassed: true,
+      replayRejected: true,
+      restartPersistenceChecked: true,
+      restartReplayRejected: true,
+      stateRecoveryPassed: true,
+    },
+    gateEvidence: Object.fromEntries(
+      expectedRequiredProductionGateKeys(descriptor.id).map((key) => [
+        key,
+        [productionTestArtifact(`${descriptor.id}-${key}`)],
+      ]),
+    ),
+  };
+}
+
+function productionEvidenceManifest(
+  descriptors,
+  { chainId = "boi-localnet-4p", localnetRunId = "boi-localnet-run-2026-06-09" } = {},
+) {
+  return {
+    version: PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+    rows: descriptors.map((descriptor) =>
+      productionEvidenceRow(descriptor, { chainId, localnetRunId })
+    ),
+  };
 }
 
 function publicInputsSchemaHasChainDomainBinding(value) {
@@ -3121,6 +3215,171 @@ test("privacy algorithm catalogs stay fail-closed and in parity across JS and Py
   assertZkAcePythonTransactionAmountCoverage();
   assertRustNativeProductionGateParity(pythonCatalog);
   assertRustNativeCatalogParity(pythonCatalog);
+});
+
+test("privacy algorithm JS catalogs accept complete internal review evidence", () => {
+  const chainId = "boi-localnet-4p";
+  for (const [label, getDescriptors, getDescriptor, getCapabilities] of [
+    [
+      "src",
+      getSrcPrivacyAlgorithmDescriptors,
+      getSrcPrivacyAlgorithmDescriptor,
+      getSrcPrivacyCapabilities,
+    ],
+    [
+      "dist",
+      getDistPrivacyAlgorithmDescriptors,
+      getDistPrivacyAlgorithmDescriptor,
+      getDistPrivacyCapabilities,
+    ],
+  ]) {
+    const sourceDescriptors = getDescriptors();
+    const sourceById = new Map(sourceDescriptors.map((descriptor) => [descriptor.id, descriptor]));
+    const manifest = productionEvidenceManifest(sourceDescriptors, { chainId });
+    const descriptors = getDescriptors(manifest, { chainId });
+    assert.equal(descriptors.length, 21, `${label} must still expose all 21 rows`);
+    assert.ok(
+      descriptors.every((descriptor) => descriptor.productionReady === true),
+      `${label} complete internal review evidence must promote every row`,
+    );
+    for (const descriptor of descriptors) {
+      const sourceDescriptor = sourceById.get(descriptor.id);
+      assert.ok(sourceDescriptor, `${label} source descriptor ${descriptor.id} must exist`);
+      const expectedEntrypoints = productionEvidenceEntrypoints(sourceDescriptor);
+      assert.equal(descriptor.implementationStage, "production-hardened");
+      assert.deepEqual(descriptor.plannedSdkEntrypoints, []);
+      assert.deepEqual(descriptor.sdkEntrypoints, expectedEntrypoints);
+      assert.ok(
+        descriptor.sdkEntrypoints.every(
+          (entrypoint) =>
+            !entrypointIsDevFixture(entrypoint) && !entrypointIsLocalVerifier(entrypoint),
+        ),
+        `${label} ${descriptor.id} production evidence must not publish dev/local SDK entrypoints`,
+      );
+      assert.equal(descriptor.productionGate.ready, true);
+      assert.deepEqual(descriptor.productionGate.missing, []);
+      assert.deepEqual(
+        descriptor.productionGate.requiredGates,
+        expectedRequiredProductionGateKeys(descriptor.id),
+      );
+      for (const key of descriptor.productionGate.requiredGates) {
+        assert.equal(descriptor.productionGate.gates[key], true);
+      }
+      if (descriptor.id === "transparent-transfer") {
+        for (const waived of TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS) {
+          assert.equal(descriptor.productionGate.gates[waived], false);
+        }
+      }
+      assert.equal(descriptor.productionGate.chainId, chainId);
+      assert.equal(
+        descriptor.productionGate.reviewerIdentity,
+        "crypto-reviewer@internal.example",
+      );
+      assert.equal(descriptor.productionGate.localnetAcceptance.peer_count, 4);
+      assert.equal(descriptor.productionGate.localnetAcceptance.replay_rejected, true);
+      assert.equal(
+        descriptor.productionGate.localnetAcceptance.restart_replay_rejected,
+        true,
+      );
+      assert.match(descriptor.productionGate.auditReferences[0].uri, /^sha256:/);
+    }
+
+    const zkAce = getDescriptor("zk-ace-pq-authorization-v0", manifest, { chainId });
+    assert.equal(zkAce.productionReady, true);
+    const capabilities = getCapabilities(manifest, { chainId });
+    assert.ok(
+      capabilities.privacyAlgorithms.every((descriptor) => descriptor.productionReady === true),
+      `${label} capabilities must consume the same internal review evidence`,
+    );
+  }
+});
+
+test("privacy algorithm JS catalogs reject malformed internal review evidence", () => {
+  const chainId = "boi-localnet-4p";
+  const mutators = [
+    (row) => {
+      delete row.reviewArtifact.signature;
+    },
+    (row) => {
+      row.reviewArtifact.uri = "https://audit.example/review.pdf";
+    },
+    (row) => {
+      row.sdkEntrypoints.python.push("buildZkAceDevProofFixture");
+    },
+    (row) => {
+      row.sdkEntrypoints.javascript.push("verifyZkAceProofLocally");
+    },
+    (row) => {
+      row.verifierKeyId = "wrong_verifier_key";
+    },
+    (row) => {
+      row.publicInputsSchema = "mutated_schema";
+    },
+    (row) => {
+      row.localnetAcceptance.peerCount = 3;
+    },
+    (row) => {
+      row.localnetAcceptance.replayRejected = false;
+    },
+    (row) => {
+      row.localnetAcceptance.restartReplayRejected = false;
+    },
+    (row) => {
+      delete row.gateEvidence.real_proving;
+    },
+  ];
+  for (const [label, getDescriptor] of [
+    ["src", getSrcPrivacyAlgorithmDescriptor],
+    ["dist", getDistPrivacyAlgorithmDescriptor],
+  ]) {
+    const target = getDescriptor("zk-ace-pq-authorization-v0");
+    for (const mutate of mutators) {
+      const row = productionEvidenceRow(target, {
+        chainId,
+        localnetRunId: "boi-localnet-run-2026-06-09",
+      });
+      mutate(row);
+      const manifest = {
+        version: PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+        rows: [row],
+      };
+      const descriptor = getDescriptor("zk-ace-pq-authorization-v0", manifest, {
+        chainId,
+      });
+      assert.equal(descriptor.productionReady, false, `${label} must reject malformed evidence`);
+      assert.equal(descriptor.productionGate.ready, false);
+      assert.ok(descriptor.plannedSdkEntrypoints.length > 0);
+      assert.ok(
+        descriptor.productionGate.missing.includes(
+          "Iroha production allowlist is not enabled for this audited row",
+        ),
+      );
+    }
+  }
+});
+
+test("privacy algorithm JS catalogs reject chain-mismatched evidence", () => {
+  for (const [label, getDescriptor] of [
+    ["src", getSrcPrivacyAlgorithmDescriptor],
+    ["dist", getDistPrivacyAlgorithmDescriptor],
+  ]) {
+    const target = getDescriptor("zk-ace-pq-authorization-v0");
+    const manifest = {
+      version: PRIVACY_PRODUCTION_EVIDENCE_REGISTRY_VERSION,
+      rows: [
+        productionEvidenceRow(target, {
+          chainId: "boi-localnet-4p",
+          localnetRunId: "boi-localnet-run-2026-06-09",
+        }),
+      ],
+    };
+    const descriptor = getDescriptor("zk-ace-pq-authorization-v0", manifest, {
+      chainId: "wrong-chain",
+    });
+    assert.equal(descriptor.productionReady, false, `${label} must reject wrong chain evidence`);
+    assert.equal(descriptor.productionGate.ready, false);
+    assert.ok(descriptor.plannedSdkEntrypoints.length > 0);
+  }
 });
 
 test("privacy algorithm catalogs pin executable ZK-ACE proof-builder descriptor shape", () => {

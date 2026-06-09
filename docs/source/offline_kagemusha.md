@@ -674,6 +674,9 @@ evidence JSON. It also requires `recursive-compact-key-artifacts.log` beside the
 key artifacts and verifies that the canonical generator summary sizes match the
 local `.vk`, `.pk`, key-artifacts package, verifier-keys package, and
 `.record.norito` files.
+The readiness summary writer, both evidence helpers, and the release-bundle
+writer serialize with strict JSON; non-finite values such as `NaN` or
+`Infinity` fail before any temporary release output is created.
 Readiness enforces the production proof-log and compact generator-log byte caps
 from the opened file metadata used for hashing and decoding, so a separate
 path-size lookup cannot satisfy the size gate for replacement log bytes.

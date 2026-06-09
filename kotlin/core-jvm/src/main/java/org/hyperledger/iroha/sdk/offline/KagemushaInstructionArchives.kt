@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
@@ -54,7 +55,7 @@ object KagemushaInstructionArchives {
         creationTimeMs: Long,
         timeToLiveMs: Long? = null,
         nonce: Int? = null,
-        metadata: Map<String, String> = emptyMap(),
+        metadata: Map<String, *> = emptyMap<String, Any>(),
     ): TransactionPayload = TransactionPayload(
         chainId = chainId,
         authority = authority,
@@ -62,7 +63,7 @@ object KagemushaInstructionArchives {
         executable = Executable.instructions(listOf(instructionBox(instructionType, instructionArchive))),
         timeToLiveMs = timeToLiveMs,
         nonce = nonce,
-        metadata = metadata,
+        metadata = metadata.mapValues { metadataValue(it.value) },
     )
 
     @JvmStatic
@@ -73,7 +74,7 @@ object KagemushaInstructionArchives {
         creationTimeMs: Long,
         timeToLiveMs: Long? = null,
         nonce: Int? = null,
-        metadata: Map<String, String> = emptyMap(),
+        metadata: Map<String, *> = emptyMap<String, Any>(),
     ): TransactionPayload = transactionPayload(
         instructionType = KagemushaInstructionType.REDEEM_RECURSIVE,
         instructionArchive = instructionArchive,
@@ -93,7 +94,7 @@ object KagemushaInstructionArchives {
         creationTimeMs: Long,
         timeToLiveMs: Long? = null,
         nonce: Int? = null,
-        metadata: Map<String, String> = emptyMap(),
+        metadata: Map<String, *> = emptyMap<String, Any>(),
     ): TransactionPayload = recursiveRedeemTransactionPayload(
         instructionArchive = KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive),
         chainId = chainId,
@@ -135,5 +136,21 @@ object KagemushaInstructionArchives {
             throw IllegalArgumentException("Kagemusha instruction archive checksum is invalid.", ex)
         }
         return archive
+    }
+
+    private fun metadataValue(value: Any?): JsonValue = when (value) {
+        is JsonValue -> value
+        is String -> JsonValue.string(value)
+        is Boolean -> JsonValue.bool(value)
+        is Double -> {
+            require(value.isFinite()) { "metadata number must be finite" }
+            JsonValue.raw(value.toString())
+        }
+        is Float -> {
+            require(value.isFinite()) { "metadata number must be finite" }
+            JsonValue.raw(value.toString())
+        }
+        is Number -> JsonValue.raw(value.toString())
+        else -> throw IllegalArgumentException("Unsupported metadata value type: $value")
     }
 }

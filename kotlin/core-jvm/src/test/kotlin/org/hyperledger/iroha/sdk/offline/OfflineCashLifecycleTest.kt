@@ -56,6 +56,29 @@ class OfflineCashLifecycleTest {
     }
 
     @Test
+    fun `offline cash lifecycle accepts SDK offline note wallet`() {
+        val events = ArrayList<String>()
+        val offlineWallet = OfflineNoteWallet(
+            chainId = "00000042",
+            accountId = "merchant",
+            attestationProvider = UnusedAttestationProvider,
+            proofProvider = UnusedProofProvider,
+            proofVerifier = UnusedProofVerifier,
+        )
+        val controller = OfflineCashLifecycleController(
+            wallet = offlineWallet,
+            auditReceiptSynchronizer = RecordingSynchronizer(events, hasPending = true),
+        )
+
+        val error = assertFailsWith<IllegalStateException> {
+            runSuspend { controller.load("pkr#sbp", "10") }
+        }
+
+        assertEquals("Offline Note issuer client is required for load", error.message)
+        assertEquals(listOf("hasPending", "sync"), events)
+    }
+
+    @Test
     fun `configuration snapshot requires cached issuer key`() {
         val snapshot = OfflineCashConfigurationSnapshot(
             chainId = "00000042",
@@ -155,6 +178,24 @@ class OfflineCashLifecycleTest {
         override fun acceptPayment(paymentToken: Any): Any? = error("not used")
 
         override suspend fun redeem(note: Any, recipient: String?): Any? = error("not used")
+    }
+
+    private object UnusedAttestationProvider : OfflineNoteAttestationProvider {
+        override fun currentKeyCertificate(): OfflineNote.KeyCertificate = error("not used")
+    }
+
+    private object UnusedProofProvider : OfflineNoteProofProvider {
+        override fun proveAudit(audit: OfflineNote.AuditBundle): OfflineNote.RecursiveProof =
+            error("not used")
+
+        override fun proveRedeem(redemption: OfflineNote.Redeem): OfflineNote.RecursiveProof =
+            error("not used")
+    }
+
+    private object UnusedProofVerifier : OfflineNoteProofVerifier {
+        override fun verifyAudit(audit: OfflineNote.AuditBundle): Boolean = error("not used")
+
+        override fun verifyRedeem(redemption: OfflineNote.Redeem): Boolean = error("not used")
     }
 
     private fun <T> runSuspend(block: suspend () -> T): T {
