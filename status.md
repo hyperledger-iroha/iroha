@@ -298,7 +298,7 @@ Last updated: 2026-06-09
 - Started a smaller diagnostic
   `lineage-key-artifacts --profile init --opening-len 2` run under
   `target/kagemusha-diagnostic/`; as of the latest check it was still CPU-bound
-  after more than 75 minutes, had emitted no output after startup, and had not
+  after more than 86 minutes, had emitted no output after startup, and had not
   created partial artifact files.
 - Fixed the production-readiness guard after the source moved evidence artifact
   hashing to `_sha256_file_with_size(...)`: the stale direct `_sha256_file(...)`
