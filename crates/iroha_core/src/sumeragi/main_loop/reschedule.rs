@@ -487,15 +487,18 @@ fn rbc_availability_unresolved_for_reschedule_decision(
     if session.invalid {
         return false;
     }
-    if session.delivered {
-        return false;
+    let ready_quorum = session.ready_signatures >= session.required_ready;
+    if session.delivered
+        && session.total_chunks != 0
+        && session.received_chunks == session.total_chunks
+    {
+        return !ready_quorum;
     }
     if session.total_chunks == 0 {
         return true;
     }
     let missing_chunks =
         session.total_chunks != 0 && session.received_chunks < session.total_chunks;
-    let ready_quorum = session.ready_signatures >= session.required_ready;
     missing_chunks || !ready_quorum
 }
 
@@ -1047,6 +1050,8 @@ impl Actor {
             let contiguous_frontier = pending.height == committed_height.saturating_add(1)
                 && pending_extends_tip(pending.height, pending_parent, tip_height, tip_hash);
             let rbc_key = (*hash, pending.height, pending.view);
+            let rbc_pending_entry = self.subsystems.da_rbc.rbc.pending.contains_key(&rbc_key);
+            let required_ready = self.rbc_deliver_quorum(&commit_topology);
             let rbc_session_incomplete = da_enabled
                 && self
                     .subsystems
@@ -1055,21 +1060,11 @@ impl Actor {
                     .sessions
                     .get(&rbc_key)
                     .is_some_and(|session| {
-                        if session.is_invalid() || session.delivered {
-                            return false;
-                        }
-                        let progress_started = session.total_chunks() != 0
-                            || session.received_chunks() != 0
-                            || !session.ready_signatures.is_empty()
-                            || self.subsystems.da_rbc.rbc.pending.contains_key(&rbc_key);
-                        if !progress_started {
-                            return false;
-                        }
-                        let missing_chunks = session.total_chunks() != 0
-                            && session.received_chunks() < session.total_chunks();
-                        let ready_quorum = session.ready_signatures.len()
-                            >= self.rbc_deliver_quorum(&commit_topology);
-                        missing_chunks || !ready_quorum
+                        rbc_session_availability_incomplete(
+                            session,
+                            rbc_pending_entry,
+                            required_ready,
+                        )
                     });
             let consensus_queue_backlog = queue_depths.rbc_chunk_rx > 0
                 || queue_depths.block_payload_rx > 0
@@ -4072,13 +4067,33 @@ mod tests {
                 expected_unresolved: false,
             },
             Case {
-                name: "DeliveredSession",
+                name: "DeliveredIncompleteSession",
                 da_enabled: true,
                 stall_age_ms: 0,
                 availability_timeout_ms: 100,
                 local_payload_available: false,
                 pending_entry: false,
                 session: rbc_availability_session(false, true, 4, 2, 2),
+                expected_unresolved: true,
+            },
+            Case {
+                name: "DeliveredCompleteButNotReady",
+                da_enabled: true,
+                stall_age_ms: 0,
+                availability_timeout_ms: 100,
+                local_payload_available: false,
+                pending_entry: false,
+                session: rbc_availability_session(false, true, 4, 4, 2),
+                expected_unresolved: true,
+            },
+            Case {
+                name: "DeliveredCompleteReady",
+                da_enabled: true,
+                stall_age_ms: 0,
+                availability_timeout_ms: 100,
+                local_payload_available: false,
+                pending_entry: false,
+                session: rbc_availability_session(false, true, 4, 4, 3),
                 expected_unresolved: false,
             },
             Case {

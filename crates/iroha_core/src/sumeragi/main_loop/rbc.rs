@@ -40,6 +40,7 @@ use super::{
         PendingChunkOutcome, PendingRbcChunk, PendingRbcDropReason, PendingRbcMessages,
         rbc_deliver_stash_bytes, rbc_ready_stash_bytes,
     },
+    rbc_session_has_complete_delivery,
 };
 use crate::{
     queue::{Queue, RoutingDecision},
@@ -7637,7 +7638,7 @@ impl Actor {
                     .total_chunks()
                     .saturating_sub(session.received_chunks()),
             );
-            if !session.delivered {
+            if !rbc_session_has_complete_delivery(session) {
                 total_missing = total_missing.saturating_add(missing);
                 if missing > max_missing {
                     max_missing = missing;

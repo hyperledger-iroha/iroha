@@ -2,6 +2,210 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 RBC rebroadcast and roster complete-delivery guard
+
+- Hardened RBC rebroadcast scheduling so incomplete `delivered=true` sessions
+  do not enter the complete-delivery DELIVER rebroadcast cadence and instead
+  remain eligible for missing-chunk repair deadlines.
+- Tightened RBC roster refresh so later authoritative roster updates are only
+  ignored for completely delivered sessions. Delivered-but-incomplete sessions
+  now clear stale READY/DELIVER evidence on roster change and reopen repair.
+- Validation:
+  - `cargo test -p iroha_core incomplete_delivered_near_tip_rbc_session_still_requests_missing_chunks --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core record_rbc_session_roster_refreshes_incomplete_delivered_session --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core record_rbc_session_roster_skips_update_after_deliver --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo fmt -p iroha_core -- --check`
+
+## 2026-06-09 RBC backlog snapshot complete-delivery guard
+
+- Hardened operator RBC backlog snapshots so delivered-but-incomplete sessions
+  remain visible in generic missing-chunk counters. `pending_sessions`,
+  `total_missing_chunks`, and `max_missing_chunks` now retire only after local
+  chunk delivery is actually complete, not merely after a raw DELIVER marker.
+- Updated the backlog snapshot documentation to describe incomplete local chunk
+  delivery rather than raw delivery status.
+- Validation:
+  - `cargo test -p iroha_core delivered_incomplete_rbc_session_counts_generic_backlog_missing_chunks --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo fmt -p iroha_core -- --check`
+
+## 2026-06-09 RBC availability gate complete-delivery and READY guard
+
+- Aligned proposal cached-slot and stale-pending reschedule RBC availability
+  gates behind a shared helper: a raw `delivered=true` marker only resolves
+  RBC availability after the local session has a positive complete chunk set
+  and the READY quorum is present.
+- Incomplete delivered sessions, and complete delivered sessions still missing
+  READY quorum, now continue suppressing premature reduced-timeout reschedules
+  instead of being treated as fully available.
+- Validation:
+  - `cargo test -p iroha_core rbc_availability_reschedule_formal_gate_matrix --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core rbc_session_availability_incomplete_requires_complete_delivered_ready_evidence --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo fmt -p iroha_core -- --check`
+
+## 2026-06-09 Incomplete RBC DELIVER repair guard
+
+- Hardened DA/RBC repair paths so an inconsistent local `delivered=true`
+  marker no longer suppresses payload recovery, RBC-aware missing-block retry
+  widening, or near-tip payload repair backpressure exemption unless the local
+  session also has a positive complete chunk set.
+- Kept complete delivered sessions retired from repair/backlog paths, while
+  incomplete delivered sessions continue to expose missing chunks for recovery
+  and QC payload-fetch cadence.
+- Validation:
+  - `cargo test -p iroha_core defer_qc_if_block_missing_widens_retry_window_for_incomplete_delivered_rbc_progress --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core incomplete_delivered_rbc_session_keeps_payload_recovery --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo test -p iroha_core incomplete_delivered_near_tip_rbc_session_remains_backpressure_exempt --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo fmt -p iroha_core -- --check`
+  - `git diff --check`
+  - `git diff -- Cargo.lock`
+
+## 2026-06-09 NPoS RBC wait-gate complete-delivery guard
+
+- Tightened the NPoS happy-path RBC delivery polling helper so the wait gate
+  only accepts non-invalid delivered sessions with a positive complete chunk
+  set. Older-height, incomplete, zero-chunk, or invalid `delivered=true`
+  snapshots no longer satisfy the pre-metrics DA/RBC readiness check.
+- Reused the same parsed `RbcSessionView` complete-delivery predicate that the
+  stronger delivered-proof helper uses, keeping the fast polling gate aligned
+  with the production proof contract.
+- Validation:
+  - `cargo test -p integration_tests --test consensus_and_da has_delivered_session_requires_complete_valid_delivery -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warning)
+  - `cargo fmt -p integration_tests -- --check`
+
+## 2026-06-09 NPoS persisted RBC proof complete-chunk guard
+
+- Tightened the NPoS DA/RBC happy-path delivered-session fallback so persisted
+  session metadata only satisfies delivered proof when the metadata is for the
+  requested height, non-invalid, delivered, positive-chunk, and retains every
+  advertised chunk (`persisted_chunk_count == total_chunks`).
+- Added a pure negative regression showing metadata-only or partially retained
+  delivered sessions do not satisfy the fallback proof, while complete retained
+  chunks still do.
+- Validation:
+  - `cargo test -p integration_tests --test sumeragi_npos_happy_path persisted_metadata_delivery_proof_requires_complete_retained_chunks -- --nocapture`
+    failed because `sumeragi_npos_happy_path` is grouped under
+    `consensus_and_da`, not a standalone test target.
+  - `cargo test -p integration_tests --test consensus_and_da persisted_metadata_delivery_proof_requires_complete_retained_chunks -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warning)
+  - `cargo fmt -p integration_tests -- --check`
+  - `cargo fmt -p iroha_core -- --check`
+  - `cargo fmt -p iroha_torii -- --check`
+  - `git diff --check`
+  - `git diff -- Cargo.lock`
+
+## 2026-06-09 RBC delivered endpoint complete-evidence guard
+
+- Hardened `GET /v1/sumeragi/rbc/delivered/{height}/{view}` so the
+  `delivered` response flag is only true for non-invalid RBC summaries with a
+  positive complete chunk set. Incomplete `delivered=true` rows remain visible
+  through the diagnostic summary fields but no longer satisfy delivered
+  evidence.
+- Updated the split Torii consensus handler, the monolithic routing copy, the
+  router-level endpoint regression, and both static OpenAPI copies to document
+  the complete-evidence contract.
+- Validation:
+  - `cargo test -p iroha_torii --test torii_sumeragi_telemetry sumeragi_rbc_delivered_endpoint --features telemetry -- --nocapture`
+    (`2` tests passed; emitted the pre-existing unrelated `soracloud.rs`
+    warning)
+  - `cargo fmt -p iroha_torii`
+  - `cargo fmt -p iroha_core -- --check`
+  - `cargo fmt -p iroha_torii -- --check`
+  - `git diff --check`
+  - `git diff -- Cargo.lock`
+
+## 2026-06-09 RBC DELIVER validation-priority chunk-shape guard
+
+- Hardened pending-block validation priority so `rbc_deliver` priority is only
+  granted when live RBC sessions or retained RBC status summaries are
+  non-invalid, marked delivered, and have a positive complete chunk set. Raw
+  `delivered=true` evidence with missing chunks no longer elevates validation
+  scheduling.
+- Added regression coverage for both live sessions and retained status-summary
+  evidence: incomplete delivered evidence stays unprioritized, while complete
+  delivered evidence still returns `rbc_deliver`.
+- Validation:
+  - `cargo test -p iroha_core pending_block_validation_priority_requires_complete_rbc_delivery_evidence --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `cargo fmt -p iroha_core`
+  - `cargo fmt -p iroha_core -- --check`
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/routing/consensus.rs`
+  - `git diff --check`
+  - `git diff -- Cargo.lock`
+
+## 2026-06-09 DA gate finalize telemetry de-duplication
+
+- Removed the duplicate DA-gate telemetry recording after
+  `finalize_pending_block` refreshes the gate. The refresh path already records
+  the `MissingLocalData` block event, so the finalize path now reports one
+  missing-local-data gate block instead of double-counting the same defer.
+- Extended `finalize_pending_block_defers_until_da_payload_available` to assert
+  the `sumeragi_da_gate_block_total{reason="missing_local_data"}` counter
+  increments exactly once when finalization is held by missing local DA payload
+  bytes.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core finalize_pending_block_defers_until_da_payload_available --lib --features telemetry -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    warnings)
+  - `env CARGO_TARGET_DIR=/tmp/iroha-codex-da-gate-test cargo test -p iroha_core finalize_pending_block_defers_until_da_payload_available --lib --features telemetry -- --nocapture`
+    (`1` test passed; same pre-existing unrelated `soracloud.rs` warnings)
+  - `cargo test -p iroha_core record_da_gate_telemetry --lib --features telemetry -- --nocapture`
+    (`2` tests passed; same pre-existing unrelated `soracloud.rs` warnings)
+  - `git diff --check`
+  - `git diff -- Cargo.lock`
+
+## 2026-06-09 Sumeragi evidence MCP route alignment
+
+- Fixed the MCP `iroha.sumeragi.evidence.submit` tool so it dispatches to the
+  live operator route, `POST /v1/sumeragi/evidence`, instead of the stale
+  `/v1/sumeragi/evidence/submit` path that is not registered by the Axum
+  router.
+- Updated the MCP tool metadata, Torii handler comments, Sumeragi evidence API
+  docs, Torii app evidence docs, and mirrored Sumeragi operator docs so
+  evidence list/count/submit references distinguish `GET /v1/sumeragi/evidence`,
+  `GET /v1/sumeragi/evidence/count`, and `POST /v1/sumeragi/evidence`.
+- Removed stale “temporary audit endpoints” wording from the Sumeragi evidence
+  API docs; the text now describes the current per-node audit endpoints without
+  implying a temporary route surface.
+- Validation:
+  - `cargo test -p iroha_torii manual_sumeragi_snapshot_tools_remain_read_only --lib -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    dead-code warning)
+  - `cargo test -p iroha_torii --test torii_protocols mcp_jsonrpc_tools_call_agent_alias_sumeragi_endpoints_dispatch -- --nocapture`
+    (`1` test passed; emitted the pre-existing unrelated `soracloud.rs`
+    dead-code warning)
+  - `cargo fmt -p iroha_torii -- --check` was attempted and failed only on the
+    pre-existing unrelated formatting diff in
+    `crates/iroha_torii/src/offline_v2_issuer.rs`.
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/mcp.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/routing/consensus.rs`
+  - `git diff --check`
+  - `git diff -- Cargo.lock`
+  - Route/doc scan for stale `/v1/sumeragi/evidence/submit` and “temporary
+    audit endpoints” wording returned no matches in the live Torii code,
+    client helper, MCP endpoint test, or Sumeragi evidence docs.
+
 ## 2026-06-09 DA/RBC production-quorum documentation, six-peer RS16, and ignored-test refresh
 
 - Reran the six-peer RS16 DA/RBC distribution path with production READY quorum

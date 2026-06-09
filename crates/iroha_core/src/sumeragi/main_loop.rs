@@ -5850,14 +5850,14 @@ impl Actor {
             .rbc
             .sessions
             .get(&key)
-            .is_some_and(|session| !session.is_invalid() && session.delivered)
+            .is_some_and(rbc_session_has_complete_delivery)
             || self
                 .subsystems
                 .da_rbc
                 .rbc
                 .status_handle
                 .get(&key)
-                .is_some_and(|summary| !summary.invalid && summary.delivered)
+                .is_some_and(|summary| rbc_status_summary_has_complete_delivery(&summary))
     }
 
     fn pending_block_has_rbc_ready_quorum(
@@ -9457,7 +9457,7 @@ impl Actor {
         let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
             return false;
         };
-        if session.is_invalid() || session.delivered {
+        if session.is_invalid() || rbc_session_has_complete_delivery(session) {
             return false;
         }
         if !self.rbc_rebroadcast_active_with_tip_and_session(
@@ -9785,7 +9785,7 @@ impl Actor {
         if self.rbc_session_matches_pending_block(key) {
             return true;
         }
-        if session.delivered {
+        if rbc_session_has_complete_delivery(session) {
             return false;
         }
         let missing_chunks =
@@ -15738,7 +15738,7 @@ impl Actor {
                     .rbc
                     .sessions
                     .get(&key)
-                    .is_some_and(|session| session.delivered)
+                    .is_some_and(rbc_session_has_complete_delivery)
                 {
                     debug!(
                         block = %key.0,
@@ -15746,7 +15746,7 @@ impl Actor {
                         view = key.2,
                         existing_source = ?existing_source,
                         incoming_source = ?source,
-                        "ignoring RBC roster update for delivered session"
+                        "ignoring RBC roster update for completely delivered session"
                     );
                     return;
                 }
@@ -20330,7 +20330,7 @@ impl Actor {
             ) {
                 continue;
             }
-            if session.delivered {
+            if rbc_session_has_complete_delivery(session) {
                 if self.suppress_rbc_hot_repair(*key) {
                     continue;
                 }
@@ -26970,7 +26970,9 @@ impl Actor {
             let hot_repair_allowed = !self.suppress_rbc_hot_repair(key);
             let chunk_repair_allowed = hot_repair_allowed
                 || self.allow_exact_frontier_recovered_rbc_chunk_repair(key, &session);
-            if session.progress_stage() == RbcProgressStage::Delivered {
+            if session.progress_stage() == RbcProgressStage::Delivered
+                && rbc_session_has_complete_delivery(&session)
+            {
                 if hot_repair_allowed
                     && self.rescue_rbc_missing_ready_peers(
                         key,
@@ -44382,10 +44384,7 @@ impl RbcSession {
     }
 
     pub(crate) fn allows_payload_recovery(&self) -> bool {
-        self.total_chunks != 0
-            && self.received_chunks < self.total_chunks
-            && !self.delivered
-            && !self.is_invalid()
+        self.total_chunks != 0 && self.received_chunks < self.total_chunks && !self.is_invalid()
     }
 
     fn has_complete_payload_bytes(&self) -> bool {
@@ -45177,6 +45176,44 @@ impl RbcSession {
         };
         Hash::new(&payload) != payload_hash
     }
+}
+
+fn rbc_session_has_complete_delivery(session: &RbcSession) -> bool {
+    session.delivered
+        && !session.is_invalid()
+        && session.total_chunks() != 0
+        && session.received_chunks() == session.total_chunks()
+}
+
+fn rbc_session_availability_incomplete(
+    session: &RbcSession,
+    pending_entry: bool,
+    required_ready: usize,
+) -> bool {
+    if session.is_invalid() {
+        return false;
+    }
+    let ready_quorum = session.ready_signatures.len() >= required_ready;
+    if rbc_session_has_complete_delivery(session) {
+        return !ready_quorum;
+    }
+    let progress_started = session.total_chunks() != 0
+        || session.received_chunks() != 0
+        || !session.ready_signatures.is_empty()
+        || pending_entry;
+    if !progress_started {
+        return false;
+    }
+    let missing_chunks =
+        session.total_chunks() != 0 && session.received_chunks() < session.total_chunks();
+    missing_chunks || !ready_quorum
+}
+
+fn rbc_status_summary_has_complete_delivery(summary: &rbc_status::Summary) -> bool {
+    summary.delivered
+        && !summary.invalid
+        && summary.total_chunks != 0
+        && summary.received_chunks == summary.total_chunks
 }
 
 /// Errors encountered while reconstructing persisted RBC payloads from disk.

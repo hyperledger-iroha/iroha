@@ -17122,7 +17122,7 @@
     },
     "/v1/sumeragi/rbc/delivered/{height}/{view}": {
       "get": {
-        "description": "Return RBC delivered status for a block height and view.",
+        "description": "Return RBC delivered status for a block height and view. The delivered flag is true only when matching evidence is non-invalid and has a positive complete chunk set; incomplete sessions remain visible as diagnostics.",
         "parameters": [
           {
             "description": "Block height to inspect (1-indexed).",

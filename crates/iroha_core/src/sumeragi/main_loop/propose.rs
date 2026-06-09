@@ -5335,6 +5335,8 @@ impl Actor {
                 }
                 missing_local_data = true;
                 let rbc_key = (pending.block.hash(), pending.height, pending.view);
+                let pending_entry = self.subsystems.da_rbc.rbc.pending.contains_key(&rbc_key);
+                let required_ready = self.rbc_deliver_quorum(&commit_topology);
                 rbc_session_incomplete |= self
                     .subsystems
                     .da_rbc
@@ -5342,21 +5344,7 @@ impl Actor {
                     .sessions
                     .get(&rbc_key)
                     .is_some_and(|session| {
-                        if session.is_invalid() || session.delivered {
-                            return false;
-                        }
-                        let progress_started = session.total_chunks() != 0
-                            || session.received_chunks() != 0
-                            || !session.ready_signatures.is_empty()
-                            || self.subsystems.da_rbc.rbc.pending.contains_key(&rbc_key);
-                        if !progress_started {
-                            return false;
-                        }
-                        let missing_chunks = session.total_chunks() != 0
-                            && session.received_chunks() < session.total_chunks();
-                        let ready_quorum = session.ready_signatures.len()
-                            >= self.rbc_deliver_quorum(&commit_topology);
-                        missing_chunks || !ready_quorum
+                        rbc_session_availability_incomplete(session, pending_entry, required_ready)
                     });
                 if rbc_session_incomplete {
                     break;

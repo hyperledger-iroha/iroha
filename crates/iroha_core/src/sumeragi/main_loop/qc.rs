@@ -909,7 +909,7 @@ impl Actor {
         let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) else {
             return base_retry_window;
         };
-        if session.is_invalid() || session.delivered {
+        if session.is_invalid() || rbc_session_has_complete_delivery(session) {
             return base_retry_window;
         }
         let chunks_progressed = session.total_chunks() > 0 && session.received_chunks() > 0;
@@ -4000,7 +4000,10 @@ impl Actor {
                 .sessions
                 .iter()
                 .any(|(key, session)| {
-                    key.1 >= lower && key.1 <= upper && !session.is_invalid() && !session.delivered
+                    key.1 >= lower
+                        && key.1 <= upper
+                        && !session.is_invalid()
+                        && !rbc_session_has_complete_delivery(session)
                 });
         if rbc_backlog_near_height {
             return within_payload_recovery_backlog_window(self);
@@ -4017,7 +4020,7 @@ impl Actor {
         }
         let key = (*block_hash, height, view);
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key) {
-            if !session.is_invalid() && !session.delivered {
+            if !session.is_invalid() && !rbc_session_has_complete_delivery(session) {
                 return within_backlog_extension(self);
             }
         }

@@ -10190,6 +10190,41 @@ fixture corridor into broader release validation.
   clears, audit-only lanes only allow missing/read/spool-scan warnings, and
   manifest hash mismatches reject in every policy; `manifest_block_guard` and
   `manifest_gate` coverage pin those cases.
+  Sumeragi evidence tooling now uses the live operator route consistently:
+  MCP submit dispatch, MCP metadata, Torii handler comments, and evidence docs
+  agree on `POST /v1/sumeragi/evidence`, while list/count remain GET routes.
+  DA-gate finalize telemetry now avoids double-counting missing-local-payload
+  deferrals: `finalize_pending_block` relies on the refresh path's gate record,
+  and telemetry-enabled coverage pins exactly one `missing_local_data` block
+  event per held finalization attempt.
+  Pending-block validation priority now uses the same delivered-and-complete
+  chunk-shape invariant for both live RBC sessions and retained RBC status
+  summaries, so malformed `delivered=true` evidence with missing chunks cannot
+  schedule validation as `rbc_deliver`.
+  The Torii `/v1/sumeragi/rbc/delivered/{height}/{view}` operator endpoint now
+  applies that same non-invalid positive-complete chunk invariant to its
+  `delivered` flag while keeping incomplete matches visible as diagnostics.
+  NPoS happy-path persisted-delivery fallback proof now also requires complete
+  retained chunk metadata, so metadata-only delivered snapshots cannot mask a
+  DA/RBC delivery regression.
+  The NPoS RBC delivery wait gate now shares that complete-delivery predicate,
+  so the pre-metrics readiness poll also ignores older-height, incomplete,
+  zero-chunk, or invalid `delivered=true` snapshots.
+  DA/RBC repair paths now distinguish raw DELIVER markers from complete local
+  delivery as well: incomplete delivered sessions keep payload recovery,
+  RBC-aware missing-block retry widening, and near-tip backpressure-exempt
+  repair active until the advertised chunks are actually complete.
+  Proposal cached-slot and stale-pending reschedule availability gates now share
+  a complete-delivery-plus-READY-quorum check, so raw or partial DELIVER state
+  cannot unlock reduced timeouts while DA/RBC availability is still incomplete.
+  Operator RBC backlog snapshots now use the same complete local chunk-delivery
+  guard, so delivered-but-incomplete sessions remain visible in generic missing
+  chunk counters until local chunks are complete.
+  RBC rebroadcast scheduling now also requires complete local delivery before
+  using the DELIVER rebroadcast cadence, so incomplete delivered sessions keep
+  missing-chunk repair deadlines active. Authoritative roster refreshes use the
+  same complete-delivery guard before ignoring updates, so partial delivered
+  sessions clear stale READY/DELIVER evidence when the roster changes.
   Exact-frontier slot tracking no longer carries a
   compatibility mirror layer: callers now observe canonical nested candidate,
   body, timer, and repair state directly. The live vNext
