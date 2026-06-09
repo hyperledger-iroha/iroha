@@ -46,6 +46,9 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             ("password_canary_unknown_secret", "canary_unknown_secret"),
             ("%70assword_canary_unknown_leak", "canary_unknown_leak"),
             ("private-key_canary_unknown_leak", "canary_unknown_leak"),
+            ("unexpected\x1bcanary_key", "\x1b"),
+            ("unexpected_canary_\uff4bey", "\uff4b"),
+            ("x" * 129, "x" * 129),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -57,6 +60,89 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
                 self.assertNotIn(hidden, message)
+        many_unknown = {f"field_{offset}": "redacted" for offset in range(9)}
+        with self.assertRaises(CANARY.CanaryError) as caught:
+            CANARY._reject_unknown_keys(many_unknown, set(), "runbook")
+        message = str(caught.exception)
+        self.assertIn("contains unknown keys", message)
+        self.assertNotIn("field_0", message)
+        self.assertNotIn("field_8", message)
+
+    def test_cli_argument_terminator_is_rejected_without_echo(self):
+        hidden = "token=canary-terminator-secret"
+        cases = (
+            (
+                "raw",
+                lambda: CANARY._preflight_raw_cli_secrets(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "path",
+                lambda: CANARY._preflight_output_cli_paths(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "boolean",
+                lambda: CANARY._preflight_boolean_cli_flags(
+                    ["--", "--plan-only", hidden],
+                    {"--plan-only"},
+                ),
+            ),
+            (
+                "numeric",
+                lambda: CANARY._preflight_numeric_cli_values(
+                    ["--", "--stage-timeout-secs", hidden],
+                    integer_flags=set(),
+                    number_flags={"--stage-timeout-secs"},
+                ),
+            ),
+        )
+        for helper, run in cases:
+            with self.subTest(helper=helper):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn("argument terminator is not supported", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("canary-terminator-secret", message)
+
+    def test_parser_rejects_abbreviated_long_options(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                CANARY.build_parser().parse_args(
+                    ["--config", "canary.json", "--summary-ou", "out"]
+                )
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments", stderr.getvalue())
+        self.assertIn("--summary-ou", stderr.getvalue())
+
+    def test_raw_cli_control_characters_are_rejected_without_echo(self):
+        hidden = "--unknown-canary\x1bflag"
+        with self.assertRaises(CANARY.CanaryError) as caught:
+            CANARY._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must not contain control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("unknown-canary", message)
+
+    def test_raw_cli_non_ascii_is_rejected_without_echo(self):
+        hidden = "\uff0d\uff0dsummary-out"
+        with self.assertRaises(CANARY.CanaryError) as caught:
+            CANARY._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must use printable ASCII", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("summary-out", message)
 
     def test_output_cli_path_flags_reject_flag_like_values(self):
         cases = (
@@ -93,6 +179,119 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("canary-path-leak", message)
+
+    def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        cases = (
+            (
+                "raw encoded dot",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%2e/summary.json",
+                "encoded dot or separator",
+            ),
+            (
+                "output encoded slash",
+                lambda raw: CANARY._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/%2f/summary.json",
+                "encoded dot or separator",
+            ),
+            (
+                "raw uri prefix",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "file:out/summary.json",
+                "URI or drive prefixes",
+            ),
+            (
+                "runbook drive prefix",
+                lambda raw: CANARY._validate_path_string(raw, "rail.receipt_dir"),
+                "C:/receipts/current",
+                "URI or drive prefixes",
+            ),
+            (
+                "runbook encoded semicolon",
+                lambda raw: CANARY._validate_path_string(raw, "rail.receipt_dir"),
+                "receipts/%3b/current",
+                "encoded semicolon",
+            ),
+            (
+                "runbook encoded delimiter",
+                lambda raw: CANARY._validate_path_string(raw, "rail.receipt_dir"),
+                "receipts/%5d/current",
+                "encoded URL delimiter",
+            ),
+            (
+                "raw encoded percent",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%25/summary.json",
+                "encoded percent",
+            ),
+            (
+                "raw encoded space",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%20/summary.json",
+                "percent-encoded control or space",
+            ),
+            (
+                "raw malformed percent",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%zz/summary.json",
+                "malformed percent",
+            ),
+        )
+        for name, call, raw, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    call(raw)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(raw, message)
+
+    def test_url_paths_reject_raw_delimiter_smuggling(self):
+        cases = (
+            "https://torii.local-bank.bank/base:debug/v1",
+            "https://torii.local-bank.bank/base@debug/v1",
+            "https://torii.local-bank.bank/base[debug]/v1",
+        )
+        for url in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._validate_endpoint_url(
+                        url,
+                        "rail.torii_base_url",
+                        allow_insecure_http=False,
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("path must not contain URL delimiter characters", message)
+                self.assertNotIn(url, message)
+
+    def test_urls_reject_non_ascii_smuggling(self):
+        cases = (
+            (
+                "https://torii\u0661.local-bank.bank/base/v1",
+                "host must use printable ASCII",
+            ),
+            (
+                "https://torii.local-bank.bank/base∕debug/v1",
+                "path must use printable ASCII",
+            ),
+            (
+                "https://torii.local-bank.bank/base%c3%a9/v1",
+                "path must not contain percent-encoded non-ASCII bytes",
+            ),
+        )
+        for url, expected in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    CANARY._validate_endpoint_url(
+                        url,
+                        "rail.torii_base_url",
+                        allow_insecure_http=False,
+                    )
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(url, message)
 
     def test_endpoint_urls_reject_secret_path_without_echo(self):
         cases = (
@@ -171,6 +370,21 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertIn("numeric value", stderr)
                 self.assertNotIn("token=", stderr)
                 self.assertNotIn("canary-secret", stderr)
+
+    def test_numeric_cli_flags_reject_unicode_digits_without_echo(self):
+        hidden = "\u0661"
+        cases = (
+            ["--output-limit-bytes", hidden],
+            [f"--output-limit-bytes={hidden}"],
+            ["--stage-timeout-secs", f"{hidden}.5"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_canary(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("must use printable ASCII", stderr)
+                self.assertNotIn(hidden, stderr)
 
     def test_raw_cli_secret_like_values_rejected_without_echo(self):
         cases = (
@@ -754,13 +968,166 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             finally:
                 CANARY.SCRIPT_DIR = original_script_dir
 
-            self.assertEqual(rc, 0, stderr)
+            self.assertEqual(rc, 1, stderr)
             summary = load_summary(stdout)
+            self.assertFalse(summary["ok"])
             stage = summary["stages"][0]
+            self.assertEqual(stage["returncode"], 0)
             self.assertEqual(stage["stdout_preview"], "O" * 8)
             self.assertEqual(stage["stderr_preview"], "E" * 8)
             self.assertTrue(stage["stdout_truncated"])
             self.assertTrue(stage["stderr_truncated"])
+
+    def test_truncated_verifier_output_marks_canary_failed(self):
+        cases = (
+            ("stdout", "sys.stdout.write('V' * 32)", "stdout_truncated"),
+            ("stderr", "sys.stderr.write('E' * 32)", "stderr_truncated"),
+        )
+        for stream, write_line, truncated_key in cases:
+            with self.subTest(stream=stream):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    script_dir = root / "scripts"
+                    script_dir.mkdir()
+                    fake_rail = script_dir / "iso_rail_gateway_adapter.py"
+                    fake_rail.write_text(
+                        "\n".join(
+                            [
+                                "import pathlib",
+                                "import sys",
+                                "receipt_dir = pathlib.Path(sys.argv[sys.argv.index('--receipt-dir') + 1])",
+                                "receipt_dir.mkdir(parents=True, exist_ok=True)",
+                                "sys.stdout.write('rail ok')",
+                            ]
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    fake_verify = script_dir / "iso_operator_receipt_verify.py"
+                    fake_verify.write_text(
+                        "\n".join(
+                            [
+                                "import sys",
+                                write_line,
+                            ]
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    inbox = root / "inbox"
+                    inbox.mkdir()
+                    config = write_config(
+                        root,
+                        {
+                            "provider": "local-bank",
+                            "environment": "ci",
+                            "rail": {
+                                "inbox_dir": str(inbox),
+                                "torii_base_url": "https://torii.local-bank.bank",
+                            },
+                        },
+                    )
+                    original_script_dir = CANARY.SCRIPT_DIR
+                    CANARY.SCRIPT_DIR = script_dir
+                    try:
+                        rc, stdout, stderr = run_canary(
+                            [
+                                "--config",
+                                str(config),
+                                "--output-limit-bytes",
+                                "8",
+                            ]
+                        )
+                    finally:
+                        CANARY.SCRIPT_DIR = original_script_dir
+
+                    self.assertEqual(rc, 1, stderr)
+                    summary = load_summary(stdout)
+                    self.assertFalse(summary["ok"])
+                    self.assertEqual([stage["name"] for stage in summary["stages"]], ["rail", "verify"])
+                    verify_stage = summary["stages"][1]
+                    self.assertEqual(verify_stage["returncode"], 0)
+                    self.assertTrue(verify_stage[truncated_key])
+
+    def test_successful_child_stderr_marks_canary_failed(self):
+        cases = (
+            (
+                "rail",
+                "sys.stderr.write('rail warning')",
+                "",
+                ["rail"],
+            ),
+            (
+                "verify",
+                "sys.stdout.write('rail ok')",
+                "sys.stdout.write('{}')\nsys.stderr.write('verify warning')",
+                ["rail", "verify"],
+            ),
+        )
+        for stream, rail_line, verify_line, expected_stages in cases:
+            with self.subTest(stream=stream):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    script_dir = root / "scripts"
+                    script_dir.mkdir()
+                    fake_rail = script_dir / "iso_rail_gateway_adapter.py"
+                    fake_rail.write_text(
+                        "\n".join(
+                            [
+                                "import pathlib",
+                                "import sys",
+                                "receipt_dir = pathlib.Path(sys.argv[sys.argv.index('--receipt-dir') + 1])",
+                                "receipt_dir.mkdir(parents=True, exist_ok=True)",
+                                rail_line,
+                            ]
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    if verify_line:
+                        fake_verify = script_dir / "iso_operator_receipt_verify.py"
+                        fake_verify.write_text(
+                            "\n".join(
+                                [
+                                    "import sys",
+                                    verify_line,
+                                ]
+                            )
+                            + "\n",
+                            encoding="utf-8",
+                        )
+                    inbox = root / "inbox"
+                    inbox.mkdir()
+                    config = write_config(
+                        root,
+                        {
+                            "provider": "local-bank",
+                            "environment": "ci",
+                            "rail": {
+                                "inbox_dir": str(inbox),
+                                "torii_base_url": "https://torii.local-bank.bank",
+                            },
+                            **({"verify": {"enabled": False}} if not verify_line else {}),
+                        },
+                    )
+                    original_script_dir = CANARY.SCRIPT_DIR
+                    CANARY.SCRIPT_DIR = script_dir
+                    try:
+                        rc, stdout, stderr = run_canary(["--config", str(config)])
+                    finally:
+                        CANARY.SCRIPT_DIR = original_script_dir
+
+                    self.assertEqual(rc, 1, stderr)
+                    summary = load_summary(stdout)
+                    self.assertFalse(summary["ok"])
+                    self.assertEqual(
+                        [stage["name"] for stage in summary["stages"]],
+                        expected_stages,
+                    )
+                    stage = summary["stages"][-1]
+                    self.assertEqual(stage["returncode"], 0)
+                    self.assertFalse(stage["stderr_truncated"])
+                    self.assertIn("warning", stage["stderr_preview"])
 
     def test_secret_looking_child_output_is_rejected_before_summary_write(self):
         cases = [
@@ -833,6 +1200,67 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertNotIn("token=", stderr)
                     self.assertNotIn("Authorization:", stderr)
                     self.assertNotIn("canary-child-secret", stderr)
+
+    def test_control_bearing_child_output_is_rejected_before_summary_write(self):
+        cases = [
+            (
+                "stdout",
+                "sys.stdout.write('accepted \\x1b[31mwarning')",
+                "stdout_preview contains unsafe control characters",
+            ),
+            (
+                "stderr",
+                "sys.stderr.write('rejected \\x1b[31mwarning')",
+                "stderr_preview contains unsafe control characters",
+            ),
+        ]
+        for stream, write_line, message in cases:
+            with self.subTest(stream=stream):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    script_dir = root / "scripts"
+                    script_dir.mkdir()
+                    fake_rail = script_dir / "iso_rail_gateway_adapter.py"
+                    fake_rail.write_text(
+                        "\n".join(
+                            [
+                                "import sys",
+                                write_line,
+                            ]
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    inbox = root / "inbox"
+                    inbox.mkdir()
+                    summary_out = root / "summary" / "canary.summary.json"
+                    config = write_config(
+                        root,
+                        {
+                            "provider": "local-bank",
+                            "environment": "ci",
+                            "rail": {
+                                "inbox_dir": str(inbox),
+                                "torii_base_url": "https://torii.local-bank.bank",
+                            },
+                            "verify": {"enabled": False},
+                        },
+                    )
+                    original_script_dir = CANARY.SCRIPT_DIR
+                    CANARY.SCRIPT_DIR = script_dir
+                    try:
+                        rc, stdout, stderr = run_canary(
+                            ["--config", str(config), "--summary-out", str(summary_out)]
+                        )
+                    finally:
+                        CANARY.SCRIPT_DIR = original_script_dir
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertFalse(summary_out.exists())
+                    self.assertIn(message, stderr)
+                    self.assertNotIn("\x1b", stderr)
+                    self.assertNotIn("[31mwarning", stderr)
 
     def test_child_stage_timeout_is_bounded_and_recorded(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -2017,6 +2445,53 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 {
                     "provider": "local-bank",
                     "environment": "ci",
+                    "notary": {
+                        "export_dir": "export",
+                        "dry_run": True,
+                    },
+                    "verify": {
+                        "include_stage_receipts": False,
+                        "receipt_dirs": ["receipts"],
+                        "receipts": ["receipts/a.receipt.json"],
+                    },
+                },
+                "verify.receipts[0] is already covered by verify.receipt_dirs[0]",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                        "receipt_dir": "rail-receipts",
+                    },
+                    "verify": {
+                        "include_stage_receipts": False,
+                        "receipts": ["rail-receipts/manual.receipt.json"],
+                    },
+                },
+                "verify.receipts[0] must not replace a generated stage receipt_dir",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                        "receipt_dir": "rail-receipts",
+                    },
+                    "verify": {
+                        "receipts": ["rail-receipts/manual.receipt.json"],
+                    },
+                },
+                "verify.receipts[0] is already covered by verify.receipt_dirs[0]",
+            ),
+            (
+                {
+                    "provider": "local-bank",
+                    "environment": "ci",
                     "rail": {
                         "inbox_dir": "inbox",
                         "torii_base_url": "https://torii.local-bank.bank",
@@ -2196,6 +2671,11 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 "rail.receipt_dir must not contain semicolon path parameters",
             ),
             (
+                "rail receipt control",
+                lambda body: body["rail"].__setitem__("receipt_dir", "receipts\x1bprod"),
+                "rail.receipt_dir must not contain control characters",
+            ),
+            (
                 "rail token empty segment",
                 lambda body: body["rail"].__setitem__(
                     "bearer_token_file",
@@ -2256,6 +2736,26 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_runbook_paths_reject_non_ascii_without_echo(self):
+        hidden = "inb\u043ex"
+        body = {
+            "provider": "local-bank",
+            "environment": "ci",
+            "rail": {
+                "inbox_dir": hidden,
+                "torii_base_url": "https://torii.local-bank.bank",
+            },
+        }
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = write_config(root, body)
+
+            rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("rail.inbox_dir must use printable ASCII", stderr)
+            self.assertNotIn(hidden, stderr)
+
     def test_control_characters_in_runbook_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2275,6 +2775,38 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("control characters", stderr)
+
+    def test_runbook_context_strings_must_be_printable_ascii_without_echo(self):
+        cases = (
+            ("provider", "local-b\u00e1nk", "config.provider must use printable ASCII"),
+            (
+                "environment",
+                "prepr\u043ed",
+                "config.environment must use printable ASCII",
+            ),
+        )
+        for field, hidden, message in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    body = {
+                        "provider": "local-bank",
+                        "environment": "ci",
+                        "rail": {
+                            "inbox_dir": "inbox",
+                            "torii_base_url": "https://torii.local-bank.bank",
+                        },
+                    }
+                    body[field] = hidden
+                    config = write_config(root, body)
+
+                    rc, _stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_runbook_strings_must_not_require_trimming(self):
         base = {

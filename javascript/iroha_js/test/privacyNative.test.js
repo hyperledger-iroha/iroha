@@ -489,18 +489,27 @@ test("privacy native availability probes build and verify with Norito request ar
   let verifyProbe;
   let buildProbeAfterReturn;
   let verifyProbeAfterReturn;
+  let capabilitiesOutput;
+  let buildOutput;
+  let verifyOutput;
 
   withNativeBinding(
     completePrivacyBinding({
+      privacyCapabilitiesV1() {
+        capabilitiesOutput = Buffer.from(PRIVACY_CAPABILITIES_ARCHIVE);
+        return capabilitiesOutput;
+      },
       privacyBuildProofV1(request) {
         buildProbe = Buffer.from(request);
         buildProbeAfterReturn = request;
-        return Uint8Array.from(PRIVACY_BUILD_ARCHIVE);
+        buildOutput = Buffer.from(PRIVACY_BUILD_ARCHIVE);
+        return buildOutput;
       },
       privacyVerifyProofV1(request) {
         verifyProbe = Buffer.from(request);
         verifyProbeAfterReturn = request;
-        return Uint8Array.from(PRIVACY_VERIFY_ARCHIVE);
+        verifyOutput = Buffer.from(PRIVACY_VERIFY_ARCHIVE);
+        return verifyOutput;
       },
     }),
     () => {
@@ -514,11 +523,15 @@ test("privacy native availability probes build and verify with Norito request ar
   assert.notDeepEqual(verifyProbe, legacyTextProbe);
   assert.equal(buildProbeAfterReturn.every((value) => value === 0), true);
   assert.equal(verifyProbeAfterReturn.every((value) => value === 0), true);
+  assert.equal(capabilitiesOutput.every((value) => value === 0), true);
+  assert.equal(buildOutput.every((value) => value === 0), true);
+  assert.equal(verifyOutput.every((value) => value === 0), true);
 });
 
 test("privacy native availability probes clear request copies after native failures", () => {
   let throwingProbe;
   let badOutputProbe;
+  let badOutput;
 
   withNativeBinding(
     completePrivacyBinding({
@@ -536,7 +549,8 @@ test("privacy native availability probes clear request copies after native failu
     completePrivacyBinding({
       privacyVerifyProofV1(request) {
         badOutputProbe = request;
-        return Buffer.from([0x56]);
+        badOutput = Buffer.from([0x56]);
+        return badOutput;
       },
     }),
     () => {
@@ -552,6 +566,7 @@ test("privacy native availability probes clear request copies after native failu
     Buffer.from(badOutputProbe),
     Buffer.alloc(privacyNoritoFrame(0x52).length),
   );
+  assert.deepEqual(badOutput, Buffer.alloc(1));
 });
 
 test("privacy native availability probes reject unsafe raw output", () => {

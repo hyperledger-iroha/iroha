@@ -43,7 +43,7 @@ _GATE_RE = re.compile(
     r"const\s+PRIVACY_PRODUCTION_GATE_REQUIREMENTS:[^=]+=\s*&\[(?P<body>.*?)\];",
     re.DOTALL,
 )
-_GATE_ITEM_RE = re.compile(r'\("([^"]+)",\s*"([^"]+)"\)')
+_GATE_ITEM_RE = re.compile(r'\(\s*"([^"]+)",\s*"([^"]+)"\s*,?\s*\)', re.DOTALL)
 
 
 def _parse_string_list(body: str) -> tuple[str, ...]:

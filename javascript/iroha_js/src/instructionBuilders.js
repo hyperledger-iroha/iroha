@@ -1842,10 +1842,10 @@ function isPortableVerifierBackendLabel(backend) {
   if (backend.includes("+")) {
     return PLUS_PRIVACY_BACKEND_ALIASES.has(backend);
   }
-  if (!/^[a-z0-9/_.:-]+$/u.test(backend)) {
+  if (!/^[A-Za-z0-9/_.:+-]+$/u.test(backend)) {
     return false;
   }
-  if (!/^[a-z0-9]/u.test(backend) || !/[a-z0-9]$/u.test(backend)) {
+  if (!/^[A-Za-z0-9]/u.test(backend) || !/[A-Za-z0-9]$/u.test(backend)) {
     return false;
   }
   return !["//", "::", "..", "/:", ":/", "/.", "./", ":.", ".:"].some((separator) =>
@@ -1931,6 +1931,12 @@ function normalizePrivacyBackendTag(value, name) {
   const backend = raw.trim().toLowerCase();
   if (isProductionVerifyBackendLabel(backend) && isStarkFriProductionBackendLabel(backend)) {
     return "Stark";
+  }
+  if (
+    isProductionVerifyBackendLabel(backend) &&
+    (backend === "halo2/ipa" || isNativeHalo2PastaProductionBackendLabel(backend))
+  ) {
+    return "Halo2IpaPasta";
   }
   const normalized = raw.toLowerCase().replace(/[^a-z0-9]/g, "");
   switch (normalized) {

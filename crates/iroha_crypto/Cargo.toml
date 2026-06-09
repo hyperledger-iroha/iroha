@@ -1,5 +1,6 @@
 [package]
 name = "iroha_crypto"
+autotests = false
 
 edition.workspace = true
 version.workspace = true
@@ -170,3 +171,9 @@ harness = false
 [[bench]]
 name = "ed25519_hotpaths"
 harness = false
+
+# Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
+
+[[test]]
+name = "iroha_crypto_group_01"
+path = "tests/grouped/group_01.rs"

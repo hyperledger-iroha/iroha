@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Offline;
 using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Sdk.Tests;
@@ -330,6 +331,97 @@ public sealed class TransactionBuilderTests
     }
 
     [Fact]
+    public void AddInstructionAcceptsKagemushaInstructionArchiveFactories()
+    {
+        var redeemArchive = KagemushaArchive(
+            KagemushaInstructionType.RedeemRecursive,
+            new byte[] { 1, 2, 3 });
+        var transferArchive = KagemushaArchive(
+            KagemushaInstructionType.Transfer,
+            new byte[] { 4, 5, 6 });
+
+        var builder = new TransactionBuilder(
+                "00000042",
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            .AddInstruction(TransactionInstruction.KagemushaInstructionArchive(
+                KagemushaInstructionType.Transfer,
+                transferArchive))
+            .KagemushaRecursiveRedeem(new KagemushaRecursiveSpendRedeemInstructionArchive(redeemArchive));
+
+        Assert.Collection(
+            builder.Instructions,
+            instruction =>
+            {
+                var kagemusha = Assert.IsType<KagemushaInstructionArchiveInstruction>(instruction);
+                Assert.Equal(KagemushaInstructionType.Transfer, kagemusha.InstructionType);
+            },
+            instruction =>
+            {
+                var kagemusha = Assert.IsType<KagemushaInstructionArchiveInstruction>(instruction);
+                Assert.Equal(KagemushaInstructionType.RedeemRecursive, kagemusha.InstructionType);
+            });
+    }
+
+    [Fact]
+    public void BuildSignedEmbedsKagemushaInstructionArchiveWithoutReframing()
+    {
+        var archive = KagemushaArchive(
+            KagemushaInstructionType.RedeemRecursive,
+            new byte[] { 9, 8, 7, 6 },
+            flags: 0x26);
+
+        var envelope = new TransactionBuilder(
+                "00000042",
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            .KagemushaInstructionArchive(KagemushaInstructionType.RedeemRecursive, archive)
+            .SetCreationTimeMilliseconds(1736000000000)
+            .SetTimeToLiveMilliseconds(3500)
+            .SetNonce(17)
+            .BuildSigned(Convert.FromHexString(FixtureSeedHex));
+
+        var instructions = ReadEncodedInstructions(envelope.PayloadBytes);
+        var instruction = Assert.Single(instructions);
+        Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId);
+        Assert.Equal(archive, instruction.Payload);
+        Assert.Equal((byte)0x26, instruction.Payload[39]);
+
+        AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
+    }
+
+    [Fact]
+    public void KagemushaInstructionArchiveAcceptsNativeAbi7RedeemInstructionFixture()
+    {
+        var archive = SharedRecursiveSpendAbi7Archive("redeem_instruction");
+        var instruction = TransactionInstruction.KagemushaInstructionArchive(
+            KagemushaInstructionType.RedeemRecursive,
+            archive);
+
+        Assert.Equal(KagemushaInstructionType.RedeemRecursive, instruction.InstructionType);
+        Assert.Equal(archive, instruction.InstructionArchive);
+    }
+
+    [Fact]
+    public void KagemushaInstructionArchiveRejectsMalformedWrongTypeAndMismatchedType()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.KagemushaInstructionArchive(
+                KagemushaInstructionType.RedeemRecursive,
+                Array.Empty<byte>()));
+        Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.KagemushaInstructionArchive(
+                KagemushaInstructionType.RedeemRecursive,
+                new byte[] { 0 }));
+        Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.KagemushaInstructionArchive(
+                KagemushaInstructionType.RedeemRecursive,
+                NoritoCodec.Encode("KagemushaRecursiveSpendRedeemRequestV1", new byte[] { 1, 2, 3 })));
+        Assert.Throws<ArgumentException>(() =>
+            TransactionInstruction.KagemushaInstructionArchive(
+                KagemushaInstructionType.RedeemRecursive,
+                KagemushaArchive(KagemushaInstructionType.Transfer, new byte[] { 1, 2, 3 })));
+    }
+
+    [Fact]
     public void BuildSignedEncodesNftAndTriggerInstructions()
     {
         var envelope = new TransactionBuilder(
@@ -588,6 +680,45 @@ public sealed class TransactionBuilderTests
     {
         Assert.True(framedPayload.Length >= NoritoHeader.EncodedLength);
         return framedPayload[NoritoHeader.EncodedLength..];
+    }
+
+    private static byte[] KagemushaArchive(
+        KagemushaInstructionType instructionType,
+        byte[] payload,
+        byte flags = 0)
+    {
+        return NoritoCodec.Encode(instructionType.WireName(), payload, flags);
+    }
+
+    private static byte[] SharedRecursiveSpendAbi7Archive(string archiveName)
+    {
+        using var document = LoadSharedRecursiveSpendAbi7Archives();
+        var archive = document.RootElement
+            .GetProperty("archives")
+            .EnumerateArray()
+            .First(candidate => candidate.GetProperty("name").GetString() == archiveName);
+        return Convert.FromBase64String(archive.GetProperty("bytes_base64").GetString()!);
+    }
+
+    private static JsonDocument LoadSharedRecursiveSpendAbi7Archives()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory != null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName,
+                "fixtures",
+                "kagemusha_recursive_spend_abi7",
+                "archives.json");
+            if (File.Exists(candidate))
+            {
+                return JsonDocument.Parse(File.ReadAllText(candidate));
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new FileNotFoundException("missing shared recursive spend ABI-7 archives fixture");
     }
 
     private sealed record EncodedInstruction(string WireId, byte[] Payload);

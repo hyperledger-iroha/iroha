@@ -155,6 +155,10 @@ function kagemushaNoritoFrame(schemaByte) {
 
 const TEST_NORITO_COMPACT_LEN_FLAG = 0x02;
 const KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
+  "c88489618a012c283ff3bb2ebabc7775",
+  "hex",
+);
+const OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH = Buffer.from(
   "119f4df38a98ef5848ad0aadb9715779",
   "hex",
 );
@@ -302,6 +306,9 @@ function kagemushaInputArchive(schemaByte = 0x50) {
   return kagemushaNoritoFrameWithPayload(schemaByte);
 }
 
+const RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE = kagemushaInputArchive(0xe1);
+const RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE = kagemushaInputArchive(0xe2);
+
 function sharedRecursiveSpendManifest() {
   return JSON.parse(
     readFileSync(
@@ -395,6 +402,7 @@ test("Kagemusha recursive spend helpers reject empty request archives before nat
         kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
           Buffer.alloc(0),
           kagemushaInputArchive(0xc7),
+          RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         ),
       /recordBundleArchive must not be empty/,
     );
@@ -403,19 +411,45 @@ test("Kagemusha recursive spend helpers reject empty request archives before nat
         kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
           kagemushaInputArchive(0xc8),
           Buffer.alloc(0),
+          RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         ),
       /pallasOpenEnvelopesArchive must not be empty/,
     );
     assert.throws(
-      () => kagemushaVerifyRecursiveCompactPaymentToken(Buffer.alloc(0)),
+      () =>
+        kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+          kagemushaInputArchive(0xc9),
+          kagemushaInputArchive(0xca),
+          Buffer.alloc(0),
+        ),
+      /recursiveCompactKeyArtifactsArchive must not be empty/,
+    );
+    assert.throws(
+      () =>
+        kagemushaVerifyRecursiveCompactPaymentToken(
+          Buffer.alloc(0),
+          RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+      ),
       /compactTokenArchive must not be empty/,
+    );
+    assert.throws(
+      () =>
+        kagemushaVerifyRecursiveCompactPaymentToken(
+          kagemushaInputArchive(0x4b),
+          Buffer.alloc(0),
+        ),
+      /recursiveCompactVerifierKeysArchive must not be empty/,
     );
     assert.throws(
       () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(Buffer.alloc(0)),
       /bundleArchive must not be empty/,
     );
     assert.throws(
-      () => kagemushaVerifyRecursiveCompactPaymentToken(Buffer.from([1])),
+      () =>
+        kagemushaVerifyRecursiveCompactPaymentToken(
+          Buffer.from([1]),
+          RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        ),
       /compactTokenArchive must be a valid Norito archive/,
     );
     assert.throws(
@@ -423,7 +457,11 @@ test("Kagemusha recursive spend helpers reject empty request archives before nat
       /bundleArchive must be a valid Norito archive/,
     );
     assert.throws(
-      () => kagemushaVerifyRecursiveCompactPaymentToken(kagemushaNoritoFrame(0x4b)),
+      () =>
+        kagemushaVerifyRecursiveCompactPaymentToken(
+          kagemushaNoritoFrame(0x4b),
+          RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        ),
       /compactTokenArchive must contain a non-empty Norito payload/,
     );
     assert.throws(
@@ -525,6 +563,7 @@ test("Kagemusha recursive spend helpers reject oversized request archives before
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         oversizedArchive,
         validArchive,
+        RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
       ),
     /recordBundleArchive must not exceed/,
   );
@@ -533,12 +572,34 @@ test("Kagemusha recursive spend helpers reject oversized request archives before
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         validArchive,
         oversizedArchive,
+        RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
       ),
     /pallasOpenEnvelopesArchive must not exceed/,
   );
   assert.throws(
-    () => kagemushaVerifyRecursiveCompactPaymentToken(oversizedArchive),
+    () =>
+      kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        validArchive,
+        validArchive,
+        oversizedArchive,
+      ),
+    /recursiveCompactKeyArtifactsArchive must not exceed/,
+  );
+  assert.throws(
+    () =>
+      kagemushaVerifyRecursiveCompactPaymentToken(
+        oversizedArchive,
+        RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+      ),
     /compactTokenArchive must not exceed/,
+  );
+  assert.throws(
+    () =>
+      kagemushaVerifyRecursiveCompactPaymentToken(
+        validArchive,
+        oversizedArchive,
+      ),
+    /recursiveCompactVerifierKeysArchive must not exceed/,
   );
   assert.throws(
     () => kagemushaRecursiveSpendCompactPaymentTokenFromBundle(oversizedArchive),
@@ -573,6 +634,7 @@ test("Kagemusha recursive spend helpers reject malformed Norito request archives
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         Buffer.from([1]),
         kagemushaInputArchive(0xc9),
+        RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
       ),
     /recordBundleArchive must be a valid Norito archive/,
   );
@@ -581,8 +643,26 @@ test("Kagemusha recursive spend helpers reject malformed Norito request archives
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         kagemushaInputArchive(0xca),
         Buffer.from([1]),
+        RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
       ),
     /pallasOpenEnvelopesArchive must be a valid Norito archive/,
+  );
+  assert.throws(
+    () =>
+      kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        kagemushaInputArchive(0xca),
+        kagemushaInputArchive(0xcb),
+        Buffer.from([1]),
+    ),
+    /recursiveCompactKeyArtifactsArchive must be a valid Norito archive/,
+  );
+  assert.throws(
+    () =>
+      kagemushaVerifyRecursiveCompactPaymentToken(
+        kagemushaInputArchive(0x4b),
+        Buffer.from([1]),
+      ),
+    /recursiveCompactVerifierKeysArchive must be a valid Norito archive/,
   );
   assert.throws(
     () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(Buffer.from([1])),
@@ -625,6 +705,7 @@ test("Kagemusha recursive spend helpers reject empty-payload Norito request arch
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         kagemushaNoritoFrame(0xcb),
         kagemushaInputArchive(0xcc),
+        RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
       ),
     /recordBundleArchive must contain a non-empty Norito payload/,
   );
@@ -633,8 +714,26 @@ test("Kagemusha recursive spend helpers reject empty-payload Norito request arch
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         kagemushaInputArchive(0xcd),
         kagemushaNoritoFrame(0xce),
+        RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
       ),
     /pallasOpenEnvelopesArchive must contain a non-empty Norito payload/,
+  );
+  assert.throws(
+    () =>
+      kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+        kagemushaInputArchive(0xcd),
+        kagemushaInputArchive(0xce),
+        kagemushaNoritoFrame(0xcf),
+    ),
+    /recursiveCompactKeyArtifactsArchive must contain a non-empty Norito payload/,
+  );
+  assert.throws(
+    () =>
+      kagemushaVerifyRecursiveCompactPaymentToken(
+        kagemushaInputArchive(0x4b),
+        kagemushaNoritoFrame(0x4c),
+      ),
+    /recursiveCompactVerifierKeysArchive must contain a non-empty Norito payload/,
   );
   assert.throws(
     () => kagemushaProveVerifiedCompactPaymentTokenWithRecords(kagemushaNoritoFrame(0xd5)),
@@ -946,6 +1045,7 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
         kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
           kagemushaInputArchive(0xc1),
           kagemushaInputArchive(0xc2),
+          RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         ),
       /recursive compact Kagemusha payment-token prover requires native bridge ABI 7/,
     );
@@ -972,6 +1072,7 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
           kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
             kagemushaInputArchive(0xc3),
             kagemushaInputArchive(0xc4),
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
           ),
         /recursive compact Kagemusha payment-token prover requires native bridge ABI 7/,
       );
@@ -980,8 +1081,8 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
   withNativeBinding(
     {
       ...completeBinding,
-      kagemushaVerifyRecursiveCompactPaymentToken(token) {
-        rejectMalformedProbe("recursive-compact-verify", token);
+      kagemushaVerifyRecursiveCompactPaymentToken(token, verifierKeys) {
+        rejectMalformedProbe("recursive-compact-verify", token, verifierKeys);
         return Buffer.from(token)[6] === 0x4b;
       },
     },
@@ -993,15 +1094,22 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
           kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
             kagemushaInputArchive(0xca),
             kagemushaInputArchive(0xcb),
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
           ),
         /recursive compact Kagemusha payment-token prover requires native bridge ABI 7/,
       );
       assert.equal(
-        kagemushaVerifyRecursiveCompactPaymentToken(kagemushaNoritoFrameWithPayload(0x4b)),
+        kagemushaVerifyRecursiveCompactPaymentToken(
+          kagemushaNoritoFrameWithPayload(0x4b),
+          RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        ),
         true,
       );
       assert.equal(
-        kagemushaVerifyRecursiveCompactPaymentToken(kagemushaNoritoFrameWithPayload(0x4c)),
+        kagemushaVerifyRecursiveCompactPaymentToken(
+          kagemushaNoritoFrameWithPayload(0x4c),
+          RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        ),
         false,
       );
     },
@@ -1012,8 +1120,8 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes() {
         throw new Error("Kagemusha recursive compact proof unavailable");
       },
-      kagemushaVerifyRecursiveCompactPaymentToken(token) {
-        rejectMalformedProbe("recursive-compact-verify", token);
+      kagemushaVerifyRecursiveCompactPaymentToken(token, verifierKeys) {
+        rejectMalformedProbe("recursive-compact-verify", token, verifierKeys);
         return true;
       },
     },
@@ -1028,6 +1136,7 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
           kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
             kagemushaInputArchive(0xcc),
             kagemushaInputArchive(0xcd),
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
           ),
         /recursive compact Kagemusha payment-token prover requires native bridge ABI 7/,
       );
@@ -1039,8 +1148,9 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         record,
         pallasOpenEnvelopes,
+        keyArtifacts,
       ) {
-        rejectMalformedProbe("recursive-compact", record, pallasOpenEnvelopes);
+        rejectMalformedProbe("recursive-compact", record, pallasOpenEnvelopes, keyArtifacts);
         return kagemushaNoritoFrameWithPayload(0x4e);
       },
       kagemushaVerifyRecursiveCompactPaymentToken() {
@@ -1054,7 +1164,11 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
         false,
       );
       assert.throws(
-        () => kagemushaVerifyRecursiveCompactPaymentToken(kagemushaNoritoFrameWithPayload(0x4b)),
+        () =>
+          kagemushaVerifyRecursiveCompactPaymentToken(
+            kagemushaNoritoFrameWithPayload(0x4b),
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+          ),
         /recursive compact Kagemusha payment-token verifier requires native bridge ABI 7 with the compact verifier symbol/,
       );
     },
@@ -1065,12 +1179,13 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         record,
         pallasOpenEnvelopes,
+        keyArtifacts,
       ) {
-        rejectMalformedProbe("recursive-compact", record, pallasOpenEnvelopes);
+        rejectMalformedProbe("recursive-compact", record, pallasOpenEnvelopes, keyArtifacts);
         throw new Error("recursive compact proof composition unavailable");
       },
-      kagemushaVerifyRecursiveCompactPaymentToken(token) {
-        rejectMalformedProbe("recursive-compact-verify", token);
+      kagemushaVerifyRecursiveCompactPaymentToken(token, verifierKeys) {
+        rejectMalformedProbe("recursive-compact-verify", token, verifierKeys);
         return true;
       },
     },
@@ -1085,6 +1200,7 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
           kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
             kagemushaInputArchive(0xc7),
             kagemushaInputArchive(0xc8),
+            RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
           ),
         /recursive compact proof composition unavailable/,
       );
@@ -1096,12 +1212,13 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         record,
         pallasOpenEnvelopes,
+        keyArtifacts,
       ) {
-        rejectMalformedProbe("recursive-compact", record, pallasOpenEnvelopes);
+        rejectMalformedProbe("recursive-compact", record, pallasOpenEnvelopes, keyArtifacts);
         return kagemushaNoritoFrameWithPayload(0x4a);
       },
-      kagemushaVerifyRecursiveCompactPaymentToken(token) {
-        rejectMalformedProbe("recursive-compact-verify", token);
+      kagemushaVerifyRecursiveCompactPaymentToken(token, verifierKeys) {
+        rejectMalformedProbe("recursive-compact-verify", token, verifierKeys);
         return Buffer.from(token)[6] === 0x4b;
       },
     },
@@ -1119,15 +1236,22 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
         kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
           kagemushaInputArchive(0xc5),
           kagemushaInputArchive(0xc6),
+          RECURSIVE_COMPACT_KEY_ARTIFACTS_ARCHIVE,
         ),
         kagemushaNoritoFrameWithPayload(0x4a),
       );
       assert.equal(
-        kagemushaVerifyRecursiveCompactPaymentToken(kagemushaNoritoFrameWithPayload(0x4b)),
+        kagemushaVerifyRecursiveCompactPaymentToken(
+          kagemushaNoritoFrameWithPayload(0x4b),
+          RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        ),
         true,
       );
       assert.equal(
-        kagemushaVerifyRecursiveCompactPaymentToken(kagemushaNoritoFrameWithPayload(0x4c)),
+        kagemushaVerifyRecursiveCompactPaymentToken(
+          kagemushaNoritoFrameWithPayload(0x4c),
+          RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+        ),
         false,
       );
     },
@@ -1138,8 +1262,9 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         record,
         pallasOpenEnvelopes,
+        keyArtifacts,
       ) {
-        rejectMalformedProbe("recursive-compact", record, pallasOpenEnvelopes);
+        rejectMalformedProbe("recursive-compact", record, pallasOpenEnvelopes, keyArtifacts);
         return Uint8Array.from([10]);
       },
       kagemushaVerifyRecursiveCompactPaymentToken() {
@@ -1153,7 +1278,11 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
         false,
       );
       assert.throws(
-        () => kagemushaVerifyRecursiveCompactPaymentToken(kagemushaNoritoFrameWithPayload(0x4b)),
+        () =>
+          kagemushaVerifyRecursiveCompactPaymentToken(
+            kagemushaNoritoFrameWithPayload(0x4b),
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+          ),
         /recursive compact Kagemusha payment-token verifier requires native bridge ABI 7 with the compact verifier symbol/,
       );
     },
@@ -1164,12 +1293,13 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
       kagemushaProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         record,
         pallasOpenEnvelopes,
+        keyArtifacts,
       ) {
-        rejectMalformedProbe("recursive-compact", record, pallasOpenEnvelopes);
+        rejectMalformedProbe("recursive-compact", record, pallasOpenEnvelopes, keyArtifacts);
         return kagemushaNoritoFrameWithPayload(0x4d);
       },
-      kagemushaVerifyRecursiveCompactPaymentToken(token) {
-        rejectMalformedProbe("recursive-compact-verify", token);
+      kagemushaVerifyRecursiveCompactPaymentToken(token, verifierKeys) {
+        rejectMalformedProbe("recursive-compact-verify", token, verifierKeys);
         return Uint8Array.from([1]);
       },
     },
@@ -1180,7 +1310,11 @@ test("Kagemusha offline spend mode defaults to recursive when native support is 
         true,
       );
       assert.throws(
-        () => kagemushaVerifyRecursiveCompactPaymentToken(kagemushaNoritoFrameWithPayload(0x4b)),
+        () =>
+          kagemushaVerifyRecursiveCompactPaymentToken(
+            kagemushaNoritoFrameWithPayload(0x4b),
+            RECURSIVE_COMPACT_VERIFIER_KEYS_ARCHIVE,
+          ),
         /kagemushaVerifyRecursiveCompactPaymentToken returned a non-boolean result/,
       );
     },
@@ -1629,6 +1763,11 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
     initVerifierKey,
     0xe8,
   );
+  const oldHashInitProvingKeyArchive = Buffer.from(initProvingKeyArchive);
+  OLD_KAGEMUSHA_LINEAGE_PROVING_KEY_ARCHIVE_SCHEMA_HASH.copy(
+    oldHashInitProvingKeyArchive,
+    6,
+  );
   const appendVerifierKey = kagemushaLineageVerifierKey(
     KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_PROOF_CIRCUIT_ID_V1,
     0xa7,
@@ -1689,6 +1828,16 @@ test("Kagemusha recursive spend exports stable proof circuit ids", () => {
         KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
         initVerifierKey,
         appendProvingKeyArchive,
+      ),
+    /lineage_proving_key_archive/,
+  );
+  assert.throws(
+    () =>
+      kagemushaRecursiveSpendLineageKeyArtifactsForInit(
+        128,
+        KAGEMUSHA_RECURSIVE_AGGREGATION_PROOF_BACKEND,
+        initVerifierKey,
+        oldHashInitProvingKeyArchive,
       ),
     /lineage_proving_key_archive/,
   );

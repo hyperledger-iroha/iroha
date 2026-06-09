@@ -47,11 +47,12 @@ public final class OfflineNoteWallet {
   private final LongSupplier clock;
   private final OfflineBearerCashPolicyV1 bearerCashPolicy;
 
-  public OfflineNoteWallet(
+  public static OfflineNoteWallet kagemusha(
       final String chainId,
       final String accountId,
-      final OfflineNoteAttestationProvider attestationProvider) {
-    this(
+      final OfflineNoteAttestationProvider attestationProvider,
+      final byte[] vkBoxNorito) {
+    return kagemusha(
         chainId,
         accountId,
         attestationProvider,
@@ -59,39 +60,101 @@ public final class OfflineNoteWallet {
         null,
         null,
         null,
-        new NativeOfflineNoteProofProvider(),
-        new Halo2OfflineNoteProofVerifier(),
+        vkBoxNorito,
         new RejectingOfflineNoteCertificateVerifier(),
         new SecureOfflineNoteRandomSource(),
         new UuidOfflineNoteIdGenerator(),
-        System::currentTimeMillis);
+        System::currentTimeMillis,
+        OfflineBearerCashPolicyV1.DEFAULT,
+        null);
   }
 
-  public OfflineNoteWallet(
+  public static OfflineNoteWallet kagemusha(
       final String chainId,
       final String accountId,
       final OfflineNoteAttestationProvider attestationProvider,
       final OfflineNoteStore store,
       final OfflineNoteIssuerClient issuerClient,
       final OfflineNoteTransactionSubmitter transactionSubmitter,
-      final OfflineNoteProofProvider proofProvider,
+      final OfflineNoteSyncResolver syncResolver,
+      final byte[] vkBoxNorito,
+      final OfflineNoteCertificateVerifier certificateVerifier,
       final OfflineNoteRandomSource randomSource,
       final OfflineNoteIdGenerator idGenerator,
-      final LongSupplier clock) {
-    this(
+      final LongSupplier clock,
+      final OfflineBearerCashPolicyV1 bearerCashPolicy,
+      final OfflineNoteOwnerCertificateSigner ownerCertificateSigner) {
+    Objects.requireNonNull(vkBoxNorito, "vkBoxNorito");
+    if (vkBoxNorito.length == 0) {
+      throw new IllegalArgumentException("vkBoxNorito must not be empty");
+    }
+    if (!NativeOfflineNoteProver.isNativeAvailable()) {
+      throw new IllegalStateException(
+          "connect_norito_bridge is required for Kagemusha Offline Note proofs");
+    }
+    final byte[] vkBox = Arrays.copyOf(vkBoxNorito, vkBoxNorito.length);
+    return new OfflineNoteWallet(
         chainId,
         accountId,
         attestationProvider,
         store,
         issuerClient,
         transactionSubmitter,
-        null,
-        proofProvider,
-        new Halo2OfflineNoteProofVerifier(),
-        new RejectingOfflineNoteCertificateVerifier(),
+        syncResolver,
+        new ChainVkOfflineNoteProofProvider(vkBox),
+        new ChainVkOfflineNoteProofVerifier(vkBox),
+        certificateVerifier,
         randomSource,
         idGenerator,
-        clock);
+        clock,
+        bearerCashPolicy,
+        ownerCertificateSigner);
+  }
+
+  public static OfflineNoteWallet kagemushaWithVerifyingKey(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteAttestationProvider attestationProvider,
+      final String verifierKeyBackend,
+      final byte[] verifierKeyBytes) {
+    return kagemusha(
+        chainId,
+        accountId,
+        attestationProvider,
+        VerifyingKeyBoxCodec.encodeNorito(verifierKeyBackend, verifierKeyBytes));
+  }
+
+  public static OfflineNoteWallet kagemushaWithVerifyingKey(
+      final String chainId,
+      final String accountId,
+      final OfflineNoteAttestationProvider attestationProvider,
+      final OfflineNoteStore store,
+      final OfflineNoteIssuerClient issuerClient,
+      final OfflineNoteTransactionSubmitter transactionSubmitter,
+      final OfflineNoteSyncResolver syncResolver,
+      final String verifierKeyBackend,
+      final byte[] verifierKeyBytes,
+      final OfflineNoteCertificateVerifier certificateVerifier,
+      final OfflineNoteRandomSource randomSource,
+      final OfflineNoteIdGenerator idGenerator,
+      final LongSupplier clock,
+      final OfflineBearerCashPolicyV1 bearerCashPolicy,
+      final OfflineNoteOwnerCertificateSigner ownerCertificateSigner) {
+    return kagemusha(
+        chainId,
+        accountId,
+        attestationProvider,
+        store,
+        issuerClient,
+        transactionSubmitter,
+        syncResolver,
+        VerifyingKeyBoxCodec.encodeNorito(verifierKeyBackend, verifierKeyBytes),
+        certificateVerifier,
+        randomSource,
+        idGenerator,
+        clock,
+        bearerCashPolicy,
+        ownerCertificateSigner);
   }
 
   public OfflineNoteWallet(
@@ -176,34 +239,6 @@ public final class OfflineNoteWallet {
         null,
         proofProvider,
         proofVerifier,
-        new RejectingOfflineNoteCertificateVerifier(),
-        randomSource,
-        idGenerator,
-        clock);
-  }
-
-  public OfflineNoteWallet(
-      final String chainId,
-      final String accountId,
-      final OfflineNoteAttestationProvider attestationProvider,
-      final OfflineNoteStore store,
-      final OfflineNoteIssuerClient issuerClient,
-      final OfflineNoteTransactionSubmitter transactionSubmitter,
-      final OfflineNoteSyncResolver syncResolver,
-      final OfflineNoteProofProvider proofProvider,
-      final OfflineNoteRandomSource randomSource,
-      final OfflineNoteIdGenerator idGenerator,
-      final LongSupplier clock) {
-    this(
-        chainId,
-        accountId,
-        attestationProvider,
-        store,
-        issuerClient,
-        transactionSubmitter,
-        syncResolver,
-        proofProvider,
-        new Halo2OfflineNoteProofVerifier(),
         new RejectingOfflineNoteCertificateVerifier(),
         randomSource,
         idGenerator,

@@ -1175,7 +1175,9 @@ Norito-encoded `KagemushaRecursiveAggregationProofBundle`.
 `recursive_compact_v1` compact-token surface and probes
 `kagemusha-recursive-compact-v1` separately from ABI 6 recursive spend. Use
 `proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes`
-and `verifyRecursiveCompactPaymentToken`; gate them with `isNativeAvailable()`
+with record-bundle, Pallas open-envelope, and recursive compact key-artifact
+archives, and `verifyRecursiveCompactPaymentToken` with compact-token and
+recursive compact verifier-key archives; gate them with `isNativeAvailable()`
 and `isVerifierNativeAvailable()`. The recursive-spend compact projection
 verifier is exposed separately as
 `verifyRecursiveSpendCompactPaymentTokenProjection(...)` and
@@ -1213,7 +1215,15 @@ with native opening preflight material. The append-boundary digest uses the
 public `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1` domain, plus
 `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1` and
 `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1` for
-chain/asset and final-root/current-note binding. Use
+chain/asset and final-root/current-note binding.
+`KagemushaInstructionArchives` wraps a typed `KagemushaTransfer` or
+`RedeemKagemushaRecursive` instruction archive, builds a single archived
+instruction transaction payload, or derives the redeem instruction from a
+native recursive redeem request before constructing that payload. These helpers
+require valid Norito archives, reject empty, malformed, tampered, or wrong-type
+instruction archives, and keep recursive redeem derivation inside the native
+bridge.
+Use
 `canRedeemWitnessless(circuitId, hopCount)` or
 `requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem
 construction. `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is `64`, and
@@ -1249,9 +1259,12 @@ material: Android wallet code must pass it through Norito unchanged and must not
 construct, rewrite, or mutate it. The native bridge validates `vk_commitment`,
 `public_inputs_schema_hash`, and `domain_tag` against the exact previous bundle
 before proving or returning output bytes.
-Native append streams the previous recursive proof bytes into
-`recursive_proof_chain_digest`; SDK code must not derive or patch the
-accumulator state.
+Native append streams the previous recursive proof bytes and per-hop accumulator
+material into native-owned accumulator digests (`recursive_proof_chain_digest`,
+lineage/aggregation transcript, fixed-window schedule/shared-manifest/table-base,
+verifier-witness batch, transition-profile, append-opening-preflight,
+append-boundary, scalar-projection, and previous/resulting accumulator digests);
+SDK code must not derive, supply, or patch accumulator state.
 Verify request archives must pass the same public-binding preflight before the
 native bridge returns a `KagemushaRecursiveSpendVerifyResultV1`:
 Reserved-lineage bundles require a matching active `lineage_verifier_record`,
@@ -1287,8 +1300,10 @@ the operation-specific result schema before returning bytes to callers.
 Capability metadata reports `privacy-production-gate-v1`, keeps
 `productionReady = false`, and remains fail-closed with missing production
 gates and no audit references until real proving, verification, chain
-admission, deterministic testing, fuzzing, performance gates, and external
-audit signoff are complete.
+admission, witness privacy checks, deterministic testing,
+negative/adversarial testing, replay/nullifier rejection testing,
+parser/verifier fuzzing, performance gates, and external audit signoff are
+complete.
 
 Android also exposes the deterministic privacy FFI status/error-code contract
 for diagnostics and cross-language parity: `STATUS_ERROR`,

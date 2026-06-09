@@ -330,7 +330,9 @@ exclude = [
 [profile.dev]
 incremental = true
 split-debuginfo = "packed"
-debug = "line-tables-only"
+# Keep default local workspace builds from producing enormous debug-heavy Linux
+# artifacts. Use `CARGO_PROFILE_DEV_DEBUG=line-tables-only` when debugging.
+debug = 0
 
 [profile.dev.build-override]
 debug = 0
@@ -339,8 +341,12 @@ codegen-units = 256
 [profile.test]
 # Avoid long dsymutil phases on macOS test binaries.
 split-debuginfo = "unpacked"
-debug = "line-tables-only"
-incremental = true
+# Keep test harnesses from producing enormous debug-heavy Linux artifacts.
+# Use `CARGO_PROFILE_TEST_DEBUG=line-tables-only` when debugging tests.
+debug = 0
+# Keep long workspace test runs from retaining large incremental-query caches
+# on WSL and memory-constrained VMs. Override locally with `CARGO_INCREMENTAL=1`.
+incremental = false
 
 [profile.test.build-override]
 debug = 0

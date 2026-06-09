@@ -938,17 +938,20 @@ public struct IssueOfflineNoteRequest: Sendable {
     public let issue: OfflineNoteIssue
     public let ttlMs: UInt64?
     public let nonce: UInt32?
+    public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
                 issue: OfflineNoteIssue,
                 ttlMs: UInt64? = nil,
-                nonce: UInt32? = nil) {
+                nonce: UInt32? = nil,
+                metadata: [String: ToriiJSONValue] = [:]) {
         self.chainId = chainId
         self.authority = authority
         self.issue = issue
         self.ttlMs = ttlMs
         self.nonce = nonce
+        self.metadata = metadata
     }
 }
 
@@ -964,17 +967,20 @@ public struct RedeemOfflineNoteRequest: Sendable {
     public let redemption: OfflineNoteRedeem
     public let ttlMs: UInt64?
     public let nonce: UInt32?
+    public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
                 redemption: OfflineNoteRedeem,
                 ttlMs: UInt64? = nil,
-                nonce: UInt32? = nil) {
+                nonce: UInt32? = nil,
+                metadata: [String: ToriiJSONValue] = [:]) {
         self.chainId = chainId
         self.authority = authority
         self.redemption = redemption
         self.ttlMs = ttlMs
         self.nonce = nonce
+        self.metadata = metadata
     }
 }
 
@@ -991,19 +997,22 @@ public struct DefundOfflineNoteRequest: Sendable {
     public let redemption: OfflineNoteRedeem
     public let ttlMs: UInt64?
     public let nonce: UInt32?
+    public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
                 bearerAuditTrail: [OfflineNoteAuditBundle],
                 redemption: OfflineNoteRedeem,
                 ttlMs: UInt64? = nil,
-                nonce: UInt32? = nil) {
+                nonce: UInt32? = nil,
+                metadata: [String: ToriiJSONValue] = [:]) {
         self.chainId = chainId
         self.authority = authority
         self.bearerAuditTrail = bearerAuditTrail
         self.redemption = redemption
         self.ttlMs = ttlMs
         self.nonce = nonce
+        self.metadata = metadata
     }
 }
 
@@ -1013,17 +1022,20 @@ public struct AuditOfflineNoteRequest: Sendable {
     public let audit: OfflineNoteAuditBundle
     public let ttlMs: UInt64?
     public let nonce: UInt32?
+    public let metadata: [String: ToriiJSONValue]
 
     public init(chainId: String,
                 authority: String,
                 audit: OfflineNoteAuditBundle,
                 ttlMs: UInt64? = nil,
-                nonce: UInt32? = nil) {
+                nonce: UInt32? = nil,
+                metadata: [String: ToriiJSONValue] = [:]) {
         self.chainId = chainId
         self.authority = authority
         self.audit = audit
         self.ttlMs = ttlMs
         self.nonce = nonce
+        self.metadata = metadata
     }
 }
 

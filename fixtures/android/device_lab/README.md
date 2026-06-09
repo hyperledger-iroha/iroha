@@ -80,7 +80,7 @@ That strict mode requires every standard Android device family in the release
 matrix to have a slot with valid hashes, StrongBox/KeyMint metadata, rollback and
 one-use key evidence, ABI-6 recursive spend probe success, and ABI-7 recursive
 compact evidence with `abi7_recursive_compact_jni_probe = one_hop_verified` and
-`abi7_recursive_compact_prover_state = multi_hop_proof_composition_unavailable`.
+`abi7_recursive_compact_prover_state = multi_hop_proof_composed`.
 The `minimum_os` field must match the release matrix for that device family.
 `slot.json` must also bind
 `app_package_name`, `app_signing_certificate_sha256`,
@@ -111,7 +111,8 @@ referenced signed evidence artifact
 must use schema `iroha.android.device_lab.kagemusha.signed_evidence.v1`, repeat
 the slot identity fields from `slot.json`, carry signer/signature metadata, and
 include `artifact_digests` entries that match the required telemetry,
-attestation, queue, log, wallet integrity, and D2D handoff files. It must repeat
+attestation, queue, log, wallet integrity, D2D handoff, release APK, and
+attestation certificate-chain files. It must repeat
 the StrongBox, physical device attestation, one-use key, rollback, ABI probe,
 D2D transcript, wallet integrity transcript, and raw command claims from
 `slot.json`, so those claims are covered by the signature. The attestation summary must also report

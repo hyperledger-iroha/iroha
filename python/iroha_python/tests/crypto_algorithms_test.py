@@ -618,16 +618,25 @@ def test_privacy_native_availability_probes_use_norito_request_archives(
             self.verify_request: bytearray | None = None
             self.build_request_bytes: bytes | None = None
             self.verify_request_bytes: bytes | None = None
+            self.capabilities_output: bytearray | None = None
+            self.build_output: bytearray | None = None
+            self.verify_output: bytearray | None = None
 
-        def privacy_build_proof_v1(self, request_archive: bytearray) -> bytes:
+        def privacy_capabilities_v1(self) -> bytearray:
+            self.capabilities_output = bytearray(_PRIVACY_CAPABILITIES_ARCHIVE)
+            return self.capabilities_output
+
+        def privacy_build_proof_v1(self, request_archive: bytearray) -> bytearray:
             self.build_request = request_archive
             self.build_request_bytes = bytes(request_archive)
-            return _PRIVACY_BUILD_ARCHIVE
+            self.build_output = bytearray(_PRIVACY_BUILD_ARCHIVE)
+            return self.build_output
 
-        def privacy_verify_proof_v1(self, request_archive: bytearray) -> bytes:
+        def privacy_verify_proof_v1(self, request_archive: bytearray) -> bytearray:
             self.verify_request = request_archive
             self.verify_request_bytes = bytes(request_archive)
-            return _PRIVACY_VERIFY_ARCHIVE
+            self.verify_output = bytearray(_PRIVACY_VERIFY_ARCHIVE)
+            return self.verify_output
 
     native = _ProbeCapturePrivacyNative()
     monkeypatch.setattr(crypto_module, "_crypto", native)
@@ -646,6 +655,12 @@ def test_privacy_native_availability_probes_use_norito_request_archives(
     assert native.verify_request is not None
     assert all(value == 0 for value in native.build_request)
     assert all(value == 0 for value in native.verify_request)
+    assert native.capabilities_output is not None
+    assert native.build_output is not None
+    assert native.verify_output is not None
+    assert all(value == 0 for value in native.capabilities_output)
+    assert all(value == 0 for value in native.build_output)
+    assert all(value == 0 for value in native.verify_output)
 
 
 def test_privacy_native_availability_probes_clear_request_copies_after_failures(
@@ -662,10 +677,12 @@ def test_privacy_native_availability_probes_clear_request_copies_after_failures(
     class _BadVerifyOutputProbePrivacyNative(_FakePrivacyNative):
         def __init__(self) -> None:
             self.verify_request: bytearray | None = None
+            self.verify_output: bytearray | None = None
 
-        def privacy_verify_proof_v1(self, request_archive: bytearray) -> bytes:
+        def privacy_verify_proof_v1(self, request_archive: bytearray) -> bytearray:
             self.verify_request = request_archive
-            return b"\x56"
+            self.verify_output = bytearray(b"\x56")
+            return self.verify_output
 
     throwing_native = _ThrowingBuildProbePrivacyNative()
     monkeypatch.setattr(crypto_module, "_crypto", throwing_native)
@@ -678,6 +695,8 @@ def test_privacy_native_availability_probes_clear_request_copies_after_failures(
     assert is_privacy_native_available() is False
     assert bad_output_native.verify_request is not None
     assert all(value == 0 for value in bad_output_native.verify_request)
+    assert bad_output_native.verify_output is not None
+    assert all(value == 0 for value in bad_output_native.verify_output)
 
 
 def test_privacy_native_availability_probes_reject_unsafe_raw_output(

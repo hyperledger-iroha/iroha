@@ -18,19 +18,12 @@ internal object FixtureGeneratorRunner {
         if (!built || !binary.exists()) {
             synchronized(buildLock) {
                 if (!built || !binary.exists()) {
-                    val build = ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
-                        .directory(repoRoot)
-                        .apply {
-                            environment()["CARGO_TARGET_DIR"] = targetDir.absolutePath
+                    withCargoBuildLock(repoRoot) {
+                        if (!binary.exists()) {
+                            buildFixtureGenerator(repoRoot, targetDir)
                         }
-                        .redirectErrorStream(true)
-                        .start()
-                    val buildOutput = build.inputStream.bufferedReader().readText()
-                    val buildExit = build.waitFor()
-                    require(buildExit == 0) {
-                        "cargo build failed (exit $buildExit): $buildOutput"
+                        built = true
                     }
-                    built = true
                 }
             }
         }
@@ -43,6 +36,31 @@ internal object FixtureGeneratorRunner {
         require(exitCode == 0) { "kotlin-fixture-gen $subcommand failed (exit $exitCode)" }
         require(stdout.isNotBlank()) { "kotlin-fixture-gen $subcommand produced empty output" }
         return stdout.lines()
+    }
+
+    private fun withCargoBuildLock(repoRoot: java.io.File, action: () -> Unit) {
+        val lockFile = java.io.File(repoRoot, "target/kotlin-fixture-gen-test.lock")
+        lockFile.parentFile.mkdirs()
+        java.io.RandomAccessFile(lockFile, "rw").channel.use { channel ->
+            channel.lock().use {
+                action()
+            }
+        }
+    }
+
+    private fun buildFixtureGenerator(repoRoot: java.io.File, targetDir: java.io.File) {
+        val build = ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
+            .directory(repoRoot)
+            .apply {
+                environment()["CARGO_TARGET_DIR"] = targetDir.absolutePath
+            }
+            .redirectErrorStream(true)
+            .start()
+        val buildOutput = build.inputStream.bufferedReader().readText()
+        val buildExit = build.waitFor()
+        require(buildExit == 0) {
+            "cargo build failed (exit $buildExit): $buildOutput"
+        }
     }
 
     private fun locateRepoRoot(): java.io.File {

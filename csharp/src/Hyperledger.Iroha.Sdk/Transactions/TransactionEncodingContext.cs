@@ -240,7 +240,7 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeInstruction(TransactionInstruction instruction)
     {
-        var framedInstruction = NoritoCodec.Encode(instruction.TypeName, instruction.EncodePayload(this));
+        var framedInstruction = instruction.EncodeFramedPayload(this);
 
         var writer = new OfflineNoritoWriter();
         writer.WriteField(EncodeString(instruction.WireId));

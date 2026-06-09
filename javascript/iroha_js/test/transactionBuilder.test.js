@@ -4,6 +4,9 @@ import {
   buildRegisterDomainTransaction,
   buildTransaction,
   buildIvmProvedTransaction,
+  buildKagemushaInstructionArchiveInstruction,
+  buildKagemushaInstructionTransaction,
+  buildKagemushaRecursiveRedeemTransaction,
   buildMintAssetTransaction,
   buildMintAndTransferTransaction,
   buildRegisterDomainAndMintTransaction,
@@ -221,6 +224,249 @@ test("buildTransaction rejects empty instruction arrays", () => {
       }),
     /non-empty array/i,
   );
+});
+
+test("buildKagemushaInstructionArchiveInstruction normalizes archive bytes", () => {
+  const archive = Buffer.from([0x4e, 0x52, 0x54, 0x30]);
+  assert.deepEqual(
+    buildKagemushaInstructionArchiveInstruction({
+      instructionType: "RedeemKagemushaRecursive",
+      instructionArchive: archive,
+    }),
+    {
+      KagemushaInstructionArchive: {
+        type: "RedeemKagemushaRecursive",
+        bytes_base64: archive.toString("base64"),
+      },
+    },
+  );
+  assert.deepEqual(
+    buildKagemushaInstructionArchiveInstruction({
+      type: "KagemushaTransfer",
+      bytesBase64: archive.toString("base64"),
+    }),
+    {
+      KagemushaInstructionArchive: {
+        type: "KagemushaTransfer",
+        bytes_base64: archive.toString("base64"),
+      },
+    },
+  );
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "OfflineTransfer",
+        instructionArchive: archive,
+      }),
+    /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
+  );
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "KagemushaTransfer",
+        instructionArchive: Buffer.alloc(0),
+      }),
+    /instructionArchive must not be empty/u,
+  );
+  assert.throws(
+    () => buildKagemushaInstructionArchiveInstruction({ type: "KagemushaTransfer" }),
+    /instructionArchive or kagemushaInstructionArchive\.bytesBase64 is required/u,
+  );
+});
+
+test("buildKagemushaInstructionTransaction wraps one archive instruction", () => {
+  const captures = [];
+  const archive = Buffer.from([0x01, 0x02, 0x03]);
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x71, 0x72]),
+    hash: Buffer.alloc(32, 0x73),
+  };
+
+  withNativeBinding(
+    {
+      buildTransaction: (
+        chainId,
+        authority,
+        instructions,
+        metadataPayload,
+        creationTimeMs,
+        ttlMs,
+        nonce,
+        secret,
+      ) => {
+        captures.push({
+          chainId,
+          authority,
+          instructions,
+          metadataPayload,
+          creationTimeMs,
+          ttlMs,
+          nonce,
+          secret,
+        });
+        return fakeResult;
+      },
+    },
+    () => {
+      const built = buildKagemushaInstructionTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        instruction_type: "KagemushaTransfer",
+        instructionArchive: archive,
+        metadata: { kagemusha: "transfer" },
+        creationTimeMs: 11,
+        ttlMs: 22,
+        nonce: 6,
+        privateKey: PRIVATE_KEY,
+      });
+      assert.deepEqual(built.signedTransaction, fakeResult.signed_transaction);
+      assert.deepEqual(built.hash, fakeResult.hash);
+    },
+  );
+
+  assert.equal(captures.length, 1);
+  const [call] = captures;
+  assert.equal(call.chainId, "test-chain");
+  assert.equal(call.authority, AUTHORITY_ID);
+  assert.equal(call.metadataPayload, JSON.stringify({ kagemusha: "transfer" }));
+  assert.equal(call.creationTimeMs, 11);
+  assert.equal(call.ttlMs, 22);
+  assert.equal(call.nonce, 6);
+  assert.deepEqual(call.secret, PRIVATE_KEY);
+  assert.equal(call.instructions.length, 1);
+  assert.deepEqual(JSON.parse(call.instructions[0]), {
+    KagemushaInstructionArchive: {
+      type: "KagemushaTransfer",
+      bytes_base64: archive.toString("base64"),
+    },
+  });
+});
+
+test("buildKagemushaRecursiveRedeemTransaction derives instruction before signing", () => {
+  const calls = [];
+  const redeemRequestArchive = Buffer.from([0x80, 0x81, 0x82]);
+  const redeemInstructionArchive = Buffer.from([0xa1, 0xb2]);
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x91, 0x92]),
+    hash: Buffer.alloc(32, 0x93),
+  };
+
+  withNativeBinding(
+    {
+      kagemushaRecursiveSpendRedeem: (requestArchive) => {
+        calls.push({
+          type: "redeem",
+          requestArchive: Buffer.from(requestArchive),
+        });
+        return redeemInstructionArchive;
+      },
+      buildTransaction: (
+        chainId,
+        authority,
+        instructions,
+        metadataPayload,
+        creationTimeMs,
+        ttlMs,
+        nonce,
+        secret,
+      ) => {
+        calls.push({
+          type: "sign",
+          chainId,
+          authority,
+          instructions,
+          metadataPayload,
+          creationTimeMs,
+          ttlMs,
+          nonce,
+          secret,
+        });
+        return fakeResult;
+      },
+    },
+    () => {
+      const built = buildKagemushaRecursiveRedeemTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        redeemRequestArchive,
+        metadata: { kagemusha: "redeem" },
+        creationTimeMs: 12,
+        ttlMs: 23,
+        nonce: 7,
+        privateKey: PRIVATE_KEY,
+      });
+      assert.deepEqual(built.signedTransaction, fakeResult.signed_transaction);
+      assert.deepEqual(built.hash, fakeResult.hash);
+    },
+  );
+
+  assert.deepEqual(
+    calls.map((call) => call.type),
+    ["redeem", "sign"],
+  );
+  assert.deepEqual(calls[0].requestArchive, redeemRequestArchive);
+  assert.equal(calls[1].chainId, "test-chain");
+  assert.equal(calls[1].authority, AUTHORITY_ID);
+  assert.equal(calls[1].metadataPayload, JSON.stringify({ kagemusha: "redeem" }));
+  assert.equal(calls[1].creationTimeMs, 12);
+  assert.equal(calls[1].ttlMs, 23);
+  assert.equal(calls[1].nonce, 7);
+  assert.deepEqual(JSON.parse(calls[1].instructions[0]), {
+    KagemushaInstructionArchive: {
+      type: "RedeemKagemushaRecursive",
+      bytes_base64: redeemInstructionArchive.toString("base64"),
+    },
+  });
+
+  const signCalls = [];
+  withNativeBinding(
+    {
+      kagemushaRecursiveSpendRedeem: () => {
+        throw new Error("native redeem should not be called");
+      },
+      buildTransaction: () => {
+        signCalls.push("signed");
+        return fakeResult;
+      },
+    },
+    () => {
+      assert.throws(
+        () =>
+          buildKagemushaRecursiveRedeemTransaction({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            privateKey: PRIVATE_KEY,
+          }),
+        /redeemRequestArchive must be a Buffer or ArrayBuffer view/u,
+      );
+    },
+  );
+  assert.equal(signCalls.length, 0);
+
+  withNativeBinding(
+    {
+      kagemushaRecursiveSpendRedeem: () => {
+        throw new Error("redeem native rejected");
+      },
+      buildTransaction: () => {
+        signCalls.push("signed");
+        return fakeResult;
+      },
+    },
+    () => {
+      assert.throws(
+        () =>
+          buildKagemushaRecursiveRedeemTransaction({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            redeemRequestArchive,
+            privateKey: PRIVATE_KEY,
+          }),
+        /redeem native rejected/u,
+      );
+    },
+  );
+  assert.equal(signCalls.length, 0);
 });
 
 test("buildIvmProvedTransaction normalizes proved executable and attachment", () => {

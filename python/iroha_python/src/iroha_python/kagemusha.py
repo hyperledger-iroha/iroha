@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Literal, Union
+from typing import Any, Literal, Mapping, Optional, Union
 
 from ._native import load_crypto_extension
 
@@ -18,10 +18,20 @@ KagemushaOfflineSpendMode = Literal[
     "recursive_spend_v1",
     "checked_prefold_v1",
 ]
+KagemushaInstructionArchiveType = Literal[
+    "KagemushaTransfer",
+    "RedeemKagemushaRecursive",
+]
 
 KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1 = "recursive_compact_v1"
 KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1"
 KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1"
+KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER = "KagemushaTransfer"
+KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE = "RedeemKagemushaRecursive"
+KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = (
+    KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,
+    KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
+)
 KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6
 KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7
 KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xFFFF_FFFF
@@ -102,6 +112,9 @@ __all__ = [
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_COMPACT_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1",
     "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
@@ -127,6 +140,7 @@ __all__ = [
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1",
     "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1",
     "KagemushaOfflineSpendMode",
+    "KagemushaInstructionArchiveType",
     "KagemushaRecursiveSpendLineageKeyArtifacts",
     "can_redeem_kagemusha_recursive_spend_witnessless",
     "is_kagemusha_recursive_spend_lineage_proof_circuit_id",
@@ -172,6 +186,10 @@ __all__ = [
     "kagemusha_recursive_spend_lineage_append_boundary",
     "kagemusha_recursive_spend_lineage_witness_from_init_result",
     "kagemusha_recursive_spend_lineage_witness_append_result",
+    "kagemusha_instruction_archive_instruction",
+    "kagemusha_recursive_redeem_instruction",
+    "build_kagemusha_instruction_transaction",
+    "build_kagemusha_recursive_redeem_transaction",
     "kagemusha_recursive_spend_verify",
     "kagemusha_recursive_spend_redeem",
 ]
@@ -542,10 +560,12 @@ def is_kagemusha_recursive_compact_payment_token_prover_available() -> bool:
             _RECURSIVE_COMPACT_TOKEN_METHOD,
             _MALFORMED_NATIVE_PROBE_ARCHIVE,
             _MALFORMED_NATIVE_PROBE_ARCHIVE,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
         )
         and _probe_native_archive_method(
             module,
             _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
             _MALFORMED_NATIVE_PROBE_ARCHIVE,
         )
     )
@@ -561,6 +581,7 @@ def is_kagemusha_recursive_compact_payment_token_verifier_available() -> bool:
         and _probe_native_archive_method(
             module,
             _RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD,
+            _MALFORMED_NATIVE_PROBE_ARCHIVE,
             _MALFORMED_NATIVE_PROBE_ARCHIVE,
         )
     )
@@ -1088,9 +1109,14 @@ def _prove_verified_recursive_aggregation_proof_bundle(
 def _prove_verified_recursive_compact_payment_token(
     record_bundle_archive: BytesLike,
     pallas_open_envelopes_archive: BytesLike,
+    recursive_compact_key_artifacts_archive: BytesLike,
 ) -> bytes:
     record_bundle = _norito_archive_bytes_named(record_bundle_archive, "record_bundle_archive")
     pallas_open_envelopes = _norito_archive_bytes_named(pallas_open_envelopes_archive, "pallas_open_envelopes_archive")
+    recursive_compact_key_artifacts = _norito_archive_bytes_named(
+        recursive_compact_key_artifacts_archive,
+        "recursive_compact_key_artifacts_archive",
+    )
     if not is_kagemusha_recursive_compact_payment_token_prover_available():
         raise RuntimeError(
             "recursive compact Kagemusha payment-token prover requires native "
@@ -1100,18 +1126,33 @@ def _prove_verified_recursive_compact_payment_token(
         _RECURSIVE_COMPACT_TOKEN_METHOD,
         record_bundle,
         pallas_open_envelopes,
+        recursive_compact_key_artifacts,
     )
 
 
-def _verify_recursive_compact_payment_token(compact_token_archive: BytesLike) -> bool:
+def _verify_recursive_compact_payment_token(
+    compact_token_archive: BytesLike,
+    recursive_compact_verifier_keys_archive: BytesLike,
+) -> bool:
     compact_token = _archive_bytes_named(compact_token_archive, "compact_token_archive")
     _assert_kagemusha_norito_archive(compact_token, "compact_token_archive")
+    recursive_compact_verifier_keys = _archive_bytes_named(
+        recursive_compact_verifier_keys_archive,
+        "recursive_compact_verifier_keys_archive",
+    )
+    _assert_kagemusha_norito_archive(
+        recursive_compact_verifier_keys,
+        "recursive_compact_verifier_keys_archive",
+    )
     if not is_kagemusha_recursive_compact_payment_token_verifier_available():
         raise RuntimeError(
             "recursive compact Kagemusha payment-token verifier requires native "
             "bridge ABI 7 with the compact verifier symbol"
         )
-    result = _native_method(_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD)(compact_token)
+    result = _native_method(_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD)(
+        compact_token,
+        recursive_compact_verifier_keys,
+    )
     if not isinstance(result, bool):
         raise RuntimeError(
             f"{_RECURSIVE_COMPACT_TOKEN_VERIFY_METHOD} returned non-boolean result"
@@ -1212,6 +1253,115 @@ globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_FROM_BUNDLE_METHOD] = (
 globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_METHOD] = (
     _verify_recursive_spend_compact_payment_token_projection
 )
+
+
+def _normalize_kagemusha_instruction_archive_type(
+    instruction_type: str,
+) -> KagemushaInstructionArchiveType:
+    if not isinstance(instruction_type, str):
+        raise TypeError("instruction_type must be a string")
+    normalized = instruction_type.strip()
+    if normalized not in KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES:
+        raise ValueError(
+            "instruction_type must be KagemushaTransfer or RedeemKagemushaRecursive"
+        )
+    return normalized  # type: ignore[return-value]
+
+
+def kagemusha_instruction_archive_instruction(
+    instruction_type: str,
+    instruction_archive: BytesLike,
+) -> object:
+    """Return an Iroha instruction from a typed Kagemusha Norito archive."""
+
+    normalized_type = _normalize_kagemusha_instruction_archive_type(instruction_type)
+    archive = _norito_archive_bytes_named(instruction_archive, "instruction_archive")
+    from .crypto import Instruction
+
+    builder = getattr(Instruction, "kagemusha_instruction_archive", None)
+    if builder is None:
+        raise RuntimeError(
+            "kagemusha_instruction_archive_instruction requires a compiled "
+            "iroha_python._crypto extension with Kagemusha instruction archive support"
+        )
+    return builder(normalized_type, archive)
+
+
+def kagemusha_recursive_redeem_instruction(redeem_request_archive: BytesLike) -> object:
+    """Derive a recursive redeem instruction from a redeem request archive."""
+
+    request = _norito_archive_bytes_named(redeem_request_archive, "redeem_request_archive")
+    from .crypto import Instruction
+
+    builder = getattr(Instruction, "kagemusha_recursive_redeem", None)
+    if builder is None:
+        raise RuntimeError(
+            "kagemusha_recursive_redeem_instruction requires a compiled "
+            "iroha_python._crypto extension with recursive Kagemusha support"
+        )
+    return builder(request)
+
+
+def build_kagemusha_instruction_transaction(
+    chain_id: str,
+    authority: str,
+    private_key: BytesLike,
+    instruction_type: str,
+    instruction_archive: BytesLike,
+    *,
+    creation_time_ms: Optional[int] = None,
+    ttl_ms: Optional[int] = None,
+    nonce: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> object:
+    """Sign a single-instruction transaction from a Kagemusha instruction archive."""
+
+    instruction = kagemusha_instruction_archive_instruction(
+        instruction_type,
+        instruction_archive,
+    )
+    private_key_bytes = _archive_bytes_named(private_key, "private_key")
+    from .crypto import build_signed_transaction
+
+    return build_signed_transaction(
+        chain_id,
+        authority,
+        private_key_bytes,
+        instructions=(instruction,),
+        creation_time_ms=creation_time_ms,
+        ttl_ms=ttl_ms,
+        nonce=nonce,
+        metadata=metadata,
+    )
+
+
+def build_kagemusha_recursive_redeem_transaction(
+    chain_id: str,
+    authority: str,
+    private_key: BytesLike,
+    redeem_request_archive: BytesLike,
+    *,
+    creation_time_ms: Optional[int] = None,
+    ttl_ms: Optional[int] = None,
+    nonce: Optional[int] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> object:
+    """Derive the native recursive redeem instruction, then sign its transaction."""
+
+    instruction = kagemusha_recursive_redeem_instruction(redeem_request_archive)
+    private_key_bytes = _archive_bytes_named(private_key, "private_key")
+    from .crypto import build_signed_transaction
+
+    return build_signed_transaction(
+        chain_id,
+        authority,
+        private_key_bytes,
+        instructions=(instruction,),
+        creation_time_ms=creation_time_ms,
+        ttl_ms=ttl_ms,
+        nonce=nonce,
+        metadata=metadata,
+    )
 
 
 def kagemusha_recursive_spend_init(request_archive: BytesLike) -> bytes:

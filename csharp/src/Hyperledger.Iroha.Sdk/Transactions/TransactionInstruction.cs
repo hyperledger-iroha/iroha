@@ -1,3 +1,6 @@
+using Hyperledger.Iroha.Offline;
+using Hyperledger.Iroha.Norito;
+
 namespace Hyperledger.Iroha.Transactions;
 
 public abstract record class TransactionInstruction
@@ -9,6 +12,11 @@ public abstract record class TransactionInstruction
     internal abstract string TypeName { get; }
 
     internal abstract byte[] EncodePayload(TransactionEncodingContext context);
+
+    internal virtual byte[] EncodeFramedPayload(TransactionEncodingContext context)
+    {
+        return NoritoCodec.Encode(TypeName, EncodePayload(context));
+    }
 
     public byte[] EncodeInstructionBox(string authorityAccountId)
     {
@@ -164,5 +172,18 @@ public abstract record class TransactionInstruction
         System.Text.Json.Nodes.JsonNode? args = null)
     {
         return new ExecuteTriggerInstruction(triggerId, args);
+    }
+
+    public static KagemushaInstructionArchiveInstruction KagemushaInstructionArchive(
+        KagemushaInstructionType instructionType,
+        byte[] instructionArchive)
+    {
+        return new KagemushaInstructionArchiveInstruction(instructionType, instructionArchive);
+    }
+
+    public static KagemushaInstructionArchiveInstruction KagemushaRecursiveRedeem(
+        KagemushaRecursiveSpendRedeemInstructionArchive instructionArchive)
+    {
+        return KagemushaInstructionArchiveInstruction.RedeemRecursive(instructionArchive);
     }
 }

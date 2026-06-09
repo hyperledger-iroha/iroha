@@ -697,7 +697,9 @@ fn parse_contract_app_manifest(value: toml::Value) -> Result<ContractAppManifest
         .map(|(index, table)| parse_contract_manifest_contract(table, index))
         .collect::<Result<Vec<_>>>()?;
     if contracts.is_empty() {
-        return Err(eyre!("`manifest.contracts` must contain at least one table"));
+        return Err(eyre!(
+            "`manifest.contracts` must contain at least one table"
+        ));
     }
     let init = toml_table_array(table, "init", "manifest")?
         .into_iter()
@@ -718,7 +720,10 @@ fn parse_contract_app_manifest(value: toml::Value) -> Result<ContractAppManifest
                 let profile = value
                     .as_table()
                     .ok_or_else(|| eyre!("`profiles.{name}` must be a table"))?;
-                Ok((name.clone(), parse_contract_manifest_profile(profile, name)?))
+                Ok((
+                    name.clone(),
+                    parse_contract_manifest_profile(profile, name)?,
+                ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?,
         None => BTreeMap::new(),

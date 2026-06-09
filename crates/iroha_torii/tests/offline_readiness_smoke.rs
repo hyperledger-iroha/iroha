@@ -144,6 +144,13 @@ async fn offline_readiness_is_mounted_and_legacy_routes_are_absent() {
     assert!(body.contains("\"offline_telemetry\":true"));
     assert!(body.contains("\"offline_kagemusha_enabled\":true"));
     assert!(body.contains("\"offline_kagemusha_force_legacy\":false"));
+    assert!(body.contains("\"offline_kagemusha_abi7\":true"));
+    assert!(body.contains("\"offline_kagemusha_abi7_mode\":\"recursive_compact_v1\""));
+    assert!(body.contains("\"offline_kagemusha_abi7_bridge_abi_version\":7"));
+    assert!(
+        body.contains("\"offline_kagemusha_abi7_circuit_id\":\"kagemusha-recursive-compact-v1\"")
+    );
+    assert!(body.contains("\"offline_kagemusha_abi7_artifacts\":true"));
 
     for path in [
         "/v1/offline/cash/setup",

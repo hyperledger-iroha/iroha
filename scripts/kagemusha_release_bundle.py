@@ -27,11 +27,55 @@ DEFAULT_READINESS_SUMMARY_PATH = "dist/kagemusha-production-readiness.json"
 DEFAULT_RELEASE_BUNDLE_OUT = "dist/kagemusha-production-release-bundle.json"
 
 SUMMARY_REQUIRED_SECTION_STATES: dict[str, str] = {
-    "abi7_recursive_compact": "one_hop_wired_multi_hop_reserved",
+    "abi7_recursive_compact": "package_aware_multi_hop_composed",
     "lineage_key_release_tooling": "record_artifacts_wired",
     "lineage_proof_evidence": "production_width_proof_passed",
     "compact_key_evidence": "compact_key_artifacts_validated",
 }
+ANDROID_SLOT_RELEASE_ARTIFACTS: tuple[tuple[str, str, str], ...] = (
+    (
+        "offline_wallet_apk",
+        "offline_wallet_apk_path",
+        "offline_wallet_apk_sha256",
+    ),
+    (
+        "d2d_payment_transcript",
+        "d2d_payment_transcript_path",
+        "d2d_payment_transcript_sha256",
+    ),
+    (
+        "wallet_integrity_transcript",
+        "wallet_integrity_transcript_path",
+        "wallet_integrity_transcript_sha256",
+    ),
+    (
+        "attestation_certificate_chain",
+        "attestation_certificate_chain_path",
+        "attestation_certificate_chain_sha256",
+    ),
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS = frozenset(
+    (
+        "signed_at_utc",
+        "artifact_sha256",
+        "signer_public_key_sha256",
+        *(
+            field
+            for _, path_field, digest_field in ANDROID_SLOT_RELEASE_ARTIFACTS
+            for field in (path_field, digest_field)
+        ),
+    )
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS = frozenset(
+    path_field for _, path_field, _ in ANDROID_SLOT_RELEASE_ARTIFACTS
+)
+ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS = frozenset(
+    (
+        "artifact_sha256",
+        "signer_public_key_sha256",
+        *(digest_field for _, _, digest_field in ANDROID_SLOT_RELEASE_ARTIFACTS),
+    )
+)
 SUMMARY_ALLOWED_TOP_LEVEL_KEYS = frozenset(
     (
         "schema",
@@ -117,6 +161,7 @@ SUMMARY_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
             "record_version",
             "command_validated",
             "generator_log_sha256",
+            "generator_log_artifact_sha256",
             "generator_log_artifact_size_bytes",
             "artifact_count",
             "ok",
@@ -194,19 +239,83 @@ def _validate_local_file(path: Path, label: str, code: str) -> list[dict[str, An
     ]
 
 
-def _load_local_json(path: Path, label: str, code_prefix: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    file_blockers = _validate_local_file(path, label, f"{code_prefix}_file_shape")
+def _read_local_json_text(
+    path: Path,
+    label: str,
+    *,
+    shape_code: str,
+    unreadable_code: str,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    file_blockers = _validate_local_file(path, label, shape_code)
     if file_blockers:
         return None, file_blockers
-    payload, load_blockers = readiness._load_json_artifact(  # type: ignore[attr-defined]
+    chunks: list[bytes] = []
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [_blocker(shape_code, f"{label} must not be a symlink")]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, [_blocker(shape_code, f"{label} must be a regular file")]
+            if (path_stat.st_dev, path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, [_blocker(shape_code, f"{label} changed while being read")]
+            if open_stat.st_nlink > 1:
+                return None, [_blocker(shape_code, f"{label} must not be hardlinked")]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, [_blocker(shape_code, f"{label} changed while being read")]
+    except OSError:
+        return None, [_blocker(unreadable_code, f"{label} could not be read")]
+    try:
+        return b"".join(chunks).decode("utf-8"), []
+    except UnicodeDecodeError:
+        return None, [_blocker(unreadable_code, f"{label} could not be read")]
+
+
+def _load_local_json(path: Path, label: str, code_prefix: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    text, read_blockers = _read_local_json_text(
         path,
-        missing_code=f"{code_prefix}_missing",
-        invalid_code=f"{code_prefix}_invalid_json",
-        unreadable_code=f"{code_prefix}_unreadable",
-        not_object_code=f"{code_prefix}_not_object",
         label=label,
+        shape_code=f"{code_prefix}_file_shape",
+        unreadable_code=f"{code_prefix}_unreadable",
     )
-    return payload, load_blockers
+    if read_blockers:
+        return None, read_blockers
+    assert text is not None
+    try:
+        payload = json.loads(
+            text,
+            object_pairs_hook=readiness._reject_duplicate_json_object_pairs,  # type: ignore[attr-defined]
+            parse_constant=readiness._reject_nonfinite_json_constant,  # type: ignore[attr-defined]
+        )
+    except json.JSONDecodeError as exc:
+        return None, [_blocker(f"{code_prefix}_invalid_json", f"{label} is not valid JSON: {exc}")]
+    except readiness.DuplicateJsonKeyError as exc:  # type: ignore[attr-defined]
+        return None, [
+            _blocker(
+                f"{code_prefix}_invalid_json",
+                readiness._duplicate_json_key_message(label, exc),  # type: ignore[attr-defined]
+            )
+        ]
+    except readiness.NonFiniteJsonConstantError as exc:  # type: ignore[attr-defined]
+        return None, [
+            _blocker(
+                f"{code_prefix}_invalid_json",
+                f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed",
+            )
+        ]
+    if not isinstance(payload, dict):
+        return None, [_blocker(f"{code_prefix}_not_object", f"{label} must be a JSON object")]
+    return payload, []
 
 
 def _sha256_file(path: Path, label: str, code: str) -> tuple[str | None, list[dict[str, Any]]]:
@@ -221,6 +330,52 @@ def _sha256_file(path: Path, label: str, code: str) -> tuple[str | None, list[di
     except OSError:
         return None, [_blocker(code, f"{label} could not be read")]
     return digest.hexdigest(), []
+
+
+def _sha256_file_with_size(
+    path: Path,
+    label: str,
+    code: str,
+) -> tuple[str | None, int | None, list[dict[str, Any]]]:
+    file_blockers = _validate_local_file(path, label, code)
+    if file_blockers:
+        return None, None, file_blockers
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, None, [_blocker(code, f"{label} must not be a symlink")]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, None, [_blocker(code, f"{label} must be a regular file")]
+            if (path_stat.st_dev, path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, None, [_blocker(code, f"{label} changed while being read")]
+            if open_stat.st_nlink > 1:
+                return None, None, [_blocker(code, f"{label} must not be hardlinked")]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                digest.update(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, None, [_blocker(code, f"{label} changed while being read")]
+    except OSError:
+        return None, None, [_blocker(code, f"{label} could not be read")]
+    if size <= 0:
+        return None, None, [
+            _blocker(
+                code,
+                f"{label} must be non-empty",
+            )
+        ]
+    return digest.hexdigest(), size, []
 
 
 def _relative_to_bundle(path: Path, bundle_root: Path, label: str) -> tuple[str | None, list[dict[str, Any]]]:
@@ -425,6 +580,138 @@ def _contains_secret_string(value: Any) -> bool:
     return False
 
 
+def _check_android_signed_evidence_summary_shape(
+    android: dict[str, Any],
+) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    signed_evidence_summary = android.get("signed_evidence")
+    if not isinstance(signed_evidence_summary, dict):
+        return [
+            _blocker(
+                "kagemusha_release_summary_android_signed_evidence_shape",
+                "Android signed-evidence summary must be a JSON object",
+            )
+        ]
+    if not signed_evidence_summary:
+        return [
+            _blocker(
+                "kagemusha_release_summary_android_signed_evidence_shape",
+                "Android signed-evidence summary must not be empty",
+            )
+        ]
+
+    for raw_slot, entry in signed_evidence_summary.items():
+        slot, slot_blockers = _validate_android_manifest_slot(raw_slot)
+        for blocker in slot_blockers:
+            blockers.append(
+                {
+                    **blocker,
+                    "code": "kagemusha_release_summary_android_signed_evidence_slot",
+                }
+            )
+        display_slot = _display_summary_field(raw_slot)
+        if not isinstance(entry, dict):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_signed_evidence_shape",
+                    "Android signed-evidence summary slot entry must be a JSON object",
+                    slot=display_slot,
+                )
+            )
+            continue
+
+        unexpected_fields = sorted(
+            set(entry) - ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS
+        )
+        for field in unexpected_fields:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_signed_evidence_unexpected_field",
+                    "Android signed-evidence summary slot entry contains an unexpected field",
+                    slot=display_slot,
+                    field=_display_summary_field(field),
+                )
+            )
+        missing_fields = sorted(
+            ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS - set(entry)
+        )
+        for field in missing_fields:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_summary_android_signed_evidence_missing_field",
+                    "Android signed-evidence summary slot entry is missing a required field",
+                    slot=display_slot,
+                    field=field,
+                )
+            )
+
+        for field in sorted(ANDROID_SIGNED_EVIDENCE_SUMMARY_REQUIRED_FIELDS & set(entry)):
+            value = entry.get(field)
+            if not isinstance(value, str) or not value:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_summary_android_signed_evidence_value",
+                        "Android signed-evidence summary field must be a non-empty string",
+                        slot=display_slot,
+                        field=field,
+                    )
+                )
+                continue
+            if field == "signed_at_utc":
+                if not device_lab.SIGNED_AT_UTC_RE.fullmatch(value):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_timestamp",
+                            "Android signed-evidence summary timestamp must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+                            slot=display_slot,
+                        )
+                    )
+                    continue
+                _, timestamp_blocker = readiness.parse_utc_timestamp(
+                    value,
+                    "Android signed-evidence summary signed_at_utc",
+                )
+                if timestamp_blocker is not None:
+                    timestamp_blocker["code"] = (
+                        "kagemusha_release_summary_android_signed_evidence_timestamp"
+                    )
+                    timestamp_blocker["slot"] = display_slot
+                    blockers.append(timestamp_blocker)
+            elif field in ANDROID_SIGNED_EVIDENCE_SUMMARY_SHA256_FIELDS:
+                if (
+                    not device_lab.SHA256_HEX_RE.fullmatch(value)
+                    or value == "0" * 64
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_sha256",
+                            "Android signed-evidence summary field must be a non-zero lowercase sha256 hex digest",
+                            slot=display_slot,
+                            field=field,
+                        )
+                    )
+            elif field in ANDROID_SIGNED_EVIDENCE_SUMMARY_PATH_FIELDS:
+                path_errors: list[str] = []
+                if (
+                    device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                        value,
+                        path_errors,
+                        f"Android signed-evidence summary {field}",
+                    )
+                    is None
+                ):
+                    blockers.extend(
+                        _blocker(
+                            "kagemusha_release_summary_android_signed_evidence_path",
+                            error,
+                            slot=display_slot,
+                            field=field,
+                        )
+                        for error in path_errors
+                    )
+    return blockers
+
+
 def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     if _contains_secret_string(summary):
@@ -509,6 +796,8 @@ def _check_ready_summary_shape(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 "Android device-lab summary must cover the full standard matrix",
             )
         )
+    else:
+        blockers.extend(_check_android_signed_evidence_summary_shape(android))
     for name, state in SUMMARY_REQUIRED_SECTION_STATES.items():
         section = _section(summary, name)
         if section is None or section.get("ok") is not True or section.get("state") != state:
@@ -594,6 +883,7 @@ def _compare_validated_sections(
         "artifact_sha256",
         "artifact_size_bytes",
         "generator_log_sha256",
+        "generator_log_artifact_sha256",
         "generator_log_artifact_size_bytes",
         "command_validated",
     ):
@@ -635,19 +925,13 @@ def _evidence_entry_with_size(
     label: str,
     code: str,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    entry, blockers = _evidence_entry(path, bundle_root, label=label, code=code)
-    if entry is None:
+    digest, size, digest_blockers = _sha256_file_with_size(path, label, code)
+    relative, relative_blockers = _relative_to_bundle(path, bundle_root, label)
+    blockers = [*digest_blockers, *relative_blockers]
+    if blockers:
         return None, blockers
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return None, [
-            _blocker(
-                code,
-                f"{label} metadata could not be read",
-            )
-        ]
-    return {**entry, "size_bytes": size}, []
+    assert digest is not None and size is not None and relative is not None
+    return {"path": relative, "sha256": digest, "size_bytes": size}, []
 
 
 def _artifact_inventory_entries(
@@ -797,8 +1081,8 @@ def _android_signed_evidence_entries(
     device_lab_root: Path,
     bundle_root: Path,
     android: dict[str, Any],
-) -> tuple[dict[str, dict[str, str]], list[dict[str, Any]]]:
-    entries: dict[str, dict[str, str]] = {}
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    entries: dict[str, dict[str, Any]] = {}
     blockers: list[dict[str, Any]] = []
     signed_evidence_summary = android.get("signed_evidence", {})
     if not isinstance(signed_evidence_summary, dict):
@@ -830,7 +1114,7 @@ def _android_signed_evidence_entries(
             / slot
             / device_lab.KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH
         )
-        entry, entry_blockers = _evidence_entry(
+        entry, entry_blockers = _evidence_entry_with_size(
             artifact_path,
             bundle_root,
             label="Android signed evidence artifact",
@@ -865,6 +1149,123 @@ def _android_signed_evidence_entries(
             _blocker(
                 "kagemusha_release_android_signed_evidence_inventory",
                 "Android signed-evidence manifest inventory must match validated readiness summary slots",
+            )
+        )
+    return entries, blockers
+
+
+def _android_slot_artifact_entries(
+    device_lab_root: Path,
+    bundle_root: Path,
+    android: dict[str, Any],
+) -> tuple[dict[str, dict[str, dict[str, Any]]], list[dict[str, Any]]]:
+    entries: dict[str, dict[str, dict[str, Any]]] = {}
+    blockers: list[dict[str, Any]] = []
+    signed_evidence_summary = android.get("signed_evidence", {})
+    if not isinstance(signed_evidence_summary, dict):
+        return entries, [
+            _blocker(
+                "kagemusha_release_android_slot_artifact_summary",
+                "Android signed-evidence summary must be a JSON object",
+            )
+        ]
+
+    for report in android.get("slots", []):
+        if not isinstance(report, dict) or report.get("status") != "ok":
+            continue
+        slot, slot_blockers = _validate_android_manifest_slot(report.get("slot"))
+        blockers.extend(slot_blockers)
+        if slot is None:
+            continue
+        kagemusha = report.get("kagemusha", {})
+        summary_entry = signed_evidence_summary.get(slot)
+        if not isinstance(kagemusha, dict) or not isinstance(summary_entry, dict):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_android_slot_artifact_summary",
+                    "validated Android slot artifacts are missing from the readiness summary",
+                    slot=slot,
+                )
+            )
+            continue
+
+        slot_entries: dict[str, dict[str, Any]] = {}
+        for artifact_kind, path_field, digest_field in ANDROID_SLOT_RELEASE_ARTIFACTS:
+            expected_path = summary_entry.get(path_field)
+            expected_digest = summary_entry.get(digest_field)
+            if (
+                not isinstance(expected_path, str)
+                or not expected_path
+                or not isinstance(expected_digest, str)
+                or not expected_digest
+                or kagemusha.get(path_field) != expected_path
+                or kagemusha.get(digest_field) != expected_digest
+            ):
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_android_slot_artifact_summary_drift",
+                        "Android slot artifact summary no longer matches validated device-lab report",
+                        slot=slot,
+                        artifact=artifact_kind,
+                    )
+                )
+                continue
+
+            path_errors: list[str] = []
+            safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                expected_path,
+                path_errors,
+                f"Android slot artifact {artifact_kind}",
+            )
+            if safe_relative is None:
+                blockers.extend(
+                    _blocker(
+                        "kagemusha_release_android_slot_artifact_path",
+                        error,
+                        slot=slot,
+                        artifact=artifact_kind,
+                    )
+                    for error in path_errors
+                )
+                continue
+
+            entry, entry_blockers = _evidence_entry_with_size(
+                device_lab_root / slot / safe_relative,
+                bundle_root,
+                label=f"Android slot artifact {artifact_kind}",
+                code="kagemusha_release_android_slot_artifact_file_shape",
+            )
+            blockers.extend(entry_blockers)
+            if entry is None:
+                continue
+            if expected_digest != entry["sha256"]:
+                blockers.append(
+                    _blocker(
+                        "kagemusha_release_android_slot_artifact_digest_drift",
+                        "Android slot artifact digest no longer matches validated readiness summary",
+                        slot=slot,
+                        artifact=artifact_kind,
+                    )
+                )
+                continue
+            slot_entries[artifact_kind] = entry
+
+        if set(slot_entries) != {item[0] for item in ANDROID_SLOT_RELEASE_ARTIFACTS}:
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_android_slot_artifact_inventory",
+                    "Android slot artifact inventory must include every release-critical artifact",
+                    slot=slot,
+                )
+            )
+            continue
+        entries[slot] = slot_entries
+
+    if set(entries) != set(signed_evidence_summary):
+        blockers.append(
+            _blocker(
+                "kagemusha_release_android_slot_artifact_inventory",
+                "Android slot artifact inventory must match validated readiness summary slots",
             )
         )
     return entries, blockers
@@ -905,6 +1306,79 @@ def _stable_release_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _check_release_bundle_evidence_paths(value: Any) -> list[dict[str, Any]]:
+    blockers: list[dict[str, Any]] = []
+    if not isinstance(value, dict):
+        return [
+            _blocker(
+                "kagemusha_release_bundle_manifest_evidence_shape",
+                "Kagemusha release bundle evidence inventory must be a JSON object",
+            )
+        ]
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            path = item.get("path")
+            if "path" in item:
+                if not isinstance(path, str):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_evidence_path",
+                            "Kagemusha release bundle evidence path must be a string",
+                        )
+                    )
+                else:
+                    path_errors: list[str] = []
+                    safe_relative = device_lab._normalise_safe_relative_path(  # type: ignore[attr-defined]
+                        path,
+                        path_errors,
+                        "Kagemusha release bundle evidence path",
+                    )
+                    if safe_relative is None or safe_relative != path:
+                        for error in path_errors or [
+                            "Kagemusha release bundle evidence path must be canonical"
+                        ]:
+                            blockers.append(
+                                _blocker(
+                                    "kagemusha_release_bundle_manifest_evidence_path",
+                                    error,
+                                )
+                            )
+                digest = item.get("sha256")
+                if (
+                    not isinstance(digest, str)
+                    or device_lab.SHA256_HEX_RE.fullmatch(digest) is None
+                    or digest == "0" * 64
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_evidence_sha256",
+                            "Kagemusha release bundle evidence SHA-256 must be a non-zero lowercase hex digest",
+                        )
+                    )
+                size = item.get("size_bytes")
+                if (
+                    "size_bytes" not in item
+                    or isinstance(size, bool)
+                    or not isinstance(size, int)
+                    or size <= 0
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_evidence_size",
+                            "Kagemusha release bundle evidence size_bytes must be a positive integer",
+                        )
+                    )
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return blockers
+
+
 def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[str, Any]]:
     blockers: list[dict[str, Any]] = []
     if _contains_secret_string(bundle):
@@ -938,13 +1412,21 @@ def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[st
             )
         )
     else:
-        _, parse_blocker = readiness.parse_utc_timestamp(
-            generated_at,
-            "Kagemusha release bundle generated_at_utc",
-        )
-        if parse_blocker is not None:
-            parse_blocker["code"] = "kagemusha_release_bundle_manifest_timestamp"
-            blockers.append(parse_blocker)
+        if not device_lab.SIGNED_AT_UTC_RE.fullmatch(generated_at):
+            blockers.append(
+                _blocker(
+                    "kagemusha_release_bundle_manifest_timestamp",
+                    "Kagemusha release bundle generated_at_utc must be canonical UTC YYYY-MM-DDTHH:MM:SSZ",
+                )
+            )
+        else:
+            _, parse_blocker = readiness.parse_utc_timestamp(
+                generated_at,
+                "Kagemusha release bundle generated_at_utc",
+            )
+            if parse_blocker is not None:
+                parse_blocker["code"] = "kagemusha_release_bundle_manifest_timestamp"
+                blockers.append(parse_blocker)
     if bundle.get("ready") is not True:
         blockers.append(
             _blocker(
@@ -959,6 +1441,7 @@ def _check_release_bundle_manifest_shape(bundle: dict[str, Any]) -> list[dict[st
                 "Kagemusha release bundle manifest must not contain blockers",
             )
         )
+    blockers.extend(_check_release_bundle_evidence_paths(bundle.get("evidence")))
     return blockers
 
 
@@ -1098,7 +1581,7 @@ def build_release_bundle(
     ):
         if not input_paths_ok or not path_ok:
             continue
-        entry, entry_blockers = _evidence_entry(
+        entry, entry_blockers = _evidence_entry_with_size(
             path,
             bundle_root,
             label=label,
@@ -1117,6 +1600,7 @@ def build_release_bundle(
             artifact_size_bytes=lineage.get("artifact_size_bytes"),
             label_prefix="Reserved-lineage proof evidence",
             code_prefix="kagemusha_release_lineage_artifact",
+            artifact_content_validator=readiness.validate_lineage_artifact_content,
         )
         blockers.extend(lineage_artifact_blockers)
         if lineage_artifact_entries:
@@ -1173,6 +1657,15 @@ def build_release_bundle(
         if android_signed_entries:
             evidence_entries["android_signed_evidence"] = android_signed_entries
 
+        android_slot_entries, android_slot_blockers = _android_slot_artifact_entries(
+            device_lab_root,
+            bundle_root,
+            android,
+        )
+        blockers.extend(android_slot_blockers)
+        if android_slot_entries:
+            evidence_entries["android_slot_artifacts"] = android_slot_entries
+
     manifest: dict[str, Any] = {
         "schema": RELEASE_BUNDLE_SCHEMA,
         "generated_at_utc": readiness.utc_now(),
@@ -1207,6 +1700,10 @@ def build_release_bundle(
             "artifact_sha256": compact.get("artifact_sha256", {}),
             "artifact_size_bytes": compact.get("artifact_size_bytes", {}),
             "generator_log_sha256": compact.get("generator_log_sha256"),
+            "generator_log_artifact_sha256": compact.get(
+                "generator_log_artifact_sha256",
+                {},
+            ),
             "generator_log_artifact_size_bytes": compact.get(
                 "generator_log_artifact_size_bytes",
                 {},
@@ -1246,11 +1743,16 @@ def verify_release_bundle(
     """Verify an existing release bundle manifest against local evidence."""
 
     blockers: list[dict[str, Any]] = []
-    path_ok, path_blockers = _preflight_bundle_input_path(
-        existing_bundle_path,
-        bundle_root,
-        "Kagemusha release bundle manifest",
-    )
+    root_blockers = _validate_bundle_root(bundle_root)
+    blockers.extend(root_blockers)
+    path_ok = False
+    path_blockers: list[dict[str, Any]] = []
+    if not root_blockers:
+        path_ok, path_blockers = _preflight_bundle_input_path(
+            existing_bundle_path,
+            bundle_root,
+            "Kagemusha release bundle manifest",
+        )
     blockers.extend(path_blockers)
     existing = None
     load_blockers: list[dict[str, Any]] = []
@@ -1374,6 +1876,17 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
     output_blockers = _validate_output_path(path, bundle_root)
     if output_blockers:
         return output_blockers
+    try:
+        parent_fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        parent_fd = None
+    if parent_fd is not None:
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(parent_fd)
     try:
         readback = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):

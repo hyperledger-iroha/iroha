@@ -250,15 +250,6 @@ interface OfflineNoteProofVerifier {
     fun verifyRedeem(redemption: OfflineNote.Redeem): Boolean
 }
 
-/** Halo2-backed Offline Note proof verifier. */
-class Halo2OfflineNoteProofVerifier : OfflineNoteProofVerifier {
-    override fun verifyAudit(audit: OfflineNote.AuditBundle): Boolean =
-        OfflineNoteHalo2Prover.verifyAudit(audit)
-
-    override fun verifyRedeem(redemption: OfflineNote.Redeem): Boolean =
-        OfflineNoteHalo2Prover.verifyRedeem(redemption)
-}
-
 /** Verifies trust and attestation shape for Offline Note key certificates. */
 interface OfflineNoteCertificateVerifier {
     /** Verifies a certificate signed by a trusted issuer for topup/issue paths. */
@@ -331,15 +322,6 @@ class Ed25519OfflineNoteCertificateVerifier(
     private companion object {
         private const val ED25519_CURVE_ID = 0x01
     }
-}
-
-/** JVM Halo2 proof provider backed by the SDK's native Offline Note prover. */
-class NativeOfflineNoteProofProvider : OfflineNoteProofProvider {
-    override fun proveAudit(audit: OfflineNote.AuditBundle): OfflineNote.RecursiveProof =
-        OfflineNoteHalo2Prover.proveAudit(audit)
-
-    override fun proveRedeem(redemption: OfflineNote.Redeem): OfflineNote.RecursiveProof =
-        OfflineNoteHalo2Prover.proveRedeem(redemption)
 }
 
 /** Torii issuer load context needed before deriving a wallet-owned issue commitment. */
@@ -1208,8 +1190,10 @@ class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(
     private val authority: String,
     private val codecAdapter: NoritoCodecAdapter = NoritoJavaCodecAdapter(),
     private val clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
+    transactionMetadata: Map<String, String> = emptyMap(),
 ) : OfflineNoteTransactionSubmitter {
     private val transactionBuilder = TransactionBuilder(codecAdapter)
+    private val transactionMetadata: Map<String, String> = transactionMetadata.toMap()
 
     override fun submitAudit(audit: OfflineNote.AuditBundle): CompletableFuture<ClientResponse> =
         submit(OfflineNote.auditInstruction(audit))
@@ -1232,8 +1216,34 @@ class IrohaOfflineNoteTransactionSubmitter @JvmOverloads constructor(
             authority = authority,
             creationTimeMs = clock.getAsLong(),
             executable = Executable.instructions(instructions),
+            metadata = transactionMetadata,
         )
         return client.submitTransaction(transactionBuilder.encodeAndSign(payload, signer))
+    }
+
+    companion object {
+        const val GAS_ASSET_ID_METADATA_KEY: String = "gas_asset_id"
+        const val FEE_SPONSOR_METADATA_KEY: String = "fee_sponsor"
+
+        @JvmStatic
+        fun gasAssetMetadata(gasAssetId: String): Map<String, String> =
+            feeMetadata(gasAssetId, null)
+
+        @JvmStatic
+        fun feeMetadata(gasAssetId: String, feeSponsor: String?): Map<String, String> {
+            val metadata = LinkedHashMap<String, String>()
+            metadata[GAS_ASSET_ID_METADATA_KEY] = normalizedMetadataValue(gasAssetId, "gasAssetId")
+            feeSponsor
+                ?.let { normalizedMetadataValue(it, "feeSponsor") }
+                ?.let { metadata[FEE_SPONSOR_METADATA_KEY] = it }
+            return metadata
+        }
+
+        private fun normalizedMetadataValue(value: String, field: String): String {
+            val trimmed = value.trim()
+            require(trimmed.isNotEmpty()) { "$field must not be blank" }
+            return trimmed
+        }
     }
 }
 
@@ -1247,8 +1257,8 @@ class OfflineNoteWallet @JvmOverloads constructor(
     private val issuerClient: OfflineNoteIssuerClient? = null,
     private val transactionSubmitter: OfflineNoteTransactionSubmitter? = null,
     private val syncResolver: OfflineNoteSyncResolver? = null,
-    private val proofProvider: OfflineNoteProofProvider = NativeOfflineNoteProofProvider(),
-    private val proofVerifier: OfflineNoteProofVerifier = Halo2OfflineNoteProofVerifier(),
+    private val proofProvider: OfflineNoteProofProvider,
+    private val proofVerifier: OfflineNoteProofVerifier,
     private val certificateVerifier: OfflineNoteCertificateVerifier = RejectingOfflineNoteCertificateVerifier(),
     private val randomSource: OfflineNoteRandomSource = SecureOfflineNoteRandomSource(),
     private val idGenerator: OfflineNoteIdGenerator = UuidOfflineNoteIdGenerator(),
@@ -1256,13 +1266,91 @@ class OfflineNoteWallet @JvmOverloads constructor(
     private val bearerCashPolicy: OfflineBearerCashPolicyV1 = OfflineBearerCashPolicyV1.DEFAULT,
     private val ownerCertificateSigner: OfflineNoteOwnerCertificateSigner? = null,
 ) {
-    private companion object {
+    companion object {
         private val loadThreadIds = AtomicInteger()
         private val loadExecutor = Executors.newCachedThreadPool { task ->
             Thread(task, "iroha-offline-note-wallet-${loadThreadIds.incrementAndGet()}").apply {
                 isDaemon = true
             }
         }
+
+        @JvmStatic
+        @JvmOverloads
+        fun kagemusha(
+            chainId: String,
+            accountId: String,
+            attestationProvider: OfflineNoteAttestationProvider,
+            vkBoxNorito: ByteArray,
+            store: OfflineNoteStore = InMemoryOfflineNoteStore(),
+            issuerClient: OfflineNoteIssuerClient? = null,
+            transactionSubmitter: OfflineNoteTransactionSubmitter? = null,
+            syncResolver: OfflineNoteSyncResolver? = null,
+            certificateVerifier: OfflineNoteCertificateVerifier = RejectingOfflineNoteCertificateVerifier(),
+            randomSource: OfflineNoteRandomSource = SecureOfflineNoteRandomSource(),
+            idGenerator: OfflineNoteIdGenerator = UuidOfflineNoteIdGenerator(),
+            clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
+            bearerCashPolicy: OfflineBearerCashPolicyV1 = OfflineBearerCashPolicyV1.DEFAULT,
+            ownerCertificateSigner: OfflineNoteOwnerCertificateSigner? = null,
+        ): OfflineNoteWallet {
+            require(vkBoxNorito.isNotEmpty()) { "vkBoxNorito must not be empty" }
+            check(NativeOfflineNoteProver.isNativeAvailable()) {
+                "connect_norito_bridge is required for Kagemusha Offline Note proofs"
+            }
+            val vkBox = vkBoxNorito.copyOf()
+            return OfflineNoteWallet(
+                chainId = chainId,
+                accountId = accountId,
+                attestationProvider = attestationProvider,
+                store = store,
+                issuerClient = issuerClient,
+                transactionSubmitter = transactionSubmitter,
+                syncResolver = syncResolver,
+                proofProvider = ChainVkOfflineNoteProofProvider(vkBox),
+                proofVerifier = ChainVkOfflineNoteProofVerifier(vkBox),
+                certificateVerifier = certificateVerifier,
+                randomSource = randomSource,
+                idGenerator = idGenerator,
+                clock = clock,
+                bearerCashPolicy = bearerCashPolicy,
+                ownerCertificateSigner = ownerCertificateSigner,
+            )
+        }
+
+        @JvmStatic
+        @JvmOverloads
+        fun kagemushaWithVerifyingKey(
+            chainId: String,
+            accountId: String,
+            attestationProvider: OfflineNoteAttestationProvider,
+            verifierKeyBackend: String,
+            verifierKeyBytes: ByteArray,
+            store: OfflineNoteStore = InMemoryOfflineNoteStore(),
+            issuerClient: OfflineNoteIssuerClient? = null,
+            transactionSubmitter: OfflineNoteTransactionSubmitter? = null,
+            syncResolver: OfflineNoteSyncResolver? = null,
+            certificateVerifier: OfflineNoteCertificateVerifier = RejectingOfflineNoteCertificateVerifier(),
+            randomSource: OfflineNoteRandomSource = SecureOfflineNoteRandomSource(),
+            idGenerator: OfflineNoteIdGenerator = UuidOfflineNoteIdGenerator(),
+            clock: LongSupplier = LongSupplier { System.currentTimeMillis() },
+            bearerCashPolicy: OfflineBearerCashPolicyV1 = OfflineBearerCashPolicyV1.DEFAULT,
+            ownerCertificateSigner: OfflineNoteOwnerCertificateSigner? = null,
+        ): OfflineNoteWallet =
+            kagemusha(
+                chainId = chainId,
+                accountId = accountId,
+                attestationProvider = attestationProvider,
+                vkBoxNorito = VerifyingKeyBoxCodec.encodeNorito(verifierKeyBackend, verifierKeyBytes),
+                store = store,
+                issuerClient = issuerClient,
+                transactionSubmitter = transactionSubmitter,
+                syncResolver = syncResolver,
+                certificateVerifier = certificateVerifier,
+                randomSource = randomSource,
+                idGenerator = idGenerator,
+                clock = clock,
+                bearerCashPolicy = bearerCashPolicy,
+                ownerCertificateSigner = ownerCertificateSigner,
+            )
     }
 
     init {

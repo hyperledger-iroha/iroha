@@ -1695,8 +1695,8 @@ a production-ready TAIRA XOR TRON record: `route_id`, `counterparty_domain`,
 settlement asset/verifier-key/gas profile must match the governed mainnet lane.
 The parser normalizes uppercase or whitespace-wrapped mainnet chain/network ids
 to their canonical values, recomputes the dynamic TRON destination-binding key
-from network id, verifier address, verifier code hash, and verifier key hash,
-then rejects foreign/testnet ids or stale binding/settlement metadata. Before
+and hash from network id, verifier address, verifier code hash, and verifier
+key hash, then rejects foreign/testnet ids or stale binding/settlement metadata. Before
 those governed metadata checks, TRON runtime parsing also requires the token,
 bridge, source bridge, and destination verifier contract literals to be
 canonical non-zero TRON Base58Check mainnet addresses and rejects duplicate
