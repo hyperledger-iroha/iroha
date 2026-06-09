@@ -724,7 +724,7 @@ frontier/fork/quorum/RBC/rbc-causality/rbc-deliver-acceptance/rbc-commit-process
   payload-refetch decisions: stale/current message handling, Kura presence,
   future-message rejection, invalid-session suppression, delivered/complete
   session suppression, payload-hash mismatch fetches, missing-payload fetches,
-  and zero-chunk completeness. Its TLC cross-check independently exhausts the
+  and zero-chunk recovery. Its TLC cross-check independently exhausts the
   same fourteen expected-failure configs as Apalache.
   The `rbc-missing-block-recovery` family covers known-local bypass,
   BlockCreated metadata recovery, forced frontier body fetches, signer fallback

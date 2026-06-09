@@ -1639,20 +1639,39 @@ function toPythonDescriptorShape(descriptor) {
       version: descriptor.productionGate.version,
       ready: descriptor.productionGate.ready,
       gates: descriptor.productionGate.gates,
+      required_gates: descriptor.productionGate.requiredGates,
       missing: descriptor.productionGate.missing,
       audit_references: descriptor.productionGate.auditReferences,
     },
   };
 }
 
-function assertFailClosedDescriptor(label, descriptor) {
-  const expectedGateEntries = PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, false]);
-  const expectedMissingReasons = [
-    ...PRODUCTION_GATE_REQUIRED_REASONS,
+function expectedRequiredProductionGateKeys(algorithmId) {
+  const waived =
+    algorithmId === "transparent-transfer"
+      ? new Set(TRANSPARENT_TRANSFER_BASELINE_WAIVED_GATE_KEYS)
+      : new Set();
+  return PRODUCTION_GATE_REQUIREMENTS
+    .map(([key]) => key)
+    .filter((key) => !waived.has(key));
+}
+
+function expectedProductionGateMissingReasons(descriptor) {
+  const requiredGateSet = new Set(descriptor.production_gate.required_gates);
+  return [
+    ...PRODUCTION_GATE_REQUIREMENTS
+      .filter(([key]) => requiredGateSet.has(key))
+      .map(([_key, reason]) => reason),
     ...SUPPLEMENTAL_FAIL_CLOSED_REASONS.filter((reason) =>
       descriptor.production_gate.missing.includes(reason),
     ),
   ];
+}
+
+function assertFailClosedDescriptor(label, descriptor) {
+  const expectedGateEntries = PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, false]);
+  const expectedRequiredGates = expectedRequiredProductionGateKeys(descriptor.id);
+  const expectedMissingReasons = expectedProductionGateMissingReasons(descriptor);
 
   assert.equal(
     descriptor.production_gate.version,
@@ -1685,6 +1704,11 @@ function assertFailClosedDescriptor(label, descriptor) {
     `${label} ${descriptor.id} production gate keys must stay in canonical order`,
   );
   assert.deepEqual(
+    descriptor.production_gate.required_gates,
+    expectedRequiredGates,
+    `${label} ${descriptor.id} required production gate keys must stay row-specific`,
+  );
+  assert.deepEqual(
     Object.values(descriptor.production_gate.gates),
     Object.values(descriptor.production_gate.gates).map(() => false),
     `${label} ${descriptor.id} must keep every production gate false`,
@@ -1694,10 +1718,7 @@ function assertFailClosedDescriptor(label, descriptor) {
     descriptor.production_gate.missing.length,
     `${label} ${descriptor.id} production gate missing reasons must not contain duplicates`,
   );
-  for (const missing of [
-    ...PRODUCTION_GATE_REQUIRED_REASONS,
-    "Iroha production allowlist is not enabled for this audited row",
-  ]) {
+  for (const missing of expectedMissingReasons) {
     assert.ok(
       descriptor.production_gate.missing.includes(missing),
       `${label} ${descriptor.id} missing production gate reason ${missing}`,
@@ -2036,6 +2057,11 @@ function assertZkAceExecutableDescriptorShape(label, descriptor) {
     PRODUCTION_GATE_REQUIREMENTS.map(([key]) => [key, false]),
     `${label} ZK-ACE production gate must keep every required gate false`,
   );
+  assert.deepEqual(
+    descriptor.productionGate.requiredGates,
+    expectedRequiredProductionGateKeys("zk-ace-pq-authorization-v0"),
+    `${label} ZK-ACE production gate must require the full proof gate set`,
+  );
   assert.ok(
     descriptor.productionGate.missing.includes("planned SDK entrypoints remain"),
     `${label} ZK-ACE production gate must report planned shielded SDK entrypoints`,
@@ -2076,6 +2102,7 @@ function pythonDescriptorToJsShape(descriptor) {
     productionGate: {
       ready: descriptor.production_gate.ready,
       gates: descriptor.production_gate.gates,
+      requiredGates: descriptor.production_gate.required_gates,
       missing: descriptor.production_gate.missing,
       auditReferences: descriptor.production_gate.audit_references,
     },
@@ -2102,6 +2129,11 @@ function assertZkAceCapabilitySurfaceFailClosed(label, capabilities) {
     Object.isFrozen(zkAceCapability.productionGate.gates),
     true,
     `${label} ZK-ACE capability production gate bits must be frozen`,
+  );
+  assert.equal(
+    Object.isFrozen(zkAceCapability.productionGate.requiredGates),
+    true,
+    `${label} ZK-ACE capability required production gates must be frozen`,
   );
   assert.equal(
     Object.isFrozen(zkAceCapability.productionGate.missing),

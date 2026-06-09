@@ -37,8 +37,8 @@ use super::{
     LaneAllocation, MissingBlockClearReason, MissingBlockFetchDecision, PipelinePhase,
     RBC_MAX_TOTAL_CHUNKS, RbcPayloadLayout, RbcRosterSource, RbcSession, RbcSessionError,
     pending_rbc::{
-        PendingChunkOutcome, PendingRbcDropReason, PendingRbcMessages, rbc_deliver_stash_bytes,
-        rbc_ready_stash_bytes,
+        PendingChunkOutcome, PendingRbcChunk, PendingRbcDropReason, PendingRbcMessages,
+        rbc_deliver_stash_bytes, rbc_ready_stash_bytes,
     },
 };
 use crate::{
@@ -508,6 +508,12 @@ pub(super) fn apply_hydrated_payload(
         outcome.updated = true;
         outcome.layout_mismatch = true;
         outcome.observed_chunks = Some(0);
+        return outcome;
+    }
+    if Hash::new(payload_bytes) != payload_hash {
+        session.invalid = true;
+        outcome.updated = true;
+        outcome.payload_hash_mismatch = true;
         return outcome;
     }
     let chunking = if session.layout().payload_size_known() {
@@ -1270,16 +1276,33 @@ impl Actor {
             guard.remove(&key);
         }
         for entry in &pending.chunks {
-            let bytes_hash = CryptoHash::new(&entry.chunk.bytes);
-            let key = BlockPayloadDedupKey::RbcChunk {
-                height: entry.chunk.height,
-                view: entry.chunk.view,
-                epoch: entry.chunk.epoch,
-                block_hash: entry.chunk.block_hash,
-                idx: entry.chunk.idx,
-                bytes_hash,
-            };
+            let key = Self::pending_rbc_chunk_dedup_key(entry);
             guard.remove(&key);
+        }
+    }
+
+    pub(super) fn release_pending_rbc_chunks_dedup(&self, chunks: &[PendingRbcChunk]) {
+        if chunks.is_empty() {
+            return;
+        }
+        let mut guard = self
+            .block_payload_dedup
+            .lock()
+            .expect("block payload dedup cache poisoned");
+        for entry in chunks {
+            let key = Self::pending_rbc_chunk_dedup_key(entry);
+            guard.remove(&key);
+        }
+    }
+
+    fn pending_rbc_chunk_dedup_key(entry: &PendingRbcChunk) -> BlockPayloadDedupKey {
+        BlockPayloadDedupKey::RbcChunk {
+            height: entry.chunk.height,
+            view: entry.chunk.view,
+            epoch: entry.chunk.epoch,
+            block_hash: entry.chunk.block_hash,
+            idx: entry.chunk.idx,
+            bytes_hash: CryptoHash::new(&entry.chunk.bytes),
         }
     }
 
@@ -4149,9 +4172,28 @@ impl Actor {
             } else if init_layout.payload_size_known() {
                 session.layout = init_layout;
             }
-            if session.payload_hash().is_none() {
-                session.payload_hash = Some(init.payload_hash);
-            }
+            let payload_hash_missing = if let Some(existing_payload_hash) = session.payload_hash() {
+                if existing_payload_hash != init.payload_hash {
+                    warn!(
+                        height = init.height,
+                        view = init.view,
+                        block = %init.block_hash,
+                        expected = %existing_payload_hash,
+                        observed = %init.payload_hash,
+                        "dropping RBC init payload hash that mismatches existing session"
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::RbcInit,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::PayloadMismatch,
+                    );
+                    self.subsystems.da_rbc.rbc.sessions.insert(key, session);
+                    return Ok(());
+                }
+                false
+            } else {
+                true
+            };
             if session.expected_chunk_digests.is_none() {
                 session.expected_chunk_digests = Some(init.chunk_digests.clone());
             }
@@ -4166,6 +4208,29 @@ impl Actor {
             }
             if session.expected_chunk_root.is_none() {
                 session.expected_chunk_root = Some(init.chunk_root);
+            }
+            let complete_chunk_set =
+                session.total_chunks() != 0 && session.received_chunks() == session.total_chunks();
+            if complete_chunk_set
+                && !session
+                    .payload_bytes()
+                    .is_some_and(|payload| Hash::new(&payload) == init.payload_hash)
+            {
+                session.invalid = true;
+                warn!(
+                    height = init.height,
+                    view = init.view,
+                    block = %init.block_hash,
+                    payload_hash = %init.payload_hash,
+                    "marking RBC session invalid because complete cached chunks do not match INIT payload hash"
+                );
+                self.record_consensus_message_handling(
+                    super::status::ConsensusMessageKind::RbcInit,
+                    super::status::ConsensusMessageOutcome::Dropped,
+                    super::status::ConsensusMessageReason::PayloadMismatch,
+                );
+            } else if payload_hash_missing && !session.is_invalid() {
+                session.payload_hash = Some(init.payload_hash);
             }
             session.epoch = init.epoch;
             let preserved_result_merkle_root = session
@@ -4658,6 +4723,7 @@ impl Actor {
                         pending_bytes,
                         evicted_chunks,
                         evicted_bytes,
+                        evicted,
                     } => {
                         status::inc_pending_rbc_stash(status::PendingRbcStashKind::Chunk, None);
                         self.record_consensus_message_handling(
@@ -4677,6 +4743,7 @@ impl Actor {
                                 PendingRbcDropReason::Cap,
                                 "rbc_chunk_stash_evicted",
                             );
+                            self.release_pending_rbc_chunks_dedup(&evicted);
                         }
                         debug!(
                             ?key,
@@ -4698,6 +4765,7 @@ impl Actor {
                         dropped_bytes,
                         evicted_chunks,
                         evicted_bytes,
+                        evicted,
                     } => {
                         let dropped_chunks = evicted_chunks.saturating_add(1);
                         let dropped_bytes_total = dropped_bytes.saturating_add(evicted_bytes);
@@ -4726,6 +4794,7 @@ impl Actor {
                             PendingRbcDropReason::Cap,
                             "rbc_chunk_stash_cap",
                         );
+                        self.release_pending_rbc_chunks_dedup(&evicted);
                         self.release_block_payload_dedup(&chunk_dedup_key);
                     }
                 }
@@ -6348,11 +6417,9 @@ impl Actor {
             }
             let _ = session
                 .sync_progress_observations(authoritative_known_payload, Some(deliver_quorum));
-            let required_ready = if local_authoritative_payload {
-                0
-            } else {
-                deliver_quorum
-            };
+            // Local authoritative payload can satisfy missing bytes, but receiver-side
+            // DELIVER acceptance still requires the protocol READY quorum.
+            let required_ready = deliver_quorum;
             Self::evaluate_rbc_deliver_outcome(
                 required_ready,
                 session,
@@ -7351,7 +7418,7 @@ impl Actor {
         }
         for key in removed {
             let existed = self.subsystems.da_rbc.rbc.sessions.remove(key).is_some();
-            self.subsystems.da_rbc.rbc.pending.remove(key);
+            self.clear_pending_rbc(key);
             self.clear_rbc_session_roster(key);
             self.subsystems.da_rbc.rbc.status_handle.remove(key);
             self.subsystems
@@ -7415,7 +7482,7 @@ impl Actor {
 
         for key in &stale_keys {
             self.subsystems.da_rbc.rbc.sessions.remove(key);
-            self.subsystems.da_rbc.rbc.pending.remove(key);
+            self.clear_pending_rbc(key);
             self.clear_rbc_session_roster(key);
             self.subsystems.da_rbc.rbc.status_handle.remove(key);
             self.subsystems

@@ -440,6 +440,10 @@ impl norito::json::JsonDeserialize for BackendTag {
 
 /// Size and policy bounds for validating an [`OpenVerifyEnvelope`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "validation bounds intentionally expose independent policy switches"
+)]
 pub struct OpenVerifyEnvelopeBounds {
     /// Maximum circuit identifier bytes.
     pub max_circuit_id_bytes: usize,

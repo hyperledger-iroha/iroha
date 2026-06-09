@@ -6669,10 +6669,11 @@ mod tests {
     use super::{
         ProposalBackpressure, cached_slot_timeout_hysteresis_remaining,
         canonicalize_parallel_batch_by_key, canonicalize_proposal_batch,
-        consensus_queue_backpressure, da_payload_budget, next_cached_slot_timeout_streak,
-        trim_batch_for_size_cap,
+        canonicalize_proposal_batch_with_plans, consensus_queue_backpressure, da_payload_budget,
+        next_cached_slot_timeout_streak, trim_batch_for_size_cap,
+        trim_batch_for_size_cap_with_plans,
     };
-    use crate::queue::{BackpressureState, RoutingDecision};
+    use crate::queue::{BackpressureState, RoutingDecision, RoutingPlan};
     use crate::sumeragi::status;
     use crate::tx::AcceptedTransaction;
     use iroha_crypto::KeyPair;
@@ -6683,7 +6684,7 @@ mod tests {
         prelude::{AccountId, TransactionBuilder},
     };
     use std::borrow::Cow;
-    use std::num::NonZeroUsize;
+    use std::num::{NonZeroU64, NonZeroUsize};
     use std::time::{Duration, Instant};
 
     fn accepted_log_transaction(message: &str) -> AcceptedTransaction<'static> {
@@ -6696,6 +6697,443 @@ mod tests {
             .sign(&private_key);
 
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
+    }
+
+    #[test]
+    fn proposal_batch_formal_gate_matrix() {
+        fn routes_for(txs: &[u32]) -> Vec<u32> {
+            txs.iter().map(|tx| tx + 10).collect()
+        }
+
+        fn plans_for(txs: &[u32]) -> Vec<u32> {
+            txs.iter().map(|tx| tx + 20).collect()
+        }
+
+        fn sizes_for(txs: &[u32]) -> Vec<usize> {
+            txs.iter()
+                .map(|tx| usize::try_from(tx + 30).expect("fits"))
+                .collect()
+        }
+
+        fn assert_trim_case(
+            name: &str,
+            txs: Vec<u32>,
+            sizes: Vec<usize>,
+            excess_bytes: usize,
+            expected_txs: &[u32],
+            expected_removed: &[(u32, u32)],
+        ) {
+            let mut tx_batch = txs.clone();
+            let mut routing_batch = routes_for(&txs);
+            let mut size_batch = sizes;
+            let mut removed = Vec::new();
+
+            let removed_count = trim_batch_for_size_cap(
+                &mut tx_batch,
+                &mut routing_batch,
+                &mut size_batch,
+                &mut removed,
+                excess_bytes,
+            );
+
+            assert_eq!(tx_batch, expected_txs, "{name} txs");
+            assert_eq!(routing_batch, routes_for(expected_txs), "{name} routes");
+            assert_eq!(
+                size_batch.len(),
+                expected_txs.len(),
+                "{name} sizes stay aligned"
+            );
+            assert_eq!(removed, expected_removed, "{name} removed");
+            assert_eq!(
+                removed_count,
+                expected_removed.len(),
+                "{name} removed_count"
+            );
+        }
+
+        assert_trim_case(
+            "trim_no_excess",
+            vec![1, 2, 3],
+            vec![10, 10, 10],
+            0,
+            &[1, 2, 3],
+            &[],
+        );
+        assert_trim_case(
+            "trim_remove_one",
+            vec![1, 2, 3],
+            vec![10, 10, 10],
+            5,
+            &[1, 2],
+            &[(3, 13)],
+        );
+        assert_trim_case(
+            "trim_remove_multiple",
+            vec![1, 2, 3, 4],
+            vec![10, 10, 10, 10],
+            15,
+            &[1, 2],
+            &[(4, 14), (3, 13)],
+        );
+        assert_trim_case(
+            "trim_keeps_single",
+            vec![1, 2, 3],
+            vec![5, 5, 5],
+            100,
+            &[1],
+            &[(3, 13), (2, 12)],
+        );
+        assert_trim_case(
+            "trim_zero_size_floor",
+            vec![1, 2, 3],
+            vec![10, 10, 0],
+            1,
+            &[1, 2],
+            &[(3, 13)],
+        );
+
+        let mut tx_batch = vec![1, 2, 3];
+        let mut routing_batch = routes_for(&tx_batch);
+        let mut routing_plan_batch = plans_for(&tx_batch);
+        let mut size_batch = vec![10, 10, 10];
+        let mut removed = Vec::new();
+        let removed_count = trim_batch_for_size_cap_with_plans(
+            &mut tx_batch,
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &mut size_batch,
+            &mut removed,
+            5,
+        );
+        assert_eq!(removed_count, 1, "trim_with_plans_align removed_count");
+        assert_eq!(tx_batch, vec![1, 2], "trim_with_plans_align txs");
+        assert_eq!(routing_batch, vec![11, 12], "trim_with_plans_align routes");
+        assert_eq!(
+            routing_plan_batch,
+            vec![21, 22],
+            "trim_with_plans_align plans"
+        );
+        assert_eq!(size_batch, vec![10, 10], "trim_with_plans_align sizes");
+        assert_eq!(removed, vec![(3, 23)], "trim_with_plans_align removed");
+
+        fn assert_canon_case<K, F>(name: &str, mut tx_batch: Vec<u32>, key: F, expected_txs: &[u32])
+        where
+            K: Ord,
+            F: Fn(&u32) -> K,
+        {
+            let mut routing_batch = routes_for(&tx_batch);
+            let mut size_batch = sizes_for(&tx_batch);
+            canonicalize_parallel_batch_by_key(
+                &mut tx_batch,
+                &mut routing_batch,
+                &mut size_batch,
+                key,
+            );
+            assert_eq!(tx_batch, expected_txs, "{name} txs");
+            assert_eq!(routing_batch, routes_for(expected_txs), "{name} routes");
+            assert_eq!(size_batch, sizes_for(expected_txs), "{name} sizes");
+        }
+
+        assert_canon_case("canon_empty", Vec::new(), |tx| *tx, &[]);
+        assert_canon_case("canon_single", vec![1], |tx| *tx, &[1]);
+        assert_canon_case("canon_already_sorted", vec![1, 2, 3], |tx| *tx, &[1, 2, 3]);
+        assert_canon_case(
+            "canon_reverse_keys",
+            vec![1, 2, 3],
+            |tx| 4 - *tx,
+            &[3, 2, 1],
+        );
+        assert_canon_case(
+            "canon_duplicate_keys_stable",
+            vec![1, 2, 3, 4],
+            |tx| match *tx {
+                2 | 4 => 0,
+                3 => 1,
+                1 => 2,
+                _ => 3,
+            },
+            &[2, 4, 3, 1],
+        );
+
+        let txs = ["canon-plan-a", "canon-plan-b", "canon-plan-c"]
+            .into_iter()
+            .map(accepted_log_transaction)
+            .collect::<Vec<_>>();
+        let mut entries = txs
+            .into_iter()
+            .enumerate()
+            .map(|(idx, tx)| {
+                let route = RoutingDecision::new(
+                    LaneId::new(u32::try_from(idx + 1).expect("lane id")),
+                    DataSpaceId::new(u64::try_from(idx + 20).expect("dataspace id")),
+                );
+                let plan = RoutingPlan::single(route);
+                let size = 100 + idx;
+                (tx.as_ref().hash_as_entrypoint(), tx, route, plan, size)
+            })
+            .collect::<Vec<_>>();
+        entries.sort_unstable_by(|left, right| right.0.cmp(&left.0));
+        let mut expected = entries.clone();
+        expected.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+
+        let mut tx_batch = entries
+            .iter()
+            .map(|(_, tx, _, _, _)| tx.clone())
+            .collect::<Vec<_>>();
+        let mut routing_batch = entries
+            .iter()
+            .map(|(_, _, route, _, _)| *route)
+            .collect::<Vec<_>>();
+        let mut routing_plan_batch = entries
+            .iter()
+            .map(|(_, _, _, plan, _)| plan.clone())
+            .collect::<Vec<_>>();
+        let mut size_batch = entries
+            .iter()
+            .map(|(_, _, _, _, size)| *size)
+            .collect::<Vec<_>>();
+
+        canonicalize_proposal_batch_with_plans(
+            &mut tx_batch,
+            &mut routing_batch,
+            &mut routing_plan_batch,
+            &mut size_batch,
+        );
+
+        let actual_hashes = tx_batch
+            .iter()
+            .map(|tx| tx.as_ref().hash_as_entrypoint())
+            .collect::<Vec<_>>();
+        let expected_hashes = expected
+            .iter()
+            .map(|(hash, _, _, _, _)| *hash)
+            .collect::<Vec<_>>();
+        let expected_routes = expected
+            .iter()
+            .map(|(_, _, route, _, _)| *route)
+            .collect::<Vec<_>>();
+        let expected_plans = expected
+            .iter()
+            .map(|(_, _, _, plan, _)| plan.clone())
+            .collect::<Vec<_>>();
+        let expected_sizes = expected
+            .iter()
+            .map(|(_, _, _, _, size)| *size)
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual_hashes, expected_hashes, "canon_with_plans hashes");
+        assert_eq!(routing_batch, expected_routes, "canon_with_plans routes");
+        assert_eq!(routing_plan_batch, expected_plans, "canon_with_plans plans");
+        assert_eq!(size_batch, expected_sizes, "canon_with_plans sizes");
+    }
+
+    #[test]
+    fn proposal_budget_formal_gate_matrix() {
+        fn assert_queue_case(
+            name: &str,
+            block_depth: u64,
+            rbc_depth: u64,
+            block_cap: usize,
+            rbc_cap: usize,
+            expected: bool,
+        ) {
+            let depths = status::WorkerQueueDepthSnapshot {
+                block_payload_rx: block_depth,
+                rbc_chunk_rx: rbc_depth,
+                ..status::WorkerQueueDepthSnapshot::default()
+            };
+            assert_eq!(
+                consensus_queue_backpressure(depths, block_cap, rbc_cap),
+                expected,
+                "{name}"
+            );
+        }
+
+        assert_queue_case("queue_block_cap_floor", 1, 0, 0, 5, true);
+        assert_queue_case("queue_rbc_cap_floor", 0, 1, 5, 0, true);
+        assert_queue_case("queue_below_caps", 1, 1, 2, 2, false);
+        assert_queue_case("queue_at_block_cap", 2, 0, 2, 5, true);
+        assert_queue_case("queue_at_rbc_cap", 0, 2, 5, 2, true);
+
+        let rbc_max_total_chunks =
+            usize::try_from(super::super::RBC_MAX_TOTAL_CHUNKS).expect("fits in usize");
+        assert_eq!(da_payload_budget(0, 10, 10, None), 10);
+        assert_eq!(da_payload_budget(5, 50, 10, NonZeroUsize::new(12)), 12);
+        assert_eq!(da_payload_budget(5, 7, 10, None), 7);
+        assert_eq!(da_payload_budget(5, 50, 0, None), 5);
+        assert_eq!(
+            da_payload_budget(3, 10_000, 2_000, None),
+            3 * rbc_max_total_chunks
+        );
+
+        let tx_cases = [
+            ("tx_no_config_empty_queue", 0, 9, None, 9, 1),
+            ("tx_config_caps_param", 10, 9, NonZeroUsize::new(3), 3, 3),
+            ("tx_param_caps_config", 10, 4, NonZeroUsize::new(8), 4, 4),
+            ("tx_queue_caps_target", 2, 9, None, 9, 2),
+        ];
+        for (name, queue_len, param_limit, config_cap, expected_target, expected_max) in tx_cases {
+            let (target, max_in_block) =
+                super::Actor::max_tx_budget(queue_len, param_limit, config_cap);
+            assert_eq!(target, expected_target, "{name} target");
+            assert_eq!(max_in_block.get(), expected_max, "{name} max_in_block");
+        }
+
+        let fast_threshold =
+            iroha_config::parameters::defaults::sumeragi::FAST_FINALITY_COMMIT_TIME_MS;
+        let fast_tx_cases = [
+            (
+                "fast_tx_cap_commit_time",
+                Some(NonZeroUsize::new(6).expect("non-zero")),
+                fast_threshold,
+                fast_threshold + 1,
+                6,
+                6,
+                true,
+                true,
+            ),
+            (
+                "fast_tx_cap_effective_time",
+                Some(NonZeroUsize::new(6).expect("non-zero")),
+                fast_threshold + 1,
+                fast_threshold,
+                6,
+                6,
+                true,
+                true,
+            ),
+            (
+                "fast_tx_cap_not_applicable",
+                Some(NonZeroUsize::new(6).expect("non-zero")),
+                fast_threshold + 1,
+                fast_threshold + 1,
+                15,
+                15,
+                false,
+                false,
+            ),
+            (
+                "fast_tx_no_cap",
+                None,
+                fast_threshold,
+                fast_threshold,
+                15,
+                15,
+                false,
+                true,
+            ),
+        ];
+        for (
+            name,
+            fast_cap,
+            commit_time_ms,
+            effective_commit_time_ms,
+            expected_target,
+            expected_max,
+            expected_capped,
+            expected_applies,
+        ) in fast_tx_cases
+        {
+            let (target, max_in_block, capped) = super::Actor::max_tx_budget_for_commit_time(
+                20,
+                20,
+                NonZeroUsize::new(15),
+                fast_cap,
+                commit_time_ms,
+                effective_commit_time_ms,
+            );
+            assert_eq!(target, expected_target, "{name} target");
+            assert_eq!(max_in_block.get(), expected_max, "{name} max_in_block");
+            assert_eq!(capped, expected_capped, "{name} capped");
+            assert_eq!(
+                super::Actor::fast_finality_cap_applies(commit_time_ms, effective_commit_time_ms),
+                expected_applies,
+                "{name} cap applies"
+            );
+        }
+
+        let gas_base = NonZeroU64::new(10).expect("non-zero");
+        let gas_fast_cap = NonZeroU64::new(4).expect("non-zero");
+        let gas_cases = [
+            (
+                "gas_no_base",
+                None,
+                Some(gas_fast_cap),
+                fast_threshold,
+                fast_threshold,
+                None,
+                true,
+            ),
+            (
+                "gas_no_fast_cap",
+                Some(gas_base),
+                None,
+                fast_threshold,
+                fast_threshold,
+                Some(10),
+                true,
+            ),
+            (
+                "gas_fast_cap_applies",
+                Some(gas_base),
+                Some(gas_fast_cap),
+                fast_threshold,
+                fast_threshold,
+                Some(4),
+                true,
+            ),
+            (
+                "gas_fast_cap_not_applicable",
+                Some(gas_base),
+                Some(gas_fast_cap),
+                fast_threshold + 1,
+                fast_threshold + 1,
+                Some(10),
+                false,
+            ),
+        ];
+        for (
+            name,
+            gas_limit,
+            fast_gas_limit,
+            commit_time_ms,
+            effective_commit_time_ms,
+            expected_limit,
+            expected_applies,
+        ) in gas_cases
+        {
+            let actual = super::Actor::cap_gas_limit_for_fast_commit(
+                gas_limit,
+                commit_time_ms,
+                effective_commit_time_ms,
+                fast_gas_limit,
+            )
+            .map(NonZeroU64::get);
+            assert_eq!(actual, expected_limit, "{name} limit");
+            assert_eq!(
+                super::Actor::fast_finality_cap_applies(commit_time_ms, effective_commit_time_ms),
+                expected_applies,
+                "{name} cap applies"
+            );
+        }
+
+        let base = Duration::from_millis(10);
+        assert_eq!(super::Actor::proposal_assembly_stale_window(base, 0), base);
+        assert_eq!(super::Actor::proposal_assembly_stale_window(base, 50), base);
+        assert_eq!(
+            super::Actor::proposal_assembly_stale_window(
+                base,
+                super::PROPOSAL_STALE_WINDOW_TX_QUANTUM
+            ),
+            base.saturating_mul(2)
+        );
+        assert_eq!(
+            super::Actor::proposal_assembly_stale_window(
+                base,
+                super::PROPOSAL_STALE_WINDOW_TX_QUANTUM * 100
+            ),
+            base.saturating_mul(super::PROPOSAL_STALE_WINDOW_MAX_MULTIPLIER)
+        );
     }
 
     #[test]

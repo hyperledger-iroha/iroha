@@ -190,22 +190,6 @@ pub(super) struct FrontierSlot {
     pub(super) quorum_progress: FrontierQuorumProgress,
     pub(super) timers: FrontierTimers,
     pub(super) repair_state: FrontierRepairState,
-    // TODO: remove these compatibility mirrors once the remaining slot helpers read the nested
-    // FSM fields directly instead of the legacy flat fields.
-    pub(super) view: u64,
-    pub(super) block_hash: HashOf<BlockHeader>,
-    pub(super) observed_at: Instant,
-    pub(super) last_updated_at: Instant,
-    pub(super) body_present: bool,
-    pub(super) block_created_seen: bool,
-    pub(super) exact_fetch_armed: bool,
-    pub(super) frontier_info: Option<super::message::BlockCreatedFrontierInfo>,
-    pub(super) leader: Option<PeerId>,
-    pub(super) voters: BTreeSet<PeerId>,
-    pub(super) fetch_stage: FrontierBodyFetchStage,
-    pub(super) last_fetch_at: Option<Instant>,
-    pub(super) retry_window: Duration,
-    pub(super) pending_requesters: BTreeSet<PeerId>,
 }
 
 impl FrontierSlot {
@@ -279,7 +263,7 @@ impl FrontierSlot {
         } else {
             SlotOwnerKind::ProposalLed
         };
-        let mut slot = Self {
+        Self {
             height,
             active_view: view,
             owner_generation: 0,
@@ -291,23 +275,7 @@ impl FrontierSlot {
             quorum_progress: FrontierQuorumProgress::default(),
             timers,
             repair_state,
-            view,
-            block_hash,
-            observed_at: now,
-            last_updated_at: now,
-            body_present,
-            block_created_seen,
-            exact_fetch_armed,
-            frontier_info,
-            leader,
-            voters,
-            fetch_stage: FrontierBodyFetchStage::Leader,
-            last_fetch_at: None,
-            retry_window,
-            pending_requesters: BTreeSet::new(),
-        };
-        slot.sync_compat_fields();
-        slot
+        }
     }
 
     pub(super) fn lag_started_at(&self) -> Instant {
@@ -334,13 +302,10 @@ impl FrontierSlot {
         }
         self.phase = FrontierSlotPhase::ValidateBody;
         self.record_progress(now);
-        self.sync_compat_fields();
     }
 
     pub(super) fn take_pending_requesters(&mut self) -> BTreeSet<PeerId> {
-        let pending_requesters = std::mem::take(&mut self.repair_state.pending_requesters);
-        self.sync_compat_fields();
-        pending_requesters
+        std::mem::take(&mut self.repair_state.pending_requesters)
     }
 
     pub(super) fn note_local_vote_emitted(&mut self) {
@@ -388,23 +353,6 @@ impl FrontierSlot {
         self.repair_state.quorum_timeout_rebroadcasted = false;
         self.timers.deep_catchup_entered_at = Some(now);
         self.timers.last_updated_at = now;
-    }
-
-    pub(super) fn sync_compat_fields(&mut self) {
-        self.view = self.candidate.view;
-        self.block_hash = self.candidate.block_hash;
-        self.observed_at = self.timers.observed_at;
-        self.last_updated_at = self.timers.last_updated_at;
-        self.body_present = matches!(self.candidate.body_state, FrontierBodyState::Available);
-        self.block_created_seen = self.candidate.block_created_seen;
-        self.exact_fetch_armed = self.candidate.exact_fetch_armed;
-        self.frontier_info = self.candidate.frontier_info.clone();
-        self.leader = self.candidate.leader.clone();
-        self.voters = self.candidate.voters.clone();
-        self.fetch_stage = self.repair_state.fetch_stage;
-        self.last_fetch_at = self.timers.last_fetch_at;
-        self.retry_window = self.repair_state.retry_window;
-        self.pending_requesters = self.repair_state.pending_requesters.clone();
     }
 
     pub(super) fn step(
@@ -864,8 +812,193 @@ impl FrontierSlot {
             }
         }
 
-        self.sync_compat_fields();
         actions
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn completed_quorum_slot_hash(byte: u8) -> HashOf<BlockHeader> {
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]))
+    }
+
+    #[test]
+    fn frontier_slot_candidate_reads_track_nested_state_directly() {
+        let now = Instant::now();
+        let initial_hash = completed_quorum_slot_hash(0xA1);
+        let updated_hash = completed_quorum_slot_hash(0xA2);
+        let mut slot = FrontierSlot::new(
+            7,
+            1,
+            initial_hash,
+            now,
+            Duration::from_millis(5),
+            None,
+            BTreeSet::new(),
+            false,
+            false,
+            false,
+            None,
+            None,
+        );
+
+        slot.candidate.view = 3;
+        slot.candidate.block_hash = updated_hash;
+        slot.candidate.block_created_seen = true;
+        slot.candidate.exact_fetch_armed = true;
+        slot.candidate.body_state = FrontierBodyState::Available;
+
+        assert_eq!(slot.view, 3);
+        assert_eq!(slot.block_hash, updated_hash);
+        assert!(slot.block_created_seen);
+        assert!(slot.exact_fetch_armed);
+        assert!(slot.body_present());
+    }
+
+    #[test]
+    fn completed_quorum_view_advance_slot_formal_gate_matrix() {
+        struct Case {
+            name: &'static str,
+            active_view_before: u64,
+            requested_view: u64,
+            candidate_view: u64,
+            cause: ViewChangeCause,
+            expected_current_view: u64,
+            expected_active_view_after: u64,
+        }
+
+        let observed_at = Instant::now();
+        let advanced_at = observed_at
+            .checked_add(Duration::from_millis(25))
+            .unwrap_or(observed_at);
+        let height = 3;
+        for case in [
+            Case {
+                name: "ExactRequestedDominates",
+                active_view_before: 1,
+                requested_view: 4,
+                candidate_view: 2,
+                cause: ViewChangeCause::QuorumTimeout,
+                expected_current_view: 4,
+                expected_active_view_after: 5,
+            },
+            Case {
+                name: "ExactActiveDominates",
+                active_view_before: 4,
+                requested_view: 2,
+                candidate_view: 2,
+                cause: ViewChangeCause::QuorumTimeout,
+                expected_current_view: 4,
+                expected_active_view_after: 5,
+            },
+            Case {
+                name: "ExactCandidateDominates",
+                active_view_before: 1,
+                requested_view: 2,
+                candidate_view: 4,
+                cause: ViewChangeCause::QuorumTimeout,
+                expected_current_view: 4,
+                expected_active_view_after: 5,
+            },
+            Case {
+                name: "ExactSaturatingIncrement",
+                active_view_before: u64::MAX,
+                requested_view: u64::MAX,
+                candidate_view: u64::MAX,
+                cause: ViewChangeCause::QuorumTimeout,
+                expected_current_view: u64::MAX,
+                expected_active_view_after: u64::MAX,
+            },
+            Case {
+                name: "ExactClearsRebroadcast",
+                active_view_before: 1,
+                requested_view: 2,
+                candidate_view: 2,
+                cause: ViewChangeCause::QuorumTimeout,
+                expected_current_view: 2,
+                expected_active_view_after: 3,
+            },
+            Case {
+                name: "ExactUpdatesTimestamps",
+                active_view_before: 1,
+                requested_view: 2,
+                candidate_view: 2,
+                cause: ViewChangeCause::QuorumTimeout,
+                expected_current_view: 2,
+                expected_active_view_after: 3,
+            },
+            Case {
+                name: "ExactCausePreserved",
+                active_view_before: 1,
+                requested_view: 2,
+                candidate_view: 2,
+                cause: ViewChangeCause::StakeQuorumTimeout,
+                expected_current_view: 2,
+                expected_active_view_after: 3,
+            },
+        ] {
+            let mut slot = FrontierSlot::new(
+                height,
+                case.candidate_view,
+                completed_quorum_slot_hash(0xE1),
+                observed_at,
+                Duration::from_millis(1),
+                None,
+                BTreeSet::new(),
+                true,
+                false,
+                true,
+                None,
+                None,
+            );
+            slot.active_view = case.active_view_before;
+            slot.repair_state.quorum_timeout_rebroadcasted = true;
+
+            let actions = slot.step(
+                advanced_at,
+                FrontierSlotEvent::OnViewAdvanceRequested {
+                    cause: case.cause,
+                    requested_view: case.requested_view,
+                },
+                Duration::from_millis(100),
+            );
+
+            assert_eq!(
+                actions.request_view_change,
+                Some((height, case.expected_current_view, case.cause)),
+                "view-change request for {}",
+                case.name
+            );
+            assert_eq!(
+                slot.owner_kind,
+                SlotOwnerKind::ExactSlotRepair,
+                "owner kind for {}",
+                case.name
+            );
+            assert_eq!(
+                slot.active_view, case.expected_active_view_after,
+                "active view for {}",
+                case.name
+            );
+            assert_eq!(
+                slot.timers.last_view_advance_at,
+                Some(advanced_at),
+                "last view-advance timestamp for {}",
+                case.name
+            );
+            assert_eq!(
+                slot.timers.last_updated_at, advanced_at,
+                "last updated timestamp for {}",
+                case.name
+            );
+            assert!(
+                !slot.repair_state.quorum_timeout_rebroadcasted,
+                "rebroadcast latch should clear for {}",
+                case.name
+            );
+        }
     }
 }
 

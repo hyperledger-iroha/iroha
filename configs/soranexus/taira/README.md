@@ -837,8 +837,8 @@ From `../iroha2-block-explorer-web`:
    - the helper renders the same config as the manual command below, refuses
      stale backup `.conf` files in the nginx include directory by default,
      validates the rendered snippet with a temporary nginx config, runs live
-     `nginx -t` after install, and reloads nginx only when `--reload` is
-     explicit
+     `nginx -t` after install, rolls the target back if that live validation
+     fails, and reloads nginx only when `--reload` is explicit
    - `python3 scripts/render_taira_edge_nginx_conf.py --roster configs/soranexus/taira/validator_roster.local.toml --output dist/taira-edge/taira.sora.org.conf`
    - `sudo cp dist/taira-edge/taira.sora.org.conf /etc/nginx/conf.d/taira.conf`
    - on the shared macOS/Homebrew host, install the rendered file as

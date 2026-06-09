@@ -354,7 +354,7 @@ impl PendingBlock {
         da_enabled: bool,
         missing_local_data: bool,
     ) -> GateComputation {
-        // Availability evidence is advisory; consensus only records missing local data.
+        // Missing availability evidence keeps DA-enabled commit/finalize work pending.
         let gate = da::evaluate(da_enabled, missing_local_data);
         let previous_gate = self.last_gate;
         let satisfaction = da::gate_satisfaction(previous_gate, gate);
@@ -657,7 +657,7 @@ pub(super) fn record_da_gate_telemetry(
             debug!(
                 reason = reason_label,
                 da_enabled = gate.da_enabled,
-                "DA availability still missing (advisory)"
+                "DA availability gate still active"
             );
         } else {
             debug!(

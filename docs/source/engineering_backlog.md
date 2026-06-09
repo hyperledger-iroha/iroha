@@ -10,7 +10,6 @@ track detailed unfinished engineering work.
 
 The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
 runtime-network families outside that launch scope are not supported for now.
-Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
@@ -620,10 +619,10 @@ redistributable schemas, and official trust/revocation bundles.
 	  digest, and material/execution statement derivation rejects governed
 	  public-key drift before material hashing, witness hashing, or Core
 	  proof-helper execution.
-	  BFV-shaped native AIR envelopes now also preflight canonical STARK/FRI
-	  parameters, public digest binding, opened row/path shape, and the
-	  no-unmasked-private-row-opening policy before Core reports the current
-	  dedicated verifier boundary.
+	  BFV-shaped native AIR envelopes now also preflight the canonical
+	  transcript label, statement-bound domain tag, STARK/FRI parameters, public
+	  digest binding, opened row/path shape, and the no-unmasked-private-row
+	  policy before Core reports the current dedicated verifier boundary.
 	  Remaining production work is the audited full-bootstrap arithmetic
 	  proof-producing backend plus release-grade prover/verifier artifacts, not the
 	  Core verifier gate, arithmetic trace-profile digest binding,
