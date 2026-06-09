@@ -22,11 +22,11 @@ class TransactionPayload(
     val executable: Executable = Executable.ivm(byteArrayOf()),
     val timeToLiveMs: Long? = null,
     val nonce: Int? = null,
-    metadata: Map<String, String> = emptyMap(),
+    metadata: Map<String, JsonValue> = emptyMap(),
 ) {
-    private val _metadata: Map<String, String> = metadata.toMap()
+    private val _metadata: Map<String, JsonValue> = metadata.toMap()
 
-    val metadata: Map<String, String> get() = _metadata
+    val metadata: Map<String, JsonValue> get() = _metadata
 
     init {
         require(chainId.isNotBlank()) { "chainId must not be blank" }
@@ -50,7 +50,7 @@ class TransactionPayload(
         executable: Executable = this.executable,
         timeToLiveMs: Long? = this.timeToLiveMs,
         nonce: Int? = this.nonce,
-        metadata: Map<String, String> = this.metadata,
+        metadata: Map<String, JsonValue> = this.metadata,
     ): TransactionPayload = TransactionPayload(
         chainId = chainId,
         authority = authority,
