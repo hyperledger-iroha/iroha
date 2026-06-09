@@ -34,7 +34,6 @@ public final class OfflineToriiClientTests {
             {
               "offline_note": true,
               "offline_one_use_keys": true,
-              "offline_recursive_note_proof": false,
               "offline_fountain_qr": true,
               "offline_sync_optional": true,
               "offline_telemetry": true,

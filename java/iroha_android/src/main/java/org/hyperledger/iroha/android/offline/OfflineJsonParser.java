@@ -19,7 +19,7 @@ public final class OfflineJsonParser {
     return new OfflineReadiness(
         asBoolean(object.get("offline_note"), "offline_note"),
         asBoolean(object.get("offline_one_use_keys"), "offline_one_use_keys"),
-        asBoolean(object.get("offline_recursive_note_proof"), "offline_recursive_note_proof"),
+        asOptionalBoolean(object.get("offline_recursive_note_proof"), false),
         asBoolean(object.get("offline_fountain_qr"), "offline_fountain_qr"),
         asBoolean(object.get("offline_sync_optional"), "offline_sync_optional"),
         asBoolean(object.get("offline_telemetry"), "offline_telemetry"),

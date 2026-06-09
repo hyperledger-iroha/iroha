@@ -14,7 +14,7 @@ object OfflineJsonParser {
         return OfflineReadiness(
             asBoolean(obj["offline_note"], "offline_note"),
             asBoolean(obj["offline_one_use_keys"], "offline_one_use_keys"),
-            asBoolean(obj["offline_recursive_note_proof"], "offline_recursive_note_proof"),
+            asOptionalBoolean(obj["offline_recursive_note_proof"], false),
             asBoolean(obj["offline_fountain_qr"], "offline_fountain_qr"),
             asBoolean(obj["offline_sync_optional"], "offline_sync_optional"),
             asBoolean(obj["offline_telemetry"], "offline_telemetry"),
