@@ -1,5 +1,6 @@
 import { test as baseTest } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   buildRegisterDomainTransaction,
   buildTransaction,
@@ -65,6 +66,27 @@ const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
 const RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.sora";
 const test = makeNativeTest(baseTest);
+const TEST_KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES = {
+  KagemushaTransfer: "iroha_data_model::isi::offline::KagemushaTransfer",
+  RedeemKagemushaRecursive:
+    "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
+};
+const TEST_NORITO_CRC64_MASK = 0xffff_ffff_ffff_ffffn;
+const TEST_NORITO_CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
+const TEST_NORITO_CRC64_TABLE = (() => {
+  const table = new Array(256);
+  for (let index = 0; index < table.length; index += 1) {
+    let crc = BigInt(index);
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 1n) !== 0n
+          ? (crc >> 1n) ^ TEST_NORITO_CRC64_REFLECTED_POLY
+          : crc >> 1n;
+    }
+    table[index] = crc;
+  }
+  return table;
+})();
 
 function i105FromEd25519PublicKeyHex(publicKeyHex) {
   const publicKey = Buffer.from(publicKeyHex.trim(), "hex");
@@ -115,6 +137,43 @@ function normalizedHashHex(bytes) {
 
 function toByteArray(bytes) {
   return Array.from(Buffer.from(bytes));
+}
+
+function testNoritoSchemaHash(typeName) {
+  return createHash("sha256")
+    .update("norito:v1:type-name\0", "utf8")
+    .update(typeName, "utf8")
+    .digest()
+    .subarray(0, 16);
+}
+
+function testNoritoCrc64(payload) {
+  let crc = TEST_NORITO_CRC64_MASK;
+  for (const byte of payload) {
+    const index = Number((crc ^ BigInt(byte)) & 0xffn);
+    crc = TEST_NORITO_CRC64_TABLE[index] ^ (crc >> 8n);
+  }
+  return BigInt.asUintN(64, crc ^ TEST_NORITO_CRC64_MASK);
+}
+
+function frameKagemushaInstructionArchive(type, payload, options = {}) {
+  const payloadBuffer = Buffer.from(payload);
+  const header = Buffer.alloc(40);
+  header.write("NRT0", 0, "ascii");
+  testNoritoSchemaHash(
+    TEST_KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES[
+      options.schemaType ?? type
+    ],
+  ).copy(header, 6);
+  header[22] = options.compression ?? 0;
+  header.writeBigUInt64LE(BigInt(payloadBuffer.length), 23);
+  header.writeBigUInt64LE(testNoritoCrc64(payloadBuffer), 31);
+  header[39] = options.flags ?? 0;
+  return Buffer.concat([
+    header,
+    Buffer.alloc(options.paddingLength ?? 0),
+    payloadBuffer,
+  ]);
 }
 
 function buildSampleRegisterDomain(additionalOptions = {}) {
@@ -226,29 +285,37 @@ test("buildTransaction rejects empty instruction arrays", () => {
   );
 });
 
-test("buildKagemushaInstructionArchiveInstruction normalizes archive bytes", () => {
-  const archive = Buffer.from([0x4e, 0x52, 0x54, 0x30]);
+baseTest("buildKagemushaInstructionArchiveInstruction normalizes archive bytes", () => {
+  const redeemArchive = frameKagemushaInstructionArchive(
+    "RedeemKagemushaRecursive",
+    [0x01, 0x02, 0x03],
+  );
+  const transferArchive = frameKagemushaInstructionArchive(
+    "KagemushaTransfer",
+    [0x04, 0x05, 0x06],
+  );
+  const transferArchiveBase64 = transferArchive.toString("base64");
   assert.deepEqual(
     buildKagemushaInstructionArchiveInstruction({
       instructionType: "RedeemKagemushaRecursive",
-      instructionArchive: archive,
+      instructionArchive: redeemArchive,
     }),
     {
       KagemushaInstructionArchive: {
         type: "RedeemKagemushaRecursive",
-        bytes_base64: archive.toString("base64"),
+        bytes_base64: redeemArchive.toString("base64"),
       },
     },
   );
   assert.deepEqual(
     buildKagemushaInstructionArchiveInstruction({
       type: "KagemushaTransfer",
-      bytesBase64: archive.toString("base64"),
+      bytesBase64: transferArchiveBase64,
     }),
     {
       KagemushaInstructionArchive: {
         type: "KagemushaTransfer",
-        bytes_base64: archive.toString("base64"),
+        bytes_base64: transferArchiveBase64,
       },
     },
   );
@@ -256,7 +323,7 @@ test("buildKagemushaInstructionArchiveInstruction normalizes archive bytes", () 
     () =>
       buildKagemushaInstructionArchiveInstruction({
         type: "OfflineTransfer",
-        instructionArchive: archive,
+        instructionArchive: transferArchive,
       }),
     /must be KagemushaTransfer or RedeemKagemushaRecursive/u,
   );
@@ -272,11 +339,73 @@ test("buildKagemushaInstructionArchiveInstruction normalizes archive bytes", () 
     () => buildKagemushaInstructionArchiveInstruction({ type: "KagemushaTransfer" }),
     /instructionArchive or kagemushaInstructionArchive\.bytesBase64 is required/u,
   );
+  for (const bytesBase64 of [
+    `${transferArchiveBase64.slice(0, 8)}!${transferArchiveBase64.slice(8)}`,
+    ` ${transferArchiveBase64}`,
+    transferArchiveBase64.replace(/=+$/u, ""),
+  ]) {
+    assert.throws(
+      () =>
+        buildKagemushaInstructionArchiveInstruction({
+          type: "KagemushaTransfer",
+          bytesBase64,
+        }),
+      /bytesBase64 must be canonical standard base64/u,
+    );
+  }
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "KagemushaTransfer",
+        instructionArchive: Buffer.from([0x4e, 0x52, 0x54, 0x30]),
+      }),
+    /valid KagemushaTransfer Norito archive/u,
+  );
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "RedeemKagemushaRecursive",
+        instructionArchive: transferArchive,
+      }),
+    /schema must match RedeemKagemushaRecursive/u,
+  );
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "KagemushaTransfer",
+        instructionArchive: frameKagemushaInstructionArchive("KagemushaTransfer", []),
+      }),
+    /non-empty Norito payload/u,
+  );
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "KagemushaTransfer",
+        instructionArchive: frameKagemushaInstructionArchive(
+          "KagemushaTransfer",
+          [0x01],
+          { compression: 1 },
+        ),
+      }),
+    /must not be compressed/u,
+  );
+  const tampered = Buffer.from(transferArchive);
+  tampered[tampered.length - 1] ^= 0xff;
+  assert.throws(
+    () =>
+      buildKagemushaInstructionArchiveInstruction({
+        type: "KagemushaTransfer",
+        instructionArchive: tampered,
+      }),
+    /checksum is invalid/u,
+  );
 });
 
-test("buildKagemushaInstructionTransaction wraps one archive instruction", () => {
+baseTest("buildKagemushaInstructionTransaction wraps one archive instruction", () => {
   const captures = [];
-  const archive = Buffer.from([0x01, 0x02, 0x03]);
+  const archive = frameKagemushaInstructionArchive("KagemushaTransfer", [
+    0x01, 0x02, 0x03,
+  ]);
   const fakeResult = {
     signed_transaction: Buffer.from([0x71, 0x72]),
     hash: Buffer.alloc(32, 0x73),
@@ -342,10 +471,13 @@ test("buildKagemushaInstructionTransaction wraps one archive instruction", () =>
   });
 });
 
-test("buildKagemushaRecursiveRedeemTransaction derives instruction before signing", () => {
+baseTest("buildKagemushaRecursiveRedeemTransaction derives instruction before signing", () => {
   const calls = [];
   const redeemRequestArchive = Buffer.from([0x80, 0x81, 0x82]);
-  const redeemInstructionArchive = Buffer.from([0xa1, 0xb2]);
+  const redeemInstructionArchive = frameKagemushaInstructionArchive(
+    "RedeemKagemushaRecursive",
+    [0xa1, 0xb2],
+  );
   const fakeResult = {
     signed_transaction: Buffer.from([0x91, 0x92]),
     hash: Buffer.alloc(32, 0x93),

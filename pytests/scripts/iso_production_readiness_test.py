@@ -3171,6 +3171,84 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     codes = {blocker["code"] for blocker in json.loads(stdout)["blockers"]}
                     self.assertIn(code, codes)
 
+    def test_xsd_source_paths_reject_non_ascii_and_overlong_without_echo(self):
+        def attach_blocked_sources(body, entries):
+            body["blocked_schema_sources"] = entries
+            body["blocked_schema_source_count"] = len(entries)
+            return body
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            hidden_unicode = "unicod\u0435-readiness-source-path"
+            hidden_long = "x" * (READINESS.MAX_SOURCE_PATH_CHARS + 1)
+            cases = (
+                (
+                    lambda body: body["schemas"][0]["source"].__setitem__(
+                        "path",
+                        f"xsd/{hidden_unicode}/fooo.001.001.01.xsd",
+                    ),
+                    "source.path must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: body["schemas"][0]["source"].__setitem__(
+                        "path",
+                        "xsd/" + hidden_long + "/fooo.001.001.01.xsd",
+                    ),
+                    "source.path must be no longer than 2048 characters",
+                    hidden_long,
+                ),
+                (
+                    lambda body: (
+                        attach_blocked_sources(body, [xsd_test.blocked_schema_source()]),
+                        body["blocked_schema_sources"][0]["source"].__setitem__(
+                            "path",
+                            f"xsd/{hidden_unicode}/barr.001.001.01.xsd",
+                        ),
+                    ),
+                    "source.path must use printable ASCII",
+                    hidden_unicode,
+                ),
+                (
+                    lambda body: (
+                        attach_blocked_sources(body, [xsd_test.blocked_schema_source()]),
+                        body["blocked_schema_sources"][0]["source"].__setitem__(
+                            "path",
+                            "xsd/" + hidden_long + "/barr.001.001.01.xsd",
+                        ),
+                    ),
+                    "source.path must be no longer than 2048 characters",
+                    hidden_long,
+                ),
+            )
+            for offset, (mutate, message, hidden) in enumerate(cases):
+                with self.subTest(offset=offset):
+                    body = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                    mutate(body)
+                    refresh_digest(body)
+                    mutated_path = write_json(
+                        root / f"malformed-xsd-source-path-{offset}.summary.json",
+                        body,
+                    )
+
+                    rc, stdout, stderr = run_readiness(
+                        [
+                            "--xsd-summary",
+                            str(mutated_path),
+                            "--evidence-summary",
+                            str(evidence_summary),
+                        ]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
     def test_forged_xsd_blocked_schema_source_metadata_blocks_readiness(self):
         def attach_blocked_sources(body, entries):
             body["blocked_schema_sources"] = entries

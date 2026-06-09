@@ -1526,6 +1526,12 @@ impl Run for KagemushaLineageKeyArtifactsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         use iroha::data_model::offline::KagemushaRecursiveSpendLineageKeyArtifactsV1;
 
+        eprintln!(
+            "Generating {} Reserved-lineage verifier key for `{}` opening_len={}",
+            self.profile.label(),
+            self.profile.circuit_id(),
+            self.opening_len
+        );
         let vk_box = match self.profile {
             KagemushaLineageKeyProfile::Init => {
                 iroha_core::zk::kagemusha_recursive_spend_lineage_vk_box(self.opening_len)
@@ -1542,65 +1548,23 @@ impl Run for KagemushaLineageKeyArtifactsArgs {
             )
         })?;
 
-        let proving_key = match self.profile {
-            KagemushaLineageKeyProfile::Init => {
-                iroha_core::zk::derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
-                    &vk_box,
-                    self.opening_len,
-                )
-            }
-            KagemushaLineageKeyProfile::Append => {
-                iroha_core::zk::derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(
-                    &vk_box,
-                    self.opening_len,
-                )
-            }
-        }
-        .map_err(|err| {
-            eyre::eyre!(
-                "failed to derive {} Reserved-lineage proving key archive for opening length {}: {err}",
-                self.profile.label(),
-                self.opening_len
-            )
-        })?;
-
-        let artifacts = match self.profile {
-            KagemushaLineageKeyProfile::Init => {
-                KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
-                    self.opening_len,
-                    vk_box.clone(),
-                    proving_key.clone(),
-                )
-            }
-            KagemushaLineageKeyProfile::Append => {
-                KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_append(
-                    self.opening_len,
-                    vk_box.clone(),
-                    proving_key.clone(),
-                )
-            }
-        }
-        .map_err(|err| {
-            eyre::eyre!(
-                "generated {} Reserved-lineage key package failed validation: {err}",
-                self.profile.label()
-            )
-        })?;
-        let artifact_bytes = norito::to_bytes(&artifacts)
-            .map_err(|err| eyre::eyre!("failed to encode Reserved-lineage key package: {err}"))?;
-
-        write_kagemusha_lineage_key_artifact_file(&self.out, &artifact_bytes)
-            .wrap_err_with(|| format!("failed to write {}", self.out.display()))?;
         if let Some(path) = &self.vk_out {
+            eprintln!(
+                "Writing {} Reserved-lineage verifier key to {}",
+                self.profile.label(),
+                path.display()
+            );
             write_kagemusha_lineage_key_artifact_file(path, &vk_box.bytes)
                 .wrap_err_with(|| format!("failed to write {}", path.display()))?;
         }
-        if let Some(path) = &self.pk_out {
-            write_kagemusha_lineage_key_artifact_file(path, &proving_key)
-                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
-        }
+
         let mut record_summary = String::new();
         if let Some(path) = &self.record_out {
+            eprintln!(
+                "Writing {} Reserved-lineage verifier record to {}",
+                self.profile.label(),
+                path.display()
+            );
             let record = match self.profile {
                 KagemushaLineageKeyProfile::Init => {
                     iroha_core::zk::kagemusha_recursive_spend_lineage_vk_record_from_box(
@@ -1633,6 +1597,83 @@ impl Run for KagemushaLineageKeyArtifactsArgs {
             write_kagemusha_lineage_key_artifact_file(path, &record_bytes)
                 .wrap_err_with(|| format!("failed to write {}", path.display()))?;
         }
+
+        eprintln!(
+            "Deriving {} Reserved-lineage proving key archive for `{}` opening_len={}",
+            self.profile.label(),
+            self.profile.circuit_id(),
+            self.opening_len
+        );
+        let proving_key = match self.profile {
+            KagemushaLineageKeyProfile::Init => {
+                iroha_core::zk::derive_halo2_ipa_kagemusha_recursive_spend_lineage_one_hop_proving_key_bytes(
+                    &vk_box,
+                    self.opening_len,
+                )
+            }
+            KagemushaLineageKeyProfile::Append => {
+                iroha_core::zk::derive_halo2_ipa_kagemusha_recursive_spend_lineage_append_proving_key_bytes(
+                    &vk_box,
+                    self.opening_len,
+                )
+            }
+        }
+        .map_err(|err| {
+            eyre::eyre!(
+                "failed to derive {} Reserved-lineage proving key archive for opening length {}: {err}",
+                self.profile.label(),
+                self.opening_len
+            )
+        })?;
+
+        if let Some(path) = &self.pk_out {
+            eprintln!(
+                "Writing {} Reserved-lineage proving key archive to {}",
+                self.profile.label(),
+                path.display()
+            );
+            write_kagemusha_lineage_key_artifact_file(path, &proving_key)
+                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+        }
+
+        eprintln!(
+            "Encoding {} Reserved-lineage key package for `{}` opening_len={}",
+            self.profile.label(),
+            self.profile.circuit_id(),
+            self.opening_len
+        );
+        let artifacts = match self.profile {
+            KagemushaLineageKeyProfile::Init => {
+                KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_init(
+                    self.opening_len,
+                    vk_box.clone(),
+                    proving_key.clone(),
+                )
+            }
+            KagemushaLineageKeyProfile::Append => {
+                KagemushaRecursiveSpendLineageKeyArtifactsV1::new_for_append(
+                    self.opening_len,
+                    vk_box.clone(),
+                    proving_key.clone(),
+                )
+            }
+        }
+        .map_err(|err| {
+            eyre::eyre!(
+                "generated {} Reserved-lineage key package failed validation: {err}",
+                self.profile.label()
+            )
+        })?;
+        let artifact_bytes = norito::to_bytes(&artifacts)
+            .map_err(|err| eyre::eyre!("failed to encode Reserved-lineage key package: {err}"))?;
+
+        eprintln!(
+            "Writing {} Reserved-lineage key package to {}",
+            self.profile.label(),
+            self.out.display()
+        );
+        write_kagemusha_lineage_key_artifact_file(&self.out, &artifact_bytes)
+            .wrap_err_with(|| format!("failed to write {}", self.out.display()))?;
 
         context.println(format!(
             "Wrote {} Reserved-lineage key package for `{}` opening_len={} to {} (package={} bytes, vk={} bytes, pk={} bytes{})",

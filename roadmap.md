@@ -813,8 +813,9 @@ and completed history lives in [`status.md`](./status.md).
   freshness, future-date clock-skew rejection, and standard family coverage into
 		  a ready/blocked JSON summary; the checked-in ABI-6 manifest must be a regular
 		  non-symlink, non-hardlinked file with symlink-free ancestors before its
-		  release contract is trusted, with manifest JSON decoded from the same
-		  opened regular file after path-identity revalidation, and
+		  release contract is trusted, with manifest JSON decoded only when the
+		  opened regular file matches the preflight `lstat()` identity and remains
+		  path-bound after the read, and
 	  the checked-in ABI-7 fail-closed and Reserved-lineage release-tooling marker
 	  source files must also be ordinary non-symlink, non-hardlinked files before
 	  their marker text can satisfy readiness, with marker bytes decoded from the
@@ -836,7 +837,8 @@ and completed history lives in [`status.md`](./status.md).
 	  closed-schema with duplicate JSON object keys rejected at every nested
 	  evidence object and non-standard `NaN`/`Infinity` JSON constants rejected
 	  before schema checks after proof-evidence JSON is parsed from the same
-	  opened regular file with path-identity revalidation. The compact key evidence hash-binds the ABI-7 LEN=4
+	  opened regular file with path-identity revalidation and the explicit 16
+	  MiB evidence JSON cap. The compact key evidence hash-binds the ABI-7 LEN=4
 	  `recursive-compact-len4.record.norito`, `.vk`, `.pk`,
 	  `recursive-compact-key-artifacts.norito`, and
 	  `recursive-compact-verifier-keys.norito` artifacts, validates compact key artifact byte sizes
@@ -848,7 +850,11 @@ and completed history lives in [`status.md`](./status.md).
 	  canonical LF line endings, strict UTF-8
 	  bytes, a final LF terminator, and no trailing whitespace, and checks the reported `.vk`,
 	  `.pk`, `.record.norito`, key-artifacts package, and verifier-keys package
-	  sizes and SHA-256 digests against local bytes. The canonical command must provide
+	  sizes and SHA-256 digests against local bytes.
+	  The proof-log and compact generator-log byte caps are enforced from the
+	  opened file metadata used for hashing and decoding, so readiness does not
+	  trust a separate path-size lookup for replacement log bytes; the checked-in
+	  ABI-6 manifest is likewise capped at 1 MiB before JSON decoding. The canonical command must provide
 	  `--key-artifacts-out` and `--verifier-keys-out` together, and the CLI now
 	  rejects missing or one-sided package-output flags before starting expensive
 	  key generation; old-shape commands remain release evidence blockers until
@@ -876,7 +882,9 @@ and completed history lives in [`status.md`](./status.md).
 	  attestation certificate-chain files with
 	  bundle-relative paths, SHA-256 digests, and byte sizes computed from bytes
 	  whose opened file identity matches the preflight `lstat()` identity and
-	  remains path-bound after the read, then revalidating each slot name while rejecting summary drift
+	  remains path-bound after the read, while readiness-summary and
+	  verify-existing manifest JSON inputs are capped at 16 MiB before decoding,
+	  then revalidating each slot name while rejecting summary drift
 	  across repo-trust and external-evidence sections, duplicate JSON keys,
 	  unexpected top-level, section-level, or per-slot Android signed-evidence
 	  summary fields, missing Android signed-evidence summary fields, malformed
@@ -2374,11 +2382,12 @@ and completed history lives in [`status.md`](./status.md).
 	  optionally validating schema-backed XML fixtures against their checked-in XSDs
 	  with `xmllint --nonet`; it also
   requires canonical repository/commit/path/license/source-SHA provenance for
-  every checked-in XSD with source repository URLs capped at 2048 characters,
-  placeholder repository owners or names rejected during preflight and
-  readiness replay, secret-looking repository coordinates rejected before
-  archived-summary output, and identifier-style secret-looking path material
-  rejected before summary emission, while requiring the
+  every checked-in XSD with source repository URLs and source paths capped at
+  2048 characters, placeholder repository owners or names rejected during
+  preflight and readiness replay, secret-looking repository coordinates
+  rejected before archived-summary output, and non-ASCII or
+  identifier-style secret-looking path material rejected before summary
+  emission, while requiring the
   `blocked_schema_sources` review list to be recorded explicitly even when
   empty,
   rejects XSD files with known restricted Standards
@@ -2519,8 +2528,8 @@ and completed history lives in [`status.md`](./status.md).
 	  unknown-value, or summary echo,
 	  overlong XSD/XML schema and fixture identifiers rejected before mismatch echo,
 	  overlong trust-bundle/evidence/readiness compact trust profile IDs,
-	  override IDs, policies, and trust-source authority/version provenance
-	  rejected before trust replay, summary archive, or blocker echo,
+	  override IDs, policies, and trust-source authority/version/timestamp
+	  provenance rejected before trust replay, summary archive, or blocker echo,
 	  plus generic evidence/readiness archive/canary kind, filename, or metadata
 	  mismatch blockers that do not print receipt kind values, receipt leaf names, or invalid metadata tuples,
 	  rail receipt metadata recording for nullable raw receipt fields and retained
@@ -2593,7 +2602,8 @@ and completed history lives in [`status.md`](./status.md).
   symlinked leaves. Archived canary/trust summaries consumed by the evidence
 	  gate and XSD/evidence summaries consumed by the readiness gate are capped at
 	  4 MiB before parsing, optional `xmllint` stdout/stderr is capped at 64 KiB
-	  and runtime is bounded by positive finite `--xmllint-timeout-secs` during
+	  and runtime is bounded by positive finite `--xmllint-timeout-secs` capped
+	  at 300 seconds during
   XSD fixture validation, with successful validator output limited to empty
 	  output or the normal `<fixture> validates` line and secret-looking,
 	  control-bearing, or non-ASCII validator diagnostics redacted, operator trust-bundle JSON is capped at
@@ -2790,7 +2800,8 @@ and completed history lives in [`status.md`](./status.md).
 	  empty/non-string archived reviewed reasons in both the XSD preflight and readiness rollup,
 	  rejecting stale missing-schema reasons
 		  on schema-backed archived fixtures, rejecting embedded
-		  whitespace, leading-dash path segments, or semicolon path parameters in checked-in XSD source provenance,
+		  non-ASCII characters, overlong source paths, whitespace, leading-dash
+		  path segments, or semicolon path parameters in checked-in XSD source provenance,
 		  rejects omitted checked-in and blocked-source `source` keys separately
 		  from explicit null source objects,
 		  manifest schema, fixture, fixture schema-reference, and archived

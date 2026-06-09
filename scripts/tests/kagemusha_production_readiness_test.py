@@ -1866,6 +1866,44 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("kagemusha_release_bundle_manifest_invalid_json", stderr.getvalue())
         self.assertIn("non-finite constant NaN is not allowed", stderr.getvalue())
 
+    def test_kagemusha_release_bundle_verify_existing_rejects_oversized_manifest_json(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = create_ready_release_bundle_fixture(Path(temp))
+            bundle_root = fixture["bundle_root"]
+            assert isinstance(bundle_root, Path)
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = release_bundle.main(release_bundle_args(fixture))
+            manifest_size = out.stat().st_size
+            original_max = release_bundle.MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES
+            try:
+                release_bundle.MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES = 8
+                stderr = io.StringIO()
+                with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                    verify_status = release_bundle.main(
+                        [
+                            *release_bundle_args(fixture),
+                            "--verify-existing",
+                            "dist/kagemusha-production-release-bundle.json",
+                        ]
+                    )
+            finally:
+                release_bundle.MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES = original_max
+
+        self.assertEqual(status, 0)
+        self.assertGreater(manifest_size, 8)
+        self.assertEqual(verify_status, 1)
+        rendered = stderr.getvalue()
+        self.assertIn("kagemusha_release_bundle_manifest_file_shape", rendered)
+        self.assertIn(
+            "Kagemusha release bundle manifest must be no more than 8 bytes",
+            rendered,
+        )
+        self.assertNotIn("kagemusha_release_bundle_manifest_invalid_json", rendered)
+
     def test_kagemusha_release_bundle_verify_existing_rejects_noncanonical_manifest_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             fixture = create_ready_release_bundle_fixture(Path(temp))
@@ -3166,6 +3204,41 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["message"] for item in blockers},
         )
 
+    def test_kagemusha_release_bundle_load_local_json_rejects_oversized_input(
+        self,
+    ) -> None:
+        original_max = release_bundle.MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES
+        try:
+            release_bundle.MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
+                summary_path.write_text(
+                    json.dumps({"schema": readiness.SUMMARY_SCHEMA}) + "\n",
+                    encoding="utf-8",
+                )
+
+                payload, blockers = release_bundle._load_local_json(
+                    summary_path,
+                    "Kagemusha readiness summary",
+                    "kagemusha_release_summary",
+                )
+        finally:
+            release_bundle.MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES = original_max
+
+        self.assertIsNone(payload)
+        self.assertIn(
+            "kagemusha_release_summary_file_shape",
+            {item["code"] for item in blockers},
+        )
+        self.assertIn(
+            "Kagemusha readiness summary must be no more than 8 bytes",
+            {item["message"] for item in blockers},
+        )
+        self.assertNotIn(
+            "kagemusha_release_summary_invalid_json",
+            {item["code"] for item in blockers},
+        )
+
     def test_kagemusha_release_bundle_verify_existing_rejects_bundle_root_symlink_before_manifest_load(
         self,
     ) -> None:
@@ -4198,6 +4271,45 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in result["blockers"]},
         )
 
+    def test_abi6_manifest_rejects_oversized_manifest_json(self) -> None:
+        original_max = readiness.MAX_ABI6_MANIFEST_JSON_BYTES
+        try:
+            readiness.MAX_ABI6_MANIFEST_JSON_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                repo = Path(temp) / "repo"
+                manifest = {
+                    "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
+                    "bridge_abi_version": 6,
+                    "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
+                    "operations": [
+                        {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
+                    ],
+                    "limits": readiness.EXPECTED_ABI6_LIMITS,
+                    "modes": {
+                        "preferred_when_recursive_available": "recursive_spend_v1",
+                        "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                    },
+                }
+                write_json(repo / readiness.ABI6_MANIFEST_PATH, manifest)
+
+                result = readiness.check_abi6_reserved_lineage(repo)
+        finally:
+            readiness.MAX_ABI6_MANIFEST_JSON_BYTES = original_max
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "abi6_manifest_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-6 manifest must be no more than 8 bytes",
+            {item["message"] for item in result["blockers"]},
+        )
+        self.assertNotIn(
+            "abi6_manifest_invalid_json",
+            {item["code"] for item in result["blockers"]},
+        )
+
     def test_abi6_manifest_rejects_symlinked_manifest_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -4239,8 +4351,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(str(external_manifest), rendered)
 
     def test_abi6_manifest_rejects_symlink_swap_after_preflight(self) -> None:
-        original_validate_release_local_json_file = (
-            readiness.validate_release_local_json_file
+        original_validate_release_local_json_file_for_read = (
+            readiness._validate_release_local_json_file_for_read
         )
 
         with tempfile.TemporaryDirectory() as temp:
@@ -4265,12 +4377,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             write_json(external_manifest, manifest)
             validate_calls = 0
 
-            def swapping_validate_release_local_json_file(
+            def swapping_validate_release_local_json_file_for_read(
                 path: Path,
                 label: str,
-            ) -> list[str]:
+            ) -> tuple[os.stat_result | None, list[str]]:
                 nonlocal validate_calls
-                errors = original_validate_release_local_json_file(path, label)
+                file_stat, errors = original_validate_release_local_json_file_for_read(
+                    path,
+                    label,
+                )
                 if path == manifest_path and not errors:
                     validate_calls += 1
                     if validate_calls == 1:
@@ -4279,12 +4394,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                             manifest_path,
                             external_manifest,
                         )
-                return errors
+                return file_stat, errors
 
             with mock.patch.object(
                 readiness,
-                "validate_release_local_json_file",
-                swapping_validate_release_local_json_file,
+                "_validate_release_local_json_file_for_read",
+                swapping_validate_release_local_json_file_for_read,
             ):
                 result = readiness.check_abi6_reserved_lineage(repo)
             rendered = json.dumps(result)
@@ -4300,6 +4415,68 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["message"] for item in result["blockers"]},
         )
         self.assertNotIn(str(external_manifest), rendered)
+
+    def test_abi6_manifest_rejects_regular_file_swap_after_preflight(self) -> None:
+        original_validate_release_local_json_file_for_read = (
+            readiness._validate_release_local_json_file_for_read
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            manifest_path = repo / readiness.ABI6_MANIFEST_PATH
+            replacement_manifest = root / "replacement-manifest.json"
+            manifest = {
+                "schema": "iroha.kagemusha.recursive_spend.abi6.fixture_manifest.v1",
+                "bridge_abi_version": 6,
+                "operation_count": len(readiness.ABI6_OPERATION_SYMBOLS),
+                "operations": [
+                    {"symbol": symbol} for symbol in readiness.ABI6_OPERATION_SYMBOLS
+                ],
+                "limits": readiness.EXPECTED_ABI6_LIMITS,
+                "modes": {
+                    "preferred_when_recursive_available": "recursive_spend_v1",
+                    "fallback_when_recursive_unavailable": "checked_prefold_v1",
+                },
+            }
+            write_json(manifest_path, manifest)
+            write_json(replacement_manifest, manifest)
+            validate_calls = 0
+
+            def swapping_validate_release_local_json_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                nonlocal validate_calls
+                file_stat, errors = original_validate_release_local_json_file_for_read(
+                    path,
+                    label,
+                )
+                if path == manifest_path and not errors:
+                    validate_calls += 1
+                    if validate_calls == 1:
+                        replacement_manifest.replace(manifest_path)
+                return file_stat, errors
+
+            with mock.patch.object(
+                readiness,
+                "_validate_release_local_json_file_for_read",
+                swapping_validate_release_local_json_file_for_read,
+            ):
+                result = readiness.check_abi6_reserved_lineage(repo)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        self.assertGreaterEqual(validate_calls, 1)
+        self.assertIn(
+            "abi6_manifest_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-6 manifest changed while being read",
+            {item["message"] for item in result["blockers"]},
+        )
+        self.assertNotIn(str(replacement_manifest), rendered)
 
     def test_abi6_manifest_rejects_symlinked_manifest_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -5323,6 +5500,29 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["message"] for item in result["blockers"]},
         )
 
+    def test_compact_key_evidence_rejects_oversized_evidence_json(self) -> None:
+        original_max = readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES
+        try:
+            readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+
+                result = readiness.check_compact_key_evidence(evidence_path)
+        finally:
+            readiness.MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES = original_max
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "ABI-7 recursive compact key evidence must be no more than 8 bytes",
+            {item["message"] for item in result["blockers"]},
+        )
+        self.assertEqual(result["artifact_sha256"], {})
+        self.assertIsNone(result["generator_log_sha256"])
+
     def test_compact_key_evidence_rejects_duplicate_json_keys(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_compact_key_evidence(Path(temp) / "compact")
@@ -5517,6 +5717,24 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn(
             "compact_key_evidence_generator_log_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIsNone(result["generator_log_sha256"])
+
+    def test_compact_key_evidence_rejects_oversized_generator_log(self) -> None:
+        old_limit = readiness.MAX_COMPACT_KEY_GENERATOR_LOG_BYTES
+        try:
+            readiness.MAX_COMPACT_KEY_GENERATOR_LOG_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                evidence_path = create_compact_key_evidence(Path(temp) / "compact")
+
+                result = readiness.check_compact_key_evidence(evidence_path)
+        finally:
+            readiness.MAX_COMPACT_KEY_GENERATOR_LOG_BYTES = old_limit
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "compact_key_evidence_generator_log_size",
             {item["code"] for item in result["blockers"]},
         )
         self.assertIsNone(result["generator_log_sha256"])
@@ -7503,6 +7721,29 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertNotIn(str(evidence_path), rendered)
 
+    def test_lineage_proof_evidence_rejects_oversized_evidence_json(self) -> None:
+        original_max = readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES
+        try:
+            readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
+
+                result = readiness.check_lineage_proof_evidence(evidence_path)
+        finally:
+            readiness.MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = original_max
+
+        self.assertFalse(result["ok"])
+        self.assertIn(
+            "lineage_proof_evidence_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "Reserved-lineage proof evidence must be no more than 8 bytes",
+            {item["message"] for item in result["blockers"]},
+        )
+        self.assertEqual(result["artifact_sha256"], {})
+        self.assertEqual(result["test_log_sha256"], {})
+
     def test_lineage_proof_evidence_rejects_duplicate_json_keys(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             evidence_path = create_lineage_proof_evidence(Path(temp) / "lineage")
@@ -8191,36 +8432,23 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertNotIn(str(log_path), rendered)
         self.assertNotIn("token=supersecret", rendered)
 
-    def test_lineage_proof_log_rejects_metadata_read_failure_after_preflight(
-        self,
-    ) -> None:
-        path_type = type(Path("."))
-        original_stat = path_type.stat
+    def test_lineage_proof_log_rejects_oversized_open_file(self) -> None:
+        old_limit = readiness.MAX_LINEAGE_PROOF_LOG_BYTES
+        try:
+            readiness.MAX_LINEAGE_PROOF_LOG_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                log_path = Path(temp) / "record-archive-proof.log"
+                write_passing_lineage_proof_log(log_path)
 
-        with tempfile.TemporaryDirectory() as temp:
-            log_path = Path(temp) / "record-archive-proof.log"
-            write_passing_lineage_proof_log(log_path)
-            proof_log_stat_calls = 0
-
-            def failing_stat(path: Path, *args, **kwargs):
-                nonlocal proof_log_stat_calls
-                if path == log_path:
-                    proof_log_stat_calls += 1
-                    if proof_log_stat_calls > 1:
-                        raise OSError("simulated proof log metadata failure")
-                return original_stat(path, *args, **kwargs)
-
-            try:
-                path_type.stat = failing_stat
                 digest, errors = readiness.validate_lineage_proof_log(
                     log_path,
                     readiness.LINEAGE_PROOF_REQUIRED_TESTS["record_archive_proof"],
                 )
-            finally:
-                path_type.stat = original_stat
+        finally:
+            readiness.MAX_LINEAGE_PROOF_LOG_BYTES = old_limit
 
         self.assertIsNone(digest)
-        self.assertEqual(errors, ["production proof log metadata could not be read"])
+        self.assertEqual(errors, ["production proof log must be no more than 8 bytes"])
 
     def test_lineage_proof_log_rejects_symlink_swap_after_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

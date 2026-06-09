@@ -4295,6 +4295,18 @@ def _callable_on_sis_hints(name: str) -> bool:
     return callable(getattr(sis_hints, name, None))
 
 
+def _planned_privacy_entrypoints_available(
+    algorithm_id: str,
+    probe: Any,
+) -> bool:
+    return all(
+        probe(entrypoint)
+        for entrypoint in REQUIRED_PRIVACY_PLAN_PLANNED_SDK_ENTRYPOINTS_BY_ALGORITHM_ID[
+            algorithm_id
+        ]
+    )
+
+
 def _ml_dsa_available() -> bool:
     try:
         from .crypto import supported_crypto_algorithms
@@ -4344,11 +4356,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     verange_envelope_builder = _callable_on_verange("buildVeRangeProofEnvelope")
     verange_dev_fixture = _callable_on_verange("buildVeRangeDevProofFixture")
     verange_local_verifier = _callable_on_verange("verifyVeRangeProofLocally")
-    verange_sdk_exports = (
-        verange_commitment_builder
-        and verange_envelope_builder
-        and verange_dev_fixture
-        and verange_local_verifier
+    verange_sdk_exports = _planned_privacy_entrypoints_available(
+        "verange-transparent-range-v1",
+        _callable_on_verange,
     )
     anonymous_pgc_receiver_set_builder = _callable_on_anonymous_pgc(
         "buildAnonymousPgcReceiverSet"
@@ -4359,10 +4369,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     anonymous_pgc_local_verifier = _callable_on_anonymous_pgc(
         "verifyAnonymousPgcDevProofLocally"
     )
-    anonymous_pgc_sdk_exports = (
-        anonymous_pgc_receiver_set_builder
-        and anonymous_pgc_dev_fixture
-        and anonymous_pgc_local_verifier
+    anonymous_pgc_sdk_exports = _planned_privacy_entrypoints_available(
+        "anonymous-pgc-k-out-of-n-v1",
+        _callable_on_anonymous_pgc,
     )
     zkat_policy_commitment_builder = _callable_on_zkat("buildZkAtPolicyCommitment")
     zkat_authenticator_envelope_builder = _callable_on_zkat(
@@ -4370,11 +4379,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     )
     zkat_dev_fixture = _callable_on_zkat("buildZkAtDevProofFixture")
     zkat_local_verifier = _callable_on_zkat("verifyZkAtAuthenticatorLocally")
-    zkat_sdk_exports = (
-        zkat_policy_commitment_builder
-        and zkat_authenticator_envelope_builder
-        and zkat_dev_fixture
-        and zkat_local_verifier
+    zkat_sdk_exports = _planned_privacy_entrypoints_available(
+        "zkat-policy-private-auth-v1",
+        _callable_on_zkat,
     )
     zk_ams_admission_batch_builder = _callable_on_zk_ams("buildZkAmsAdmissionBatch")
     zk_ams_proof_envelope_builder = _callable_on_zk_ams(
@@ -4382,11 +4389,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     )
     zk_ams_dev_fixture = _callable_on_zk_ams("buildZkAmsAdmissionDevProofFixture")
     zk_ams_local_verifier = _callable_on_zk_ams("verifyZkAmsAdmissionProofLocally")
-    zk_ams_sdk_exports = (
-        zk_ams_admission_batch_builder
-        and zk_ams_proof_envelope_builder
-        and zk_ams_dev_fixture
-        and zk_ams_local_verifier
+    zk_ams_sdk_exports = _planned_privacy_entrypoints_available(
+        "zk-ams-recursive-admission-v0",
+        _callable_on_zk_ams,
     )
     vega_predicate_commitment_builder = _callable_on_vega(
         "buildVegaCredentialPredicateCommitment"
@@ -4394,11 +4399,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     vega_proof_envelope_builder = _callable_on_vega("buildVegaCredentialProofEnvelope")
     vega_dev_fixture = _callable_on_vega("buildVegaCredentialDevProofFixture")
     vega_local_verifier = _callable_on_vega("verifyVegaCredentialProofLocally")
-    vega_sdk_exports = (
-        vega_predicate_commitment_builder
-        and vega_proof_envelope_builder
-        and vega_dev_fixture
-        and vega_local_verifier
+    vega_sdk_exports = _planned_privacy_entrypoints_available(
+        "vega-existing-credential-zk-v0",
+        _callable_on_vega,
     )
     silent_threshold_commitments_builder = _callable_on_silent_threshold(
         "buildSilentThresholdCredentialCommitments"
@@ -4412,11 +4415,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     silent_threshold_local_verifier = _callable_on_silent_threshold(
         "verifySilentThresholdCredentialProofLocally"
     )
-    silent_threshold_sdk_exports = (
-        silent_threshold_commitments_builder
-        and silent_threshold_envelope_builder
-        and silent_threshold_dev_fixture
-        and silent_threshold_local_verifier
+    silent_threshold_sdk_exports = _planned_privacy_entrypoints_available(
+        "silent-threshold-anoncred-v0",
+        _callable_on_silent_threshold,
     )
     zk_x509_identity_commitments_builder = _callable_on_zk_x509(
         "buildZkX509IdentityCommitments"
@@ -4430,11 +4431,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     zk_x509_identity_local_verifier = _callable_on_zk_x509(
         "verifyZkX509IdentityProofLocally"
     )
-    zk_x509_identity_sdk_exports = (
-        zk_x509_identity_commitments_builder
-        and zk_x509_identity_envelope_builder
-        and zk_x509_identity_dev_fixture
-        and zk_x509_identity_local_verifier
+    zk_x509_identity_sdk_exports = _planned_privacy_entrypoints_available(
+        "zk-x509-onchain-identity-v0",
+        _callable_on_zk_x509,
     )
     jindo_lattice_public_inputs_builder = _callable_on_jindo(
         "buildJindoLatticePublicInputs"
@@ -4448,11 +4447,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     jindo_lattice_local_verifier = _callable_on_jindo(
         "verifyJindoLatticeProofLocally"
     )
-    jindo_lattice_sdk_exports = (
-        jindo_lattice_public_inputs_builder
-        and jindo_lattice_proof_envelope_builder
-        and jindo_lattice_dev_fixture
-        and jindo_lattice_local_verifier
+    jindo_lattice_sdk_exports = _planned_privacy_entrypoints_available(
+        "jindo-lattice-pcs-zk-v0",
+        _callable_on_jindo,
     )
     sis_hints_credential_commitments_builder = _callable_on_sis_hints(
         "buildSisHintsCredentialCommitments"
@@ -4466,11 +4463,9 @@ def privacy_capabilities(client: Any | None = None) -> dict[str, Any]:
     sis_hints_credential_local_verifier = _callable_on_sis_hints(
         "verifySisHintsCredentialProofLocally"
     )
-    sis_hints_credential_sdk_exports = (
-        sis_hints_credential_commitments_builder
-        and sis_hints_credential_envelope_builder
-        and sis_hints_credential_dev_fixture
-        and sis_hints_credential_local_verifier
+    sis_hints_credential_sdk_exports = _planned_privacy_entrypoints_available(
+        "sis-hints-anoncred-pq-v0",
+        _callable_on_sis_hints,
     )
     zk_ace_register_available = zk_ace_register and _callable_on_client(
         client, "register_zk_ace_identity_commitment_and_wait", default=True

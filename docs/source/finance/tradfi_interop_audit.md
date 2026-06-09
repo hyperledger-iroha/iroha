@@ -282,7 +282,7 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   byte buffer, caps manifest JSON and profile catalog source at 4 MiB and
   schema/fixture XML inputs at 8 MiB before parsing, drains `xmllint`
   stdout/stderr through a 64 KiB cap and bounds validator runtime with positive
-  finite `--xmllint-timeout-secs` during optional schema validation, and
+  finite `--xmllint-timeout-secs` capped at 300 seconds during optional schema validation, and
   accepts only empty successful output or the normal `<fixture> validates`
   success line so warning-bearing successful validator output fails closed,
   enforces canonical lowercase ISO message definition ids and path
@@ -320,11 +320,11 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   `DEFAULT_PROFILES_JSON` raw-string declaration and ignores spoofed matches in
   comments or unrelated strings, requires each checked-in XSD to carry canonical
   repository, commit, source path, SPDX license, and source SHA-256 provenance
-  that matches the checked-in bytes, caps source repository URLs at 2048
-  characters, rejects placeholder repository owners or names such as
+  that matches the checked-in bytes, caps source repository URLs and source
+  provenance paths at 2048 characters, rejects placeholder repository owners or names such as
   `example`, `dummy`, `fake`, `sample`, or `template`, rejects source
-  provenance paths with embedded whitespace, leading-dash path segments,
-  semicolon path parameters, or identifier-style secret-looking material, and
+  provenance paths with non-ASCII characters, embedded whitespace, leading-dash
+  path segments, semicolon path parameters, or identifier-style secret-looking material, and
   rejects omitted `source` separately from explicit null source objects in both
   direct preflight and archived readiness replay,
   requires the `blocked_schema_sources` review list to be explicitly recorded
@@ -704,8 +704,8 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   spellings before unsupported-stage, ordering, or stage-window diagnostics.
   Trust-bundle preflight, evidence replay, and production-readiness compact
   trust profile IDs, override IDs, embedded signature policy strings, and
-  trust-source authority/version provenance are capped before trust diagnostics
-  can print or archive them.
+  trust-source authority/version/timestamp provenance are capped before trust
+  diagnostics can print or archive them.
   Live rail/notary adapter timeouts must be
   positive finite numbers, and their response/payload byte caps must be positive
   integers rather than JSON/Python boolean aliases before any local read or
@@ -800,9 +800,9 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   schema-backed fixtures still carry a missing-schema reason. Rejected XSD manifest and archived summary path
   validation errors report label-only failures without echoing raw path values
   that may contain secret-looking segments. Checked-in XSD source provenance
-  now rejects placeholder GitHub repository coordinates plus embedded
-  whitespace, semicolon path parameters, identifier-style secret-looking
-  path material, and secret-looking repository coordinates during preflight,
+  now rejects placeholder GitHub repository coordinates plus non-ASCII or
+  overlong source paths, embedded whitespace, semicolon path parameters,
+  identifier-style secret-looking path material, and secret-looking repository coordinates during preflight,
   and production readiness replays the same repository-coordinate rejection
   before emitting archived XSD summaries.
   Archived profile-catalog paths get the same readiness recheck when production

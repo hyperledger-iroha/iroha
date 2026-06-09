@@ -68,6 +68,8 @@ TEXT_REQUIREMENTS = {
         "reuse the scanner-validated signed-evidence timestamp",
         "telemetry/status/runtime completion markers",
         "symlink-free ancestors before its",
+        "MiB evidence JSON cap",
+        "ABI-6 manifest is likewise capped at 1 MiB",
         "symlink-ancestor `--repo-root` aliases",
         "symlink-free key-path ancestors",
         "secret-looking key path strings",
@@ -82,6 +84,7 @@ TEXT_REQUIREMENTS = {
         "hash-bound readiness summary",
         "verify existing manifests",
         "stable manifest comparison",
+        "verify-existing manifest JSON inputs are capped at 16 MiB",
         "Path.is_dir()",
         "summary output parents",
         "scanner slot inventory classify",
@@ -190,11 +193,14 @@ TEXT_REQUIREMENTS = {
         "rejected instead of ignored",
         "duplicate JSON object keys are also invalid",
         "last-key-wins evidence packets",
+        "ABI-6 manifest JSON capped at 1 MiB",
+        "capped at 16 MiB before parsing",
         "stops before loading any readiness JSON",
         "`--out` cannot",
         "already hash-bound into the manifest",
         "--verify-existing dist/kagemusha-production-release-bundle.json",
         "stable manifest comparison",
+        "capped at 16 MiB from the opened file metadata",
         "future-dated beyond the release validator",
         "clock-skew allowance, remains blocked",
         "timestamp must use canonical UTC",
@@ -919,6 +925,9 @@ TEXT_REQUIREMENTS = {
         "ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL",
         "LINEAGE_PROOF_EVIDENCE_SUMMARY_LABEL",
         "COMPACT_KEY_EVIDENCE_SUMMARY_LABEL",
+        "MAX_ABI6_MANIFEST_JSON_BYTES",
+        "MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
+        "MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES",
         "LINEAGE_PROOF_EVIDENCE_FIELDS",
         "LINEAGE_PROOF_TEST_FIELDS",
         "COMPACT_KEY_EVIDENCE_FIELDS",
@@ -935,15 +944,22 @@ TEXT_REQUIREMENTS = {
         "derive_halo2_ipa_kagemusha_recursive_compact_payment_token_proving_key_bytes",
         "kagemusha_recursive_compact_payment_token_vk_record_from_box",
         "validate_release_local_json_file",
+        "_validate_release_local_json_file_for_read",
         "def _read_release_json_text(",
+        "release_json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+        "release_json_open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "release_json_path_stat = path.lstat()",
         "release_json_final_path_stat = path.lstat()",
+        "if open_stat.st_size > MAX_ABI6_MANIFEST_JSON_BYTES:",
+        "if size > MAX_ABI6_MANIFEST_JSON_BYTES:",
+        'f"{label} must be no more than {MAX_ABI6_MANIFEST_JSON_BYTES} bytes"',
         'except OSError:\n        return None, [blocker(unreadable_code, f"{label} could not be read")]',
         'except UnicodeDecodeError:\n        return None, [blocker(unreadable_code, f"{label} could not be read")]',
-        'def validate_release_local_json_file(path: Path, label: str) -> list[str]:\n    """Reject local release JSON files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} path must not contain secret-looking material"]\n',
+        '_file_stat, errors = _validate_release_local_json_file_for_read(path, label)',
+        'def _validate_release_local_json_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local release JSON files and return the read identity."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
         "release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(",
-        '    release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if release_json_ancestor_errors:\n        return release_json_ancestor_errors\n    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return [f"{label} is missing"]\n    except OSError:\n        return [f"{label} file metadata could not be read"]\n    if stat.S_ISLNK(mode):\n        return [f"{label} must not be a symlink"]\n    if not stat.S_ISREG(mode):\n        return [f"{label} must be a regular file"]\n',
-        '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n    return []\n\n\ndef _validate_repo_source_marker_file_for_read(\n',
+        '    release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if release_json_ancestor_errors:\n        return None, release_json_ancestor_errors\n    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        return None, [f"{label} is missing"]\n    except OSError:\n        return None, [f"{label} file metadata could not be read"]\n    if stat.S_ISLNK(file_stat.st_mode):\n        return None, [f"{label} must not be a symlink"]\n    if not stat.S_ISREG(file_stat.st_mode):\n        return None, [f"{label} must be a regular file"]\n',
+        '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return None, [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n    return file_stat, []\n\n\ndef _validate_repo_source_marker_file_for_read(\n',
         "validate_repo_source_marker_file",
         "def _validate_repo_source_marker_file_for_read(",
         '    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
@@ -1051,21 +1067,28 @@ TEXT_REQUIREMENTS = {
         'def _validate_lineage_local_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local lineage evidence files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if ancestor_errors:\n        return None, ancestor_errors\n    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        return None, [f"{label} is missing"]\n    except OSError:\n        return None, [f"{label} file metadata could not be read"]\n',
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return None, [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n    return file_stat, []\n\n\ndef validate_lineage_local_file(path: Path, label: str) -> list[str]:\n',
         'except OSError:\n        return None, [f"{label} could not be read"]',
-        '    try:\n        if path.stat().st_size > MAX_LINEAGE_PROOF_LOG_BYTES:\n            return None, [\n                f"production proof log must be no more than {MAX_LINEAGE_PROOF_LOG_BYTES} bytes"\n            ]\n    except OSError:\n        return None, ["production proof log metadata could not be read"]\n',
+        'size_error = f"production proof log must be no more than {MAX_LINEAGE_PROOF_LOG_BYTES} bytes"',
         "def _lineage_local_text(",
         "def _sha256_text_file(",
         "chunks: list[bytes] = []",
         'text = b"".join(chunks).decode("utf-8", errors=decode_errors)',
         'digest, text, read_errors = _sha256_text_file(\n        path,\n        "production proof log",\n        "production proof log could not be read",',
+        "max_bytes=MAX_LINEAGE_PROOF_LOG_BYTES",
         'digest, text, read_errors = _sha256_text_file(\n        path,\n        "ABI-7 recursive compact key generator log",\n        "ABI-7 recursive compact key generator log could not be read",',
+        "max_bytes=MAX_COMPACT_KEY_GENERATOR_LOG_BYTES",
         "DuplicateJsonKeyError",
         "NonFiniteJsonConstantError",
         "_reject_duplicate_json_object_pairs",
         "_reject_nonfinite_json_constant",
         "shape_code: str",
-        'digest, text, read_errors = _sha256_text_file(\n        path,\n        label,\n        f"{label} could not be read",\n    )',
+        "max_bytes: int | None = None",
+        'size_error = (\n        f"{label} must be no more than {max_bytes} bytes"\n        if max_bytes is not None\n        else None\n    )',
+        'digest, text, read_errors = _sha256_text_file(\n        path,\n        label,\n        f"{label} could not be read",\n        max_bytes=max_bytes,\n        too_large_error=size_error,\n    )',
+        "too_large_error=size_error",
         "shape_code=\"lineage_proof_evidence_file_shape\"",
+        "max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
         "shape_code=\"compact_key_evidence_file_shape\"",
+        "max_bytes=MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES",
         "object_pairs_hook=_reject_duplicate_json_object_pairs",
         "parse_constant=_reject_nonfinite_json_constant",
         "contains duplicate JSON object key",
@@ -1496,9 +1519,13 @@ TEXT_REQUIREMENTS = {
         "kagemusha_release_summary_drift",
         "_read_local_json_text",
         "_validate_local_file_for_read",
+        "MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES",
         'text, read_blockers = _read_local_json_text(',
         "release_json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "release_json_open_identity = (open_stat.st_dev, open_stat.st_ino)",
+        "if open_stat.st_size > MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES:",
+        "if size > MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES:",
+        'f"{label} must be no more than {MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES} bytes"',
         "object_pairs_hook=readiness._reject_duplicate_json_object_pairs",
         "parse_constant=readiness._reject_nonfinite_json_constant",
         "_evidence_entry_with_size",
@@ -1984,8 +2011,10 @@ TEXT_REQUIREMENTS = {
         "summary[\"android_device_lab\"][\"signed_evidence\"]",
         "expected_android_signed_evidence",
         "test_abi6_manifest_drift_blocks_rollup_section",
+        "test_abi6_manifest_rejects_oversized_manifest_json",
         "test_abi6_manifest_rejects_symlinked_manifest_file",
         "test_abi6_manifest_rejects_symlink_swap_after_preflight",
+        "test_abi6_manifest_rejects_regular_file_swap_after_preflight",
         "test_abi6_manifest_rejects_symlinked_manifest_ancestor",
         "test_abi6_manifest_rejects_hardlinked_manifest_file",
         "test_abi6_manifest_rejects_non_utf8_without_traceback",
@@ -2020,6 +2049,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_evidence_rejects_noncanonical_filename",
         "test_compact_key_evidence_rejects_symlinked_evidence_file",
         "test_compact_key_evidence_rejects_json_symlink_swap_after_preflight",
+        "test_compact_key_evidence_rejects_oversized_evidence_json",
         "test_compact_key_evidence_rejects_duplicate_json_keys",
         "test_compact_key_evidence_rejects_secret_duplicate_json_key",
         "test_compact_key_evidence_rejects_nonfinite_json_constant",
@@ -2038,6 +2068,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_evidence_rejects_generator_log_crlf_line_endings",
         "test_compact_key_evidence_rejects_generator_log_without_final_lf",
         "test_compact_key_evidence_rejects_generator_log_invalid_utf8_bytes",
+        "test_compact_key_evidence_rejects_oversized_generator_log",
         "test_compact_key_evidence_rejects_generator_log_symlink_swap_after_preflight",
         "test_compact_key_evidence_rejects_noncanonical_generator_log_path",
         "test_compact_key_evidence_rejects_secret_size_field_without_leak",
@@ -2103,6 +2134,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_evidence_rejects_symlinked_evidence_ancestor",
         "test_lineage_proof_evidence_rejects_secret_path_before_json_parse",
         "test_lineage_proof_evidence_rejects_non_utf8_without_traceback",
+        "test_lineage_proof_evidence_rejects_oversized_evidence_json",
         "test_lineage_proof_evidence_rejects_duplicate_json_keys",
         "test_lineage_proof_evidence_redacts_secret_duplicate_json_key",
         "test_lineage_proof_evidence_rejects_nonfinite_json_constant",
@@ -2157,8 +2189,10 @@ TEXT_REQUIREMENTS = {
         "test_kagemusha_release_bundle_rejects_empty_compact_generator_log_inventory",
         "test_kagemusha_release_bundle_verify_existing_rejects_duplicate_manifest_json_key",
         "test_kagemusha_release_bundle_verify_existing_rejects_nonfinite_manifest_json_constant",
+        "test_kagemusha_release_bundle_verify_existing_rejects_oversized_manifest_json",
         "test_kagemusha_release_bundle_verify_existing_rejects_noncanonical_manifest_timestamp",
         "test_kagemusha_release_bundle_load_local_json_rejects_symlink_swap_after_preflight",
+        "test_kagemusha_release_bundle_load_local_json_rejects_oversized_input",
         "test_kagemusha_release_bundle_verify_existing_rejects_bundle_root_symlink_before_manifest_load",
         "test_kagemusha_release_bundle_verify_existing_rejects_outside_manifest_before_scanners",
         "lineage_artifacts",
@@ -2240,7 +2274,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_evidence_rejects_symlinked_local_proof_log_file",
         "test_lineage_proof_evidence_rejects_hardlinked_local_proof_log_file",
         "test_lineage_proof_log_rejects_secret_path_before_digest",
-        "test_lineage_proof_log_rejects_metadata_read_failure_after_preflight",
+        "test_lineage_proof_log_rejects_oversized_open_file",
         "test_lineage_proof_log_rejects_symlink_swap_after_preflight",
         "test_lineage_proof_log_rejects_trailing_whitespace_on_required_lines",
         "test_lineage_proof_log_rejects_crlf_line_endings",
@@ -2467,6 +2501,12 @@ TEXT_REQUIREMENTS = {
         "kagemusha_recursive_spend_lineage_append_vk_record_from_box(",
         "kagemusha_lineage_record_run_writes_norito_record_from_existing_vk_file",
         'record_summary = format!(", record={} bytes", record_bytes.len())',
+        "Generating {} Reserved-lineage verifier key for `{}` opening_len={}",
+        "Writing {} Reserved-lineage verifier key to {}",
+        "Writing {} Reserved-lineage verifier record to {}",
+        "Deriving {} Reserved-lineage proving key archive for `{}` opening_len={}",
+        "Writing {} Reserved-lineage proving key archive to {}",
+        "Writing {} Reserved-lineage key package to {}",
     ),
     "crates/connect_norito_bridge/src/lib.rs": (
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 7;",
@@ -2820,6 +2860,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-write-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-file-metadata-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-tooling",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-release-tooling",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-aliases",
@@ -2892,16 +2933,19 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-scalar-types",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-scalar-types",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-size-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-json-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-prefix-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-size-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-json-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-readiness-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-prefix-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-placeholder-artifacts",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-digest-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-timestamp-raw",
@@ -2915,6 +2959,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-entry-nonempty",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-entry-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-json-input-open-path-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-local-json-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure",
@@ -2928,7 +2973,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-verify-existing-evidence-path-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-timestamp-raw",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-exact",
-    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-metadata-read-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-is-file-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-text-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-open-path-binding",
@@ -3075,8 +3120,8 @@ if mode == "--negative-control-kagemusha-readiness-release-json-direct-secret-pa
         "Kagemusha readiness release JSON direct secret-path gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            'def validate_release_local_json_file(path: Path, label: str) -> list[str]:\n    """Reject local release JSON files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return [f"{label} path must not contain secret-looking material"]\n',
-            'def validate_release_local_json_file(path: Path, label: str) -> list[str]:\n    """Reject local release JSON files that could alias external bytes."""\n\n',
+            'def _validate_release_local_json_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local release JSON files and return the read identity."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n',
+            'def _validate_release_local_json_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local release JSON files and return the read identity."""\n\n',
         ),
     )
     raise SystemExit(0)
@@ -3086,8 +3131,8 @@ if mode == "--negative-control-kagemusha-readiness-release-json-hardlink-metadat
         "Kagemusha readiness release JSON hardlink metadata failure gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
-            '    link_count = path.stat().st_nlink\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
+            '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return None, [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n',
+            '    link_count = path.stat().st_nlink\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n',
         ),
     )
     raise SystemExit(0)
@@ -3097,8 +3142,19 @@ if mode == "--negative-control-kagemusha-readiness-release-json-file-metadata-fa
         "Kagemusha readiness release JSON file metadata failure gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if release_json_ancestor_errors:\n        return release_json_ancestor_errors\n    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return [f"{label} is missing"]\n    except OSError:\n        return [f"{label} file metadata could not be read"]\n',
-            '    release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if release_json_ancestor_errors:\n        return release_json_ancestor_errors\n    try:\n        mode = path.lstat().st_mode\n    except FileNotFoundError:\n        return [f"{label} is missing"]\n    except OSError:\n        return [f"{label} is missing"]\n',
+            '    release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if release_json_ancestor_errors:\n        return None, release_json_ancestor_errors\n    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        return None, [f"{label} is missing"]\n    except OSError:\n        return None, [f"{label} file metadata could not be read"]\n',
+            '    release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if release_json_ancestor_errors:\n        return None, release_json_ancestor_errors\n    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        return None, [f"{label} is missing"]\n    except OSError:\n        return None, [f"{label} is missing"]\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-kagemusha-readiness-release-json-size-limit":
+    run_negative_control(
+        "Kagemusha readiness release JSON size limit",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "if open_stat.st_size > MAX_ABI6_MANIFEST_JSON_BYTES:",
+            "if False and open_stat.st_size > MAX_ABI6_MANIFEST_JSON_BYTES:",
         ),
     )
     raise SystemExit(0)
@@ -3215,8 +3271,8 @@ if mode == "--negative-control-kagemusha-readiness-release-json-open-path-bindin
         "Kagemusha readiness release JSON open-path binding",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            "            release_json_path_stat = path.lstat()",
-            "            release_json_path_stat = open_stat",
+            "release_json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
+            "release_json_expected_identity = (open_stat.st_dev, open_stat.st_ino)",
         ),
     )
     raise SystemExit(0)
@@ -5993,6 +6049,17 @@ if mode == "--negative-control-release-bundle-json-input-open-path-binding":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-release-bundle-local-json-size-limit":
+    run_negative_control(
+        "Kagemusha release bundle local JSON size limit",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            "if open_stat.st_size > MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES:",
+            "if False and open_stat.st_size > MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES:",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-release-bundle-digest-open-path-binding":
     run_negative_control(
         "Kagemusha release bundle digest open path binding",
@@ -6873,6 +6940,17 @@ if mode == "--negative-control-lineage-proof-artifact-size-binding":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-evidence-json-size-limit":
+    run_negative_control(
+        "Reserved-lineage proof evidence JSON size limit",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES",
+            "max_bytes=None",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-lineage-proof-readiness-artifact-open-path-binding":
     run_negative_control(
         "Reserved-lineage proof readiness artifact open-path binding",
@@ -6891,6 +6969,17 @@ if mode == "--negative-control-compact-key-artifact-size-binding":
             "scripts/kagemusha_production_readiness.py",
             "_require_compact_key_artifact_size",
             "_compact_key_artifact_size_disabled",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-evidence-json-size-limit":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence JSON size limit",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "max_bytes=MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES",
+            "max_bytes=None",
         ),
     )
     raise SystemExit(0)
@@ -6935,6 +7024,17 @@ if mode == "--negative-control-compact-key-generator-log-digest-binding":
             "scripts/kagemusha_production_readiness.py",
             "compact_key_evidence_generator_log_artifact_digest",
             "compact_key_evidence_generator_log_unchecked_digest",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-compact-key-generator-log-size-limit":
+    run_negative_control(
+        "ABI-7 recursive compact key generator log size limit",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            "max_bytes=MAX_COMPACT_KEY_GENERATOR_LOG_BYTES",
+            "max_bytes=None",
         ),
     )
     raise SystemExit(0)
@@ -7005,13 +7105,13 @@ if mode == "--negative-control-lineage-proof-log-exact":
     )
     raise SystemExit(0)
 
-if mode == "--negative-control-lineage-proof-log-metadata-read-failure":
+if mode == "--negative-control-lineage-proof-log-size-limit":
     run_negative_control(
-        "Reserved-lineage proof evidence proof-log metadata read-failure gate",
+        "Reserved-lineage proof evidence proof-log size limit",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '    try:\n        if path.stat().st_size > MAX_LINEAGE_PROOF_LOG_BYTES:\n            return None, [\n                f"production proof log must be no more than {MAX_LINEAGE_PROOF_LOG_BYTES} bytes"\n            ]\n    except OSError:\n        return None, ["production proof log metadata could not be read"]\n',
-            '    if path.stat().st_size > MAX_LINEAGE_PROOF_LOG_BYTES:\n        return None, [\n            f"production proof log must be no more than {MAX_LINEAGE_PROOF_LOG_BYTES} bytes"\n        ]\n',
+            "max_bytes=MAX_LINEAGE_PROOF_LOG_BYTES",
+            "max_bytes=None",
         ),
     )
     raise SystemExit(0)

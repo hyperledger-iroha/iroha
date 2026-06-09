@@ -218,8 +218,8 @@ full metadata tuples, so invalid marker material is not reflected by follow-on
 consistency diagnostics.
 Trust-bundle preflight, evidence replay, and production-readiness compact trust
 profile IDs, override IDs, embedded signature policy strings, and trust-source
-authority/version provenance are capped before trust diagnostics can print or
-archive them.
+authority/version/timestamp provenance are capped before trust diagnostics can
+print or archive them.
 Receipt verifier, evidence, and readiness `receipt_kind` values reject
 secret-looking identifier-style markers and non-ASCII confusable spellings before
 unsupported-kind diagnostics or blockers can preserve forged archive values.
@@ -2492,7 +2492,7 @@ redistributable schemas, and official trust/revocation bundles.
   per-schema source repository/commit/path,
   SPDX license, source SHA-256, profile source-file SHA-256, and embedded
   catalog JSON SHA-256 values for release evidence provenance, cap source
-  repository URLs at 2048 characters, require exactly one active Rust
+  repository URLs and source paths at 2048 characters, require exactly one active Rust
   `DEFAULT_PROFILES_JSON` raw-string declaration while ignoring
   spoofed declarations in comments or unrelated strings, and fail closed
   on duplicated, malformed, or unknown-key profile/message/direction/version
@@ -2518,7 +2518,7 @@ redistributable schemas, and official trust/revocation bundles.
   catalog source capped at 4 MiB and schema/fixture XML capped at 8 MiB before
 	  parsing, while optional `xmllint` stdout/stderr is drained through a 64 KiB
 	  cap and validator runtime is bounded by positive finite
-	  `--xmllint-timeout-secs`; successful validator output must be empty or the
+	  `--xmllint-timeout-secs` capped at 300 seconds; successful validator output must be empty or the
 	  normal `<fixture> validates` line, so warning-bearing success output fails
 	  closed before release evidence is emitted. Secret-looking and
 	  control-bearing validator diagnostics are redacted before error reporting.
@@ -3284,8 +3284,9 @@ redistributable schemas, and official trust/revocation bundles.
 	  empty or non-string instead of treating them as absent, blocks schema-backed archived fixtures
 		  that still carry a missing-schema reason, and checked-in XSD source
 		  provenance, manifest schema, fixture, fixture schema-reference, and
-		  archived profile-catalog paths reject embedded whitespace, leading-dash
-		  path segments, or semicolon path parameters before summary emission and during readiness rechecks.
+		  archived profile-catalog paths reject non-ASCII characters, overlong
+		  source paths, embedded whitespace, leading-dash path segments, or
+		  semicolon path parameters before summary emission and during readiness rechecks.
   Readiness also requires archived XSD summaries to retain the emitted manifest
   path and explicit profile-catalog object/null state.
 - Completed 2026-06-04: added `scripts/iso_production_readiness.py` as the

@@ -7219,46 +7219,46 @@ def test_privacy_capabilities_uses_client_entrypoints() -> None:
     assert capabilities["verange_proof_envelope_builder_v1"] is True
     assert capabilities["verange_dev_fixture_v1"] is True
     assert capabilities["verange_local_verifier_v1"] is True
-    assert capabilities["verange_sdk_exports_v1"] is True
+    assert capabilities["verange_sdk_exports_v1"] is False
     assert capabilities["anonymous_pgc_receiver_set_builder_v1"] is True
     assert capabilities["anonymous_pgc_dev_fixture_v1"] is True
     assert capabilities["anonymous_pgc_local_verifier_v1"] is True
-    assert capabilities["anonymous_pgc_sdk_exports_v1"] is True
+    assert capabilities["anonymous_pgc_sdk_exports_v1"] is False
     assert capabilities["zkat_policy_commitment_builder_v1"] is True
     assert capabilities["zkat_authenticator_envelope_builder_v1"] is True
     assert capabilities["zkat_dev_fixture_v1"] is True
     assert capabilities["zkat_local_verifier_v1"] is True
-    assert capabilities["zkat_sdk_exports_v1"] is True
+    assert capabilities["zkat_sdk_exports_v1"] is False
     assert capabilities["zk_ams_admission_batch_builder_v0"] is True
     assert capabilities["zk_ams_proof_envelope_builder_v0"] is True
     assert capabilities["zk_ams_dev_fixture_v0"] is True
     assert capabilities["zk_ams_local_verifier_v0"] is True
-    assert capabilities["zk_ams_sdk_exports_v0"] is True
+    assert capabilities["zk_ams_sdk_exports_v0"] is False
     assert capabilities["vega_predicate_commitment_builder_v0"] is True
     assert capabilities["vega_proof_envelope_builder_v0"] is True
     assert capabilities["vega_dev_fixture_v0"] is True
     assert capabilities["vega_local_verifier_v0"] is True
-    assert capabilities["vega_sdk_exports_v0"] is True
+    assert capabilities["vega_sdk_exports_v0"] is False
     assert capabilities["silent_threshold_commitments_builder_v0"] is True
     assert capabilities["silent_threshold_envelope_builder_v0"] is True
     assert capabilities["silent_threshold_dev_fixture_v0"] is True
     assert capabilities["silent_threshold_local_verifier_v0"] is True
-    assert capabilities["silent_threshold_sdk_exports_v0"] is True
+    assert capabilities["silent_threshold_sdk_exports_v0"] is False
     assert capabilities["zk_x509_identity_commitments_builder_v0"] is True
     assert capabilities["zk_x509_identity_envelope_builder_v0"] is True
     assert capabilities["zk_x509_identity_dev_fixture_v0"] is True
     assert capabilities["zk_x509_identity_local_verifier_v0"] is True
-    assert capabilities["zk_x509_identity_sdk_exports_v0"] is True
+    assert capabilities["zk_x509_identity_sdk_exports_v0"] is False
     assert capabilities["jindo_lattice_public_inputs_builder_v0"] is True
     assert capabilities["jindo_lattice_proof_envelope_builder_v0"] is True
     assert capabilities["jindo_lattice_dev_fixture_v0"] is True
     assert capabilities["jindo_lattice_local_verifier_v0"] is True
-    assert capabilities["jindo_lattice_sdk_exports_v0"] is True
+    assert capabilities["jindo_lattice_sdk_exports_v0"] is False
     assert capabilities["sis_hints_credential_commitments_builder_v0"] is True
     assert capabilities["sis_hints_credential_envelope_builder_v0"] is True
     assert capabilities["sis_hints_credential_dev_fixture_v0"] is True
     assert capabilities["sis_hints_credential_local_verifier_v0"] is True
-    assert capabilities["sis_hints_credential_sdk_exports_v0"] is True
+    assert capabilities["sis_hints_credential_sdk_exports_v0"] is False
     assert capabilities["asset_hidden_transfer_instruction"] is False
     assert capabilities["ml_kem_note_encryption"] is False
     assert capabilities["privacy_algorithms"][0]["id"] == "transparent-transfer"
@@ -7278,16 +7278,72 @@ def test_module_privacy_capabilities_defaults_to_static_sdk_surface() -> None:
     assert capabilities["zk_ace_validator_support_v1"] is True
     assert capabilities["zk_ace_air_opening_privacy_v1"] is True
     assert capabilities["zk_ace_sdk_exports_v1"] is True
-    assert capabilities["verange_sdk_exports_v1"] is True
-    assert capabilities["anonymous_pgc_sdk_exports_v1"] is True
-    assert capabilities["zkat_sdk_exports_v1"] is True
-    assert capabilities["zk_ams_sdk_exports_v0"] is True
-    assert capabilities["vega_sdk_exports_v0"] is True
-    assert capabilities["silent_threshold_sdk_exports_v0"] is True
-    assert capabilities["zk_x509_identity_sdk_exports_v0"] is True
-    assert capabilities["jindo_lattice_sdk_exports_v0"] is True
-    assert capabilities["sis_hints_credential_sdk_exports_v0"] is True
+    assert capabilities["verange_sdk_exports_v1"] is False
+    assert capabilities["anonymous_pgc_sdk_exports_v1"] is False
+    assert capabilities["zkat_sdk_exports_v1"] is False
+    assert capabilities["zk_ams_sdk_exports_v0"] is False
+    assert capabilities["vega_sdk_exports_v0"] is False
+    assert capabilities["silent_threshold_sdk_exports_v0"] is False
+    assert capabilities["zk_x509_identity_sdk_exports_v0"] is False
+    assert capabilities["jindo_lattice_sdk_exports_v0"] is False
+    assert capabilities["sis_hints_credential_sdk_exports_v0"] is False
     assert capabilities["privacy_criteria"] == get_privacy_criteria()
+
+
+def test_privacy_capabilities_do_not_promote_dev_fixture_or_local_verifier_exports() -> None:
+    capabilities = privacy_capabilities()
+    component_export_groups = (
+        (
+            "verange_dev_fixture_v1",
+            "verange_local_verifier_v1",
+            "verange_sdk_exports_v1",
+        ),
+        (
+            "anonymous_pgc_dev_fixture_v1",
+            "anonymous_pgc_local_verifier_v1",
+            "anonymous_pgc_sdk_exports_v1",
+        ),
+        (
+            "zkat_dev_fixture_v1",
+            "zkat_local_verifier_v1",
+            "zkat_sdk_exports_v1",
+        ),
+        (
+            "zk_ams_dev_fixture_v0",
+            "zk_ams_local_verifier_v0",
+            "zk_ams_sdk_exports_v0",
+        ),
+        (
+            "vega_dev_fixture_v0",
+            "vega_local_verifier_v0",
+            "vega_sdk_exports_v0",
+        ),
+        (
+            "silent_threshold_dev_fixture_v0",
+            "silent_threshold_local_verifier_v0",
+            "silent_threshold_sdk_exports_v0",
+        ),
+        (
+            "zk_x509_identity_dev_fixture_v0",
+            "zk_x509_identity_local_verifier_v0",
+            "zk_x509_identity_sdk_exports_v0",
+        ),
+        (
+            "jindo_lattice_dev_fixture_v0",
+            "jindo_lattice_local_verifier_v0",
+            "jindo_lattice_sdk_exports_v0",
+        ),
+        (
+            "sis_hints_credential_dev_fixture_v0",
+            "sis_hints_credential_local_verifier_v0",
+            "sis_hints_credential_sdk_exports_v0",
+        ),
+    )
+
+    for dev_fixture_key, local_verifier_key, sdk_exports_key in component_export_groups:
+        assert capabilities[dev_fixture_key] is True
+        assert capabilities[local_verifier_key] is True
+        assert capabilities[sdk_exports_key] is False
 
 
 @pytest.mark.parametrize(

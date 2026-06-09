@@ -54,6 +54,7 @@ MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_TIMESTAMP_CHARS = 128
 MAX_SOURCE_URL_CHARS = 2048
 MAX_SOURCE_REPOSITORY_CHARS = 2048
+MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
 MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}\.[0-9]{3}\.[0-9]{2}$")
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
@@ -1443,10 +1444,15 @@ def _require_profile_direction(value: dict[str, Any], key: str, label: str) -> s
 
 
 def _validate_schema_source_path(raw: str, label: str) -> str:
+    if len(raw) > MAX_SOURCE_PATH_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_SOURCE_PATH_CHARS} characters"
+        )
     if "\\" in raw:
         raise ReadinessError(f"{label} must use forward slashes")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise ReadinessError(f"{label} must not contain control characters")
+    _reject_non_ascii_context(raw, label)
     if raw != raw.strip():
         raise ReadinessError(f"{label} must not have surrounding whitespace")
     if any(ch.isspace() for ch in raw):

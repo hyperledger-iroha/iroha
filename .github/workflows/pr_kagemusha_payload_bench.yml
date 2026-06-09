@@ -626,6 +626,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-post-write-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-file-metadata-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-release-json-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-tooling
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-release-tooling
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-key-release-source-marker-aliases
@@ -639,12 +640,15 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-command-canonical
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-scalar-types
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-size-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-evidence-json-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-artifact-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-size-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-evidence-json-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-readiness-artifact-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-placeholder-artifacts
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-digest-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift
@@ -657,6 +661,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-entry-nonempty
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-entry-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-json-input-open-path-binding
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-local-json-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure
@@ -736,7 +741,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-exact
-          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-metadata-read-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-is-file-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-text-preflight
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-log-open-path-binding

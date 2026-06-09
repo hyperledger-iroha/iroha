@@ -2557,6 +2557,26 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertEqual(stdout, "")
                     self.assertIn("positive finite number", stderr)
 
+    def test_xmllint_timeout_cli_rejects_overlarge_values_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            hidden = "9" * 64
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--xmllint-timeout-secs",
+                    hidden,
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("must be no more than 300 seconds", stderr)
+            self.assertNotIn(hidden, stderr)
+
     @unittest.skipUnless(shutil.which("xmllint"), "xmllint is required for XSD validation")
     def test_xml_schema_validation_flag_validates_schema_backed_fixtures(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -3683,8 +3703,72 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
 
                     rc, _stdout, stderr = run_verify(["--manifest", str(manifest_path)])
 
+                self.assertEqual(rc, 2)
+                self.assertIn(message, stderr)
+
+    def test_schema_source_paths_reject_non_ascii_and_overlong_without_echo(self):
+        hidden_unicode = "unicod\u0435-source-path"
+        hidden_long = "x" * (VERIFIER.MAX_SOURCE_PATH_CHARS + 1)
+        cases = (
+            (
+                lambda manifest: manifest["schemas"][0]["source"].__setitem__(
+                    "path",
+                    f"xsd/{hidden_unicode}/fooo.001.001.01.xsd",
+                ),
+                "source.path must use printable ASCII",
+                hidden_unicode,
+            ),
+            (
+                lambda manifest: manifest["schemas"][0]["source"].__setitem__(
+                    "path",
+                    "xsd/" + hidden_long + "/fooo.001.001.01.xsd",
+                ),
+                "source.path must be no longer than 2048 characters",
+                hidden_long,
+            ),
+            (
+                lambda manifest: (
+                    manifest.__setitem__(
+                        "blocked_schema_sources",
+                        [blocked_schema_source()],
+                    ),
+                    manifest["blocked_schema_sources"][0]["source"].__setitem__(
+                        "path",
+                        f"xsd/{hidden_unicode}/barr.001.001.01.xsd",
+                    ),
+                ),
+                "source.path must use printable ASCII",
+                hidden_unicode,
+            ),
+            (
+                lambda manifest: (
+                    manifest.__setitem__(
+                        "blocked_schema_sources",
+                        [blocked_schema_source()],
+                    ),
+                    manifest["blocked_schema_sources"][0]["source"].__setitem__(
+                        "path",
+                        "xsd/" + hidden_long + "/barr.001.001.01.xsd",
+                    ),
+                ),
+                "source.path must be no longer than 2048 characters",
+                hidden_long,
+            ),
+        )
+        for offset, (mutate, message, hidden) in enumerate(cases):
+            with self.subTest(offset=offset):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    manifest = minimal_manifest()
+                    mutate(manifest)
+                    manifest_path = write_minimal_tree(root, manifest)
+
+                    rc, stdout, stderr = run_verify(["--manifest", str(manifest_path)])
+
                     self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
                     self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_blocked_schema_source_provenance_and_markers_are_rejected(self):
         cases = []

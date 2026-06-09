@@ -301,7 +301,7 @@ Reserved-lineage release-tooling marker files as local trust roots that must
 also be ordinary non-symlink, non-hardlinked files with symlink-free ancestors
 before their contents can satisfy readiness, with ABI-6 manifest JSON and
 marker text decoded from the same opened regular files after path-identity
-revalidation,
+revalidation and the ABI-6 manifest JSON capped at 1 MiB before parsing,
 then hashes and parses the local proof log from the same opened regular file
 and re-checks that it
 contains the passing cargo result for the production Reserved-lineage test
@@ -343,8 +343,9 @@ rejected instead of ignored; duplicate JSON object keys are also invalid, so
 non-standard `NaN`/`Infinity` JSON constants are rejected before schema checks, and
 auditors never have to interpret last-key-wins evidence packets. Proof-evidence
 JSON is parsed from the same opened regular file after path-identity
-revalidation, so post-preflight swaps cannot replace the evidence bytes before
-schema checks. Unreadable or
+revalidation and capped at 16 MiB before parsing, so post-preflight swaps or
+oversized metadata cannot replace or exhaust the evidence parser before schema
+checks. Unreadable or
 non-UTF-8 ABI-6 manifest and proof-evidence JSON files fail closed as structured
 read blockers instead of tracebacks. Proof evidence
 before the release cutoff, or future-dated beyond the release validator
@@ -602,6 +603,15 @@ must be a canonical safe relative string with a non-zero lowercase SHA-256
 digest and a positive integer `size_bytes`, so traversal, absolute, non-string,
 whitespace-normalized, all-zero digest, missing-size, boolean-size, zero-size,
 or non-integer-size evidence entries fail as manifest-shape blockers.
+The readiness summary JSON and any `--verify-existing` release manifest are
+capped at 16 MiB from the opened file metadata and streamed byte count before
+JSON decoding, so oversized local metadata fails as file-shape evidence instead
+of reaching parser or comparison code.
+
+The checked-in ABI-6 manifest is parsed only after its local-file preflight
+returns a regular, non-hardlinked file identity; the opened JSON bytes must
+match that preflight identity and remain path-bound after the read, so a
+post-preflight manifest replacement fails closed before schema checks.
 
 The release bundle manifest uses
 `iroha.kagemusha.production_release_bundle.v1`, recomputes the checked-in ABI-6,
@@ -664,6 +674,11 @@ evidence JSON. It also requires `recursive-compact-key-artifacts.log` beside the
 key artifacts and verifies that the canonical generator summary sizes match the
 local `.vk`, `.pk`, key-artifacts package, verifier-keys package, and
 `.record.norito` files.
+Readiness enforces the production proof-log and compact generator-log byte caps
+from the opened file metadata used for hashing and decoding, so a separate
+path-size lookup cannot satisfy the size gate for replacement log bytes.
+The checked-in ABI-6 manifest and both Kagemusha evidence JSON files use the
+same fail-closed size policy before JSON decoding.
 Both helpers create missing output parents only after these preflights,
 classify `--out` parents with `lstat()` before any `Path.is_dir()` preflight,
 and recheck created output parents before direct helper preflight returns. After
