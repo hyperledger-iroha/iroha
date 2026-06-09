@@ -7,6 +7,7 @@ import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
@@ -193,7 +194,7 @@ class NexusAppClient @JvmOverloads constructor(
             executable = Executable.instructions(listOf(instruction)),
             timeToLiveMs = normalized.ttlMs,
             nonce = normalized.nonce,
-            metadata = normalized.metadata,
+            metadata = normalized.metadata.mapValues { JsonValue.string(it.value) },
         )
         val payloadBytes = codecAdapter.encodeTransaction(payload)
         val signable = NexusSignableTransaction(

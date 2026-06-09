@@ -39,6 +39,44 @@ For SoraFS content, use `OpenSoraFsCidContentAsync(...)` when you want the raw
 HTTP response/stream, or `GetSoraFsCidContentAsync(...)` when buffering the
 payload into memory is acceptable.
 
+## Offline Cash Lifecycle
+
+Use `OfflineCashLifecycleController` around the app's offline wallet for load
+actions. It syncs pending audit receipts before issuing more cash, while local
+device-to-device exchange should validate cached setup and avoid fresh
+capability fetches.
+
+```csharp
+using Hyperledger.Iroha.Offline;
+
+var snapshot = new OfflineCashConfigurationSnapshot(
+    ChainId: "00000042",
+    AssetDefinitionId: "pkr#sbp",
+    OfflinePaymentsEnabled: true,
+    IssuerPublicKeyBase64: cachedIssuerPublicKeyBase64,
+    BridgeAbiVersion: 7,
+    CreatedAtMs: cachedAtMs,
+    ExpiresAtMs: expiresAtMs);
+snapshot.RequireUsableForOfflineExchange(
+    nowMs: currentTimeMs,
+    requiredBridgeAbiVersion: 7);
+
+var controller = new OfflineCashLifecycleController(
+    offlineWallet,
+    auditReceiptSynchronizer);
+await controller.LoadAsync("pkr#sbp", "500");
+
+var transports = new OfflineCashTransportCapabilities(
+    QrStreaming: true,
+    Nfc: appHasHceEntitlement && deviceSupportsNfc
+        ? OfflineCashNfcCapability.Available
+        : OfflineCashNfcCapability.Unavailable("missing HCE"),
+    Nearby: true);
+```
+
+UI layers must hide NFC when `SupportedTransportKinds()` omits `nfc`; non-NFC
+devices and app builds without HCE should expose QR or Nearby only.
+
 ## Verifying Key Registry
 
 `ToriiClient.RegisterVerifyingKeyAsync(...)` and

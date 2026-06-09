@@ -470,6 +470,49 @@ def validate_output_path(path: Path, label: str) -> list[str]:
     return preflight_output_path(path, label)
 
 
+def _read_output_text(
+    path: Path,
+    expected_stat: os.stat_result,
+    label: str,
+) -> tuple[str | None, list[str]]:
+    """Read helper output text without trusting a stale path."""
+
+    chunks: list[bytes] = []
+    output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                return None, [f"{label} must be a regular file"]
+            output_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if output_open_identity != output_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != output_expected_identity:
+                return None, [f"{label} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, [f"{label} must not be hardlinked"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != output_expected_identity:
+                return None, [f"{label} changed while being read"]
+    except OSError:
+        return None, [f"{label} write verification failed"]
+    try:
+        return b"".join(chunks).decode("utf-8"), []
+    except UnicodeDecodeError:
+        return None, [f"{label} write verification failed"]
+
+
 def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     errors = validate_output_path(path, "--out")
     if errors:
@@ -517,9 +560,13 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     if errors:
         return errors
     try:
-        if path.read_text(encoding="utf-8") != evidence_text:
-            return ["--out write verification failed"]
-    except (OSError, UnicodeDecodeError):
+        expected_stat = path.lstat()
+    except (FileNotFoundError, OSError):
+        return ["--out write verification failed"]
+    readback_text, readback_errors = _read_output_text(path, expected_stat, "--out")
+    if readback_errors:
+        return readback_errors
+    if readback_text != evidence_text:
         return ["--out write verification failed"]
     return []
 

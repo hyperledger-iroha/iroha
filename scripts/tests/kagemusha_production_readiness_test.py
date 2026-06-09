@@ -2055,25 +2055,31 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             target = bundle_root / "target.bin"
             artifact.write_bytes(b"release artifact bytes")
             target.write_bytes(b"target artifact bytes")
-            original_validate_local_file = release_bundle._validate_local_file
+            original_validate_local_file_for_read = (
+                release_bundle._validate_local_file_for_read
+            )
             swapped = False
 
-            def swapping_validate_local_file(
+            def swapping_validate_local_file_for_read(
                 path: Path,
                 label: str,
                 code: str,
-            ) -> list[dict[str, object]]:
+            ) -> tuple[os.stat_result | None, list[dict[str, object]]]:
                 nonlocal swapped
-                blockers = original_validate_local_file(path, label, code)
+                expected_stat, blockers = original_validate_local_file_for_read(
+                    path,
+                    label,
+                    code,
+                )
                 if path == artifact and not blockers and not swapped:
                     slot_helpers.replace_with_symlink(self, artifact, target)
                     swapped = True
-                return blockers
+                return expected_stat, blockers
 
             with mock.patch.object(
                 release_bundle,
-                "_validate_local_file",
-                swapping_validate_local_file,
+                "_validate_local_file_for_read",
+                swapping_validate_local_file_for_read,
             ):
                 entry, blockers = release_bundle._evidence_entry_with_size(
                     artifact,
@@ -2091,6 +2097,164 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["code"] for item in blockers},
         )
         self.assertIn("must not be a symlink", blockers[0]["message"])
+
+    def test_kagemusha_release_bundle_json_input_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            bundle_root.mkdir()
+            payload = bundle_root / "summary.json"
+            replacement = bundle_root / "replacement-summary.json"
+            write_json(payload, {"schema": "original"})
+            write_json(replacement, {"schema": "replacement"})
+            original_validate_local_file_for_read = (
+                release_bundle._validate_local_file_for_read
+            )
+            swapped = False
+
+            def swapping_validate_local_file_for_read(
+                path: Path,
+                label: str,
+                code: str,
+            ) -> tuple[os.stat_result | None, list[dict[str, object]]]:
+                nonlocal swapped
+                expected_stat, blockers = original_validate_local_file_for_read(
+                    path,
+                    label,
+                    code,
+                )
+                if path == payload and not blockers and not swapped:
+                    replacement.replace(payload)
+                    swapped = True
+                return expected_stat, blockers
+
+            with mock.patch.object(
+                release_bundle,
+                "_validate_local_file_for_read",
+                swapping_validate_local_file_for_read,
+            ):
+                text, blockers = release_bundle._read_local_json_text(
+                    payload,
+                    "Release summary",
+                    shape_code="kagemusha_release_summary_file_shape",
+                    unreadable_code="kagemusha_release_summary_unreadable",
+                )
+            final_summary = json.loads(payload.read_text(encoding="utf-8"))
+
+        self.assertIsNone(text)
+        self.assertTrue(swapped)
+        self.assertEqual(final_summary["schema"], "replacement")
+        self.assertEqual(
+            {item["code"] for item in blockers},
+            {"kagemusha_release_summary_file_shape"},
+        )
+        self.assertIn("changed while being read", blockers[0]["message"])
+
+    def test_kagemusha_release_bundle_digest_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            bundle_root.mkdir()
+            artifact = bundle_root / "summary.json"
+            replacement = bundle_root / "replacement-summary.json"
+            artifact.write_bytes(b"original release bytes")
+            replacement.write_bytes(b"replacement release bytes")
+            original_validate_local_file_for_read = (
+                release_bundle._validate_local_file_for_read
+            )
+            swapped = False
+
+            def swapping_validate_local_file_for_read(
+                path: Path,
+                label: str,
+                code: str,
+            ) -> tuple[os.stat_result | None, list[dict[str, object]]]:
+                nonlocal swapped
+                expected_stat, blockers = original_validate_local_file_for_read(
+                    path,
+                    label,
+                    code,
+                )
+                if path == artifact and not blockers and not swapped:
+                    replacement.replace(artifact)
+                    swapped = True
+                return expected_stat, blockers
+
+            with mock.patch.object(
+                release_bundle,
+                "_validate_local_file_for_read",
+                swapping_validate_local_file_for_read,
+            ):
+                digest, blockers = release_bundle._sha256_file(
+                    artifact,
+                    "Release summary",
+                    "kagemusha_release_summary_file_shape",
+                )
+            final_bytes = artifact.read_bytes()
+
+        self.assertIsNone(digest)
+        self.assertTrue(swapped)
+        self.assertEqual(final_bytes, b"replacement release bytes")
+        self.assertEqual(
+            {item["code"] for item in blockers},
+            {"kagemusha_release_summary_file_shape"},
+        )
+        self.assertIn("changed while being read", blockers[0]["message"])
+
+    def test_kagemusha_release_bundle_evidence_entry_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            bundle_root.mkdir()
+            artifact = bundle_root / "artifact.bin"
+            replacement = bundle_root / "replacement-artifact.bin"
+            artifact.write_bytes(b"release artifact bytes")
+            replacement.write_bytes(b"replacement artifact bytes")
+            original_validate_local_file_for_read = (
+                release_bundle._validate_local_file_for_read
+            )
+            swapped = False
+
+            def swapping_validate_local_file_for_read(
+                path: Path,
+                label: str,
+                code: str,
+            ) -> tuple[os.stat_result | None, list[dict[str, object]]]:
+                nonlocal swapped
+                expected_stat, blockers = original_validate_local_file_for_read(
+                    path,
+                    label,
+                    code,
+                )
+                if path == artifact and not blockers and not swapped:
+                    replacement.replace(artifact)
+                    swapped = True
+                return expected_stat, blockers
+
+            with mock.patch.object(
+                release_bundle,
+                "_validate_local_file_for_read",
+                swapping_validate_local_file_for_read,
+            ):
+                entry, blockers = release_bundle._evidence_entry_with_size(
+                    artifact,
+                    bundle_root,
+                    label="Release test artifact",
+                    code="kagemusha_release_test_file_shape",
+                )
+            final_bytes = artifact.read_bytes()
+
+        self.assertIsNone(entry)
+        self.assertTrue(swapped)
+        self.assertEqual(final_bytes, b"replacement artifact bytes")
+        self.assertEqual(
+            {item["code"] for item in blockers},
+            {"kagemusha_release_test_file_shape"},
+        )
+        self.assertIn("changed while being read", blockers[0]["message"])
 
     def test_kagemusha_release_bundle_rejects_blocked_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2183,18 +2347,21 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "evidence": {},
                 "blockers": [],
             }
-            original_read_text = Path.read_text
+            original_read_output_text = release_bundle._read_output_text
 
-            def corrupt_read_text(
+            def corrupt_read_output_text(
                 path: Path,
-                *args: object,
-                **kwargs: object,
-            ) -> str:
+                expected_stat: os.stat_result,
+            ) -> tuple[str | None, list[dict[str, object]]]:
                 if path == out:
-                    return "corrupted manifest\n"
-                return original_read_text(path, *args, **kwargs)
+                    return "corrupted manifest\n", []
+                return original_read_output_text(path, expected_stat)
 
-            with mock.patch.object(Path, "read_text", corrupt_read_text):
+            with mock.patch.object(
+                release_bundle,
+                "_read_output_text",
+                corrupt_read_output_text,
+            ):
                 errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
 
             written = out.read_text(encoding="utf-8")
@@ -2217,18 +2384,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 "evidence": {},
                 "blockers": [],
             }
-            original_read_text = Path.read_text
+            original_read_output_text = release_bundle._read_output_text
 
-            def failing_read_text(
+            def failing_read_output_text(
                 path: Path,
-                *args: object,
-                **kwargs: object,
-            ) -> str:
+                expected_stat: os.stat_result,
+            ) -> tuple[str | None, list[dict[str, object]]]:
                 if path == out:
-                    raise OSError("readback failed")
-                return original_read_text(path, *args, **kwargs)
+                    return None, [
+                        {
+                            "code": "kagemusha_release_bundle_out_invalid",
+                            "message": "--out could not be read back after writing",
+                        }
+                    ]
+                return original_read_output_text(path, expected_stat)
 
-            with mock.patch.object(Path, "read_text", failing_read_text):
+            with mock.patch.object(
+                release_bundle,
+                "_read_output_text",
+                failing_read_output_text,
+            ):
                 errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
 
             written = out.read_text(encoding="utf-8")
@@ -2239,6 +2414,44 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         )
         self.assertIn("could not be read back", errors[0]["message"])
         self.assertEqual(written, json.dumps(bundle, indent=2, sort_keys=True) + "\n")
+
+    def test_write_release_bundle_rejects_regular_file_swap_before_readback(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            replacement = bundle_root / "dist" / "replacement-bundle.json"
+            bundle = {
+                "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                "ready": True,
+                "evidence": {},
+                "blockers": [],
+            }
+            replacement.parent.mkdir(parents=True)
+            replacement.write_text('{"ready":false}\n', encoding="utf-8")
+            original_open = Path.open
+            swapped = False
+
+            def swapping_open(path: Path, *args: object, **kwargs: object):
+                nonlocal swapped
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == out and "r" in str(mode) and not swapped:
+                    replacement.replace(out)
+                    swapped = True
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", swapping_open):
+                errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
+            written = out.read_text(encoding="utf-8")
+
+        self.assertEqual(written, '{"ready":false}\n')
+        self.assertEqual(
+            [error["code"] for error in errors],
+            ["kagemusha_release_bundle_out_invalid"],
+        )
+        self.assertIn("changed while being read", errors[0]["message"])
 
     def test_write_release_bundle_rejects_symlink_swap_after_replace(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2897,7 +3110,9 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
     def test_kagemusha_release_bundle_load_local_json_rejects_symlink_swap_after_preflight(
         self,
     ) -> None:
-        original_validate_local_file = release_bundle._validate_local_file
+        original_validate_local_file_for_read = (
+            release_bundle._validate_local_file_for_read
+        )
 
         with tempfile.TemporaryDirectory() as temp:
             summary_path = Path(temp) / "summary.json"
@@ -2912,23 +3127,27 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             )
             validate_calls = 0
 
-            def swapping_validate_local_file(
+            def swapping_validate_local_file_for_read(
                 path: Path,
                 label: str,
                 code: str,
-            ) -> list[dict[str, object]]:
+            ) -> tuple[os.stat_result | None, list[dict[str, object]]]:
                 nonlocal validate_calls
-                blockers = original_validate_local_file(path, label, code)
+                expected_stat, blockers = original_validate_local_file_for_read(
+                    path,
+                    label,
+                    code,
+                )
                 if path == summary_path and not blockers:
                     validate_calls += 1
                     if validate_calls == 1:
                         slot_helpers.replace_with_symlink(self, summary_path, target)
-                return blockers
+                return expected_stat, blockers
 
             with mock.patch.object(
                 release_bundle,
-                "_validate_local_file",
-                swapping_validate_local_file,
+                "_validate_local_file_for_read",
+                swapping_validate_local_file_for_read,
             ):
                 payload, blockers = release_bundle._load_local_json(
                     summary_path,
@@ -4328,8 +4547,8 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(errors, ["ABI-7 core marker file must not be a symlink"])
 
     def test_repo_source_marker_text_rejects_symlink_swap_after_preflight(self) -> None:
-        original_validate_repo_source_marker_file = (
-            readiness.validate_repo_source_marker_file
+        original_validate_repo_source_marker_file_for_read = (
+            readiness._validate_repo_source_marker_file_for_read
         )
 
         with tempfile.TemporaryDirectory() as temp:
@@ -4344,12 +4563,15 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             )
             validate_calls = 0
 
-            def swapping_validate_repo_source_marker_file(
+            def swapping_validate_repo_source_marker_file_for_read(
                 path: Path,
                 label: str,
-            ) -> list[str]:
+            ) -> tuple[os.stat_result | None, list[str]]:
                 nonlocal validate_calls
-                errors = original_validate_repo_source_marker_file(path, label)
+                expected_stat, errors = original_validate_repo_source_marker_file_for_read(
+                    path,
+                    label,
+                )
                 if path == marker_path and not errors:
                     validate_calls += 1
                     if validate_calls == 1:
@@ -4358,12 +4580,12 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                             marker_path,
                             external_marker,
                         )
-                return errors
+                return expected_stat, errors
 
             with mock.patch.object(
                 readiness,
-                "validate_repo_source_marker_file",
-                swapping_validate_repo_source_marker_file,
+                "_validate_repo_source_marker_file_for_read",
+                swapping_validate_repo_source_marker_file_for_read,
             ):
                 text, errors = readiness._repo_source_marker_text(
                     marker_path,
@@ -4374,6 +4596,63 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIsNone(text)
         self.assertGreaterEqual(validate_calls, 1)
         self.assertEqual(errors, ["ABI-7 core marker file must not be a symlink"])
+
+    def test_repo_source_marker_text_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        original_validate_repo_source_marker_file_for_read = (
+            readiness._validate_repo_source_marker_file_for_read
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            marker_path = root / "repo" / "crates/iroha_core/src/zk.rs"
+            marker_path.parent.mkdir(parents=True)
+            marker_path.write_text(
+                "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE\n",
+                encoding="utf-8",
+            )
+            replacement = root / "replacement-core-marker.rs"
+            replacement.write_text(
+                "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE\n",
+                encoding="utf-8",
+            )
+            validate_calls = 0
+
+            def swapping_validate_repo_source_marker_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                nonlocal validate_calls
+                expected_stat, errors = original_validate_repo_source_marker_file_for_read(
+                    path,
+                    label,
+                )
+                if path == marker_path and not errors:
+                    validate_calls += 1
+                    if validate_calls == 1:
+                        replacement.replace(marker_path)
+                return expected_stat, errors
+
+            with mock.patch.object(
+                readiness,
+                "_validate_repo_source_marker_file_for_read",
+                swapping_validate_repo_source_marker_file_for_read,
+            ):
+                text, errors = readiness._repo_source_marker_text(
+                    marker_path,
+                    "ABI-7 core marker file",
+                    "ABI-7 source marker file could not be read",
+                )
+            final_text = marker_path.read_text(encoding="utf-8")
+
+        self.assertIsNone(text)
+        self.assertEqual(validate_calls, 1)
+        self.assertEqual(errors, ["ABI-7 core marker file changed while being read"])
+        self.assertEqual(
+            final_text,
+            "KAGEMUSHA_RECURSIVE_COMPACT_PAYMENT_TOKEN_UNAVAILABLE\n",
+        )
 
     def test_repo_source_marker_text_rejects_hardlink_directly_before_read(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -4869,6 +5148,57 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             {item["message"] for item in result["blockers"]},
         )
         self.assertNotIn(str(external_marker), rendered)
+
+    def test_lineage_key_release_tooling_rejects_marker_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        original_validate_repo_source_marker_file_for_read = (
+            readiness._validate_repo_source_marker_file_for_read
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            repo = root / "repo"
+            write_lineage_key_release_tooling_marker_files(repo)
+            marker_path = repo / "crates/iroha_cli/src/zk.rs"
+            replacement = root / "replacement-lineage-cli.rs"
+            replacement.write_text(marker_path.read_text(encoding="utf-8"), encoding="utf-8")
+            validate_calls = 0
+
+            def swapping_validate_repo_source_marker_file_for_read(
+                path: Path,
+                label: str,
+            ) -> tuple[os.stat_result | None, list[str]]:
+                nonlocal validate_calls
+                expected_stat, errors = original_validate_repo_source_marker_file_for_read(
+                    path,
+                    label,
+                )
+                if path == marker_path and not errors:
+                    validate_calls += 1
+                    if validate_calls == 1:
+                        replacement.replace(marker_path)
+                return expected_stat, errors
+
+            with mock.patch.object(
+                readiness,
+                "_validate_repo_source_marker_file_for_read",
+                swapping_validate_repo_source_marker_file_for_read,
+            ):
+                result = readiness.check_lineage_key_release_tooling(repo)
+            rendered = json.dumps(result)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(validate_calls, 1)
+        self.assertIn(
+            "lineage_key_release_file_shape",
+            {item["code"] for item in result["blockers"]},
+        )
+        self.assertIn(
+            "Reserved-lineage release-tooling marker file changed while being read",
+            {item["message"] for item in result["blockers"]},
+        )
+        self.assertNotIn(str(replacement), rendered)
 
     def test_lineage_key_release_tooling_rejects_non_utf8_marker_without_traceback(
         self,
@@ -6637,19 +6967,27 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(temp_outputs, [])
 
     def test_compact_key_write_evidence_rejects_readback_mismatch(self) -> None:
-        original_read_text = Path.read_text
+        original_read_output_text = compact_key_helper._read_output_text
 
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
 
-            def mismatching_read_text(path: Path, *args, **kwargs) -> str:
+            def mismatching_read_output_text(
+                path: Path,
+                expected_stat: os.stat_result,
+                label: str,
+            ) -> tuple[str | None, list[str]]:
                 if path == out:
-                    return '{"schema": "tampered"}\n'
-                return original_read_text(path, *args, **kwargs)
+                    return '{"schema": "tampered"}\n', []
+                return original_read_output_text(path, expected_stat, label)
 
-            with mock.patch.object(Path, "read_text", mismatching_read_text):
+            with mock.patch.object(
+                compact_key_helper,
+                "_read_output_text",
+                mismatching_read_output_text,
+            ):
                 errors = compact_key_helper.write_evidence(out, {"schema": "test"})
-            final_text = original_read_text(out, encoding="utf-8")
+            final_text = out.read_text(encoding="utf-8")
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
         self.assertEqual(errors, ["--out write verification failed"])
@@ -6657,23 +6995,59 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(temp_outputs, [])
 
     def test_compact_key_write_evidence_rejects_readback_failure(self) -> None:
-        original_read_text = Path.read_text
+        original_read_output_text = compact_key_helper._read_output_text
 
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
 
-            def failing_read_text(path: Path, *args, **kwargs) -> str:
+            def failing_read_output_text(
+                path: Path,
+                expected_stat: os.stat_result,
+                label: str,
+            ) -> tuple[str | None, list[str]]:
                 if path == out:
-                    raise OSError("simulated compact evidence readback failure")
-                return original_read_text(path, *args, **kwargs)
+                    return None, ["--out write verification failed"]
+                return original_read_output_text(path, expected_stat, label)
 
-            with mock.patch.object(Path, "read_text", failing_read_text):
+            with mock.patch.object(
+                compact_key_helper,
+                "_read_output_text",
+                failing_read_output_text,
+            ):
                 errors = compact_key_helper.write_evidence(out, {"schema": "test"})
-            final_text = original_read_text(out, encoding="utf-8")
+            final_text = out.read_text(encoding="utf-8")
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
         self.assertEqual(errors, ["--out write verification failed"])
         self.assertEqual(final_text, '{\n  "schema": "test"\n}\n')
+        self.assertEqual(temp_outputs, [])
+
+    def test_compact_key_write_evidence_rejects_regular_file_swap_before_readback(
+        self,
+    ) -> None:
+        original_open = Path.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / readiness.COMPACT_KEY_EVIDENCE_FILENAME
+            replacement = Path(temp) / "replacement-compact-evidence.json"
+            replacement.write_text('{"schema":"replacement"}\n', encoding="utf-8")
+            swapped = False
+
+            def swapping_open(path: Path, *args, **kwargs):
+                nonlocal swapped
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == out and "r" in str(mode) and not swapped:
+                    replacement.replace(out)
+                    swapped = True
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", swapping_open):
+                errors = compact_key_helper.write_evidence(out, {"schema": "test"})
+            final_text = out.read_text(encoding="utf-8")
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(errors, ["--out changed while being read"])
+        self.assertEqual(final_text, '{"schema":"replacement"}\n')
         self.assertEqual(temp_outputs, [])
 
     def test_compact_key_write_evidence_rejects_symlink_swap_before_replace(
@@ -10002,19 +10376,27 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(temp_outputs, [])
 
     def test_lineage_proof_write_evidence_rejects_readback_mismatch(self) -> None:
-        original_read_text = Path.read_text
+        original_read_output_text = evidence_helper._read_output_text
 
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / "lineage-proof-evidence.json"
 
-            def mismatching_read_text(path: Path, *args, **kwargs) -> str:
+            def mismatching_read_output_text(
+                path: Path,
+                expected_stat: os.stat_result,
+                label: str,
+            ) -> tuple[str | None, list[str]]:
                 if path == out:
-                    return '{"schema": "tampered"}\n'
-                return original_read_text(path, *args, **kwargs)
+                    return '{"schema": "tampered"}\n', []
+                return original_read_output_text(path, expected_stat, label)
 
-            with mock.patch.object(Path, "read_text", mismatching_read_text):
+            with mock.patch.object(
+                evidence_helper,
+                "_read_output_text",
+                mismatching_read_output_text,
+            ):
                 errors = evidence_helper.write_evidence(out, {"schema": "test"})
-            final_text = original_read_text(out, encoding="utf-8")
+            final_text = out.read_text(encoding="utf-8")
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
         self.assertEqual(errors, ["--out write verification failed"])
@@ -10022,23 +10404,59 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertEqual(temp_outputs, [])
 
     def test_lineage_proof_write_evidence_rejects_readback_failure(self) -> None:
-        original_read_text = Path.read_text
+        original_read_output_text = evidence_helper._read_output_text
 
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / "lineage-proof-evidence.json"
 
-            def failing_read_text(path: Path, *args, **kwargs) -> str:
+            def failing_read_output_text(
+                path: Path,
+                expected_stat: os.stat_result,
+                label: str,
+            ) -> tuple[str | None, list[str]]:
                 if path == out:
-                    raise OSError("simulated lineage evidence readback failure")
-                return original_read_text(path, *args, **kwargs)
+                    return None, ["--out write verification failed"]
+                return original_read_output_text(path, expected_stat, label)
 
-            with mock.patch.object(Path, "read_text", failing_read_text):
+            with mock.patch.object(
+                evidence_helper,
+                "_read_output_text",
+                failing_read_output_text,
+            ):
                 errors = evidence_helper.write_evidence(out, {"schema": "test"})
-            final_text = original_read_text(out, encoding="utf-8")
+            final_text = out.read_text(encoding="utf-8")
             temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
 
         self.assertEqual(errors, ["--out write verification failed"])
         self.assertEqual(final_text, '{\n  "schema": "test"\n}\n')
+        self.assertEqual(temp_outputs, [])
+
+    def test_lineage_proof_write_evidence_rejects_regular_file_swap_before_readback(
+        self,
+    ) -> None:
+        original_open = Path.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            out = Path(temp) / "lineage-proof-evidence.json"
+            replacement = Path(temp) / "replacement-lineage-evidence.json"
+            replacement.write_text('{"schema":"replacement"}\n', encoding="utf-8")
+            swapped = False
+
+            def swapping_open(path: Path, *args, **kwargs):
+                nonlocal swapped
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == out and "r" in str(mode) and not swapped:
+                    replacement.replace(out)
+                    swapped = True
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", swapping_open):
+                errors = evidence_helper.write_evidence(out, {"schema": "test"})
+            final_text = out.read_text(encoding="utf-8")
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(errors, ["--out changed while being read"])
+        self.assertEqual(final_text, '{"schema":"replacement"}\n')
         self.assertEqual(temp_outputs, [])
 
     def test_lineage_proof_write_evidence_rejects_symlink_swap_before_replace(
@@ -11132,18 +11550,21 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary_path = Path(temp) / "summary.json"
             summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
             summary_text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
-            original_read_text = Path.read_text
+            original_read_summary_output_text = readiness._read_summary_output_text
 
-            def corrupt_read_text(
+            def corrupt_read_summary_output_text(
                 path: Path,
-                *args: object,
-                **kwargs: object,
-            ) -> str:
+                expected_stat: os.stat_result,
+            ) -> tuple[str | None, list[dict[str, object]]]:
                 if path == summary_path:
-                    return "corrupted summary\n"
-                return original_read_text(path, *args, **kwargs)
+                    return "corrupted summary\n", []
+                return original_read_summary_output_text(path, expected_stat)
 
-            with mock.patch.object(Path, "read_text", corrupt_read_text):
+            with mock.patch.object(
+                readiness,
+                "_read_summary_output_text",
+                corrupt_read_summary_output_text,
+            ):
                 errors = readiness.write_summary(summary_path, summary)
 
             written = summary_path.read_text(encoding="utf-8")
@@ -11164,18 +11585,26 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
             summary_path = Path(temp) / "summary.json"
             summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
             summary_text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
-            original_read_text = Path.read_text
+            original_read_summary_output_text = readiness._read_summary_output_text
 
-            def failing_read_text(
+            def failing_read_summary_output_text(
                 path: Path,
-                *args: object,
-                **kwargs: object,
-            ) -> str:
+                expected_stat: os.stat_result,
+            ) -> tuple[str | None, list[dict[str, object]]]:
                 if path == summary_path:
-                    raise OSError("simulated summary readback failure")
-                return original_read_text(path, *args, **kwargs)
+                    return None, [
+                        {
+                            "code": "kagemusha_summary_out_path_invalid",
+                            "message": "--summary-out write verification failed",
+                        }
+                    ]
+                return original_read_summary_output_text(path, expected_stat)
 
-            with mock.patch.object(Path, "read_text", failing_read_text):
+            with mock.patch.object(
+                readiness,
+                "_read_summary_output_text",
+                failing_read_summary_output_text,
+            ):
                 errors = readiness.write_summary(summary_path, summary)
 
             written = summary_path.read_text(encoding="utf-8")
@@ -11187,6 +11616,40 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 {
                     "code": "kagemusha_summary_out_path_invalid",
                     "message": "--summary-out write verification failed",
+                }
+            ],
+        )
+
+    def test_write_summary_rejects_regular_file_swap_before_readback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            summary_path = root / "summary.json"
+            replacement = root / "replacement-summary.json"
+            summary = {"schema": readiness.SUMMARY_SCHEMA, "ready": False}
+            replacement.write_text('{"ready":true}\n', encoding="utf-8")
+            original_open = Path.open
+            swapped = False
+
+            def swapping_open(path: Path, *args: object, **kwargs: object):
+                nonlocal swapped
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == summary_path and "r" in str(mode) and not swapped:
+                    replacement.replace(summary_path)
+                    swapped = True
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", swapping_open):
+                errors = readiness.write_summary(summary_path, summary)
+
+            written = summary_path.read_text(encoding="utf-8")
+
+        self.assertEqual(written, '{"ready":true}\n')
+        self.assertEqual(
+            errors,
+            [
+                {
+                    "code": "kagemusha_summary_out_path_invalid",
+                    "message": "--summary-out changed while being read",
                 }
             ],
         )

@@ -544,10 +544,8 @@ def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> 
             except OSError:
                 errors.append("signature command could not be run")
                 return None
-            try:
-                signature = signature_path.read_bytes()
-            except OSError:
-                errors.append("signature output could not be read")
+            signature = _read_signature_output(signature_path, errors)
+            if signature is None:
                 return None
             if len(signature) != device_lab.ED25519_SIGNATURE_BYTES:
                 errors.append("signature output must be 64 bytes")
@@ -556,6 +554,58 @@ def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> 
     except OSError:
         errors.append("signature temporary directory could not be created")
         return None
+
+
+def _read_signature_output(signature_path: Path, errors: list[str]) -> bytes | None:
+    """Read OpenSSL signature output without trusting a stale path."""
+
+    try:
+        expected_stat = signature_path.lstat()
+    except OSError:
+        errors.append("signature output could not be read")
+        return None
+    if stat.S_ISLNK(expected_stat.st_mode) or not stat.S_ISREG(expected_stat.st_mode):
+        errors.append("signature output could not be read")
+        return None
+    chunks: list[bytes] = []
+    signature_output_expected_identity = (
+        expected_stat.st_dev,
+        expected_stat.st_ino,
+    )
+    try:
+        with signature_path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = signature_path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                errors.append("signature output could not be read")
+                return None
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                errors.append("signature output could not be read")
+                return None
+            signature_output_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if (
+                signature_output_open_identity
+                != signature_output_expected_identity
+                or (path_stat.st_dev, path_stat.st_ino)
+                != signature_output_expected_identity
+            ):
+                errors.append("signature output could not be read")
+                return None
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = signature_path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != signature_output_expected_identity:
+                errors.append("signature output could not be read")
+                return None
+    except OSError:
+        errors.append("signature output could not be read")
+        return None
+    return b"".join(chunks)
 
 
 def _validate_private_public_pair(

@@ -1354,17 +1354,17 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
         errors.extend(json_ancestor_errors)
         return None
     try:
-        mode = path.lstat().st_mode
+        expected_stat = path.lstat()
     except FileNotFoundError:
         errors.append(f"missing {label}")
         return None
     except OSError:
         errors.append(f"{label} file metadata could not be read")
         return None
-    if stat.S_ISLNK(mode):
+    if stat.S_ISLNK(expected_stat.st_mode):
         errors.append(f"{label} must not be a symlink")
         return None
-    if not stat.S_ISREG(mode):
+    if not stat.S_ISREG(expected_stat.st_mode):
         errors.append(f"{label} must be a regular file")
         return None
     try:
@@ -1377,6 +1377,7 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
         return None
     try:
         chunks: list[bytes] = []
+        json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
         with path.open("rb") as handle:
             open_stat = os.fstat(handle.fileno())
             json_path_stat = path.lstat()
@@ -1388,10 +1389,11 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
             ):
                 errors.append(f"{label} must be a regular file")
                 return None
-            if (json_path_stat.st_dev, json_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
+            json_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if json_open_identity != json_expected_identity or (
+                json_path_stat.st_dev,
+                json_path_stat.st_ino,
+            ) != json_expected_identity:
                 errors.append(f"{label} changed while being read")
                 return None
             if open_stat.st_nlink > 1:
@@ -1401,8 +1403,7 @@ def _load_json(path: Path, label: str, errors: list[str]) -> dict[str, Any] | No
                 chunks.append(chunk)
             json_final_path_stat = path.lstat()
             if (json_final_path_stat.st_dev, json_final_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
+                json_expected_identity
             ):
                 errors.append(f"{label} changed while being read")
                 return None
@@ -3354,6 +3355,48 @@ def _validate_summary_output_parent(
     return True, []
 
 
+def _read_summary_output_text(
+    path: Path,
+    expected_stat: os.stat_result,
+) -> tuple[str | None, list[str]]:
+    """Read scanner summary output text without trusting a stale path."""
+
+    chunks: list[bytes] = []
+    summary_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, ["--json-out must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                return None, ["--json-out must be a regular file"]
+            summary_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if summary_open_identity != summary_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != summary_expected_identity:
+                return None, ["--json-out changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, ["--json-out must not be hardlinked"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != summary_expected_identity:
+                return None, ["--json-out changed while being read"]
+    except OSError:
+        return None, ["--json-out write verification failed"]
+    try:
+        return b"".join(chunks).decode("utf-8"), []
+    except UnicodeDecodeError:
+        return None, ["--json-out write verification failed"]
+
+
 def write_summary(path: Path, summary: dict) -> list[str]:
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
@@ -3404,9 +3447,23 @@ def write_summary(path: Path, summary: dict) -> list[str]:
     if errors:
         return errors
     try:
-        if path.read_text(encoding="utf-8") != summary_text:
-            return ["--json-out write verification failed"]
-    except (OSError, UnicodeDecodeError):
+        expected_stat = path.lstat()
+    except (FileNotFoundError, OSError):
+        return ["--json-out write verification failed"]
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return ["--json-out must not be a symlink"]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return ["--json-out must be a regular file"]
+    try:
+        link_count = path.stat().st_nlink
+    except OSError:
+        return ["--json-out hardlink metadata could not be read"]
+    if link_count > 1:
+        return ["--json-out must not be hardlinked"]
+    readback_text, readback_errors = _read_summary_output_text(path, expected_stat)
+    if readback_errors:
+        return readback_errors
+    if readback_text != summary_text:
         return ["--json-out write verification failed"]
     return []
 

@@ -4959,6 +4959,14 @@ pub fn sccp_counterparty_domain_for_message_payload(payload: &SccpPayloadV1) -> 
     }
 }
 
+fn sccp_message_bundle_matches_manifest_counterparty(
+    bundle: &NexusSccpMessageProofV1,
+    manifest: &SccpProofManifestV1,
+) -> bool {
+    sccp_counterparty_domain_for_message_payload(&bundle.payload)
+        == Some(manifest.counterparty_domain)
+}
+
 pub fn sccp_counterparty_domain_from_backend(backend: &str) -> Option<u32> {
     SCCP_CORE_REMOTE_DOMAINS.into_iter().find(|domain| {
         let Some(manifest) = sccp_proof_manifest_for_domain(*domain) else {
@@ -18229,6 +18237,9 @@ fn build_sccp_counterparty_submission_package_internal(
     if !sccp_manifest_allows_transparent_proofs(manifest, allow_unready) {
         return None;
     }
+    if !sccp_message_bundle_matches_manifest_counterparty(bundle, manifest) {
+        return None;
+    }
     if !allow_unready
         && !sccp_bundle_source_proof_satisfies_production_build_gate(
             bundle,
@@ -18402,6 +18413,9 @@ fn build_sccp_message_transparent_inner_proof_internal(
         source_material,
         source_deployment,
     )?;
+    if !sccp_message_bundle_matches_manifest_counterparty(bundle, manifest) {
+        return None;
+    }
     if !sccp_transparent_public_inputs_match_manifest(manifest, &public_inputs) {
         return None;
     }
@@ -41834,6 +41848,38 @@ mod tests {
             )
             .is_none(),
             "diagnostic proof jobs must not mix a bundle with another lane's manifest"
+        );
+        let inbound = sample_transfer_bundle(SCCP_DOMAIN_ETH, SCCP_DOMAIN_SORA, 329);
+        let inbound_public_inputs =
+            sccp_message_transparent_public_inputs(&inbound).expect("inbound public inputs");
+        assert_eq!(inbound_public_inputs.target_domain, SCCP_DOMAIN_SORA);
+        assert_eq!(
+            sccp_counterparty_domain_for_message_payload(&inbound.payload),
+            Some(SCCP_DOMAIN_ETH)
+        );
+        assert!(
+            sccp_transparent_public_inputs_match_manifest(&manifest, &inbound_public_inputs),
+            "SORA-target public inputs can match a SORA-local manifest before bundle lane binding"
+        );
+        let inbound_proof_bytes =
+            sample_evm_groth16_proof_bytes(&inbound_public_inputs, manifest.local_domain);
+        assert!(
+            build_sccp_message_transparent_inner_proof(&inbound, &manifest).is_none(),
+            "inbound bundles must not build transparent statements under another lane's manifest"
+        );
+        assert!(
+            build_sccp_counterparty_submission_package_internal(
+                &inbound,
+                &manifest,
+                &inbound_proof_bytes,
+                Some(&deployment_binding),
+                None,
+                true,
+                None,
+                None,
+            )
+            .is_none(),
+            "diagnostic packages must not mix inbound bundles with another lane's manifest"
         );
 
         let outbound = sample_transfer_bundle(SCCP_DOMAIN_SORA, SCCP_DOMAIN_BSC, 327);
@@ -68734,6 +68780,40 @@ mod tests {
                 )
                 .is_none(),
                 "bundle domain {bundle_domain} must not package under manifest domain {manifest_domain}",
+            );
+        }
+        for (source_domain, manifest_domain) in [
+            (SCCP_DOMAIN_SOL, SCCP_DOMAIN_TON),
+            (SCCP_DOMAIN_TON, SCCP_DOMAIN_SOL),
+        ] {
+            let bundle = sample_transfer_bundle(source_domain, SCCP_DOMAIN_SORA, 65);
+            let manifest =
+                sccp_proof_manifest_for_domain(manifest_domain).expect("mismatched manifest");
+            let public_inputs =
+                sccp_message_transparent_public_inputs(&bundle).expect("inbound public inputs");
+
+            assert_eq!(public_inputs.target_domain, SCCP_DOMAIN_SORA);
+            assert!(
+                sccp_transparent_public_inputs_match_manifest(&manifest, &public_inputs),
+                "SORA-target public inputs should remain manifest-compatible until bundle lane binding"
+            );
+            assert!(
+                build_sccp_message_transparent_inner_proof(&bundle, &manifest).is_none(),
+                "inbound source domain {source_domain} must not build an inner proof under manifest domain {manifest_domain}",
+            );
+            assert!(
+                build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).is_none(),
+                "inbound source domain {source_domain} must not build proof bytes under manifest domain {manifest_domain}",
+            );
+            assert!(
+                build_sccp_counterparty_submission_package_allow_unready(
+                    &bundle,
+                    &manifest,
+                    &[0xAA, 0xBB],
+                    true,
+                )
+                .is_none(),
+                "inbound source domain {source_domain} must not package under manifest domain {manifest_domain}",
             );
         }
     }

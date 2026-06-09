@@ -42,4 +42,48 @@ final class OfflineTransferWidgetTests: XCTestCase {
         let payload = "offline-small-payload"
         XCTAssertEqual(IrohaOfflineFountainPayloadFrames.frames(for: payload), [payload])
     }
+
+    func testTransportAvailabilityHidesUnsupportedNfc() {
+        let capabilities = OfflineNoteTransferCapabilities(
+            qrStreaming: true,
+            nfc: .unavailable("missing HCE entitlement"),
+            nearby: true
+        )
+
+        XCTAssertEqual(IrohaOfflineTransferTransportKind.available(in: capabilities), [.qr, .nearby])
+    }
+
+    func testTransportAvailabilityShowsNfcOnlyWhenSupported() {
+        let capabilities = OfflineNoteTransferCapabilities(
+            qrStreaming: true,
+            nfc: .supported,
+            nearby: false
+        )
+
+        XCTAssertEqual(IrohaOfflineTransferTransportKind.available(in: capabilities), [.qr, .nfc])
+    }
+
+    func testOfflineCashFlowViewCompilesWithUnsupportedNfcCapabilities() {
+        let capabilities = OfflineNoteTransferCapabilities(
+            qrStreaming: true,
+            nfc: .unavailable("missing HCE entitlement"),
+            nearby: true
+        )
+        let state = IrohaOfflineCashFlowState(
+            phase: .ready,
+            totalBalance: "1000",
+            spendableBalance: "900",
+            pendingBalance: "100",
+            pendingReceiptCount: 1
+        )
+
+        let view = IrohaOfflineCashFlowView(
+            state: state,
+            capabilities: capabilities,
+            selectedTransport: .qr
+        ) { _ in }
+
+        XCTAssertFalse(String(describing: type(of: view)).isEmpty)
+        XCTAssertEqual(IrohaOfflineTransferTransportKind.available(in: capabilities), [.qr, .nearby])
+    }
 }

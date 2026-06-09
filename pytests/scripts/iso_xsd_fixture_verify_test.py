@@ -650,6 +650,50 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
             self.assertNotIn(hidden, stderr)
             self.assertNotIn("duplicates profile id", stderr)
 
+    def test_profile_catalog_overlong_business_services_are_rejected_without_echo(self):
+        hidden = "service." + ("a" * VERIFIER.MAX_PROFILE_CATALOG_IDENTIFIER_CHARS)
+        catalog = [
+            {
+                "id": "minimal-profile",
+                "rail": "generic-iso20022",
+                "embedded_signature_policy": "record-only",
+                "required_reference_datasets": [],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "structured_address_mode": "permissive",
+                        "business_services": [hidden],
+                        "require_app_header": True,
+                        "require_business_service": True,
+                    }
+                ],
+            }
+        ]
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = write_profile_catalog(root / "profiles.rs", catalog=catalog)
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                "business_services[0] must be no longer than 128 characters",
+                stderr,
+            )
+            self.assertNotIn(hidden, stderr)
+            self.assertNotIn("business_services must not be empty", stderr)
+
     def test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo(self):
         cases = (
             (

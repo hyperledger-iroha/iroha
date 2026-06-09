@@ -208,6 +208,8 @@ reference datasets, and structured-address modes also reject overlong ASCII
 spellings before unknown-value diagnostics can print them.
 Profile-catalog profile IDs are capped before duplicate-ID or
 missing-schema-version diagnostics can echo catalog-provided IDs.
+Profile-catalog business-service entries are capped before the catalog can
+emit or archive overlong service identifiers.
 XSD profile-catalog `message_def_id` and version entries use the same ASCII-only
 digit policy before missing-schema or skipped-version diagnostics can classify
 Unicode digit confusables as concrete ISO message IDs.
@@ -215,6 +217,10 @@ Evidence and readiness archive/canary receipt kind, filename, and metadata
 mismatch blockers no longer print receipt kind values, receipt leaf names, or
 full metadata tuples, so invalid marker material is not reflected by follow-on
 consistency diagnostics.
+Trust-bundle preflight, evidence replay, and production-readiness compact trust
+profile IDs, override IDs, embedded signature policy strings, and trust-source
+authority/version provenance are capped before trust diagnostics can print or
+archive them.
 Receipt verifier, evidence, and readiness `receipt_kind` values reject
 secret-looking identifier-style markers and non-ASCII confusable spellings before
 unsupported-kind diagnostics or blockers can preserve forged archive values.

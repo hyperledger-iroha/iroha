@@ -14,6 +14,20 @@ public enum IrohaOfflineTransferTransportKind: String, CaseIterable, Identifiabl
 
     public var id: String { rawValue }
 
+    public static func available(in capabilities: OfflineNoteTransferCapabilities) -> [IrohaOfflineTransferTransportKind] {
+        var kinds: [IrohaOfflineTransferTransportKind] = []
+        if capabilities.qrStreaming {
+            kinds.append(.qr)
+        }
+        if capabilities.nfc.isSupported {
+            kinds.append(.nfc)
+        }
+        if capabilities.nearby {
+            kinds.append(.nearby)
+        }
+        return kinds
+    }
+
     public var defaultTitle: String {
         switch self {
         case .qr:

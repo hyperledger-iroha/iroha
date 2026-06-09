@@ -11,6 +11,13 @@ public enum KagemushaInstructionType
     RedeemRecursive,
 }
 
+public static class KagemushaWireNames
+{
+    public const string TransferInstruction = "iroha_data_model::isi::offline::KagemushaTransfer";
+    public const string RedeemRecursiveInstruction = "iroha_data_model::isi::offline::RedeemKagemushaRecursive";
+    public const string RecursiveRedeemRequest = "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1";
+}
+
 public static class KagemushaInstructionTypeExtensions
 {
     public static string ArchiveTypeName(this KagemushaInstructionType instructionType)
@@ -27,8 +34,8 @@ public static class KagemushaInstructionTypeExtensions
     {
         return instructionType switch
         {
-            KagemushaInstructionType.Transfer => "iroha_data_model::isi::offline::KagemushaTransfer",
-            KagemushaInstructionType.RedeemRecursive => "iroha_data_model::isi::offline::RedeemKagemushaRecursive",
+            KagemushaInstructionType.Transfer => KagemushaWireNames.TransferInstruction,
+            KagemushaInstructionType.RedeemRecursive => KagemushaWireNames.RedeemRecursiveInstruction,
             _ => throw new ArgumentOutOfRangeException(nameof(instructionType), instructionType, "Unknown Kagemusha instruction type."),
         };
     }

@@ -1270,6 +1270,44 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_overlong_trust_profile_identity_values_are_rejected_without_echo(self):
+        overlong_profile = "a" * 129
+        overlong_policy = "require-verified-" + ("a" * 129)
+        cases = (
+            (
+                "profile-id",
+                lambda bundle: bundle.__setitem__("profile_id", overlong_profile),
+                "profile_id must be no longer than 128 characters",
+                overlong_profile,
+                "profile_id must be a canonical lowercase profile id",
+            ),
+            (
+                "policy",
+                lambda bundle: bundle.__setitem__(
+                    "embedded_signature_policy",
+                    overlong_policy,
+                ),
+                "embedded_signature_policy must be no longer than 128 characters",
+                overlong_policy,
+                "embedded_signature_policy is unsupported",
+            ),
+        )
+        for name, mutate, message, hidden, bypassed_message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    mutate(bundle)
+                    path = write_bundle(root, bundle)
+
+                    rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn(bypassed_message, stderr)
+
     def test_secret_material_and_unknown_keys_are_rejected(self):
         cases = [
             (
@@ -1879,6 +1917,35 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_overlong_source_identity_values_are_rejected_without_echo(self):
+        hidden = "A" * (VERIFIER.MAX_TRUST_SOURCE_TEXT_CHARS + 1)
+        cases = (
+            (
+                "authority",
+                lambda bundle: bundle["source"].__setitem__("authority", hidden),
+                "source.authority must be no longer than 256 characters",
+            ),
+            (
+                "version",
+                lambda bundle: bundle["source"].__setitem__("version", hidden),
+                "source.version must be no longer than 256 characters",
+            ),
+        )
+        for name, mutate, message in cases:
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    bundle = valid_bundle()
+                    mutate(bundle)
+                    path = write_bundle(root, bundle)
+
+                    rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
     def test_source_url_rejects_credentials_query_fragment_and_local_addresses(self):
         long_host = ".".join(["a" * 63] * 4)
         long_url = "https://pki.example.invalid/" + ("a" * VERIFIER.MAX_SOURCE_URL_CHARS)
@@ -2036,6 +2103,21 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
 
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
+
+    def test_overlong_source_retrieved_at_is_rejected_without_echo(self):
+        hidden = "2" * (VERIFIER.MAX_TIMESTAMP_CHARS + 1)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            bundle["source"]["retrieved_at"] = hidden
+            path = write_bundle(root, bundle)
+
+            rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("source.retrieved_at must be no longer than 128 characters", stderr)
+            self.assertNotIn(hidden, stderr)
 
     def test_malformed_der_envelope_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
