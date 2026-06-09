@@ -1,5 +1,6 @@
 [package]
 name = "norito"
+autotests = false
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
@@ -182,3 +183,29 @@ parallel-stage1-rayon = ["rayon", "parallel-stage1"]
 parallel-decode = ["rayon"]
 adaptive-telemetry = []
 adaptive-telemetry-log = ["adaptive-telemetry"]
+
+# Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
+
+[[test]]
+name = "norito_group_01"
+path = "tests/grouped/group_01.rs"
+
+[[test]]
+name = "norito_group_02"
+path = "tests/grouped/group_02.rs"
+
+[[test]]
+name = "norito_group_03"
+path = "tests/grouped/group_03.rs"
+
+[[test]]
+name = "norito_group_04"
+path = "tests/grouped/group_04.rs"
+
+[[test]]
+name = "norito_group_05"
+path = "tests/grouped/group_05.rs"
+
+[[test]]
+name = "norito_group_06"
+path = "tests/grouped/group_06.rs"

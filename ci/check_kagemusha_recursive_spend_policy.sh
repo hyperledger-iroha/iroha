@@ -364,6 +364,8 @@ ADVERSARIAL_COVERAGE = {
         "KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE",
         "multi-hop proving requires the append verifier batch to be composed into the compact proof",
         "fn kagemusha_recursive_compact_record_prover_preflights_pallas_archive_before_unavailable",
+        "fn kagemusha_recursive_compact_record_bound_pallas_preflights_before_unavailable",
+        "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1",
         "Norito-valid data-model proof envelope must not decode as Pallas openings",
         "detached compact Pallas archive must reject before proving",
         "height-aware detached compact Pallas archive must reject before proving",

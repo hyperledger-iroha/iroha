@@ -40497,7 +40497,11 @@ mod kagemusha_folded_real_prover_tests {
             err.contains("Kagemusha recursive compact proof requires at least one hop"),
             "{err}"
         );
+    }
 
+    #[test]
+    #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
+    fn kagemusha_recursive_compact_record_bound_pallas_preflights_before_unavailable() {
         let (bound_chain_id, bound_asset, bound_hop, bound_record) =
             sample_confidential_v2_verified_hop();
         let bound_record_bundle =
