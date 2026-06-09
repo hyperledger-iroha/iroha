@@ -15670,14 +15670,14 @@ fn decode_evidence_hex(value: &str) -> Result<ConsensusEvidence, Error> {
         .map_err(|err| invalid_consensus_evidence_error(format!("evidence_hex decode: {err}")))
 }
 
-/// JSON payload accepted by `/v1/sumeragi/evidence/submit`.
+/// JSON payload accepted by `/v1/sumeragi/evidence`.
 #[derive(crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 pub struct EvidenceSubmitRequestDto {
     /// Hex-encoded consensus evidence payload.
     pub evidence_hex: String,
 }
 
-/// Handle POST `/v1/sumeragi/evidence/submit`, validating and forwarding consensus evidence.
+/// Handle POST `/v1/sumeragi/evidence`, validating and forwarding consensus evidence.
 pub fn handle_post_sumeragi_evidence_submit(
     sumeragi: SumeragiHandle,
     request: EvidenceSubmitRequestDto,

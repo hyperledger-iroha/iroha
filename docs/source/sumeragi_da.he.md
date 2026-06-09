@@ -12,13 +12,13 @@ translator: manual
 
 # זמינות נתונים ורשת RBC ב-Sumeragi
 
-בדיקות האינטגרציה [`sumeragi_rbc_da_large_payload_four_peers`] ו־[`sumeragi_rbc_da_large_payload_six_peers`] (בקובץ `integration_tests/tests/sumeragi_da.rs`) מקימות רשתות של ארבעה ושישה פירים עם `sumeragi.da.enabled = true` (DA + RBC). כל בדיקה שולחת הוראת לוג בגודל ≥10 MiB, צופה במסירה של RBC ובקומיט, מאמתת שניתן להרכיב קוורום זמינות למטען, ומדפיסה סיכום מובנה הניתן לצריכה בדשבורדים או בכלי רגרסיה.
+בדיקות האינטגרציה [`sumeragi_rbc_da_large_payload_four_peers`] ו־[`sumeragi_rbc_da_large_payload_six_peers`] (בקובץ `integration_tests/tests/sumeragi_da.rs`) מקימות רשתות של ארבעה ושישה פירים עם `sumeragi.da.enabled = true` (DA + RBC). כל הרצה משתמשת בברירת המחדל של ההארנס `LARGE_PAYLOAD_BYTES = 1024`, צופה במסירה של RBC ובקומיט, מאמתת את קוורום READY של הפרוטוקול (ארבעה פירים: לפחות 3 קולות; שישה פירים: לפחות 4 קולות), ומדפיסה סיכום מובנה הניתן לצריכה בדשבורדים או בכלי רגרסיה.
 
 לסמפול מונחה קליינט-קל של מטעני RBC ראו [`light_client_da.md`](light_client_da.md), המתעד את נקודת הקצה המאומתת `/v1/sumeragi/rbc/sample` ואת המגבלות/תקציבים הנלווים.
 
-### טיימאאוט DA והתראות
+### טיימאאוט DA ומעקב זמינות
 
-כאשר `sumeragi.da.enabled=true`, צינור הקומיט רושם עדות זמינות (`availability evidence` או קוורום RBC `READY`) ועוקב אחריה כ‑advisory (הקומיט אינו ממתין). payload מקומי חסר מתקבל דרך RBC `DELIVER` או BlockCreated/סנכרון בלוקים. חוסר זמינות נרשם לצרכים תפעוליים. `sumeragi_da_gate_block_total{reason="missing_local_data"}` גדל, ו-`status_snapshot().da_reschedule_total` הוא legacy ולכן בדרך כלל נשאר 0.
+כאשר `sumeragi.da.enabled=true`, צינור הקומיט רושם זמינות payload מקומית (`BlockCreated` או מסירת RBC) ב־DA gate. עדות זמינות (`availability evidence` או קוורום RBC `READY`) נעקבת לצורכי ביקורת, טלמטריה וריקברי דטרמיניסטי, אך היא אינה קוורום קומיט נפרד. כל עוד `missing_local_data` פעיל, finalize מקומי ממתין; הוא ממשיך אחרי ש־BlockCreated או ריקברי דרך RBC/סנכרון בלוקים מביאים את ה-payload לצומת המקומי.
 
 טיימאאוט הזמינות נגזר מזמני block/commit ומכווני ה-DA, ומשמש רק ללוגים ולהחלטות rebroadcast:
 - `sumeragi.advanced.da.quorum_timeout_multiplier` מקדם את `block_time + 3 * commit_time` כאשר DA פעיל (ברירת מחדל `3`).
@@ -51,20 +51,20 @@ cargo test -p integration_tests \
 
 כל ריצה מדפיסה שורות עם הקידומת `sumeragi_da_summary::<scenario>::{...}` כך שאוטומציה תוכל ללכוד את ה-JSON. ניתן להגדיר `SUMERAGI_DA_ARTIFACT_DIR=/path/to/dir` כדי לשמור את הסיכומים והסנאפשוטים של Prometheus לכל peer. הסקריפט `scripts/run_sumeragi_da.py` מפעיל אוטומטית את ההגדרה בהרצות הלילה ומפיק `sumeragi-da-report.md` באמצעות `cargo run -p build-support --bin sumeragi_da_report`. תהליך הלילה `.github/workflows/sumeragi-da-nightly.yml` מעלה את כל תיקיית הריצה (סיכומים, מדדים, דו״ח Markdown) ל-GitHub Actions כדי שהמפעילים יוכלו לעיין בתוצאות.
 
-התרחישים מפעילים `sumeragi.debug.rbc.force_deliver_quorum_one = true` כך שה‑DELIVER יוצא לאחר READY ראשון. בסביבת ייצור יש להשאיר זאת כבוי כדי לשמור על קוורום READY מלא (2f+1).
+התרחישים משאירים את `sumeragi.debug.rbc.force_deliver_quorum_one = false` ובודקים את קוורום READY של הפרוטוקול. הכפתור הדיאגנוסטי שמור לבדיקות ממוקדות; בהרצות DA/RBC רגילות יש להשאירו כבוי כדי שמדדי המסירה והקצב ישקפו את קוורום הייצור.
 
 ## קווי בסיס צפויים
 
-עם `sumeragi.advanced.rbc.chunk_max_bytes = 256 KiB`, הוראה בגודל 10.5 MiB (11 010 048 בייט), ובהנחה ש‑`force_deliver_quorum_one` פעיל, מתקיימים התנאים הבאים:
+עם `LARGE_PAYLOAD_BYTES = 1024` בהארנס האינטגרציה וקוורום READY של הפרוטוקול, הרצות ה-smoke למפתחים בודקות את התנאים הבאים. מטענים גדולים יותר נשארים במסגרת soak/performance ולא בבדיקת ברירת המחדל הזו:
 
 שים לב: `sumeragi.advanced.rbc.chunk_max_bytes` נחתך בזמן ההפעלה כך ש־`RbcChunk` סריאלי ייכנס לתקרת ה‑plaintext שמתקבלת מ־`network.max_frame_bytes_block_sync` לאחר ניכוי תקורת ההצפנה.
 
 | תרחיש | מספר צ׳אנקים | סף READY | מונים לכל peer | תקציבי זמן |
 | --- | --- | --- | --- | --- |
-| ארבעה פירים | 42 צ׳אנקים (כולם נדרשים) | READY ≥1 (דיבוג כפוי; רגיל ≥3 עבור ‎f=1) | `payload_bytes_delivered_total ≥ 11 010 048`, ‏`deliver_broadcasts_total = 1`, ‏`ready_broadcasts_total = 1` | `commit_ms` ו-`rbc_deliver_ms` צריכים להישאר בתוך `commit_time_ms` (ברירת מחדל `4000`) |
-| שישה פירים | 42 צ׳אנקים | READY ≥1 (דיבוג כפוי; רגיל ≥4 עבור ‎f=2) | זהה לעיל | זהה לעיל |
+| ארבעה פירים | צ׳אנק אחד במצב plain, ארבעה צ׳אנקים ב-RS16 | READY ≥3 (‏2f+1 עבור ‎f=1) | `payload_bytes_delivered_total ≥ 1024`, ‏`deliver_broadcasts_total ≥ 1`, ו-`ready_broadcasts_total ≥ 1` או הוכחת READY מתמידה שקולה | תקציבי המסירה/קומיט של ההארנס |
+| שישה פירים | צ׳אנק אחד במצב plain, שישה צ׳אנקים ב-RS16 | READY ≥4 (‏2f+1 עבור ‎f=2) | זהה לעיל | זהה לעיל |
 
-השארה במקטע הקומיט של 4 שניות מחייבת קצב אפקטיבי של ≥≈2.7 MiB/s. מומלץ להתריע כשזמן ה-DELIVER מתקרב ל-`commit_time_ms`, כאשר הקצב יורד מתחת לסף או כאשר המונים לכל peer מתפצלים (אות לכפיית יתר או צ׳אנקים חסרים).
+הרצות ה-smoke האלה בודקות בעיקר קוורום, תעבורה ורגרסיות בתורים. מומלץ להתריע כשזמן ה-DELIVER מתקרב לתקציב ההארנס, כשהקצב יורד מתחת לרצפה המחושבת עבור המטען שהוגדר, או כאשר המונים לכל peer מתפצלים (אות לרוויית קולקטורים או צ׳אנקים חסרים).
 
 `cargo run -p build-support --bin sumeragi_da_report [ARTIFACT_DIR]` קורא את `.summary.json` ומפיק דו״ח Markdown עם זמני השהיה, קצב ותמונות מצב לכל ריצה. יש להעביר את נתיב הארטיפקטים כארגומנט או להגדיר `SUMERAGI_DA_ARTIFACT_DIR`. דו״ח הפיקסצ׳ר מ-2025‑10‑05 מציג מדיונים בין ‎3.12s–3.34s לקונסולות RBC, קומיט בתוך ‎4s וקצב ≥3.1 MiB/s.
 
@@ -76,9 +76,9 @@ cargo test -p integration_tests \
 
 | מדד | תקציב | אכיפה | הנחיית התרעה |
 | --- | --- | --- | --- |
-| Latency של RBC (מטען 10.5 MiB) | ≤ 3.6 s | `sumeragi_rbc_da_large_payload_*` | התרעה ב־≥ 3.2 s; בדקו רוויה של אספנים |
-| Latency של קומיט | ≤ 4.0 s | אותו תרחיש | התרעה ב־≥ 3.6 s; בדקו דדליין של pacemaker ושינויי תצוגה |
-| קצב אפקטיבי | ≥ 2.7 MiB/s | אותו תרחיש | התרעה כשקצב < 3 MiB/s שתי ריצות ברצף |
+| Latency של RBC | תקציב בסיס 30s, ועוד 60s לכל peer מעבר לארבעה ופרמיית RS16 של 40s | `sumeragi_rbc_da_large_payload_*` | התרעה כשהרצות smoke רגילות מתקרבות לתקציב המחושב; בדקו רוויה של אספנים |
+| Latency של קומיט | תקציב מסירת RBC + מרווח 40s | אותו תרחיש | התרעה כשהקומיט מתקרב לתקציב המחושב; בדקו דדליין של pacemaker ושינויי תצוגה |
+| קצב אפקטיבי | לפחות min(payload/תקציב-מסירה, 0.1 MiB/s) | אותו תרחיש | התרעה כאשר הקצב יורד מתחת לרצפה המחושבת בשתי ריצות ברצף |
 | עומק תור Post ברקע | ≤ 32 משימות | אותו תרחיש | התרעה ב־≥ 24; מצביע על עומס מצטבר |
 | נפילות בתורי P2P | = 0 | אותו תרחיש | התרעה מיידית על ערך > 0; בדיקת קיבולות התורים |
 

@@ -3936,7 +3936,7 @@ async fn dispatch_iroha_sumeragi_evidence_submit(
         app,
         inbound_headers,
         Method::POST,
-        "/v1/sumeragi/evidence/submit",
+        "/v1/sumeragi/evidence",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -10195,10 +10195,10 @@ fn iroha_sumeragi_evidence_submit_tool() -> ToolSpec {
         name: "iroha.sumeragi.evidence.submit".to_owned(),
         effect: manual_tool_effect_from_name("iroha.sumeragi.evidence.submit"),
         description:
-            "Submit consensus evidence (`/v1/sumeragi/evidence/submit`); accepts raw `body` or flat top-level body shortcuts."
+            "Submit consensus evidence (`/v1/sumeragi/evidence`); accepts raw `body` or flat top-level body shortcuts."
                 .to_owned(),
         method: Method::POST,
-        path_template: "/v1/sumeragi/evidence/submit".to_owned(),
+        path_template: "/v1/sumeragi/evidence".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
@@ -14852,6 +14852,7 @@ mod tests {
 
         let submit = iroha_sumeragi_evidence_submit_tool();
         assert_eq!(submit.effect, ToolEffect::Operator);
+        assert_eq!(submit.path_template, "/v1/sumeragi/evidence");
         assert!(!is_tool_allowed_by_policy(&cfg, &submit));
     }
 

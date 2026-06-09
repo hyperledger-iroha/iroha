@@ -80,9 +80,14 @@ import org.hyperledger.iroha.android.offline.OfflineCashLifecycle;
 
 OfflineCashLifecycle.ConfigurationSnapshot snapshot =
     new OfflineCashLifecycle.ConfigurationSnapshot(
+        "00000042",
+        "pkr#sbp",
         true,
         cachedIssuerPublicKeyBase64,
         7,
+        cachedArtifactSetId,
+        cachedCircuitId,
+        cachedAtMs,
         expiresAtMs);
 snapshot.requireUsableForOfflineExchange(System.currentTimeMillis(), 7);
 

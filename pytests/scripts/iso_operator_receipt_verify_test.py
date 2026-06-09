@@ -279,6 +279,90 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertNotIn("receipt-source-secret", message)
                     self.assertNotIn(hidden, message)
 
+    def test_overlong_clean_metadata_strings_are_rejected_without_echo(self):
+        overlong = "M" * (VERIFIER.MAX_CLEAN_STRING_CHARS + 1)
+        cases = (
+            (
+                "helper",
+                lambda: VERIFIER._require_clean_string(overlong, "receipt.detail"),
+                "receipt.detail must be no longer than 4096 characters",
+            ),
+            (
+                "nonsecret-helper",
+                lambda: VERIFIER._require_nonsecret_clean_string(
+                    overlong,
+                    "receipt.business_message_id",
+                ),
+                "receipt.business_message_id must be no longer than 4096 characters",
+            ),
+            (
+                "normalized-optional",
+                lambda: VERIFIER._normalize_optional_string(
+                    overlong,
+                    "receipt.profile",
+                ),
+                "receipt.profile must be no longer than 4096 characters",
+            ),
+            (
+                "sidecar-optional",
+                lambda: VERIFIER._normalize_sidecar_optional_string(
+                    {"business_message_id": overlong},
+                    "business_message_id",
+                    "sidecar.business_message_id",
+                ),
+                "sidecar.business_message_id must be no longer than 4096 characters",
+            ),
+            (
+                "audit-index",
+                lambda: self._verify_overlong_audit_index_metadata(overlong),
+                "anchor.audit_index.records[0].business_message_id must be no longer than 4096 characters",
+            ),
+            (
+                "record-source",
+                lambda: self._verify_overlong_record_source_metadata(overlong),
+                "record.detail must be no longer than 4096 characters",
+            ),
+        )
+        for name, run, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.ReceiptError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(overlong, message)
+
+    def _verify_overlong_audit_index_metadata(self, overlong):
+        index = audit_test.sample_index()
+        index["records"][0]["business_message_id"] = overlong
+        index = audit_test.with_digest(index, audit_test.ADAPTER.INDEX_DIGEST_FIELD)
+        VERIFIER._verify_audit_index_source(index, "anchor.audit_index")
+
+    def _verify_overlong_record_source_metadata(self, overlong):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            record = audit_test.sample_record()
+            source = audit_test.sample_persisted_record(record)
+            source["detail"] = overlong
+            source = audit_test.with_digest(
+                source,
+                audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD,
+            )
+            record[audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD] = source[
+                audit_test.ADAPTER.PERSISTED_RECORD_DIGEST_FIELD
+            ]
+            record_path = root / record["filename"]
+            record_path.write_text(
+                json.dumps(source, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            VERIFIER._verify_persisted_record_source(
+                record,
+                record_path,
+                "record",
+            )
+
     def test_archived_source_paths_reject_secret_identifiers_without_echo(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -485,7 +569,20 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertNotIn("receipt-path-leak", message)
 
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        overlong_path = "out/" + ("a" * (VERIFIER.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
+            (
+                "cli overlong",
+                lambda raw: VERIFIER._reject_raw_cli_path_smuggling(raw, "--receipt-dir"),
+                overlong_path,
+                f"no longer than {VERIFIER.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "source overlong",
+                lambda raw: VERIFIER._require_clean_path_string(raw, "receipt.xml_path"),
+                overlong_path,
+                f"no longer than {VERIFIER.MAX_LOCAL_PATH_CHARS} characters",
+            ),
             (
                 "cli encoded dot",
                 lambda raw: VERIFIER._reject_raw_cli_path_smuggling(raw, "--receipt-dir"),

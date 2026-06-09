@@ -189,10 +189,17 @@ def _read_existing_output_bytes(
     path: Path,
     expected_stat: os.stat_result,
     label: str,
+    *,
+    max_bytes: int | None = None,
 ) -> tuple[bytes | None, list[str]]:
     """Read signer-controlled output bytes without trusting a stale path."""
 
     chunks: list[bytes] = []
+    byte_limit = (
+        device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES
+        if max_bytes is None
+        else max_bytes
+    )
     try:
         with path.open("rb") as handle:
             open_stat = os.fstat(handle.fileno())
@@ -215,7 +222,17 @@ def _read_existing_output_bytes(
                 return None, [f"{label} changed while being read"]
             if open_stat.st_nlink > 1:
                 return None, [f"{label} must not be hardlinked"]
+            if open_stat.st_size > byte_limit:
+                return None, [
+                    f"{label} must be no more than {byte_limit} bytes"
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > byte_limit:
+                    return None, [
+                        f"{label} must be no more than {byte_limit} bytes"
+                    ]
                 chunks.append(chunk)
             final_path_stat = path.lstat()
             if (
@@ -232,10 +249,17 @@ def _read_existing_output_text(
     path: Path,
     expected_stat: os.stat_result,
     label: str,
+    *,
+    max_bytes: int | None = None,
 ) -> tuple[str | None, list[str]]:
     """Read signer-controlled output text for post-write verification."""
 
-    payload, read_errors = _read_existing_output_bytes(path, expected_stat, label)
+    payload, read_errors = _read_existing_output_bytes(
+        path,
+        expected_stat,
+        label,
+        max_bytes=max_bytes,
+    )
     if read_errors:
         if read_errors == [f"{label} could not be read"]:
             return None, [f"{label} write verification failed"]
@@ -248,21 +272,49 @@ def _read_existing_output_text(
 
 
 def _write_json(path: Path, payload: dict[str, Any], label: str) -> list[str]:
+    try:
+        text = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    except ValueError:
+        return [f"{label} is not strict JSON"]
+    if len(text.encode("utf-8")) > device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+        return [
+            f"{label} must be no more than "
+            f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+        ]
     return _write_text_atomic(
         path,
-        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        text,
         label,
     )
 
 
-def _write_text(path: Path, text: str, label: str) -> list[str]:
-    return _write_text_atomic(path, text, label)
+def _write_text(
+    path: Path,
+    text: str,
+    label: str,
+    *,
+    max_bytes: int | None = None,
+) -> list[str]:
+    return _write_text_atomic(path, text, label, max_bytes=max_bytes)
 
 
-def _write_text_atomic(path: Path, text: str, label: str) -> list[str]:
+def _write_text_atomic(
+    path: Path,
+    text: str,
+    label: str,
+    *,
+    max_bytes: int | None = None,
+) -> list[str]:
+    byte_limit = (
+        device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES
+        if max_bytes is None
+        else max_bytes
+    )
     errors = _validate_json_output_path(path, label)
     if errors:
         return errors
+    if len(text.encode("utf-8")) > byte_limit:
+        return [f"{label} must be no more than {byte_limit} bytes"]
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -325,6 +377,7 @@ def _write_text_atomic(path: Path, text: str, label: str) -> list[str]:
         path,
         expected_stat,
         label,
+        max_bytes=max_bytes,
     )
     if readback_errors:
         return readback_errors
@@ -593,7 +646,16 @@ def _read_signature_output(signature_path: Path, errors: list[str]) -> bytes | N
             ):
                 errors.append("signature output could not be read")
                 return None
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            if open_stat.st_nlink > 1:
+                errors.append("signature output could not be read")
+                return None
+            read_limit = device_lab.ED25519_SIGNATURE_BYTES + 1
+            size = 0
+            while size < read_limit:
+                chunk = handle.read(read_limit - size)
+                if not chunk:
+                    break
+                size += len(chunk)
                 chunks.append(chunk)
             final_path_stat = signature_path.lstat()
             if (
@@ -762,7 +824,11 @@ def build_signed_evidence(
     if errors:
         return None
 
-    payload = device_lab._canonical_signed_evidence_payload(evidence)
+    try:
+        payload = device_lab._canonical_signed_evidence_payload(evidence)
+    except ValueError:
+        errors.append("signed evidence payload is not strict JSON")
+        return None
     signature = _sign_ed25519(private_key_path, payload, errors)
     if signature is None:
         return None
@@ -873,7 +939,19 @@ def _read_validated_slot_artifact_bytes(
                 return None, [f"slot artifact {display} changed while being read"]
             if open_stat.st_nlink > 1:
                 return None, [f"slot artifact {display} must not be hardlinked"]
+            if open_stat.st_size > device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                return None, [
+                    f"slot artifact {display} must be no more than "
+                    f"{device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES:
+                    return None, [
+                        f"slot artifact {display} must be no more than "
+                        f"{device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+                    ]
                 chunks.append(chunk)
             final_path_stat = artifact_path.lstat()
             if (
@@ -921,7 +999,13 @@ def rewrite_sha256_manifest(slot_path: Path) -> list[str]:
             return digest_errors
         assert digest is not None
         lines.append(f"{digest}  {relative}")
-    return _write_text(slot_path / "sha256sum.txt", "\n".join(lines) + "\n", "sha256sum.txt")
+    manifest_text = "\n".join(lines) + "\n"
+    return _write_text(
+        slot_path / "sha256sum.txt",
+        manifest_text,
+        "sha256sum.txt",
+        max_bytes=device_lab.MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES,
+    )
 
 
 def sign_slot_evidence(

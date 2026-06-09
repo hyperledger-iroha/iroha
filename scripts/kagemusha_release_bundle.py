@@ -25,6 +25,8 @@ import kagemusha_production_readiness as readiness  # noqa: E402
 RELEASE_BUNDLE_SCHEMA = "iroha.kagemusha.production_release_bundle.v1"
 DEFAULT_READINESS_SUMMARY_PATH = "dist/kagemusha-production-readiness.json"
 DEFAULT_RELEASE_BUNDLE_OUT = "dist/kagemusha-production-release-bundle.json"
+MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES = 16 * 1024 * 1024
+MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES = 16 * 1024 * 1024
 
 SUMMARY_REQUIRED_SECTION_STATES: dict[str, str] = {
     "abi7_recursive_compact": "package_aware_multi_hop_composed",
@@ -261,6 +263,7 @@ def _read_local_json_text(
         return None, file_blockers
     assert expected_stat is not None
     chunks: list[bytes] = []
+    size = 0
     release_json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
     try:
         with path.open("rb") as handle:
@@ -278,7 +281,22 @@ def _read_local_json_text(
                 return None, [_blocker(shape_code, f"{label} changed while being read")]
             if open_stat.st_nlink > 1:
                 return None, [_blocker(shape_code, f"{label} must not be hardlinked")]
+            if open_stat.st_size > MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES:
+                return None, [
+                    _blocker(
+                        shape_code,
+                        f"{label} must be no more than {MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES} bytes",
+                    )
+                ]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES:
+                    return None, [
+                        _blocker(
+                            shape_code,
+                            f"{label} must be no more than {MAX_RELEASE_BUNDLE_LOCAL_JSON_BYTES} bytes",
+                        )
+                    ]
                 chunks.append(chunk)
             final_path_stat = path.lstat()
             if (final_path_stat.st_dev, final_path_stat.st_ino) != (
@@ -1885,7 +1903,21 @@ def _read_output_text(
                 return None, [_release_bundle_out_blocker("--out changed while being read")]
             if open_stat.st_nlink > 1:
                 return None, [_release_bundle_out_blocker("--out must not be hardlinked")]
+            if open_stat.st_size > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:
+                return None, [
+                    _release_bundle_out_blocker(
+                        f"--out must be no more than {MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES} bytes"
+                    )
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:
+                    return None, [
+                        _release_bundle_out_blocker(
+                            f"--out must be no more than {MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES} bytes"
+                        )
+                    ]
                 chunks.append(chunk)
             final_path_stat = path.lstat()
             if (
@@ -1921,7 +1953,26 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
                 "--out must not overwrite bundled evidence input",
             )
         ]
-    manifest_text = json.dumps(bundle, indent=2, sort_keys=True) + "\n"
+    try:
+        manifest_text = json.dumps(
+            bundle,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ) + "\n"
+    except ValueError:
+        return [
+            _blocker(
+                "kagemusha_release_bundle_out_invalid",
+                "release bundle manifest is not strict JSON",
+            )
+        ]
+    if len(manifest_text.encode("utf-8")) > MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES:
+        return [
+            _release_bundle_out_blocker(
+                f"--out must be no more than {MAX_RELEASE_BUNDLE_OUTPUT_JSON_BYTES} bytes"
+            )
+        ]
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

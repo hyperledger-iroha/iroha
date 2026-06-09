@@ -181,7 +181,26 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertNotIn("canary-path-leak", message)
 
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        overlong_path = "out/" + ("a" * (CANARY.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
+            (
+                "raw overlong",
+                lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
+                overlong_path,
+                f"no longer than {CANARY.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "output overlong",
+                lambda raw: CANARY._reject_output_path_smuggling(Path(raw), "output path"),
+                overlong_path,
+                f"no longer than {CANARY.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "runbook overlong",
+                lambda raw: CANARY._validate_path_string(raw, "rail.receipt_dir"),
+                overlong_path,
+                f"no longer than {CANARY.MAX_LOCAL_PATH_CHARS} characters",
+            ),
             (
                 "raw encoded dot",
                 lambda raw: CANARY._reject_raw_output_path_smuggling(raw, "raw path"),
@@ -439,6 +458,64 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertIn(message, stderr)
                     self.assertNotIn(secret_value, stderr)
                     self.assertNotIn(hidden, stderr)
+
+    def test_overlong_runbook_strings_are_rejected_without_echo(self):
+        overlong = "M" * (CANARY.MAX_CLEAN_STRING_CHARS + 1)
+        cases = (
+            (
+                "required",
+                lambda: CANARY._required_string(
+                    {"provider": overlong}, "provider", "runbook"
+                ),
+                f"runbook.provider must be no longer than {CANARY.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "optional",
+                lambda: CANARY._optional_string(
+                    {"message": overlong}, "message", "rail"
+                ),
+                f"rail.message must be no longer than {CANARY.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "list",
+                lambda: CANARY._string_list(
+                    {"endpoints": [overlong]}, "endpoints", "notary"
+                ),
+                f"notary.endpoints[0] must be no longer than {CANARY.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+        )
+        for name, call, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(CANARY.CanaryError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(overlong, message)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = write_config(
+                root,
+                {
+                    "provider": overlong,
+                    "environment": "ci",
+                    "rail": {
+                        "inbox_dir": "missing-inbox",
+                        "torii_base_url": "https://torii.local-bank.bank",
+                    },
+                },
+            )
+
+            rc, stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                f"config.provider must be no longer than {CANARY.MAX_CLEAN_STRING_CHARS} characters",
+                stderr,
+            )
+            self.assertNotIn(overlong, stderr)
 
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:

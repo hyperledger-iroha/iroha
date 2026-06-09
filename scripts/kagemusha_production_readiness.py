@@ -37,6 +37,11 @@ DEFAULT_MAX_SIGNED_AT_FUTURE_SKEW_SECONDS = 300
 ANDROID_DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"
 LINEAGE_PROOF_EVIDENCE_SUMMARY_LABEL = "<lineage-proof-evidence>"
 COMPACT_KEY_EVIDENCE_SUMMARY_LABEL = "<recursive-compact-key-evidence>"
+MAX_ABI6_MANIFEST_JSON_BYTES = 1024 * 1024
+MAX_REPO_SOURCE_MARKER_BYTES = 8 * 1024 * 1024
+MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES = 16 * 1024 * 1024
+MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES = 16 * 1024 * 1024
+MAX_READINESS_SUMMARY_JSON_BYTES = 16 * 1024 * 1024
 EXPECTED_LINEAGE_PROOF_OPENING_LEN = 128
 EXPECTED_LINEAGE_PROOF_IPA_K = 8
 EXPECTED_LINEAGE_PROOF_BACKEND = "halo2/ipa"
@@ -252,6 +257,12 @@ LINEAGE_KEY_RELEASE_TOOLING_REQUIREMENTS = {
         "kagemusha_recursive_spend_lineage_append_vk_record_from_box(",
         "kagemusha_lineage_record_run_writes_norito_record_from_existing_vk_file",
         'record_summary = format!(", record={} bytes", record_bytes.len())',
+        "Generating {} Reserved-lineage verifier key for `{}` opening_len={}",
+        "Writing {} Reserved-lineage verifier key to {}",
+        "Writing {} Reserved-lineage verifier record to {}",
+        "Deriving {} Reserved-lineage proving key archive for `{}` opening_len={}",
+        "Writing {} Reserved-lineage proving key archive to {}",
+        "Writing {} Reserved-lineage key package to {}",
     ),
     "crates/iroha_core/src/zk.rs": (
         "kagemusha_recursive_spend_lineage_vk_record_from_box_for_circuit",
@@ -450,13 +461,16 @@ def _read_release_json_text(
     shape_code: str,
     unreadable_code: str,
 ) -> tuple[str | None, list[dict[str, Any]]]:
-    shape_errors = validate_release_local_json_file(path, label)
+    expected_stat, shape_errors = _validate_release_local_json_file_for_read(path, label)
     if shape_errors:
         missing_error = f"{label} is missing"
         if shape_errors == [missing_error]:
             return None, [blocker(missing_code, f"missing {label}")]
         return None, [blocker(shape_code, error) for error in shape_errors]
+    assert expected_stat is not None
     chunks: list[bytes] = []
+    size = 0
+    release_json_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
     try:
         with path.open("rb") as handle:
             open_stat = os.fstat(handle.fileno())
@@ -467,23 +481,36 @@ def _read_release_json_text(
                 open_stat.st_mode
             ):
                 return None, [blocker(shape_code, f"{label} must be a regular file")]
-            if (release_json_path_stat.st_dev, release_json_path_stat.st_ino) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
+            release_json_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if release_json_open_identity != release_json_expected_identity or (
+                release_json_path_stat.st_dev,
+                release_json_path_stat.st_ino,
+            ) != release_json_expected_identity:
                 return None, [blocker(shape_code, f"{label} changed while being read")]
             if open_stat.st_nlink > 1:
                 return None, [blocker(shape_code, f"{label} must not be hardlinked")]
+            if open_stat.st_size > MAX_ABI6_MANIFEST_JSON_BYTES:
+                return None, [
+                    blocker(
+                        shape_code,
+                        f"{label} must be no more than {MAX_ABI6_MANIFEST_JSON_BYTES} bytes",
+                    )
+                ]
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_ABI6_MANIFEST_JSON_BYTES:
+                    return None, [
+                        blocker(
+                            shape_code,
+                            f"{label} must be no more than {MAX_ABI6_MANIFEST_JSON_BYTES} bytes",
+                        )
+                    ]
                 chunks.append(chunk)
             release_json_final_path_stat = path.lstat()
             if (
                 release_json_final_path_stat.st_dev,
                 release_json_final_path_stat.st_ino,
-            ) != (
-                open_stat.st_dev,
-                open_stat.st_ino,
-            ):
+            ) != release_json_expected_identity:
                 return None, [blocker(shape_code, f"{label} changed while being read")]
     except OSError:
         return None, [blocker(unreadable_code, f"{label} could not be read")]
@@ -543,31 +570,41 @@ def _load_json(path: Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]
 def validate_release_local_json_file(path: Path, label: str) -> list[str]:
     """Reject local release JSON files that could alias external bytes."""
 
+    _file_stat, errors = _validate_release_local_json_file_for_read(path, label)
+    return errors
+
+
+def _validate_release_local_json_file_for_read(
+    path: Path,
+    label: str,
+) -> tuple[os.stat_result | None, list[str]]:
+    """Reject local release JSON files and return the read identity."""
+
     if device_lab.SECRET_RE.search(str(path)):
-        return [f"{label} path must not contain secret-looking material"]
+        return None, [f"{label} path must not contain secret-looking material"]
     release_json_ancestor_errors = device_lab.validate_no_symlink_ancestors(
         path,
         f"{label} ancestor directory",
     )
     if release_json_ancestor_errors:
-        return release_json_ancestor_errors
+        return None, release_json_ancestor_errors
     try:
-        mode = path.lstat().st_mode
+        file_stat = path.lstat()
     except FileNotFoundError:
-        return [f"{label} is missing"]
+        return None, [f"{label} is missing"]
     except OSError:
-        return [f"{label} file metadata could not be read"]
-    if stat.S_ISLNK(mode):
-        return [f"{label} must not be a symlink"]
-    if not stat.S_ISREG(mode):
-        return [f"{label} must be a regular file"]
+        return None, [f"{label} file metadata could not be read"]
+    if stat.S_ISLNK(file_stat.st_mode):
+        return None, [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(file_stat.st_mode):
+        return None, [f"{label} must be a regular file"]
     try:
         link_count = path.stat().st_nlink
     except OSError:
-        return [f"{label} hardlink metadata could not be read"]
+        return None, [f"{label} hardlink metadata could not be read"]
     if link_count > 1:
-        return [f"{label} must not be hardlinked"]
-    return []
+        return None, [f"{label} must not be hardlinked"]
+    return file_stat, []
 
 
 def _validate_repo_source_marker_file_for_read(
@@ -648,7 +685,17 @@ def _repo_source_marker_text(
                 return None, [f"{label} changed while being read"]
             if open_stat.st_nlink > 1:
                 return None, [f"{label} must not be hardlinked"]
+            if open_stat.st_size > MAX_REPO_SOURCE_MARKER_BYTES:
+                return None, [
+                    f"{label} must be no more than {MAX_REPO_SOURCE_MARKER_BYTES} bytes"
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_REPO_SOURCE_MARKER_BYTES:
+                    return None, [
+                        f"{label} must be no more than {MAX_REPO_SOURCE_MARKER_BYTES} bytes"
+                    ]
                 chunks.append(chunk)
             marker_final_path_stat = path.lstat()
             if (marker_final_path_stat.st_dev, marker_final_path_stat.st_ino) != (
@@ -672,11 +719,19 @@ def _load_json_artifact(
     shape_code: str,
     not_object_code: str,
     label: str,
+    max_bytes: int | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    size_error = (
+        f"{label} must be no more than {max_bytes} bytes"
+        if max_bytes is not None
+        else None
+    )
     digest, text, read_errors = _sha256_text_file(
         path,
         label,
         f"{label} could not be read",
+        max_bytes=max_bytes,
+        too_large_error=size_error,
     )
     if read_errors:
         blockers: list[dict[str, Any]] = []
@@ -1023,13 +1078,6 @@ def validate_lineage_proof_log(path: Path, expected_name: str) -> tuple[str | No
         if file_errors == ["production proof log is missing"]:
             return None, ["missing production proof log"]
         return None, file_errors
-    try:
-        if path.stat().st_size > MAX_LINEAGE_PROOF_LOG_BYTES:
-            return None, [
-                f"production proof log must be no more than {MAX_LINEAGE_PROOF_LOG_BYTES} bytes"
-            ]
-    except OSError:
-        return None, ["production proof log metadata could not be read"]
 
     size_error = f"production proof log must be no more than {MAX_LINEAGE_PROOF_LOG_BYTES} bytes"
     digest, text, read_errors = _sha256_text_file(
@@ -1411,23 +1459,6 @@ def validate_compact_key_generator_log(
         "ABI-7 recursive compact key generator log must be no more than "
         f"{MAX_COMPACT_KEY_GENERATOR_LOG_BYTES} bytes"
     )
-    try:
-        if path.stat().st_size > MAX_COMPACT_KEY_GENERATOR_LOG_BYTES:
-            blockers.append(
-                blocker(
-                    "compact_key_evidence_generator_log_size",
-                    size_error,
-                )
-            )
-            return None, {}, {}, blockers
-    except OSError:
-        blockers.append(
-            blocker(
-                "compact_key_evidence_generator_log_file_shape",
-                "ABI-7 recursive compact key generator log metadata could not be read",
-            )
-        )
-        return None, {}, {}, blockers
     digest, text, read_errors = _sha256_text_file(
         path,
         "ABI-7 recursive compact key generator log",
@@ -1650,6 +1681,7 @@ def check_lineage_proof_evidence(
         shape_code="lineage_proof_evidence_file_shape",
         not_object_code="lineage_proof_evidence_not_object",
         label="Reserved-lineage proof evidence",
+        max_bytes=MAX_LINEAGE_PROOF_EVIDENCE_JSON_BYTES,
     )
     blockers.extend(load_blockers)
     details: dict[str, Any] = {
@@ -2169,6 +2201,7 @@ def check_compact_key_evidence(
         shape_code="compact_key_evidence_file_shape",
         not_object_code="compact_key_evidence_not_object",
         label="ABI-7 recursive compact key evidence",
+        max_bytes=MAX_COMPACT_KEY_EVIDENCE_JSON_BYTES,
     )
     blockers.extend(load_blockers)
     details: dict[str, Any] = {
@@ -3408,7 +3441,21 @@ def _read_summary_output_text(
                 ]
             if open_stat.st_nlink > 1:
                 return None, [_summary_out_blocker("--summary-out must not be hardlinked")]
+            if open_stat.st_size > MAX_READINESS_SUMMARY_JSON_BYTES:
+                return None, [
+                    _summary_out_blocker(
+                        f"--summary-out must be no more than {MAX_READINESS_SUMMARY_JSON_BYTES} bytes"
+                    )
+                ]
+            size = 0
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                if size > MAX_READINESS_SUMMARY_JSON_BYTES:
+                    return None, [
+                        _summary_out_blocker(
+                            f"--summary-out must be no more than {MAX_READINESS_SUMMARY_JSON_BYTES} bytes"
+                        )
+                    ]
                 chunks.append(chunk)
             final_path_stat = path.lstat()
             if (
@@ -3436,7 +3483,26 @@ def write_summary(path: Path, summary: dict[str, Any]) -> list[dict[str, Any]]:
     errors = validate_summary_output_path(path)
     if errors:
         return errors
-    summary_text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    try:
+        summary_text = json.dumps(
+            summary,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ) + "\n"
+    except ValueError:
+        return [
+            blocker(
+                SUMMARY_OUT_PATH_INVALID_CODE,
+                "--summary-out summary is not strict JSON",
+            )
+        ]
+    if len(summary_text.encode("utf-8")) > MAX_READINESS_SUMMARY_JSON_BYTES:
+        return [
+            _summary_out_blocker(
+                f"--summary-out must be no more than {MAX_READINESS_SUMMARY_JSON_BYTES} bytes"
+            )
+        ]
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(

@@ -35,6 +35,7 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
@@ -3280,7 +3281,9 @@ public final class OfflineNoteTest {
     assertTrue(client.submittedTransaction != null, "submitter should submit a transaction");
     final TransactionPayload payload =
         codec.decodeTransaction(client.submittedTransaction.encodedPayload());
-    assertTrue(metadata.equals(payload.metadata()), "fee metadata should round-trip");
+    final Map<String, JsonValue> expectedMetadata = new LinkedHashMap<>();
+    metadata.forEach((key, value) -> expectedMetadata.put(key, JsonValue.string(value)));
+    assertTrue(expectedMetadata.equals(payload.metadata()), "fee metadata should round-trip");
   }
 
   private static void walletSyncReconcilesPendingSpendChangeAndRedeemStates() throws Exception {

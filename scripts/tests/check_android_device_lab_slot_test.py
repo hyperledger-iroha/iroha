@@ -1192,6 +1192,36 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(payload), rendered)
 
+    def test_load_json_rejects_nonfinite_json_constant(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            payload = Path(temp) / "payload.json"
+            payload.write_text('{"value": NaN}\n', encoding="utf-8")
+            errors: list[str] = []
+
+            data = device_lab._load_json(payload, "test json", errors)
+
+        self.assertIsNone(data)
+        self.assertEqual(errors, ["test json contains non-finite constant NaN"])
+
+    def test_load_json_rejects_oversized_json_before_parse(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            payload = Path(temp) / "payload.json"
+            payload.write_bytes(
+                b'{"value":"' + b"x" * device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES + b'"}\n'
+            )
+            errors: list[str] = []
+
+            data = device_lab._load_json(payload, "test json", errors)
+
+        self.assertIsNone(data)
+        self.assertEqual(
+            errors,
+            [
+                "test json must be no more than "
+                f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+            ],
+        )
+
     def test_load_json_rejects_non_utf8_bytes_without_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             payload = Path(temp) / "payload.json"
@@ -2152,6 +2182,29 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("expected '<sha256> <path>'", rendered)
         self.assertNotIn(str(slot), rendered)
 
+    def test_parse_sha256_manifest_rejects_oversized_manifest_before_parse(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            manifest_path = slot / "sha256sum.txt"
+            manifest_path.write_bytes(
+                b"#"
+                + b"x" * device_lab.MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES
+                + b"\n"
+            )
+
+            entries, errors = device_lab.parse_sha256_manifest(slot)
+
+        self.assertEqual(entries, {})
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt must be no more than "
+                f"{device_lab.MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES} bytes"
+            ],
+        )
+
     def test_parse_sha256_manifest_rejects_regular_file_swap_after_preflight(
         self,
     ) -> None:
@@ -2373,6 +2426,31 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(
             errors,
             ["sha256sum.txt references hardlinked artifact logs/runtime.log"],
+        )
+
+    def test_manifest_artifact_digest_rejects_oversized_artifact_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            runtime_log = slot / "logs" / "runtime.log"
+            with runtime_log.open("wb") as handle:
+                handle.seek(device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES)
+                handle.write(b"x")
+
+            digest, errors = device_lab._manifest_artifact_sha256(
+                slot,
+                "logs/runtime.log",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt references artifact logs/runtime.log "
+                "must be no more than "
+                f"{device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+            ],
         )
 
     def test_manifest_artifact_digest_rejects_file_metadata_failure(self) -> None:
@@ -2800,6 +2878,26 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("must be non-empty", rendered)
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(slot), rendered)
+
+    def test_required_artifact_shapes_rejects_oversized_artifact_directly(
+        self,
+    ) -> None:
+        old_limit = device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES
+        try:
+            device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES = 8
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "pixel8")
+                write_text(slot / "logs" / "runtime.log", "runtime log too large\n")
+                errors: list[str] = []
+
+                device_lab.validate_required_kagemusha_slot_artifact_shapes(slot, errors)
+        finally:
+            device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES = old_limit
+
+        self.assertIn(
+            "required slot artifact logs/runtime.log must be no more than 8 bytes",
+            errors,
+        )
 
     def test_required_status_artifact_rejects_symlink_before_text_read(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -3873,6 +3971,34 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             [
                 "slot.json offline_wallet_apk_path references artifact file metadata "
                 "could not be read evidence/offline-wallet-release.apk"
+            ],
+        )
+
+    def test_metadata_artifact_digest_rejects_oversized_artifact_after_preflight(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            apk_path = slot / "evidence" / "offline-wallet-release.apk"
+            with apk_path.open("wb") as handle:
+                handle.seek(device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES)
+                handle.write(b"x")
+
+            payload, digest, errors = device_lab._metadata_artifact_bytes_and_sha256(
+                slot,
+                "evidence/offline-wallet-release.apk",
+                "slot.json offline_wallet_apk_path",
+                "slot.json offline_wallet_apk_path must point to an existing file",
+            )
+
+        self.assertIsNone(payload)
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "slot.json offline_wallet_apk_path references artifact "
+                "evidence/offline-wallet-release.apk must be no more than "
+                f"{device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
             ],
         )
 
@@ -5657,6 +5783,31 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             ],
         )
 
+    def test_signed_evidence_artifact_digest_rejects_oversized_artifact_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "slot-a")
+            runtime_log = slot / "logs" / "runtime.log"
+            with runtime_log.open("wb") as handle:
+                handle.seek(device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES)
+                handle.write(b"x")
+
+            digest, errors = device_lab._signed_evidence_artifact_sha256(
+                slot,
+                "logs/runtime.log",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence artifact digest references artifact "
+                "logs/runtime.log must be no more than "
+                f"{device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+            ],
+        )
+
     def test_signed_evidence_artifact_digest_rejects_file_metadata_failure(
         self,
     ) -> None:
@@ -5985,8 +6136,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES = old_limit
 
         self.assertEqual(report["status"], "error")
-        self.assertIn(
-            "required slot artifact logs/runtime.log must be no more than 8 bytes",
+        self.assertTrue(
+            any(
+                "logs/runtime.log must be no more than 8 bytes" in error
+                for error in report["errors"]
+            ),
             report["errors"],
         )
 
@@ -6231,6 +6385,31 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
+    def test_signed_evidence_canonical_payload_rejects_nonfinite_json(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            errors: list[str] = []
+
+            with mock.patch.object(
+                device_lab,
+                "_load_json",
+                return_value={
+                    "schema": device_lab.SIGNED_EVIDENCE_SCHEMA,
+                    "nonfinite": float("nan"),
+                },
+            ):
+                device_lab.validate_signed_evidence_artifact(
+                    Path(temp),
+                    Path(temp) / "signed-evidence.json",
+                    {},
+                    {},
+                    errors,
+                )
+
+        self.assertIn(
+            "signed evidence artifact signature payload is not strict JSON",
+            errors,
+        )
+
     def test_production_metadata_rejects_signed_evidence_signature_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
@@ -6330,6 +6509,46 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 json.dumps(evidence, indent=2, sort_keys=True).encode("utf-8") + b"\n"
             ).hexdigest(),
         )
+
+    def test_signer_helper_rejects_nonfinite_canonical_payload_before_signing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(root, "pixel6")
+            write_unsigned_production_slot_metadata(
+                slot,
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            errors: list[str] = []
+
+            with (
+                mock.patch.object(
+                    evidence_signer,
+                    "_artifact_digests",
+                    return_value={"nonfinite": float("nan")},
+                ),
+                mock.patch.object(
+                    evidence_signer,
+                    "_sign_ed25519",
+                    side_effect=AssertionError("signature should not be attempted"),
+                ),
+            ):
+                evidence = evidence_signer.build_signed_evidence(
+                    slot,
+                    metadata,
+                    private_key_path=signer["private_key"],
+                    public_key_path=signer["public_key"],
+                    signer_key_id="android-lab-release-signer-v1",
+                    signed_at_utc="2026-06-06T00:00:00Z",
+                    errors=errors,
+                )
+
+        self.assertIsNone(evidence)
+        self.assertEqual(errors, ["signed evidence payload is not strict JSON"])
 
     def test_signer_helper_rejects_mismatched_private_and_public_keys(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -6776,6 +6995,42 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(errors, ["stage readback mismatch"])
         self.assertEqual(stage_payload, b"replacement")
+
+    def test_write_staged_bytes_rejects_hardlink_created_before_readback(
+        self,
+    ) -> None:
+        original_open = Path.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage = root / "payload.bin"
+            alias = root / "payload-hardlink.bin"
+            linked = False
+
+            def hardlinking_open(path: Path, *args, **kwargs):
+                nonlocal linked
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == stage and "r" in mode and not linked:
+                    try:
+                        os.link(stage, alias)
+                    except (AttributeError, NotImplementedError, OSError) as exc:
+                        self.skipTest(
+                            f"hardlinks are not available in this test environment: {exc}"
+                        )
+                    linked = True
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", hardlinking_open):
+                errors = device_lab._write_staged_bytes(  # type: ignore[attr-defined]
+                    stage,
+                    b"payload",
+                    write_error="stage could not be written",
+                    verification_error="stage readback mismatch",
+                )
+            link_count = stage.stat().st_nlink
+
+        self.assertEqual(errors, ["stage readback mismatch"])
+        self.assertGreater(link_count, 1)
 
     def test_verify_signature_rejects_tempdir_failure_before_staging(
         self,
@@ -7750,6 +8005,47 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(output), rendered)
 
+    def test_signer_write_json_rejects_nonfinite_json_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+
+            errors = evidence_signer._write_json(
+                output,
+                {"schema": "test", "value": float("nan")},
+                "signed evidence output path",
+            )
+            temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
+
+        self.assertEqual(errors, ["signed evidence output path is not strict JSON"])
+        self.assertFalse(output.exists())
+        self.assertEqual(temp_files, [])
+
+    def test_signer_write_json_rejects_oversized_json_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+            payload = {"schema": "test"}
+            text = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+            limit = len(text.encode("utf-8")) - 1
+
+            with mock.patch.object(
+                evidence_signer.device_lab,
+                "MAX_ANDROID_DEVICE_LAB_JSON_BYTES",
+                limit,
+            ):
+                errors = evidence_signer._write_json(
+                    output,
+                    payload,
+                    "signed evidence output path",
+                )
+            temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
+
+        self.assertEqual(
+            errors,
+            [f"signed evidence output path must be no more than {limit} bytes"],
+        )
+        self.assertFalse(output.exists())
+        self.assertEqual(temp_files, [])
+
     def test_signer_write_json_rejects_write_failure_after_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
@@ -7841,10 +8137,17 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     path: Path,
                     expected_stat: os.stat_result,
                     label: str,
+                    *,
+                    max_bytes: int | None = None,
                 ) -> tuple[str | None, list[str]]:
                     if path == output:
                         return "mismatched signed evidence\n", []
-                    return original_read_output_text(path, expected_stat, label)
+                    return original_read_output_text(
+                        path,
+                        expected_stat,
+                        label,
+                        max_bytes=max_bytes,
+                    )
 
                 evidence_signer._read_existing_output_text = mismatching_read_output_text
                 errors = evidence_signer._write_json(
@@ -7873,10 +8176,17 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     path: Path,
                     _expected_stat: os.stat_result,
                     label: str,
+                    *,
+                    max_bytes: int | None = None,
                 ) -> tuple[str | None, list[str]]:
                     if path == output:
                         return None, [f"{label} write verification failed"]
-                    return original_read_output_text(path, _expected_stat, label)
+                    return original_read_output_text(
+                        path,
+                        _expected_stat,
+                        label,
+                        max_bytes=max_bytes,
+                    )
 
                 evidence_signer._read_existing_output_text = failing_read_output_text
                 errors = evidence_signer._write_json(
@@ -7895,6 +8205,50 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         )
         self.assertEqual(output_text, '{\n  "schema": "test"\n}\n')
         self.assertEqual(temp_files, [])
+
+    def test_signer_write_json_rejects_oversized_readback_after_replace(self) -> None:
+        original_open = Path.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+            payload = {"schema": "test"}
+            text = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
+            limit = len(text.encode("utf-8")) + 4
+            mutated = False
+
+            def appending_open(path: Path, *args, **kwargs):
+                nonlocal mutated
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == output and "r" in str(mode) and not mutated:
+                    with original_open(path, "a", encoding="utf-8") as handle:
+                        handle.write("X" * 16)
+                    mutated = True
+                return original_open(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    evidence_signer.device_lab,
+                    "MAX_ANDROID_DEVICE_LAB_JSON_BYTES",
+                    limit,
+                ),
+                mock.patch.object(Path, "open", appending_open),
+            ):
+                errors = evidence_signer._write_json(
+                    output,
+                    payload,
+                    "signed evidence output path",
+                )
+            output_text = output.read_text(encoding="utf-8")
+
+        self.assertTrue(mutated)
+        self.assertGreater(
+            len(output_text.encode("utf-8")),
+            len(text.encode("utf-8")),
+        )
+        self.assertEqual(
+            errors,
+            [f"signed evidence output path must be no more than {limit} bytes"],
+        )
 
     def test_signer_write_json_rejects_regular_file_swap_before_readback(
         self,
@@ -8181,6 +8535,28 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["signed evidence output path must not be hardlinked"])
         self.assertEqual(target_text, "external\n")
 
+    def test_signer_output_digest_rejects_oversized_output_after_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+            output.parent.mkdir(parents=True)
+            with output.open("wb") as handle:
+                handle.seek(device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES)
+                handle.write(b"x")
+
+            digest, errors = evidence_signer._output_file_sha256(
+                output,
+                "signed evidence output path",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence output path must be no more than "
+                f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+            ],
+        )
+
     def test_signer_output_digest_rejects_hardlink_metadata_failure_after_write(
         self,
     ) -> None:
@@ -8433,6 +8809,24 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(output), rendered)
 
+    def test_signer_write_text_rejects_oversized_manifest_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "sha256sum.txt"
+            text = "replacement\n"
+            limit = len(text.encode("utf-8")) - 1
+
+            errors = evidence_signer._write_text(
+                output,
+                text,
+                "sha256sum.txt",
+                max_bytes=limit,
+            )
+            temp_files = list(output.parent.glob(".sha256sum.txt.*.tmp"))
+
+        self.assertEqual(errors, [f"sha256sum.txt must be no more than {limit} bytes"])
+        self.assertFalse(output.exists())
+        self.assertEqual(temp_files, [])
+
     def test_signer_write_text_rejects_write_failure_after_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "slot" / "sha256sum.txt"
@@ -8524,10 +8918,17 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     path: Path,
                     expected_stat: os.stat_result,
                     label: str,
+                    *,
+                    max_bytes: int | None = None,
                 ) -> tuple[str | None, list[str]]:
                     if path == output:
                         return "mismatched manifest\n", []
-                    return original_read_output_text(path, expected_stat, label)
+                    return original_read_output_text(
+                        path,
+                        expected_stat,
+                        label,
+                        max_bytes=max_bytes,
+                    )
 
                 evidence_signer._read_existing_output_text = mismatching_read_output_text
                 errors = evidence_signer._write_text(
@@ -8542,6 +8943,40 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["sha256sum.txt write verification failed"])
         self.assertEqual(output_text, "replacement\n")
 
+    def test_signer_write_text_rejects_oversized_readback_after_replace(self) -> None:
+        original_open = Path.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "sha256sum.txt"
+            text = "replacement\n"
+            limit = len(text.encode("utf-8")) + 4
+            mutated = False
+
+            def appending_open(path: Path, *args, **kwargs):
+                nonlocal mutated
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == output and "r" in str(mode) and not mutated:
+                    with original_open(path, "a", encoding="utf-8") as handle:
+                        handle.write("X" * 16)
+                    mutated = True
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", appending_open):
+                errors = evidence_signer._write_text(
+                    output,
+                    text,
+                    "sha256sum.txt",
+                    max_bytes=limit,
+                )
+            output_text = output.read_text(encoding="utf-8")
+
+        self.assertTrue(mutated)
+        self.assertGreater(
+            len(output_text.encode("utf-8")),
+            len(text.encode("utf-8")),
+        )
+        self.assertEqual(errors, [f"sha256sum.txt must be no more than {limit} bytes"])
+
     def test_signer_write_text_rejects_readback_failure(self) -> None:
         original_read_output_text = evidence_signer._read_existing_output_text
 
@@ -8553,10 +8988,17 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     path: Path,
                     _expected_stat: os.stat_result,
                     label: str,
+                    *,
+                    max_bytes: int | None = None,
                 ) -> tuple[str | None, list[str]]:
                     if path == output:
                         return None, [f"{label} write verification failed"]
-                    return original_read_output_text(path, _expected_stat, label)
+                    return original_read_output_text(
+                        path,
+                        _expected_stat,
+                        label,
+                        max_bytes=max_bytes,
+                    )
 
                 evidence_signer._read_existing_output_text = failing_read_output_text
                 errors = evidence_signer._write_text(
@@ -8614,6 +9056,25 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(target_text, "external\n")
         self.assertTrue(output_is_symlink)
         self.assertEqual(temp_files, [])
+
+    def test_rewrite_sha256_manifest_rejects_oversized_manifest_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            slot = create_slot(root / "slots", "pixel8")
+            original_manifest = (slot / "sha256sum.txt").read_text(encoding="utf-8")
+
+            with mock.patch.object(
+                evidence_signer.device_lab,
+                "MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES",
+                1,
+            ):
+                errors = evidence_signer.rewrite_sha256_manifest(slot)
+            manifest_after = (slot / "sha256sum.txt").read_text(encoding="utf-8")
+
+        self.assertEqual(errors, ["sha256sum.txt must be no more than 1 bytes"])
+        self.assertEqual(manifest_after, original_manifest)
 
     def test_rewrite_sha256_manifest_rejects_symlinked_artifact_when_called_directly(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -8780,6 +9241,30 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertIsNone(digest)
         self.assertEqual(errors, ["slot artifact logs/runtime.log must not be hardlinked"])
+
+    def test_signer_slot_artifact_digest_rejects_oversized_artifact_directly(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = create_slot(Path(temp), "pixel8")
+            runtime_log = slot / "logs" / "runtime.log"
+            with runtime_log.open("wb") as handle:
+                handle.seek(device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES)
+                handle.write(b"x")
+
+            digest, errors = evidence_signer._slot_artifact_sha256(
+                slot,
+                "logs/runtime.log",
+            )
+
+        self.assertIsNone(digest)
+        self.assertEqual(
+            errors,
+            [
+                "slot artifact logs/runtime.log must be no more than "
+                f"{device_lab.MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES} bytes"
+            ],
+        )
 
     def test_signer_slot_artifact_digest_rejects_hardlink_metadata_failure_after_preflight(
         self,
@@ -10272,6 +10757,119 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIsNone(signature)
         self.assertEqual(errors, ["signature output could not be read"])
 
+    def test_sign_ed25519_rejects_signature_output_hardlink_after_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+        original_open = Path.open
+
+        def fake_run(command, *args, **kwargs):
+            out_path = Path(command[command.index("-out") + 1])
+            out_path.write_bytes(b"x" * device_lab.ED25519_SIGNATURE_BYTES)
+            return subprocess.CompletedProcess(args=command, returncode=0)
+
+        linked = False
+
+        def hardlinking_signature_open(path: Path, *args, **kwargs):
+            nonlocal linked
+            mode = args[0] if args else kwargs.get("mode", "r")
+            if path.name == "signature.bin" and "r" in mode and not linked:
+                try:
+                    os.link(path, path.with_name("signature-output-hardlink.bin"))
+                except (AttributeError, NotImplementedError, OSError) as exc:
+                    self.skipTest(
+                        f"hardlinks are not available in this test environment: {exc}"
+                    )
+                linked = True
+            return original_open(path, *args, **kwargs)
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = fake_run
+            Path.open = hardlinking_signature_open
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+            Path.open = original_open
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["signature output could not be read"])
+
+    def test_sign_ed25519_reads_only_shape_bound_signature_output_after_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+        original_open = Path.open
+        read_sizes: list[int] = []
+        read_limit = device_lab.ED25519_SIGNATURE_BYTES + 1
+
+        class SignatureOutputReader:
+            def __init__(self, handle):
+                self._handle = handle
+
+            def __enter__(self):
+                self._handle.__enter__()
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return self._handle.__exit__(exc_type, exc, traceback)
+
+            def fileno(self):
+                return self._handle.fileno()
+
+            def read(self, size=-1):
+                read_sizes.append(size)
+                if size > read_limit:
+                    raise AssertionError("signature output read exceeded shape bound")
+                return self._handle.read(size)
+
+        def fake_run(command, *args, **kwargs):
+            out_path = Path(command[command.index("-out") + 1])
+            out_path.write_bytes(b"x" * read_limit)
+            return subprocess.CompletedProcess(args=command, returncode=0)
+
+        def bounded_signature_open(path: Path, *args, **kwargs):
+            mode = args[0] if args else kwargs.get("mode", "r")
+            handle = original_open(path, *args, **kwargs)
+            if path.name == "signature.bin" and "r" in mode:
+                return SignatureOutputReader(handle)
+            return handle
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = fake_run
+            Path.open = bounded_signature_open
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+            Path.open = original_open
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["signature output must be 64 bytes"])
+        self.assertEqual(read_sizes, [read_limit])
+
     def test_sign_ed25519_rejects_short_signature_output_after_openssl(
         self,
     ) -> None:
@@ -10671,6 +11269,39 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn(str(secret_summary_path), rendered)
         self.assertNotIn("token=supersecret", rendered)
 
+    def test_write_summary_rejects_nonfinite_json_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+
+            errors = device_lab.write_summary(summary_path, {"value": float("inf")})
+            temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
+
+        self.assertEqual(errors, ["--json-out summary is not strict JSON"])
+        self.assertFalse(summary_path.exists())
+        self.assertEqual(temp_files, [])
+
+    def test_write_summary_rejects_oversized_json_before_write(self) -> None:
+        summary = {"ok": False}
+        summary_text = json.dumps(summary, indent=2, allow_nan=False) + "\n"
+        test_limit = len(summary_text) - 1
+        old_limit = device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES
+        try:
+            device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES = test_limit
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
+
+                errors = device_lab.write_summary(summary_path, summary)
+                temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
+        finally:
+            device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES = old_limit
+
+        self.assertEqual(
+            errors,
+            ["--json-out must be no more than " f"{test_limit} bytes"],
+        )
+        self.assertFalse(summary_path.exists())
+        self.assertEqual(temp_files, [])
+
     def test_validate_summary_output_path_uses_lstat_before_parent_is_dir_preflight(
         self,
     ) -> None:
@@ -10962,6 +11593,28 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["--json-out write verification failed"])
         self.assertEqual(summary_text, '{\n  "ok": false\n}\n')
         self.assertEqual(temp_files, [])
+
+    def test_read_summary_output_rejects_oversized_readback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            with summary_path.open("wb") as handle:
+                handle.seek(device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES)
+                handle.write(b"x")
+            expected_stat = summary_path.lstat()
+
+            text, errors = device_lab._read_summary_output_text(  # type: ignore[attr-defined]
+                summary_path,
+                expected_stat,
+            )
+
+        self.assertIsNone(text)
+        self.assertEqual(
+            errors,
+            [
+                "--json-out must be no more than "
+                f"{device_lab.MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
+            ],
+        )
 
     def test_write_summary_rejects_regular_file_swap_before_readback(self) -> None:
         original_open = Path.open

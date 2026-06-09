@@ -29,11 +29,21 @@ import org.hyperledger.iroha.android.crypto.keystore.KeyGenerationResult;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreBackend;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProvider;
 import org.hyperledger.iroha.android.client.JsonParser;
+import org.hyperledger.iroha.android.model.JsonValue;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
-import org.hyperledger.iroha.android.offline.OfflineCashLifecycle;
+import org.hyperledger.iroha.android.offline.InMemoryOfflineNoteStore;
 import org.hyperledger.iroha.android.offline.KagemushaInstructionArchives;
+import org.hyperledger.iroha.android.offline.OfflineBearerCashWallet;
+import org.hyperledger.iroha.android.offline.OfflineCashLifecycle;
+import org.hyperledger.iroha.android.offline.OfflineNote;
+import org.hyperledger.iroha.android.offline.OfflineNoteAttestationProvider;
+import org.hyperledger.iroha.android.offline.OfflineNoteProofProvider;
+import org.hyperledger.iroha.android.offline.OfflineNoteProofVerifier;
+import org.hyperledger.iroha.android.offline.OfflineNoteWallet;
+import org.hyperledger.iroha.android.offline.SecureOfflineNoteRandomSource;
+import org.hyperledger.iroha.android.offline.UuidOfflineNoteIdGenerator;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -183,7 +193,7 @@ public final class TransactionBuilderTests {
             1_735_000_000_000L,
             3_500L,
             17,
-            Map.of("mode", "kagemusha"));
+            Map.of("mode", "kagemusha", "enabled", JsonValue.bool(true)));
     assert payload.executable().isInstructions() : "Payload must use instruction executable";
     final InstructionBox.WirePayload transferWire =
         (InstructionBox.WirePayload) payload.executable().instructions().get(0).payload();
@@ -193,6 +203,10 @@ public final class TransactionBuilderTests {
         : "Transfer instruction wire name must be canonical";
     assert Arrays.equals(transferArchive, transferWire.payloadBytes())
         : "Transfer archive bytes must be preserved";
+    assert JsonValue.string("kagemusha").equals(payload.metadata().get("mode"))
+        : "String metadata must be encoded as JSON string";
+    assert JsonValue.bool(true).equals(payload.metadata().get("enabled"))
+        : "Typed JSON metadata must be preserved";
     assert KagemushaInstructionArchives.TRANSFER_INSTRUCTION_WIRE_NAME.equals(
             KagemushaInstructionArchives.InstructionType.TRANSFER.wireName())
         : "Transfer wire-name constant must match enum";
@@ -264,6 +278,44 @@ public final class TransactionBuilderTests {
     final OfflineCashLifecycle.ConfigurationSnapshot snapshot =
         new OfflineCashLifecycle.ConfigurationSnapshot(true, "issuer-key", 7, 1_000L);
     snapshot.requireUsableForOfflineExchange(999L, 7);
+    assert snapshot.chainId() == null : "Legacy snapshot constructor must preserve null chain id";
+    assert snapshot.assetDefinitionId() == null
+        : "Legacy snapshot constructor must preserve null asset definition id";
+    assert snapshot.artifactSetId() == null
+        : "Legacy snapshot constructor must preserve null artifact set id";
+    assert snapshot.circuitId() == null : "Legacy snapshot constructor must preserve null circuit id";
+    assert snapshot.createdAtMs() == 0L
+        : "Legacy snapshot constructor must default created_at_ms";
+
+    final OfflineCashLifecycle.ConfigurationSnapshot identifiedSnapshot =
+        new OfflineCashLifecycle.ConfigurationSnapshot(
+            "00000042",
+            "pkr#sbp",
+            true,
+            "issuer-key",
+            7,
+            "artifact-set",
+            "kagemusha-v1",
+            100L,
+            1_000L);
+    identifiedSnapshot.requireUsableForOfflineExchange(999L, 7);
+    assert "00000042".equals(identifiedSnapshot.chainId()) : "Snapshot must expose chain id";
+    assert "pkr#sbp".equals(identifiedSnapshot.assetDefinitionId())
+        : "Snapshot must expose asset definition id";
+    assert identifiedSnapshot.offlinePaymentsEnabled()
+        : "Snapshot must expose offline payments flag";
+    assert "issuer-key".equals(identifiedSnapshot.issuerPublicKeyBase64())
+        : "Snapshot must expose issuer public key";
+    assert Integer.valueOf(7).equals(identifiedSnapshot.bridgeAbiVersion())
+        : "Snapshot must expose bridge ABI version";
+    assert "artifact-set".equals(identifiedSnapshot.artifactSetId())
+        : "Snapshot must expose artifact set id";
+    assert "kagemusha-v1".equals(identifiedSnapshot.circuitId())
+        : "Snapshot must expose circuit id";
+    assert identifiedSnapshot.createdAtMs() == 100L : "Snapshot must expose creation time";
+    assert Long.valueOf(1_000L).equals(identifiedSnapshot.expiresAtMs())
+        : "Snapshot must expose expiry time";
+
     assertThrowsRuntime(
         () ->
             new OfflineCashLifecycle.ConfigurationSnapshot(true, " ", 7, null)
@@ -388,6 +440,44 @@ public final class TransactionBuilderTests {
     }
     assert failedEvents.equals(List.of("hasPending", "sync"))
         : "Lifecycle controller must stop before wallet load after sync failure";
+
+    final List<String> noteWalletEvents = new java.util.ArrayList<>();
+    final OfflineCashLifecycle.Controller noteWalletController =
+        new OfflineCashLifecycle.Controller(
+            testOfflineNoteWallet(),
+            new OfflineCashLifecycle.AuditReceiptSynchronizer() {
+              @Override
+              public CompletableFuture<Boolean> hasPendingAuditReceipts() {
+                noteWalletEvents.add("hasPending");
+                return CompletableFuture.completedFuture(true);
+              }
+
+              @Override
+              public CompletableFuture<Void> syncPendingAuditReceipts() {
+                noteWalletEvents.add("sync");
+                return CompletableFuture.completedFuture(null);
+              }
+            });
+    try {
+      noteWalletController.load("pkr#sbp", "10").get();
+      throw new AssertionError("OfflineNoteWallet adapter must propagate load failure");
+    } catch (final java.util.concurrent.ExecutionException expected) {
+      assert expected.getCause() instanceof IllegalStateException
+          : "Expected OfflineNoteWallet load failure to propagate";
+    }
+    assert noteWalletEvents.equals(List.of("hasPending", "sync"))
+        : "OfflineNoteWallet adapter must sync pending receipts before loading";
+
+    final OfflineCashLifecycle.Controller bearerWalletController =
+        new OfflineCashLifecycle.Controller(
+            new OfflineBearerCashWallet(testOfflineNoteWallet()), null);
+    try {
+      bearerWalletController.load("pkr#sbp", "10").get();
+      throw new AssertionError("OfflineBearerCashWallet adapter must propagate load failure");
+    } catch (final java.util.concurrent.ExecutionException expected) {
+      assert expected.getCause() instanceof IllegalStateException
+          : "Expected OfflineBearerCashWallet load failure to propagate";
+    }
   }
 
   private static void encodeAndSignEnvelopeWithAttestationBundle() throws Exception {
@@ -572,6 +662,55 @@ public final class TransactionBuilderTests {
       directory = directory.getParent();
     }
     throw new AssertionError("missing shared recursive spend ABI-7 fixture " + fileName);
+  }
+
+  private static OfflineNoteWallet testOfflineNoteWallet() {
+    return new OfflineNoteWallet(
+        "00000042",
+        "merchant",
+        unusedAttestationProvider(),
+        new InMemoryOfflineNoteStore(),
+        null,
+        null,
+        unusedProofProvider(),
+        unusedProofVerifier(),
+        new SecureOfflineNoteRandomSource(),
+        new UuidOfflineNoteIdGenerator(),
+        () -> 1_000L);
+  }
+
+  private static OfflineNoteAttestationProvider unusedAttestationProvider() {
+    return () -> {
+      throw new UnsupportedOperationException("not used");
+    };
+  }
+
+  private static OfflineNoteProofProvider unusedProofProvider() {
+    return new OfflineNoteProofProvider() {
+      @Override
+      public OfflineNote.RecursiveProof proveAudit(final OfflineNote.AuditBundle audit) {
+        throw new UnsupportedOperationException("not used");
+      }
+
+      @Override
+      public OfflineNote.RecursiveProof proveRedeem(final OfflineNote.Redeem redemption) {
+        throw new UnsupportedOperationException("not used");
+      }
+    };
+  }
+
+  private static OfflineNoteProofVerifier unusedProofVerifier() {
+    return new OfflineNoteProofVerifier() {
+      @Override
+      public boolean verifyAudit(final OfflineNote.AuditBundle audit) {
+        throw new UnsupportedOperationException("not used");
+      }
+
+      @Override
+      public boolean verifyRedeem(final OfflineNote.Redeem redemption) {
+        throw new UnsupportedOperationException("not used");
+      }
+    };
   }
 
   private static void assertThrows(final Runnable runnable, final String message) {

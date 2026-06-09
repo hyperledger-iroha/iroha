@@ -637,7 +637,26 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 self.assertNotIn("evidence-path-leak", message)
 
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        overlong_path = "out/" + ("a" * (EVIDENCE.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
+            (
+                "raw overlong",
+                lambda raw: EVIDENCE._reject_raw_output_path_smuggling(raw, "raw path"),
+                overlong_path,
+                f"no longer than {EVIDENCE.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "output overlong",
+                lambda raw: EVIDENCE._reject_output_path_smuggling(Path(raw), "output path"),
+                overlong_path,
+                f"no longer than {EVIDENCE.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "input overlong",
+                lambda raw: EVIDENCE._reject_path_smuggling(raw, "config_path"),
+                overlong_path,
+                f"no longer than {EVIDENCE.MAX_LOCAL_PATH_CHARS} characters",
+            ),
             (
                 "raw encoded dot",
                 lambda raw: EVIDENCE._reject_raw_output_path_smuggling(raw, "raw path"),
@@ -701,6 +720,50 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                 message = str(caught.exception)
                 self.assertIn(expected, message)
                 self.assertNotIn(raw, message)
+
+    def test_overlong_archive_strings_are_rejected_without_echo(self):
+        overlong = "M" * (EVIDENCE.MAX_CLEAN_STRING_CHARS + 1)
+        cases = (
+            (
+                "required",
+                lambda: EVIDENCE._required_string({"path": overlong}, "path", "summary"),
+                f"summary.path must be no longer than {EVIDENCE.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "list",
+                lambda: EVIDENCE._required_clean_string_list(
+                    {"oids": [overlong]}, "oids", "bundle"
+                ),
+                f"bundle.oids[0] must be no longer than {EVIDENCE.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+        )
+        for name, call, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(EVIDENCE.EvidenceError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(overlong, message)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            canary = valid_canary_summary()
+            canary["provider"] = overlong
+            canary_path = write_canary(root, digest_summary(canary))
+            trust_path = write_trust_summary(root / "trust")
+
+            rc, stdout, stderr = run_evidence(
+                ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                f".provider must be no longer than {EVIDENCE.MAX_CLEAN_STRING_CHARS} characters",
+                stderr,
+            )
+            self.assertNotIn(overlong, stderr)
 
     def test_url_paths_reject_raw_delimiter_smuggling(self):
         cases = (

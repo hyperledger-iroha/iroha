@@ -1245,9 +1245,9 @@ for run in $(seq 1 "$RUNS"); do
     fi
   fi
 
-  if rg -n "DA availability still missing \\(advisory\\)" "$run_dir"/peer*.log >/dev/null 2>&1; then
+  if rg -n "DA availability gate still active|DA availability still missing \\(advisory\\)" "$run_dir"/peer*.log >/dev/null 2>&1; then
     warn_availability=$((warn_availability + 1))
-    echo "[run $run] warning: DA availability still missing (advisory) detected"
+    echo "[run $run] warning: DA availability gate still active detected"
   fi
   if rg -n "DAG fingerprint mismatch" "$run_dir"/peer*.log >/dev/null 2>&1; then
     warn_dag=$((warn_dag + 1))

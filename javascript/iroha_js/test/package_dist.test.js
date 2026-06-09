@@ -3346,7 +3346,7 @@ test("package declarations mark privacy capability metadata readonly", () => {
   assert.match(productionGate, /readonly missing: readonly string\[\];/);
   assert.match(
     productionGate,
-    /readonly auditReferences: readonly Readonly<\{ label: string; url: string \}>\[\];/,
+    /readonly auditReferences: readonly Readonly<\{\s*label: string;\s*url: string;\s*uri\?: string;\s*signature\?: string;\s*\}>\[\];/,
   );
 
   const descriptor = declarationInterface("PrivacyAlgorithmDescriptor");
@@ -3373,7 +3373,7 @@ test("package declarations mark privacy capability metadata readonly", () => {
   );
   assert.match(
     DECLARATIONS_TEXT,
-    /export function getPrivacyAlgorithmDescriptors\(\): readonly PrivacyAlgorithmDescriptor\[\];/,
+    /export function getPrivacyAlgorithmDescriptors\(\s*productionEvidence\?: PrivacyProductionEvidenceRegistry,\s*options\?: PrivacyProductionEvidenceOptions,\s*\): readonly PrivacyAlgorithmDescriptor\[\];/,
   );
   assert.match(
     DECLARATIONS_TEXT,

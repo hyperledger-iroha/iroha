@@ -479,6 +479,70 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                     self.assertNotIn("notary-source-secret", message)
                     self.assertNotIn(hidden, message)
 
+    def test_overlong_clean_metadata_strings_are_rejected_without_echo(self):
+        overlong = "M" * (ADAPTER.MAX_CLEAN_STRING_CHARS + 1)
+        cases = (
+            (
+                "helper",
+                lambda: ADAPTER._require_clean_string(overlong, "record.detail"),
+                "record.detail must be no longer than 4096 characters",
+            ),
+            (
+                "nonsecret-helper",
+                lambda: ADAPTER._require_nonsecret_clean_string(
+                    overlong,
+                    "record.business_message_id",
+                ),
+                "record.business_message_id must be no longer than 4096 characters",
+            ),
+            (
+                "audit-index",
+                lambda: self._verify_overlong_audit_index_metadata(overlong),
+                "audit index records[0].business_message_id must be no longer than 4096 characters",
+            ),
+            (
+                "record-source",
+                lambda: self._verify_overlong_record_source_metadata(overlong),
+                "record.detail must be no longer than 4096 characters",
+            ),
+        )
+        for name, run, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(ADAPTER.AdapterError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(overlong, message)
+
+    def _verify_overlong_audit_index_metadata(self, overlong):
+        index = sample_index()
+        index["records"][0]["business_message_id"] = overlong
+        index = with_digest(index, ADAPTER.INDEX_DIGEST_FIELD)
+        ADAPTER.verify_audit_index(index)
+
+    def _verify_overlong_record_source_metadata(self, overlong):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            record = sample_record()
+            source = sample_persisted_record(record)
+            source["detail"] = overlong
+            source = with_digest(source, ADAPTER.PERSISTED_RECORD_DIGEST_FIELD)
+            record[ADAPTER.PERSISTED_RECORD_DIGEST_FIELD] = source[
+                ADAPTER.PERSISTED_RECORD_DIGEST_FIELD
+            ]
+            record_path = root / record["filename"]
+            record_path.write_text(
+                json.dumps(source, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            ADAPTER._verify_persisted_record_source(
+                record,
+                record_path,
+                "record",
+            )
+
     def test_output_cli_path_flags_reject_flag_like_values(self):
         cases = (
             ["--receipt-dir"],
@@ -516,7 +580,26 @@ class IsoAuditNotaryAdapterTest(unittest.TestCase):
                 self.assertNotIn("notary-path-leak", message)
 
     def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        overlong_path = "out/" + ("a" * (ADAPTER.MAX_LOCAL_PATH_CHARS + 1))
         cases = (
+            (
+                "raw overlong",
+                lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),
+                overlong_path,
+                f"no longer than {ADAPTER.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "output overlong",
+                lambda raw: ADAPTER._reject_output_path_smuggling(Path(raw), "output path"),
+                overlong_path,
+                f"no longer than {ADAPTER.MAX_LOCAL_PATH_CHARS} characters",
+            ),
+            (
+                "store overlong",
+                lambda raw: ADAPTER._require_clean_path_string(raw, "anchor.store_dir"),
+                overlong_path,
+                f"no longer than {ADAPTER.MAX_LOCAL_PATH_CHARS} characters",
+            ),
             (
                 "raw encoded dot",
                 lambda raw: ADAPTER._reject_raw_output_path_smuggling(raw, "raw path"),

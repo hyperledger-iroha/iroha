@@ -28,10 +28,25 @@ KAGEMUSHA_OFFLINE_SPEND_MODE_RECURSIVE_V1 = "recursive_spend_v1"
 KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1 = "checked_prefold_v1"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER = "KagemushaTransfer"
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE = "RedeemKagemushaRecursive"
+KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME = (
+    "iroha_data_model::isi::offline::KagemushaTransfer"
+)
+KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME = (
+    "iroha_data_model::isi::offline::RedeemKagemushaRecursive"
+)
+KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME = (
+    "iroha_data_model::offline::model::KagemushaRecursiveSpendRedeemRequestV1"
+)
 KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = (
     KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER,
     KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE,
 )
+KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES = {
+    KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER: KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME,
+    KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE: (
+        KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME
+    ),
+}
 KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION = 6
 KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION = 7
 KAGEMUSHA_MAX_BRIDGE_ABI_VERSION = 0xFFFF_FFFF
@@ -114,7 +129,11 @@ __all__ = [
     "KAGEMUSHA_OFFLINE_SPEND_MODE_CHECKED_PREFOLD_V1",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+    "KAGEMUSHA_TRANSFER_INSTRUCTION_WIRE_NAME",
+    "KAGEMUSHA_REDEEM_RECURSIVE_INSTRUCTION_WIRE_NAME",
+    "KAGEMUSHA_RECURSIVE_REDEEM_REQUEST_WIRE_NAME",
     "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES",
     "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_REQUIRED_BRIDGE_ABI_VERSION",
     "KAGEMUSHA_RECURSIVE_COMPACT_CIRCUIT_ID_V1",
@@ -315,6 +334,24 @@ def _assert_kagemusha_norito_archive(data: bytes, name: str) -> bytes:
     if _kagemusha_crc64(payload) != int.from_bytes(data[31:39], "little"):
         fail()
     return payload
+
+
+def _norito_schema_hash(type_name: str) -> bytes:
+    digest = hashlib.sha256()
+    digest.update(b"norito:v1:type-name\x00")
+    digest.update(type_name.encode("utf-8"))
+    return digest.digest()[:16]
+
+
+def _assert_kagemusha_instruction_archive_schema(
+    data: bytes,
+    instruction_type: KagemushaInstructionArchiveType,
+    name: str,
+) -> None:
+    wire_name = KAGEMUSHA_INSTRUCTION_ARCHIVE_WIRE_NAMES[instruction_type]
+    expected_schema = _norito_schema_hash(wire_name)
+    if data[6:22] != expected_schema:
+        raise ValueError(f"{name} schema must match {instruction_type}")
 
 
 def _validate_kagemusha_recursive_spend_lineage_key_artifact_package_binding(
@@ -1276,6 +1313,11 @@ def kagemusha_instruction_archive_instruction(
 
     normalized_type = _normalize_kagemusha_instruction_archive_type(instruction_type)
     archive = _norito_archive_bytes_named(instruction_archive, "instruction_archive")
+    _assert_kagemusha_instruction_archive_schema(
+        archive,
+        normalized_type,
+        "instruction_archive",
+    )
     from .crypto import Instruction
 
     builder = getattr(Instruction, "kagemusha_instruction_archive", None)

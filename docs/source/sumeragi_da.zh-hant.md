@@ -14,22 +14,24 @@ translation_last_reviewed: 2026-02-07
 The integration tests [`sumeragi_rbc_da_large_payload_four_peers`] and
 [`sumeragi_rbc_da_large_payload_six_peers`] (defined in
 `integration_tests/tests/sumeragi_da.rs`) spin up four- and six-peer networks
-with `sumeragi.da.enabled = true` (DA + RBC). Each
-test submits a ≥10&nbsp;MiB log instruction, observes RBC delivery and commit,
-verifies that availability quorum can be formed for the payload, and prints a
-structured summary that can be ingested by dashboards or regression tooling.
+with `sumeragi.da.enabled = true` (DA + RBC). Each run uses the integration
+harness default `LARGE_PAYLOAD_BYTES = 1024`, observes RBC delivery and
+commit, verifies the protocol READY quorum (four peers: ≥3 votes; six peers:
+≥4 votes), and prints a structured summary that can be ingested by dashboards
+or regression tooling.
 
 For light-client driven sampling of RBC payloads see
 [`light_client_da.md`](light_client_da.md), which documents the authenticated
 `/v1/sumeragi/rbc/sample` endpoint and the associated rate limits and budgets.
 
-### DA timeout & advisory warnings
+### DA timeout & availability tracking
 
 With `sumeragi.da.enabled=true`, the commit pipeline records local payload availability
 (`BlockCreated` or RBC delivery) in the DA gate. Availability evidence (availability votes
-or an RBC `READY` quorum) is tracked for audit/telemetry and is advisory in v1; commit/finalize
-continue even when availability is missing. Missing local payloads are logged for operator
-visibility and fetched via RBC or block sync.
+or an RBC `READY` quorum) is tracked for audit/telemetry and deterministic recovery, but
+it is not a separate commit quorum. Local finalize waits while `missing_local_data` is
+active, then continues once `BlockCreated` or RBC/block-sync recovery makes the payload
+available locally.
 
 The availability deadline is derived from the configured block/commit times and the
 DA timeout tuning knobs; it is used to classify missing payloads as "stale" for logging
@@ -145,7 +147,7 @@ alert when real runs drift beyond these ceilings:
 
 | Metric | Budget | Enforcement | Alert guidance |
 | --- | --- | --- | --- |
-| RBC delivery latency | 35 s base budget, plus 60 s per peer beyond four and a 40 s RS16 premium | `sumeragi_rbc_da_large_payload_*` | Alert when routine smoke runs approach the computed budget; investigate collector saturation. |
+| RBC delivery latency | 30 s base budget, plus 60 s per peer beyond four and a 40 s RS16 premium | `sumeragi_rbc_da_large_payload_*` | Alert when routine smoke runs approach the computed budget; investigate collector saturation. |
 | Commit latency | RBC delivery budget + 40 s headroom | Same as above | Alert when commit latency approaches the computed budget; check pacemaker deadlines and view changes. |
 | Effective throughput | At least min(payload/delivery-budget, 0.1 MiB/s) | Same as above | Alert when throughput falls below the computed floor for two consecutive runs. |
 | Sumeragi background-post queue depth | ≤ 32 inflight tasks | Same as above | Alert when depth ≥ 24 to catch growing backlog early. |
