@@ -2,6 +2,51 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 Kagemusha default-test de-heavying
+
+- Found a WSL-crash root cause in the normal `iroha_core kagemusha` test
+  filter: `kagemusha_recursive_aggregation_proof_vk_record_from_box_canonicalizes_record`
+  used the production ABI-7 recursive compact verifier-key helper, which enters
+  the 4 GiB-stack recursive compact key-generation path during default tests.
+- Re-routed that assertion through the existing shape-only recursive compact VK
+  helper. The remaining production compact VK calls are public artifact/record
+  generation paths or ignored heavy proof tests.
+- Found a second default-suite pressure source in
+  `crates/iroha_core/src/smartcontracts/isi/offline.rs`: several Kagemusha
+  transfer and recursive redeem tests were ordinary `#[test]` cases even though
+  they call real Halo2 IPA proof builders, recursive spend proof generation, and
+  512 MiB recursive redeem test stacks. Marked those real-proof coverage cases
+  ignored so broad default filters keep the lightweight policy/metadata checks
+  while real proof coverage remains opt-in via `--ignored --test-threads=1`.
+- Found a third default-suite pressure source in the non-native Vesta/IPA
+  Kagemusha circuit tests: ordinary tests were still entering
+  `run_vesta_affine_ipa_verifier_test` and
+  `run_vesta_affine_ipa_one_round_test`, which reserve 4 GiB and 3 GiB test
+  stacks respectively. Marked the tests that call those large-stack MockProver
+  wrappers ignored; lower-stack builder checks remain in the default suite.
+- Follow-up scan found 17 more default tests still entering the 1 GiB, 1.5 GiB,
+  or 2 GiB Kagemusha Vesta/IPA stack wrappers. Marked those tests ignored as
+  well so no default test body calls a 1 GiB-or-larger Kagemusha Vesta/IPA
+  stack wrapper.
+- Validation:
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_recursive_aggregation_proof_vk_record_from_box_canonicalizes_record --lib -- --test-threads=1 --nocapture`
+    (`1` test passed; rebuild plus test completed without `RUST_MIN_STACK`)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_transfer_executes_real_confidential_transfer_v2_proof --lib -- --test-threads=1 --nocapture`
+    (`1` test ignored by the default runner)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_recursive_redeem_rejects_verifier_and_policy_misconfigurations --lib -- --test-threads=1 --nocapture`
+    (`1` test ignored by the default runner)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_transfer_rejects_unbound_asset_verifier --lib -- --test-threads=1 --nocapture`
+    (`1` lightweight default Kagemusha test passed)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_non_native_vesta_ipa_verifier_batch_preflight_accepts_multiple_real_openings --lib -- --test-threads=1 --nocapture`
+    (`1` 4 GiB-wrapper Kagemusha test ignored by the default runner)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_two_round_profile --lib -- --test-threads=1 --nocapture`
+    (`1` 3 GiB-wrapper Kagemusha test ignored by the default runner)
+  - `CARGO_BUILD_JOBS=1 CARGO_PROFILE_TEST_DEBUG=0 CARGO_PROFILE_TEST_SPLIT_DEBUGINFO=off cargo test -p iroha_core kagemusha_non_native_vesta_ipa_final_windowed_msm_rejects_product_high_bit_builder --lib -- --test-threads=1 --nocapture`
+    (`1` 2 GiB-wrapper Kagemusha test ignored by the default runner)
+  - Source scan: no non-ignored test body calls `run_vesta_affine_*` Kagemusha
+    helpers with 1 GiB-or-larger stack reservations.
+  - `cargo fmt -p iroha_core --check`
+
 ## 2026-06-09 ABI-7 recursive compact LEN=4 package artifacts
 
 - Relaxed `KagemushaRecursiveCompactKeyArtifactsV1` and verifier-key package
