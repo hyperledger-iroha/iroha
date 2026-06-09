@@ -883,6 +883,79 @@ class IsoXsdFixtureVerifyTest(unittest.TestCase):
                     self.assertNotIn("unknown dataset", stderr)
                     self.assertNotIn("unknown mode", stderr)
 
+    def test_profile_catalog_overlong_generic_strings_are_rejected_without_echo(self):
+        hidden = "M" * (VERIFIER.MAX_CLEAN_STRING_CHARS + 1)
+        cases = (
+            (
+                "required",
+                lambda: VERIFIER._required_string({"rail": hidden}, "rail", "profiles[0]"),
+                f"profiles[0].rail must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "optional",
+                lambda: VERIFIER._optional_string(
+                    {"schema": hidden}, "schema", "fixtures[0]"
+                ),
+                f"fixtures[0].schema must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "list",
+                lambda: VERIFIER._optional_string_list(
+                    {"required_reference_datasets": [hidden]},
+                    "required_reference_datasets",
+                    "profiles[0]",
+                ),
+                f"profiles[0].required_reference_datasets[0] must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+        )
+        for name, call, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.FixtureManifestError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(hidden, message)
+
+        catalog = [
+            {
+                "id": "minimal-profile",
+                "rail": hidden,
+                "embedded_signature_policy": "record-only",
+                "required_reference_datasets": [],
+                "message_profiles": [
+                    {
+                        "message_type": "fooo.001",
+                        "direction": "inbound",
+                        "versions": ["fooo.001.001.01"],
+                        "structured_address_mode": "permissive",
+                    }
+                ],
+            }
+        ]
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            manifest_path = write_minimal_tree(root, minimal_manifest())
+            profile_catalog = write_profile_catalog(root / "profiles.rs", catalog=catalog)
+
+            rc, stdout, stderr = run_verify(
+                [
+                    "--manifest",
+                    str(manifest_path),
+                    "--profile-catalog",
+                    str(profile_catalog),
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                f"profiles[0].rail must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+                stderr,
+            )
+            self.assertNotIn(hidden, stderr)
+            self.assertNotIn("unknown rail", stderr)
+
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             path = Path(raw_root) / "fixture_manifest.json"

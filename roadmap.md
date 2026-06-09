@@ -13,6 +13,11 @@ and completed history lives in [`status.md`](./status.md).
 
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
+- Kagemusha SDK parity must keep ABI-7 compact projection verifier surfaces
+  aligned across package roots and native hosts. Python now exposes both the
+  optional-height verifier and the explicit
+  `kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height(...)`
+  root helper, and the SDK parity guard must continue pinning that surface.
 - Continue reducing local/CI compile memory after the WSL cargo-test hardening
   and Kagemusha record-bound compact preflight isolation: plain default tests no
   longer run the heavy ABI-7 recursive compact record-bound Pallas proof matrix,
@@ -835,7 +840,7 @@ and completed history lives in [`status.md`](./status.md).
 	  the checked-in ABI-7 fail-closed and Reserved-lineage release-tooling marker
 	  source files must also be ordinary non-symlink, non-hardlinked files before
 	  their marker text can satisfy readiness, with marker bytes decoded from the
-	  same opened regular file after path-identity revalidation, capped at 2 MiB,
+	  same opened regular file after path-identity revalidation, capped at 8 MiB,
 	  and unreadable
 	  or non-UTF-8 marker bytes fail closed as structured blockers. The proof evidence has to hash-bind adjacent
 	  `.norito`, `.record.norito`, `.vk`, `.pk`, and production proof-log artifact
@@ -894,14 +899,19 @@ and completed history lives in [`status.md`](./status.md).
 		  the evidence helpers' writer-specific strict JSON blocks so validation
 		  scratch-file serialization cannot mask writer drift. The readiness
 		  summary writer enforces a 16 MiB `--summary-out` cap before
-		  temporary-file creation and during final opened-file readback. The lineage and compact-key
+		  temporary-file creation, during final opened-file readback, and
+		  reports temporary-file cleanup failures after write errors. The lineage and compact-key
 		  evidence helpers also enforce their readiness evidence JSON byte caps
 		  before creating `--out` temporary files and during final opened-file
 		  readback after atomic replacement, and the Android device-lab summary
 		  writer enforces the 16 MiB JSON cap before creating `--json-out`
-		  temporary files plus during final opened-file readback, while the
+		  temporary files plus during final opened-file readback and reports
+		  temporary-file cleanup failures after write errors. The Android
+		  signed-evidence helper output writer applies the same cleanup failure
+		  reporting to its atomic JSON and manifest text writes, while the
 		  release-bundle writer enforces its 16 MiB manifest cap before
-		  temporary-file creation and during final opened-file readback. Android signed-evidence
+		  temporary-file creation and during final opened-file readback and
+		  reports temporary-file cleanup failures as structured blockers. Android signed-evidence
 		  canonical signature payloads also reject non-finite values before
 		  hashing, signing, or verification.
 	  The Kagemusha release
@@ -2552,9 +2562,11 @@ and completed history lives in [`status.md`](./status.md).
 			  4096-character clean metadata string caps across notary/receipt audit
 			  indexes, persisted records, nullable context/metadata/history fields, and
 			  rail sidecars,
-			  4096-character canary runbook generic string/list and evidence
-			  replay clean string/list caps before planning or archive replay,
-			  with embedded trust DER base64 retaining its decoded-size guard,
+			  4096-character direct trust-bundle generic string/OID-list, XSD
+			  profile-catalog generic string/list, canary runbook generic
+			  string/list, and evidence replay clean string/list caps before trust
+			  preflight, XSD profile validation, planning, or archive replay, with
+			  embedded trust/profile DER base64 retaining its decoded-size guard,
 			  Torii durable-store reload,
 	  audit record filename/message-id bindings, Torii reload clean-string enforcement,
 	  Torii reload filename/message-id binding, symlink-free regular-file-only Torii record

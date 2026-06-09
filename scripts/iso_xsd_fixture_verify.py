@@ -100,6 +100,7 @@ MAX_FIXTURE_XML_BYTES = 8 * 1024 * 1024
 MAX_XMLLINT_OUTPUT_BYTES = 64 * 1024
 MAX_XMLLINT_TIMEOUT_SECS = 300.0
 MAX_LOCAL_PATH_CHARS = 4096
+MAX_CLEAN_STRING_CHARS = 4096
 MAX_SOURCE_REPOSITORY_CHARS = 2048
 MAX_SOURCE_PATH_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
@@ -1067,10 +1068,18 @@ def _check_no_secret_material(value: Any, label: str = "$") -> None:
             raise FixtureManifestError(f"{label} contains secret-looking material")
 
 
-def _required_string(value: dict[str, Any], key: str, label: str) -> str:
+def _required_string(
+    value: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    max_chars: int | None = MAX_CLEAN_STRING_CHARS,
+) -> str:
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise FixtureManifestError(f"{label}.{key} must be a non-empty string")
+    if max_chars is not None and len(raw) > max_chars:
+        raise FixtureManifestError(f"{label}.{key} must be no longer than {max_chars} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label}.{key} must not contain control characters")
     if raw != raw.strip():
@@ -1116,12 +1125,20 @@ def _require_message_def_id(value: str, label: str) -> str:
     return value
 
 
-def _optional_string(value: dict[str, Any], key: str, label: str) -> str | None:
+def _optional_string(
+    value: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    max_chars: int | None = MAX_CLEAN_STRING_CHARS,
+) -> str | None:
     if key not in value:
         return None
     raw = value.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise FixtureManifestError(f"{label}.{key} must be a non-empty string when set")
+    if max_chars is not None and len(raw) > max_chars:
+        raise FixtureManifestError(f"{label}.{key} must be no longer than {max_chars} characters")
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{label}.{key} must not contain control characters")
     if raw != raw.strip():
@@ -1147,7 +1164,13 @@ def _optional_nonnegative_int(value: dict[str, Any], key: str, label: str) -> in
     return raw
 
 
-def _optional_string_list(value: dict[str, Any], key: str, label: str) -> list[str]:
+def _optional_string_list(
+    value: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    max_chars: int | None = MAX_CLEAN_STRING_CHARS,
+) -> list[str]:
     if key not in value:
         return []
     raw = value.get(key)
@@ -1157,6 +1180,10 @@ def _optional_string_list(value: dict[str, Any], key: str, label: str) -> list[s
     for offset, item in enumerate(items):
         if not isinstance(item, str) or not item.strip():
             raise FixtureManifestError(f"{label}.{key}[{offset}] must be a non-empty string")
+        if max_chars is not None and len(item) > max_chars:
+            raise FixtureManifestError(
+                f"{label}.{key}[{offset}] must be no longer than {max_chars} characters"
+            )
         if item != item.strip():
             raise FixtureManifestError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
@@ -1219,7 +1246,7 @@ def _optional_canonical_base64_list(
     key: str,
     label: str,
 ) -> list[str]:
-    items = _optional_string_list(value, key, label)
+    items = _optional_string_list(value, key, label, max_chars=None)
     if len(items) > MAX_PROFILE_DER_BLOBS:
         raise FixtureManifestError(
             f"{label}.{key} must not contain more than {MAX_PROFILE_DER_BLOBS} entries"

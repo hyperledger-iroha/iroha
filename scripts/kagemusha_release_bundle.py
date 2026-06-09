@@ -1343,13 +1343,19 @@ def _bundle_evidence_paths(bundle: dict[str, Any]) -> set[str]:
     return paths
 
 
-def _cleanup_temp_output(path: Path) -> None:
+def _cleanup_temp_output(path: Path) -> list[dict[str, Any]]:
     try:
         path.unlink()
     except FileNotFoundError:
-        return
+        return []
     except OSError:
-        return
+        return [
+            _blocker(
+                "kagemusha_release_bundle_out_invalid",
+                "--out temporary file could not be removed",
+            )
+        ]
+    return []
 
 
 def _stable_release_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -1974,6 +1980,7 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
             )
         ]
     tmp_path: Path | None = None
+    write_blockers: list[dict[str, Any]] = []
     try:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -1993,23 +2000,27 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
             "--out temporary file",
         )
         if temp_relative_blockers:
-            return temp_relative_blockers
-        assert temp_relative is not None
-        output_blockers = _validate_output_path(path, bundle_root)
-        if output_blockers:
-            return output_blockers
-        os.replace(tmp_path, path)
-        tmp_path = None
+            write_blockers.extend(temp_relative_blockers)
+        else:
+            assert temp_relative is not None
+            output_blockers = _validate_output_path(path, bundle_root)
+            if output_blockers:
+                write_blockers.extend(output_blockers)
+            else:
+                os.replace(tmp_path, path)
+                tmp_path = None
     except OSError:
-        return [
+        write_blockers.append(
             _blocker(
                 "kagemusha_release_bundle_out_invalid",
                 "--out could not be written",
             )
-        ]
+        )
     finally:
         if tmp_path is not None:
-            _cleanup_temp_output(tmp_path)
+            write_blockers.extend(_cleanup_temp_output(tmp_path))
+    if write_blockers:
+        return write_blockers
     output_blockers = _validate_output_path(path, bundle_root)
     if output_blockers:
         return output_blockers

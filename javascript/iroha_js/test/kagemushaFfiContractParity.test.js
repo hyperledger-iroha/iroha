@@ -3882,6 +3882,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     "--negative-control-js-dts-recursive-compact-key-package",
     "--negative-control-python-recursive-compact-root-export",
     "--negative-control-recursive-spend-compact-projection-surface",
+    "--negative-control-python-recursive-spend-compact-projection-root-export",
     "--negative-control-native-bridge-zero-envelope-pallas-guard",
     "--negative-control-kagemusha-abi-probe-bounds",
     "--negative-control-kagemusha-probe-rejection-shape",
@@ -4916,7 +4917,7 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
   );
   const recursiveSpendCompactProjectionSurfaceBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-recursive-spend-compact-projection-surface":'),
-    guard.indexOf('if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":'),
+    guard.indexOf('if mode == "--negative-control-python-recursive-spend-compact-projection-root-export":'),
   );
   assert.match(
     recursiveSpendCompactProjectionSurfaceBranch,
@@ -4937,6 +4938,30 @@ test("recursive Kagemusha SDK parity negative controls fail when drift is undete
     recursiveSpendCompactProjectionSurfaceBranch,
     /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
     "recursive spend compact projection negative control must not unconditionally pass after run_checks",
+  );
+  const pythonRecursiveSpendCompactProjectionRootExportBranch = guard.slice(
+    guard.indexOf('if mode == "--negative-control-python-recursive-spend-compact-projection-root-export":'),
+    guard.indexOf('if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":'),
+  );
+  assert.match(
+    pythonRecursiveSpendCompactProjectionRootExportBranch,
+    /python\/iroha_python\/src\/iroha_python\/__init__\.py[\s\S]*?method\s*=\s*"kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"[\s\S]*?replace\(f'    "\{method\}",\\n'/u,
+    "Python recursive spend compact projection root export negative control must remove the at-height root export",
+  );
+  assert.match(
+    pythonRecursiveSpendCompactProjectionRootExportBranch,
+    /mutated_texts\s*=\s*dict\(texts\)[\s\S]*?mutated_texts\[target\]\s*=\s*mutated[\s\S]*?run_checks\(mutated_texts\)/u,
+    "Python recursive spend compact projection root export negative control must validate the mutated text snapshot",
+  );
+  assert.match(
+    pythonRecursiveSpendCompactProjectionRootExportBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)[\s\S]*?raise\s+SystemExit\(\s*"negative control failed: Python recursive spend compact projection root export drift was not detected"\s*\)/u,
+    "Python recursive spend compact projection root export negative control must only pass after detecting injected drift",
+  );
+  assert.doesNotMatch(
+    pythonRecursiveSpendCompactProjectionRootExportBranch,
+    /except\s+ParityError\s+as\s+error:[\s\S]*?raise\s+SystemExit\(0\)\s*raise\s+SystemExit\(0\)/u,
+    "Python recursive spend compact projection root export negative control must not unconditionally pass after run_checks",
   );
   const kagemushaProbeRejectionShapeBranch = guard.slice(
     guard.indexOf('if mode == "--negative-control-kagemusha-probe-rejection-shape":'),

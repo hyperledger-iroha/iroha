@@ -285,6 +285,7 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-dts-recursive-compact-key-package
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-compact-root-export
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-spend-compact-projection-root-export
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-probe-rejection-shape
@@ -420,6 +421,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-file-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-write-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-strict-json-write
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-verification
@@ -570,6 +572,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-write-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-verification
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-post-write-preflight
@@ -642,6 +645,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-direct-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-write-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-strict-json-write
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-verification
@@ -689,6 +693,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-local-json-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-temp-cleanup-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-strict-json-write
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-size-limit
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure

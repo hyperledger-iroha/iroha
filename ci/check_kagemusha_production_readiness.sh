@@ -769,6 +769,9 @@ TEXT_REQUIREMENTS = {
         "handle.flush()",
         "os.fsync(handle.fileno())",
         "os.replace(tmp_path, path)",
+        "_cleanup_summary_output",
+        "--json-out temporary file could not be removed",
+        "write_errors.extend(_cleanup_summary_output(tmp_path))",
         "_read_summary_output_text",
         "summary_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "summary_open_identity = (open_stat.st_dev, open_stat.st_ino)",
@@ -898,6 +901,9 @@ TEXT_REQUIREMENTS = {
         "handle.flush()",
         "os.fsync(handle.fileno())",
         "os.replace(tmp_path, path)",
+        "_cleanup_temp_output",
+        'f"{label} temporary file could not be removed"',
+        "write_errors.extend(_cleanup_temp_output(tmp_path, label))",
         "_read_existing_output_text",
         '        if read_errors == [f"{label} could not be read"]:\n            return None, [f"{label} write verification failed"]\n',
         "readback_text != text",
@@ -1313,6 +1319,9 @@ TEXT_REQUIREMENTS = {
         "--summary-out summary is not strict JSON",
         'if len(summary_text.encode("utf-8")) > MAX_READINESS_SUMMARY_JSON_BYTES:',
         "--summary-out could not be written",
+        "_cleanup_summary_output",
+        "--summary-out temporary file could not be removed",
+        "write_blockers.extend(_cleanup_summary_output(tmp_path))",
         "tempfile.NamedTemporaryFile(",
         "handle.flush()",
         "os.fsync(handle.fileno())",
@@ -1688,6 +1697,9 @@ TEXT_REQUIREMENTS = {
         "tempfile.NamedTemporaryFile",
         "os.fsync(handle.fileno())",
         "os.replace(tmp_path, path)",
+        "_cleanup_temp_output",
+        "--out temporary file could not be removed",
+        "write_blockers.extend(_cleanup_temp_output(tmp_path))",
         "_read_output_text",
         "output_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
@@ -1941,6 +1953,7 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_rejects_oversized_json_before_write",
         "test_write_summary_rejects_write_failure_after_preflight",
         "test_write_summary_preserves_existing_output_on_replace_failure",
+        "test_write_summary_reports_temp_cleanup_failure_after_write_failure",
         "test_write_summary_rejects_symlink_swap_before_replace",
         "test_write_summary_rejects_readback_mismatch",
         "test_write_summary_rejects_readback_failure",
@@ -2008,6 +2021,7 @@ TEXT_REQUIREMENTS = {
         "test_signer_write_json_rejects_oversized_json_before_write",
         "test_signer_write_json_rejects_write_failure_after_preflight",
         "test_signer_write_json_preserves_existing_output_on_replace_failure",
+        "test_signer_write_json_reports_temp_cleanup_failure_after_write_failure",
         "test_signer_write_json_rejects_symlink_swap_before_replace",
         "test_signer_write_json_rejects_readback_mismatch",
         "test_signer_write_json_rejects_readback_failure",
@@ -2522,6 +2536,7 @@ TEXT_REQUIREMENTS = {
         "test_write_summary_rejects_oversized_json_before_write",
         "test_write_summary_rejects_oversized_readback_after_replace",
         "test_write_summary_preserves_existing_output_on_replace_failure",
+        "test_write_summary_reports_temp_cleanup_failure_after_write_failure",
         "test_write_summary_rejects_symlink_swap_before_replace",
         "test_write_summary_rejects_readback_mismatch",
         "test_write_summary_rejects_readback_failure",
@@ -2788,6 +2803,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-readback-verification",
@@ -2937,6 +2953,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-verification",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-manifest-shape",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-slot-metadata-failure",
@@ -3007,6 +3024,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-direct-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-write-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-readback-verification",
@@ -3122,6 +3140,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-local-json-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-temp-cleanup-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-strict-json-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-size-limit",
     "ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-output-readback-failure",
@@ -3830,8 +3849,19 @@ if mode == "--negative-control-android-device-lab-json-output-write-failure":
         "Android device-lab JSON summary output write-failure gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            "        os.replace(tmp_path, path)\n",
-            '        path.write_text(summary_text, encoding="utf-8")\n',
+            "            os.replace(tmp_path, path)\n",
+            '            path.write_text(summary_text, encoding="utf-8")\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-json-output-temp-cleanup-failure":
+    run_negative_control(
+        "Android device-lab JSON summary output temp cleanup failure gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            '    except OSError:\n        return ["--json-out temporary file could not be removed"]\n',
+            "    except OSError:\n        return []\n",
         ),
     )
     raise SystemExit(0)
@@ -5227,8 +5257,8 @@ if mode == "--negative-control-android-device-lab-signing-helper-json-write-fail
         "Android device-lab signed evidence helper JSON write-failure gate",
         lambda: override_text(
             "scripts/sign_android_device_lab_evidence.py",
-            "        os.replace(tmp_path, path)\n",
-            '        path.write_text(text, encoding="utf-8")\n',
+            "            os.replace(tmp_path, path)\n",
+            '            path.write_text(text, encoding="utf-8")\n',
         ),
     )
     raise SystemExit(0)
@@ -5493,6 +5523,17 @@ if mode == "--negative-control-android-device-lab-signing-helper-text-write-fail
             "scripts/sign_android_device_lab_evidence.py",
             "            os.fsync(handle.fileno())\n",
             "            handle.fileno()\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-temp-cleanup-failure":
+    run_negative_control(
+        "Android device-lab signed evidence helper temp cleanup failure gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            '    except OSError:\n        return [f"{label} temporary file could not be removed"]\n',
+            "    except OSError:\n        return []\n",
         ),
     )
     raise SystemExit(0)
@@ -6191,6 +6232,17 @@ if mode == "--negative-control-kagemusha-readiness-summary-output-write-failure"
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure":
+    run_negative_control(
+        "Kagemusha readiness summary output temp cleanup-failure gate",
+        lambda: override_text(
+            "scripts/kagemusha_production_readiness.py",
+            '    except OSError:\n        return [\n            _summary_out_blocker("--summary-out temporary file could not be removed")\n        ]\n',
+            "    except OSError:\n        return []\n",
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-kagemusha-readiness-summary-output-strict-json-write":
     run_negative_control(
         "Kagemusha readiness summary output strict JSON writer",
@@ -6505,6 +6557,17 @@ if mode == "--negative-control-release-bundle-atomic-output":
             "scripts/kagemusha_release_bundle.py",
             "os.replace(tmp_path, path)",
             'path.write_text(manifest_text, encoding="utf-8")',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-release-bundle-temp-cleanup-failure":
+    run_negative_control(
+        "Kagemusha release bundle temp cleanup failure gate",
+        lambda: override_text(
+            "scripts/kagemusha_release_bundle.py",
+            '    except OSError:\n        return [\n            _blocker(\n                "kagemusha_release_bundle_out_invalid",\n                "--out temporary file could not be removed",\n            )\n        ]\n',
+            "    except OSError:\n        return []\n",
         ),
     )
     raise SystemExit(0)

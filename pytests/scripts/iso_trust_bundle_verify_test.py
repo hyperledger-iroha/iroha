@@ -396,6 +396,58 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 self.assertIn(expected, message)
                 self.assertNotIn(raw, message)
 
+    def test_overlong_bundle_strings_are_rejected_without_echo(self):
+        overlong = "M" * (VERIFIER.MAX_CLEAN_STRING_CHARS + 1)
+        cases = (
+            (
+                "required",
+                lambda: VERIFIER._required_string(
+                    {"authority": overlong}, "authority", "bundle.source"
+                ),
+                f"bundle.source.authority must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "optional",
+                lambda: VERIFIER._optional_string(
+                    {"label": overlong}, "label", "bundle.x509_trust_anchors[0]"
+                ),
+                f"bundle.x509_trust_anchors[0].label must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+            (
+                "oid",
+                lambda: VERIFIER._oid_list(
+                    {"x509_required_certificate_policy_oids": [overlong]},
+                    "x509_required_certificate_policy_oids",
+                    "bundle",
+                ),
+                f"bundle.x509_required_certificate_policy_oids[0] must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+            ),
+        )
+        for name, call, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    call()
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(overlong, message)
+
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            bundle["environment"] = overlong
+            path = write_bundle(root, bundle)
+
+            rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn(
+                f".environment must be no longer than {VERIFIER.MAX_CLEAN_STRING_CHARS} characters",
+                stderr,
+            )
+            self.assertNotIn(overlong, stderr)
+
     def test_url_paths_reject_raw_delimiter_smuggling(self):
         cases = (
             "https://pki.local-bank.bank/source:debug",

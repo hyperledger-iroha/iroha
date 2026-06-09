@@ -8086,6 +8086,42 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(output_text, "existing signed evidence\n")
         self.assertEqual(temp_files, [])
 
+    def test_signer_write_json_reports_temp_cleanup_failure_after_write_failure(
+        self,
+    ) -> None:
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+
+            def failing_replace(src: Path, dst: Path) -> None:
+                raise OSError("simulated signer replace failure")
+
+            def failing_temp_unlink(path: Path, *args, **kwargs):
+                if path.name.startswith(f".{output.name}.") and path.suffix == ".tmp":
+                    raise OSError("simulated signer temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(evidence_signer.os, "replace", failing_replace),
+                mock.patch.object(Path, "unlink", failing_temp_unlink),
+            ):
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+            temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
+
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence output path could not be written",
+                "signed evidence output path temporary file could not be removed",
+            ],
+        )
+        self.assertEqual(len(temp_files), 1)
+
     def test_signer_write_json_rejects_symlink_swap_before_replace(self) -> None:
         original_validate = evidence_signer._validate_json_output_path
 
@@ -11508,6 +11544,41 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(errors, ["--json-out could not be written"])
         self.assertEqual(summary_text, "existing summary\n")
         self.assertEqual(temp_files, [])
+
+    def test_write_summary_reports_temp_cleanup_failure_after_write_failure(
+        self,
+    ) -> None:
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+
+            def failing_replace(src: Path, dst: Path) -> None:
+                raise OSError("simulated summary replace failure")
+
+            def failing_temp_unlink(path: Path, *args, **kwargs):
+                if (
+                    path.name.startswith(f".{summary_path.name}.")
+                    and path.suffix == ".tmp"
+                ):
+                    raise OSError("simulated summary temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(device_lab.os, "replace", failing_replace),
+                mock.patch.object(Path, "unlink", failing_temp_unlink),
+            ):
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+            temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
+
+        self.assertEqual(
+            errors,
+            [
+                "--json-out could not be written",
+                "--json-out temporary file could not be removed",
+            ],
+        )
+        self.assertEqual(len(temp_files), 1)
 
     def test_write_summary_rejects_symlink_swap_before_replace(self) -> None:
         original_validate = device_lab.validate_summary_output_path

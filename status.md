@@ -2,6 +2,87 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 Kagemusha Android output temp cleanup failure reporting
+
+- Android device-lab `--json-out` summary writes and signed-evidence helper
+  atomic output writes now report temporary-file cleanup failures after write
+  errors instead of silently dropping leftover temp outputs.
+- Pinned both cleanup-failure branches in the production-readiness guard and PR
+  workflow negative controls, and documented the Android output failure mode.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_write_json_reports_temp_cleanup_failure_after_write_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_write_summary_reports_temp_cleanup_failure_after_write_failure`
+    (`2` tests passed, latest run 0.003s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-json-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-write-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test`
+    (`389` tests passed, latest run 9.344s)
+
+## 2026-06-09 Kagemusha readiness summary temp cleanup failure reporting
+
+- Readiness `--summary-out` writes now report temporary-file cleanup failures as
+  structured blockers after write errors, preserving the failed temp output for
+  inspection instead of silently ignoring cleanup.
+- Pinned the cleanup-failure branch in the production-readiness guard and PR
+  workflow negative controls, and documented the summary-output failure mode.
+- Restored PR workflow coverage for the Android scanner JSON-output and signing
+  helper temp-cleanup negative controls required by the guard.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_summary_reports_temp_cleanup_failure_after_write_failure`
+    (`1` test passed, latest run 0.002s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-summary-output-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-json-output-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`418` tests passed, latest run 35.470s)
+
+## 2026-06-09 Kagemusha Python compact projection root export parity
+
+- Added the explicit Python SDK
+  `kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height(...)`
+  wrapper and re-exported it from the `iroha_python` package root so the ABI-7
+  compact projection verifier surface matches the PyO3, Java/Kotlin, and JS
+  height-aware paths.
+- Extended the recursive Kagemusha SDK parity guard, workflow negative-control
+  list, and JS meta-test so removing the Python at-height root export is caught
+  as a package re-export regression.
+- Hardened Python projection verifier `block_height` handling so bool,
+  non-integer, negative, and out-of-`u64` values fail locally before native
+  dispatch.
+- Validation:
+  - `PYTHONPATH=/tmp/iroha-python-kagemusha-testdeps:python/norito_py/src:python:python/iroha_python/src /opt/homebrew/bin/python3.11 -m pytest python/iroha_python/tests/kagemusha_test.py -q`
+    (`44` tests passed, latest run 2.98s)
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh`
+  - `ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-spend-compact-projection-root-export`
+  - `node --check javascript/iroha_js/test/kagemushaFfiContractParity.test.js && node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js --test-name-pattern "negative controls"`
+    (`38` tests passed)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root . --summary-out target/kagemusha-readiness-summary.json`
+    (expected blocked status remains only external evidence/device-lab blockers)
+
+## 2026-06-09 Kagemusha release-bundle temp cleanup failure reporting
+
+- Release-bundle output writes now report temporary-file cleanup failures as
+  structured blockers after write errors, rather than silently ignoring leftover
+  temp outputs.
+- Pinned the cleanup-failure branch in the production-readiness guard and
+  documented the release-bundle output failure mode.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_release_bundle.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_write_release_bundle_reports_temp_cleanup_failure_after_write_failure`
+    (`1` test passed, latest run 0.003s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-temp-cleanup-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`417` tests passed, latest run 36.264s)
+  - full generated sweep of `ci/check_kagemusha_production_readiness.sh --negative-control-*`
+    entries from the guard (`400` controls, `0` failures)
+
 ## 2026-06-09 Kagemusha source-marker cap and guard sweep hardening
 
 - Raised checked-in ABI/source marker text cap to 8 MiB, keeping bounded
@@ -11,6 +92,9 @@ Last updated: 2026-06-09
   the source-marker size negative control into the workflow and guard
   implementation, and retargeted stale static negative controls after the
   scanner/readiness helpers were split into validate/read phases.
+- Removed the unused readiness JSON helper that still performed a direct
+  `read_text(...)`, leaving production Kagemusha script reads routed through
+  bounded, path-bound loaders.
 - Re-ran the full workflow-listed Kagemusha production-readiness negative-control
   sweep: `399` controls passed with `0` failures.
 - Validation:
@@ -24,7 +108,7 @@ Last updated: 2026-06-09
   - `bash -n ci/check_kagemusha_production_readiness.sh`
   - `git diff --check`
   - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
-    (`416` tests passed, latest run 34.186s)
+    (`416` tests passed, latest run 34.433s)
   - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test`
     (`387` tests passed, latest run 9.348s)
   - `python3 scripts/kagemusha_production_readiness.py --repo-root . --summary-out target/kagemusha-readiness-summary.json`
@@ -5258,10 +5342,12 @@ Last updated: 2026-06-09
   records, nullable context/metadata/history fields, and rail sidecars now cap at
   4096 characters with label-only diagnostics before mismatch, source replay, or
   sidecar validation can retain oversized operator evidence.
-- Canary runbook generic strings/lists and evidence replay clean strings/lists
-  now share the 4096-character label-only cap before planning or archive replay
-  can preserve oversized metadata; embedded trust DER base64 still uses its
-  separate decoded-size guard.
+- Direct trust-bundle generic strings/OID lists, XSD profile-catalog generic
+  strings/lists, canary runbook generic strings/lists, and evidence replay clean
+  strings/lists now share the 4096-character label-only cap before trust
+  preflight, XSD profile validation, planning, or archive replay can preserve
+  oversized metadata; embedded trust/profile DER base64 still uses its separate
+  decoded-size guard.
 - Unknown JSON field names with non-ASCII characters, overlong spellings, too
   many entries, or collectively oversized spellings now use the same label-only
   unknown-key diagnostic as secret-looking and control-bearing keys across the
@@ -5433,6 +5519,12 @@ Last updated: 2026-06-09
     (`2` tests passed, latest run 0.004s)
   - `python3 -m unittest pytests.scripts.iso_audit_notary_adapter_test pytests.scripts.iso_operator_receipt_verify_test`
     (`133` tests passed, latest run 60.082s)
+  - `python3 -m py_compile scripts/iso_trust_bundle_verify.py pytests/scripts/iso_trust_bundle_verify_test.py`
+    (passed)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_overlong_bundle_strings_are_rejected_without_echo pytests.scripts.iso_trust_bundle_verify_test.IsoTrustBundleVerifyTest.test_oversized_der_base64_is_rejected_before_decode`
+    (`2` tests passed, latest run 0.173s)
+  - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
+    (`77` tests passed, latest run 0.419s)
   - `python3 -m py_compile scripts/iso_operator_canary.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_operator_canary_test.py pytests/scripts/iso_operator_evidence_verify_test.py`
     (passed)
   - `python3 -m unittest pytests.scripts.iso_operator_canary_test.IsoOperatorCanaryTest.test_overlong_runbook_strings_are_rejected_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_overlong_archive_strings_are_rejected_without_echo`
@@ -5443,8 +5535,12 @@ Last updated: 2026-06-09
     (`2` tests passed, latest run 2.322s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_xmllint_timeout_cli_rejects_overlarge_values_without_echo`
     (`1` test passed, latest run 0.002s)
+  - `python3 -m py_compile scripts/iso_xsd_fixture_verify.py pytests/scripts/iso_xsd_fixture_verify_test.py`
+    (passed)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_generic_strings_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_shape_is_fail_closed`
+    (`2` tests passed, latest run 0.307s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
-    (`85` tests passed, latest run 2.005s)
+    (`86` tests passed, latest run 1.756s)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_non_ascii_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_malformed_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_secret_material_in_sidecar_fields_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_unknown_sidecar_fields_are_rejected_before_network_delivery`
     (`4` tests passed, latest run 0.520s)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
@@ -5476,7 +5572,7 @@ Last updated: 2026-06-09
     (`3` tests passed, latest run 2.321s)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
   - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
-    (`767` tests passed, latest run 309.507s)
+    (`769` tests passed, latest run 311.680s)
 
 ## 2026-06-09 Kagemusha Reserved-lineage proof-log exactness guard
 
@@ -59921,7 +60017,7 @@ Last updated: 2026-06-09
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
     (passed)
   - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
-    (`767` passed, latest run 309.507s)
+    (`769` passed, latest run 311.680s)
   - `git diff --check -- scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py scripts/iso_production_readiness.py pytests/scripts/iso_production_readiness_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md`
     (passed)
   - `rg -n '^(<<<<<<<|=======|>>>>>>>)' scripts/iso_trust_bundle_verify.py scripts/iso_operator_evidence_verify.py scripts/iso_production_readiness.py pytests/scripts/iso_trust_bundle_verify_test.py pytests/scripts/iso_operator_evidence_verify_test.py pytests/scripts/iso_production_readiness_test.py docs/source/engineering_backlog.md docs/source/finance/tradfi_interop_audit.md status.md roadmap.md`

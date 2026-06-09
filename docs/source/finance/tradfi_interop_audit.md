@@ -619,10 +619,12 @@ does not claim direct live SWIFT, Fedwire, SEPA, or CSD network connectivity.
   persisted records, nullable context/metadata/history fields, and rail sidecars
   are capped at 4096 characters with label-only diagnostics before mismatch,
   source replay, or sidecar validation can retain oversized operator evidence.
-  Canary runbook generic strings/lists and evidence replay clean strings/lists
-  share the same 4096-character label-only cap before runbook planning or
-  archive validation can preserve oversized metadata; embedded trust DER base64
-  keeps its separate decoded-size guard.
+  Direct trust-bundle generic strings/OID lists, XSD profile-catalog generic
+  strings/lists, canary runbook generic strings/lists, and evidence replay clean
+  strings/lists share the same 4096-character label-only cap before trust
+  preflight, XSD profile validation, runbook planning, or archive validation can
+  preserve oversized metadata; embedded trust/profile DER base64 keeps its
+  separate decoded-size guard.
   Canary runbooks,
   trust bundles, evidence/readiness summaries, XSD manifests, profile catalogs,
   schema files, XML fixtures, and receipt archive directories must reject

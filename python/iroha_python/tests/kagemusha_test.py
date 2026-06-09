@@ -1018,6 +1018,10 @@ def test_recursive_spend_compact_projection_verifier_probes_and_delegates(
     compact_token = _kagemusha_input_archive(0xE2)
     verifier_record = _kagemusha_input_archive(0xE3)
     verify_projection = getattr(kagemusha, RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_METHOD)
+    verify_projection_at_height = getattr(
+        kagemusha,
+        RECURSIVE_SPEND_COMPACT_PROJECTION_VERIFY_AT_HEIGHT_METHOD,
+    )
 
     assert (
         kagemusha.is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available()
@@ -1067,6 +1071,11 @@ def test_recursive_spend_compact_projection_verifier_probes_and_delegates(
         "recursive_spend_compact_projection_verify_at_height",
         compact_token + b"|" + verifier_record + b"|2",
     )
+    assert verify_projection_at_height(compact_token, verifier_record, 3) is True
+    assert native.calls[-1] == (
+        "recursive_spend_compact_projection_verify_at_height",
+        compact_token + b"|" + verifier_record + b"|3",
+    )
 
     with pytest.raises(ValueError, match="compact_token_archive must not be empty"):
         verify_projection(b"", verifier_record)
@@ -1074,6 +1083,25 @@ def test_recursive_spend_compact_projection_verifier_probes_and_delegates(
         verify_projection(compact_token, b"\x01")
     with pytest.raises(ValueError, match="block_height must be non-negative"):
         verify_projection(compact_token, verifier_record, block_height=-1)
+    with pytest.raises(ValueError, match="block_height must be non-negative"):
+        verify_projection_at_height(compact_token, verifier_record, -1)
+    for bad_height in (True, False, 1.5, "1"):
+        with pytest.raises(TypeError, match="block_height must be an integer"):
+            verify_projection(
+                compact_token,
+                verifier_record,
+                block_height=bad_height,  # type: ignore[arg-type]
+            )
+        with pytest.raises(TypeError, match="block_height must be an integer"):
+            verify_projection_at_height(
+                compact_token,
+                verifier_record,
+                bad_height,  # type: ignore[arg-type]
+            )
+    with pytest.raises(ValueError, match="block_height must fit in u64"):
+        verify_projection(compact_token, verifier_record, block_height=1 << 64)
+    with pytest.raises(ValueError, match="block_height must fit in u64"):
+        verify_projection_at_height(compact_token, verifier_record, 1 << 64)
 
     def invalid_boolean(token: bytes, record: bytes) -> str:
         native._reject_probe("recursive spend compact projection verifier", token, record)
@@ -1579,6 +1607,8 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         as root_recursive_compact_verify,
         kagemusha_verify_recursive_spend_compact_payment_token_projection
         as root_recursive_spend_compact_projection_verify,
+        kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height
+        as root_recursive_spend_compact_projection_verify_at_height,
         is_kagemusha_recursive_compact_payment_token_prover_available
         as root_is_recursive_compact_prover_available,
         is_kagemusha_recursive_compact_payment_token_verifier_available
@@ -1636,6 +1666,10 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         in iroha_python.__all__
     )
     assert (
+        "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"
+        in iroha_python.__all__
+    )
+    assert (
         root_requires_key_artifacts_for_init
         is kagemusha.requires_kagemusha_recursive_spend_lineage_key_artifacts_for_init
     )
@@ -1687,6 +1721,10 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
         root_recursive_spend_compact_projection_verify
         is kagemusha.kagemusha_verify_recursive_spend_compact_payment_token_projection
     )
+    assert (
+        root_recursive_spend_compact_projection_verify_at_height
+        is kagemusha.kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height
+    )
     prover_signature = inspect.signature(root_recursive_compact_prover)
     assert list(prover_signature.parameters) == [
         "record_bundle_archive",
@@ -1705,6 +1743,18 @@ def test_recursive_kagemusha_key_artifact_helpers_are_package_root_exports() -> 
     assert all(
         parameter.default is inspect.Parameter.empty
         for parameter in verifier_signature.parameters.values()
+    )
+    projection_at_height_signature = inspect.signature(
+        root_recursive_spend_compact_projection_verify_at_height
+    )
+    assert list(projection_at_height_signature.parameters) == [
+        "compact_token_archive",
+        "verifier_record_archive",
+        "block_height",
+    ]
+    assert all(
+        parameter.default is inspect.Parameter.empty
+        for parameter in projection_at_height_signature.parameters.values()
     )
 
 

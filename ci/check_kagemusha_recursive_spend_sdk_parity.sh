@@ -129,6 +129,7 @@ REQUIRED_RECURSIVE_COMPACT_PYTHON_METHODS = (
 REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS = (
     "kagemusha_recursive_spend_compact_payment_token_from_bundle",
     "kagemusha_verify_recursive_spend_compact_payment_token_projection",
+    "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height",
 )
 
 REQUIRED_RECURSIVE_COMPACT_PYTHON_PUBLIC_METHODS = (
@@ -595,6 +596,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "recursive spend compact projection surface negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface",
+    ),
+    (
+        "Python recursive spend compact projection root export negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-spend-compact-projection-root-export",
     ),
     (
         "native bridge zero-envelope Pallas guard negative control",
@@ -2218,9 +2223,14 @@ def check_recursive_compact_surface(texts, errors):
             "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available",
             "globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_FROM_BUNDLE_METHOD]",
             "globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_METHOD]",
+            "globals()[_RECURSIVE_SPEND_COMPACT_TOKEN_PROJECTION_VERIFY_AT_HEIGHT_METHOD]",
+            "_verify_recursive_spend_compact_payment_token_projection_at_height",
             '_norito_archive_bytes_named(bundle_archive, "bundle_archive")',
             '_assert_kagemusha_norito_archive(verifier_record, "verifier_record_archive")',
+            "_validate_kagemusha_block_height",
+            "block_height must be an integer",
             "block_height must be non-negative",
+            "block_height must fit in u64",
             "native bridge ABI 7 with the compact projection symbol",
             "compact projection verifier symbols",
         ),
@@ -2271,10 +2281,13 @@ def check_recursive_compact_surface(texts, errors):
             "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available",
             "kagemusha_recursive_spend_compact_payment_token_from_bundle",
             "kagemusha_verify_recursive_spend_compact_payment_token_projection",
+            "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height",
             "bundle_archive must be a valid Norito archive",
             "bundle_archive must contain a non-empty Norito payload",
             "verifier_record_archive must be a valid Norito archive",
+            "block_height must be an integer",
             "block_height must be non-negative",
+            "block_height must fit in u64",
             "compact projection symbol",
             "compact projection verifier symbols",
         ),
@@ -5535,6 +5548,8 @@ def check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors):
             "is_kagemusha_recursive_compact_payment_token_prover_available",
             "is_kagemusha_recursive_compact_payment_token_verifier_available",
             "kagemusha_verify_recursive_spend_compact_payment_token_projection(...)",
+            "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height(...)",
+            "non-integer, bool, negative-height, or out-of-u64 height inputs",
             "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available()",
             "RuntimeError",
         ),
@@ -9505,6 +9520,33 @@ if mode == "--negative-control-recursive-spend-compact-projection-surface":
         raise SystemExit(0)
     raise SystemExit(
         "negative control failed: recursive spend compact projection surface drift was not detected"
+    )
+
+if mode == "--negative-control-python-recursive-spend-compact-projection-root-export":
+    mutated_texts = dict(texts)
+    target = "python/iroha_python/src/iroha_python/__init__.py"
+    method = "kagemusha_verify_recursive_spend_compact_payment_token_projection_at_height"
+    mutated = mutated_texts[target].replace(f'    "{method}",\n', "", 1)
+    mutated = mutated.replace(f"        {method},\n", "", 1)
+    if mutated == mutated_texts[target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate Python recursive spend compact projection root export"
+        )
+    mutated_texts[target] = mutated
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        message = str(error)
+        label = "Python package recursive spend compact projection re-exports"
+        if label not in message:
+            raise SystemExit(
+                "negative control failed: Python recursive spend compact projection root export drift was not detected"
+            )
+        print("negative control rejected Python recursive spend compact projection root export drift")
+        print(message.splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Python recursive spend compact projection root export drift was not detected"
     )
 
 if mode == "--negative-control-native-bridge-zero-envelope-pallas-guard":

@@ -316,6 +316,7 @@ def _write_text_atomic(
     if len(text.encode("utf-8")) > byte_limit:
         return [f"{label} must be no more than {byte_limit} bytes"]
     tmp_path: Path | None = None
+    write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -331,17 +332,17 @@ def _write_text_atomic(
             os.fsync(handle.fileno())
         errors = _validate_json_output_path(path, label)
         if errors:
-            return errors
-        os.replace(tmp_path, path)
-        tmp_path = None
+            write_errors.extend(errors)
+        else:
+            os.replace(tmp_path, path)
+            tmp_path = None
     except OSError:
-        return [f"{label} could not be written"]
+        write_errors.append(f"{label} could not be written")
     finally:
         if tmp_path is not None:
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
+            write_errors.extend(_cleanup_temp_output(tmp_path, label))
+    if write_errors:
+        return write_errors
     errors = _validate_existing_json_output_path(path, label)
     if errors:
         return errors
@@ -383,6 +384,16 @@ def _write_text_atomic(
         return readback_errors
     if readback_text != text:
         return [f"{label} write verification failed"]
+    return []
+
+
+def _cleanup_temp_output(path: Path, label: str) -> list[str]:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return [f"{label} temporary file could not be removed"]
     return []
 
 

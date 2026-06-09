@@ -302,7 +302,7 @@ also be ordinary non-symlink, non-hardlinked files with symlink-free ancestors
 before their contents can satisfy readiness, with ABI-6 manifest JSON and
 marker text decoded from the same opened regular files after path-identity
 revalidation and the ABI-6 manifest JSON capped at 1 MiB before parsing,
-while ABI-7 and Reserved-lineage marker text reads are capped at 2 MiB so
+while ABI-7 and Reserved-lineage marker text reads are capped at 8 MiB so
 large checked-in Rust bridge files remain bounded without becoming false
 readiness blockers,
 then hashes and parses the local proof log from the same opened regular file
@@ -388,7 +388,7 @@ source marker text reads also rerun the source-marker file validator immediately
 before loading marker text and bind the opened read to that preflight `lstat()`
 identity, so symlink, hardlink, non-regular, secret-bearing, or post-preflight
 regular-file source aliases cannot satisfy readiness markers after an earlier
-check. Source-marker text reads are capped at 2 MiB using opened-file metadata
+check. Source-marker text reads are capped at 8 MiB using opened-file metadata
 and streamed byte counts. Unreadable source-marker leaf metadata, unreadable
 marker bytes, or non-UTF-8 ABI-7 and Reserved-lineage marker files return
 structured blockers instead of raw decode errors. The
@@ -703,14 +703,19 @@ serialize with strict JSON; non-finite values such as `NaN` and
 The lineage and compact-key evidence helpers apply the same strict JSON
 serialization before creating validation scratch files under `--artifact-dir`.
 The readiness summary writer enforces a 16 MiB `--summary-out` cap before
-temporary-file creation and during final opened-file readback. The lineage and
-compact-key evidence helpers also enforce the readiness evidence JSON byte caps
+temporary-file creation, during final opened-file readback, and reports
+temporary-file cleanup failures after write errors. The lineage and compact-key
+evidence helpers also enforce the readiness evidence JSON byte caps
 before creating `--out` temporary files and again while reading back the opened
 output file after atomic replacement, so oversized same-inode output growth
 cannot be accepted as a verified write.
 The release-bundle writer applies the same pattern to its manifest output with
 a 16 MiB cap before temporary-file creation and during final opened-file
-readback.
+readback, and reports temporary-file cleanup failures after write errors as
+structured blockers.
+The Android device-lab summary writer and Android signed-evidence helper
+atomic output writer also report temporary-file cleanup failures after write
+errors instead of swallowing failed cleanup.
 Android signed-evidence canonical signature payloads also serialize with strict
 JSON before hashing, signing, or verification, so non-standard constants cannot
 become signed bytes.

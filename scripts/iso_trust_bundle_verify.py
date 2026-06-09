@@ -46,6 +46,7 @@ MAX_DER_BASE64_CHARS = ((MAX_DER_BYTES + 2) // 3) * 4
 MAX_BUNDLE_JSON_BYTES = 64 * 1024 * 1024
 MAX_SOURCE_URL_CHARS = 2048
 MAX_LOCAL_PATH_CHARS = 4096
+MAX_CLEAN_STRING_CHARS = 4096
 MAX_PROFILE_ID_CHARS = 128
 MAX_TRUST_POLICY_CHARS = 128
 MAX_TRUST_SOURCE_TEXT_CHARS = 256
@@ -727,10 +728,18 @@ def _reject_url_percent_encoding_smuggling(url: str, label: str) -> None:
         index += 3
 
 
-def _required_string(bundle: dict[str, Any], key: str, label: str) -> str:
+def _required_string(
+    bundle: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    max_chars: int | None = MAX_CLEAN_STRING_CHARS,
+) -> str:
     raw = bundle.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise TrustBundleError(f"{label}.{key} must be a non-empty string")
+    if max_chars is not None and len(raw) > max_chars:
+        raise TrustBundleError(f"{label}.{key} must be no longer than {max_chars} characters")
     _reject_ascii_control(raw, f"{label}.{key}")
     if raw != raw.strip():
         raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
@@ -759,12 +768,20 @@ def _required_rail(bundle: dict[str, Any], key: str, label: str) -> str:
     return raw
 
 
-def _optional_string(bundle: dict[str, Any], key: str, label: str) -> str | None:
+def _optional_string(
+    bundle: dict[str, Any],
+    key: str,
+    label: str,
+    *,
+    max_chars: int | None = MAX_CLEAN_STRING_CHARS,
+) -> str | None:
     if key not in bundle:
         return None
     raw = bundle.get(key)
     if not isinstance(raw, str) or not raw.strip():
         raise TrustBundleError(f"{label}.{key} must be a non-empty string when provided")
+    if max_chars is not None and len(raw) > max_chars:
+        raise TrustBundleError(f"{label}.{key} must be no longer than {max_chars} characters")
     _reject_ascii_control(raw, f"{label}.{key}")
     if raw != raw.strip():
         raise TrustBundleError(f"{label}.{key} must not have surrounding whitespace")
@@ -854,6 +871,10 @@ def _oid_list(bundle: dict[str, Any], key: str, label: str) -> list[str]:
     for offset, item in enumerate(raw):
         if not isinstance(item, str):
             raise TrustBundleError(f"{label}.{key}[{offset}] must be a dotted numeric OID")
+        if len(item) > MAX_CLEAN_STRING_CHARS:
+            raise TrustBundleError(
+                f"{label}.{key}[{offset}] must be no longer than {MAX_CLEAN_STRING_CHARS} characters"
+            )
         if item != item.strip():
             raise TrustBundleError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
         value = item
@@ -1103,7 +1124,12 @@ def _der_objects(
             if name in seen_labels:
                 raise TrustBundleError(f"{label}.{key}[{offset}].label duplicates label")
             seen_labels.add(name)
-        der_b64 = _required_string(obj, "der_base64", f"{label}.{key}[{offset}]")
+        der_b64 = _required_string(
+            obj,
+            "der_base64",
+            f"{label}.{key}[{offset}]",
+            max_chars=None,
+        )
         der, canonical_b64, is_synthetic_der = _strict_base64_der(
             der_b64,
             f"{label}.{key}[{offset}].der_base64",

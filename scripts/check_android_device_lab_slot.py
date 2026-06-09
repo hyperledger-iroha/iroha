@@ -3520,6 +3520,7 @@ def write_summary(path: Path, summary: dict) -> list[str]:
             f"{MAX_ANDROID_DEVICE_LAB_JSON_BYTES} bytes"
         ]
     tmp_path: Path | None = None
+    write_errors: list[str] = []
     try:
         with tempfile.NamedTemporaryFile(
             "w",
@@ -3535,17 +3536,17 @@ def write_summary(path: Path, summary: dict) -> list[str]:
             os.fsync(handle.fileno())
         errors = validate_summary_output_path(path, "--json-out")
         if errors:
-            return errors
-        os.replace(tmp_path, path)
-        tmp_path = None
+            write_errors.extend(errors)
+        else:
+            os.replace(tmp_path, path)
+            tmp_path = None
     except OSError:
-        return ["--json-out could not be written"]
+        write_errors.append("--json-out could not be written")
     finally:
         if tmp_path is not None:
-            try:
-                tmp_path.unlink()
-            except OSError:
-                pass
+            write_errors.extend(_cleanup_summary_output(tmp_path))
+    if write_errors:
+        return write_errors
     errors = validate_summary_output_path(path, "--json-out")
     if errors:
         return errors
@@ -3582,6 +3583,16 @@ def write_summary(path: Path, summary: dict) -> list[str]:
         return readback_errors
     if readback_text != summary_text:
         return ["--json-out write verification failed"]
+    return []
+
+
+def _cleanup_summary_output(path: Path) -> list[str]:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return []
+    except OSError:
+        return ["--json-out temporary file could not be removed"]
     return []
 
 

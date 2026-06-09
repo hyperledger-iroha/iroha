@@ -120,9 +120,11 @@ Notary and receipt replay clean metadata strings from audit indexes, persisted
 records, nullable context/metadata/history fields, and rail sidecars are capped
 at 4096 characters with label-only diagnostics before mismatch, source replay,
 or sidecar validation can retain oversized operator evidence.
-Canary runbook generic strings/lists and evidence replay clean strings/lists now
-share the same 4096-character label-only cap before runbook planning or archive
-validation can preserve oversized metadata; embedded trust DER base64 keeps its
+Direct trust-bundle generic strings/OID lists, XSD profile-catalog generic
+strings/lists, canary runbook generic strings/lists, and evidence replay clean
+strings/lists now share the same 4096-character label-only cap before trust
+preflight, XSD profile validation, runbook planning, or archive validation can
+preserve oversized metadata; embedded trust/profile DER base64 keeps its
 separate decoded-size guard.
 ISO URL host validators now reject secret-looking hostname labels and
 non-ASCII raw host labels, and non-port URL parser failures use label-only

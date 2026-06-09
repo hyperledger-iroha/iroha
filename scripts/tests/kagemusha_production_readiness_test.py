@@ -2575,6 +2575,54 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
         self.assertIn("could not be read back", errors[0]["message"])
         self.assertEqual(written, json.dumps(bundle, indent=2, sort_keys=True) + "\n")
 
+    def test_write_release_bundle_reports_temp_cleanup_failure_after_write_failure(
+        self,
+    ) -> None:
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            bundle_root = Path(temp) / "bundle"
+            out = bundle_root / "dist" / "kagemusha-production-release-bundle.json"
+            bundle = {
+                "schema": release_bundle.RELEASE_BUNDLE_SCHEMA,
+                "generated_at_utc": readiness.DEFAULT_MIN_SIGNED_AT_UTC,
+                "ready": True,
+                "evidence": {},
+                "blockers": [],
+            }
+
+            def failing_replace(src: Path, dst: Path) -> None:
+                raise OSError("simulated release-bundle replace failure")
+
+            def failing_temp_unlink(path: Path, *args, **kwargs):
+                if path.name.startswith(f".{out.name}.") and path.suffix == ".tmp":
+                    raise OSError("simulated release-bundle temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(release_bundle.os, "replace", failing_replace),
+                mock.patch.object(Path, "unlink", failing_temp_unlink),
+            ):
+                errors = release_bundle.write_release_bundle(out, bundle, bundle_root)
+            temp_outputs = list(out.parent.glob(f".{out.name}.*.tmp"))
+
+        self.assertEqual(
+            [error["code"] for error in errors],
+            [
+                "kagemusha_release_bundle_out_invalid",
+                "kagemusha_release_bundle_out_invalid",
+            ],
+        )
+        self.assertIn(
+            "--out could not be written",
+            {error["message"] for error in errors},
+        )
+        self.assertIn(
+            "--out temporary file could not be removed",
+            {error["message"] for error in errors},
+        )
+        self.assertEqual(len(temp_outputs), 1)
+
     def test_write_release_bundle_rejects_regular_file_swap_before_readback(
         self,
     ) -> None:
@@ -12210,6 +12258,50 @@ class KagemushaProductionReadinessTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_write_summary_reports_temp_cleanup_failure_after_write_failure(
+        self,
+    ) -> None:
+        original_unlink = Path.unlink
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+
+            def failing_temp_unlink(path: Path, *args, **kwargs):
+                if path.name.startswith(f".{summary_path.name}.") and path.suffix == ".tmp":
+                    raise OSError("simulated summary temp cleanup failure")
+                return original_unlink(path, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    readiness.os,
+                    "replace",
+                    side_effect=OSError("simulated summary replace failure"),
+                ),
+                mock.patch.object(Path, "unlink", failing_temp_unlink),
+            ):
+                errors = readiness.write_summary(
+                    summary_path,
+                    {"schema": readiness.SUMMARY_SCHEMA, "ready": False},
+                )
+            temp_outputs = list(summary_path.parent.glob(f".{summary_path.name}.*.tmp"))
+
+        self.assertEqual(
+            [error["code"] for error in errors],
+            [
+                "kagemusha_summary_out_path_invalid",
+                "kagemusha_summary_out_path_invalid",
+            ],
+        )
+        self.assertIn(
+            "--summary-out could not be written",
+            {error["message"] for error in errors},
+        )
+        self.assertIn(
+            "--summary-out temporary file could not be removed",
+            {error["message"] for error in errors},
+        )
+        self.assertEqual(len(temp_outputs), 1)
 
     def test_write_summary_rejects_symlink_swap_before_replace(self) -> None:
         original_validate_summary_output_path = readiness.validate_summary_output_path
