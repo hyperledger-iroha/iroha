@@ -109,7 +109,7 @@ object KagemushaInstructionArchives {
         }
         val archive = instructionArchive.copyOf()
         val decoded = try {
-            NoritoHeader.decode(archive, SchemaHash.hash16(instructionType.archiveTypeName))
+            NoritoHeader.decode(archive, SchemaHash.hash16(instructionType.wireName))
         } catch (ex: IllegalArgumentException) {
             throw IllegalArgumentException(
                 "Kagemusha instruction archive must be a valid ${instructionType.archiveTypeName} Norito archive.",

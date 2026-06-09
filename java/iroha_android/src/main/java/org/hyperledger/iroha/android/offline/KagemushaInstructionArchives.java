@@ -130,7 +130,7 @@ public final class KagemushaInstructionArchives {
     final byte[] archive = instructionArchive.clone();
     final NoritoHeader.DecodeResult decoded;
     try {
-      decoded = NoritoHeader.decode(archive, SchemaHash.hash16(instructionType.archiveTypeName()));
+      decoded = NoritoHeader.decode(archive, SchemaHash.hash16(instructionType.wireName()));
     } catch (final IllegalArgumentException ex) {
       throw new IllegalArgumentException(
           "Kagemusha instruction archive must be a valid "

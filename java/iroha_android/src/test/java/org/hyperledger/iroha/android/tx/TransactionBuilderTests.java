@@ -1,8 +1,13 @@
 package org.hyperledger.iroha.android.tx;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.KeyPair;
 import java.security.Signature;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -22,6 +27,7 @@ import org.hyperledger.iroha.android.crypto.keystore.KeyGenParameters;
 import org.hyperledger.iroha.android.crypto.keystore.KeyGenerationResult;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreBackend;
 import org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProvider;
+import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
@@ -43,6 +49,7 @@ public final class TransactionBuilderTests {
     encodeAndSignWithKeyManagerAlias();
     instructionsVariantRoundTrips();
     kagemushaInstructionArchivesBuildPayloads();
+    kagemushaInstructionArchivesAcceptAbi7Fixtures();
     kagemushaInstructionArchivesRejectAdversarialInputs();
     encodeAndSignEnvelopeWithAttestationBundle();
     encodeAndSignEnvelopeWithAttestationWithoutHardware();
@@ -183,6 +190,19 @@ public final class TransactionBuilderTests {
         : "Transfer instruction wire name must be canonical";
     assert Arrays.equals(transferArchive, transferWire.payloadBytes())
         : "Transfer archive bytes must be preserved";
+  }
+
+  private static void kagemushaInstructionArchivesAcceptAbi7Fixtures() {
+    final byte[] archive = sharedRecursiveSpendAbi7Archive("redeem_instruction");
+    final InstructionBox box = KagemushaInstructionArchives.recursiveRedeemInstructionBox(archive);
+    final InstructionBox.WirePayload wire = (InstructionBox.WirePayload) box.payload();
+
+    assert wire
+        .wireName()
+        .equals("iroha_data_model::isi::offline::RedeemKagemushaRecursive")
+        : "ABI-7 redeem instruction wire name must be canonical";
+    assert Arrays.equals(archive, wire.payloadBytes())
+        : "ABI-7 redeem instruction archive bytes must be preserved";
   }
 
   private static void kagemushaInstructionArchivesRejectAdversarialInputs() {
@@ -374,7 +394,37 @@ public final class TransactionBuilderTests {
   }
 
   private static byte[] kagemushaArchive(final KagemushaInstructionArchives.InstructionType type) {
-    return NoritoCodec.encode("payload", type.archiveTypeName(), NoritoAdapters.stringAdapter());
+    return NoritoCodec.encode("payload", type.wireName(), NoritoAdapters.stringAdapter());
+  }
+
+  @SuppressWarnings("unchecked")
+  private static byte[] sharedRecursiveSpendAbi7Archive(final String name) {
+    final Map<String, Object> root =
+        (Map<String, Object>) JsonParser.parse(sharedRecursiveSpendAbi7Fixture("archives.json"));
+    final List<Map<String, Object>> archives = (List<Map<String, Object>>) root.get("archives");
+    for (final Map<String, Object> archive : archives) {
+      if (name.equals(archive.get("name"))) {
+        return Base64.getDecoder().decode((String) archive.get("bytes_base64"));
+      }
+    }
+    throw new AssertionError("missing shared recursive spend ABI-7 archive " + name);
+  }
+
+  private static String sharedRecursiveSpendAbi7Fixture(final String fileName) {
+    Path directory = Paths.get("").toAbsolutePath();
+    while (directory != null) {
+      final Path candidate =
+          directory.resolve("fixtures/kagemusha_recursive_spend_abi7").resolve(fileName);
+      if (Files.isRegularFile(candidate)) {
+        try {
+          return new String(Files.readAllBytes(candidate), StandardCharsets.UTF_8);
+        } catch (final java.io.IOException error) {
+          throw new AssertionError("failed to read shared recursive spend ABI-7 fixture", error);
+        }
+      }
+      directory = directory.getParent();
+    }
+    throw new AssertionError("missing shared recursive spend ABI-7 fixture " + fileName);
   }
 
   private static void assertThrows(final Runnable runnable, final String message) {
