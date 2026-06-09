@@ -179,6 +179,27 @@ def load_report_module():
     return module
 
 
+def minimal_release_bundle_report(*, production_ready: bool = True) -> dict[str, object]:
+    """Return a structurally valid empty release-bundle report."""
+
+    return {
+        "production_ready": production_ready,
+        "blockers": [] if production_ready else ["blocked"],
+        "input_artifacts": [],
+        "release_checklist": {"ready": production_ready, "items": []},
+        "corridor": {
+            "production_ready": production_ready,
+            "phases": {},
+            "evidence_artifacts": {},
+        },
+        "cryptographic_evidence": [],
+        "user_prover_submission_surfaces": [],
+        "native_evm_prover_bundle": {},
+        "source_inventory": {},
+        "evidence": {"lanes": []},
+    }
+
+
 def active_evm_live_chain_id(report):
     """Return the decimal EVM chain id required by the active launch lane."""
 
@@ -999,6 +1020,125 @@ def rewrite_canonical_report_and_notes(output_dir: Path) -> None:
     rewrite_manifest_artifact(output_dir, "sccp-release-notes-attachment.md")
 
 
+def test_release_bundle_release_note_status_compares_ready_exactly() -> None:
+    """Release-note status text must not truthy-coerce readiness claims."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    report = {"production_ready": "true", "blockers": []}
+    artifacts = [
+        {
+            "path": "sccp-release-readiness.json",
+            "bytes": 1,
+            "sha256": "0" * 64,
+        }
+    ]
+
+    builder_notes = bundle._release_notes_attachment(report, artifacts)
+    verifier_notes = verifier._expected_release_notes_attachment(report, artifacts)
+
+    assert "Status: NOT READY" in builder_notes
+    assert "Status: READY" not in builder_notes
+    assert "Status: NOT READY" in verifier_notes
+    assert "Status: READY" not in verifier_notes
+
+
+def test_release_bundle_release_notes_mark_malformed_blocker_containers() -> None:
+    """Release-note blocker bullets must not flatten malformed blocker strings."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    report = {"production_ready": False, "blockers": "operator override"}
+    artifacts = [
+        {
+            "path": "sccp-release-readiness.json",
+            "bytes": 1,
+            "sha256": "0" * 64,
+        }
+    ]
+
+    builder_notes = bundle._release_notes_attachment(report, artifacts)
+    verifier_notes = verifier._expected_release_notes_attachment(report, artifacts)
+
+    for notes in (builder_notes, verifier_notes):
+        assert "- `<invalid blockers>`" in notes
+        assert "- o\n- p\n- e\n- r" not in notes
+
+
+def test_release_bundle_verifier_readiness_markdown_compares_rows_exactly(
+    tmp_path: Path,
+) -> None:
+    """Verifier-owned readiness Markdown must render malformed ready flags blocked."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    checklist_item = report["release_checklist"]["items"][0]
+    checklist_item["ready"] = "true"
+    checklist_item["blockers"] = []
+    active_lane = next(
+        lane
+        for lane in report["evidence"]["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["production_ready"] = "true"
+    active_lane["blockers"] = []
+    active_lane["records"]["source_verifier_material"] = "true"
+    active_crypto = next(
+        row
+        for row in report["cryptographic_evidence"]
+        if row["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_crypto["route_canary_evidence_bound"] = "false"
+    report["native_evm_prover_bundle"]["required"] = "true"
+
+    markdown = verifier._expected_readiness_markdown(report)
+
+    assert f"| `{checklist_item['id']}` | blocked | -" in markdown
+    assert (
+        f"| {verifier.ACTIVE_LAUNCH_DOMAIN} | `{verifier.ACTIVE_LAUNCH_CHAIN}` | "
+        "blocked |"
+    ) in markdown
+    assert (
+        "source=no, deploy=yes, dest=yes, route=yes"
+        in markdown
+    )
+    assert (
+        f"`{verifier.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE} (unbound)`"
+        in markdown
+    )
+    assert "| no | passed |" in markdown
+    assert "| yes | passed |" not in markdown
+
+
+def test_release_bundle_verifier_readiness_markdown_marks_bad_blocker_containers(
+    tmp_path: Path,
+) -> None:
+    """Verifier-owned readiness Markdown must mark malformed blocker containers."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    report["native_evm_prover_bundle"]["validation_blockers"] = "operator override"
+    report["source_inventory"]["proof_request_bundle_gate"][
+        "validation_blockers"
+    ] = ["", 1]
+    report["user_prover_submission_surfaces"][0]["validation_status"] = "blocked"
+    report["user_prover_submission_surfaces"][0]["validation_blockers"] = ""
+    report["blockers"] = "operator override"
+
+    markdown = verifier._expected_readiness_markdown(report)
+
+    assert markdown.count("`<invalid validation_blockers>`") >= 3
+    assert "- `<invalid blockers>`" in markdown
+    assert "o<br>p<br>e<br>r<br>a<br>t<br>o<br>r" not in markdown
+    assert "- o\n- p\n- e\n- r" not in markdown
+
+
 def test_release_bundle_requires_hashed_phase_evidence(tmp_path: Path) -> None:
     """The production bundle must not pass with declared-only corridor status."""
 
@@ -1027,6 +1167,201 @@ def test_release_bundle_requires_hashed_phase_evidence(tmp_path: Path) -> None:
         completed.stderr
     )
     assert not output_dir.exists()
+
+
+def test_release_bundle_preflight_rejects_truthy_production_ready(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Bundle preflight must require exact boolean production readiness."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            return {
+                "production_ready": "true",
+                "blockers": ["malformed production_ready flag"],
+            }
+
+    monkeypatch.setattr(bundle, "_report_module", lambda: FakeReportModule())
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("malformed production_ready preflight passed")
+
+    captured = capsys.readouterr()
+    assert "SCCP release bundle is not production ready" in captured.err
+    assert "malformed production_ready flag" in captured.err
+    assert not output_dir.exists()
+
+
+def test_release_bundle_preflight_marks_malformed_blocker_containers(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Bundle preflight diagnostics must not flatten malformed blocker strings."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            return {
+                "production_ready": False,
+                "blockers": "operator override",
+            }
+
+    monkeypatch.setattr(bundle, "_report_module", lambda: FakeReportModule())
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("malformed blocker preflight passed")
+
+    captured = capsys.readouterr()
+    assert "SCCP release bundle is not production ready" in captured.err
+    assert "- `<invalid blockers>`" in captured.err
+    assert "- o\n- p\n- e\n- r" not in captured.err
+    assert not output_dir.exists()
+
+
+def test_release_bundle_preflight_rejects_malformed_ready_report(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """A malformed ready preflight report must not crash after passing readiness."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            return {"production_ready": True, "blockers": []}
+
+    monkeypatch.setattr(bundle, "_report_module", lambda: FakeReportModule())
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed ready preflight report crashed after preflight")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "preflight report missing field: release_checklist" in captured.err
+    assert not output_dir.exists()
+
+
+def test_release_bundle_rejects_malformed_copied_report_before_render(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """The bundle-local rebuilt report must be validated before Markdown rendering."""
+
+    bundle = load_bundle_module()
+    evidence = tmp_path / "evidence.toml"
+    evidence.write_text("[zk]\n", encoding="utf-8")
+    output_dir = tmp_path / "bundle"
+
+    class FakeReportModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def _corridor_phases(self) -> list[str]:
+            return []
+
+        def _build_report(self, *args, **kwargs) -> dict[str, object]:
+            self.calls += 1
+            if self.calls == 1:
+                return minimal_release_bundle_report()
+            return {
+                "production_ready": True,
+                "blockers": [],
+                "release_checklist": {"ready": True, "items": []},
+                "corridor": {
+                    "production_ready": True,
+                    "phases": {},
+                    "evidence_artifacts": {},
+                },
+            }
+
+        def _render_markdown(self, *args, **kwargs) -> str:
+            raise AssertionError("malformed bundled report was rendered")
+
+    fake_report_module = FakeReportModule()
+    monkeypatch.setattr(bundle, "_report_module", lambda: fake_report_module)
+
+    try:
+        bundle.main(
+            [
+                "--output-dir",
+                str(output_dir),
+                "--phase-result",
+                "all=passed",
+                str(evidence),
+            ]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("malformed bundled report reached Markdown rendering")
+
+    captured = capsys.readouterr()
+    assert "malformed SCCP release readiness report" in captured.err
+    assert "bundled report missing field: input_artifacts" in captured.err
+    assert fake_report_module.calls == 2
+    assert not (output_dir / "sccp-release-readiness.md").exists()
 
 
 def test_release_bundle_rejects_duplicate_phase_evidence_assignment_before_copy(
@@ -2610,6 +2945,45 @@ def test_release_bundle_writes_hash_bound_public_artifacts(tmp_path: Path) -> No
     ).hexdigest()
 
 
+def test_release_bundle_manifest_preserves_malformed_readiness_values(
+    tmp_path: Path,
+) -> None:
+    """Manifest generation must not truthy-coerce malformed readiness fields."""
+
+    bundle = load_bundle_module()
+    verifier = load_verify_helpers()
+    artifact = tmp_path / "artifact.txt"
+    artifact.write_text("payload\n", encoding="utf-8")
+    report = {
+        "production_ready": "false",
+        "release_checklist": {"ready": "false"},
+        "corridor": {"production_ready": 1},
+        "blockers": ["blocked"],
+    }
+
+    manifest = bundle._release_bundle_manifest(tmp_path, report, [artifact])
+
+    assert manifest["production_ready"] == "false"
+    assert manifest["release_checklist_ready"] == "false"
+    assert manifest["corridor_ready"] == 1
+    assert (
+        "manifest production_ready must be a boolean"
+        in verifier._boolean_field_errors("manifest", manifest, "production_ready")
+    )
+    assert (
+        "manifest release_checklist_ready must be a boolean"
+        in verifier._boolean_field_errors(
+            "manifest",
+            manifest,
+            "release_checklist_ready",
+        )
+    )
+    assert (
+        "manifest corridor_ready must be a boolean"
+        in verifier._boolean_field_errors("manifest", manifest, "corridor_ready")
+    )
+
+
 def test_release_bundle_accepts_hash_bound_full_corridor_log(
     tmp_path: Path,
 ) -> None:
@@ -2707,6 +3081,15 @@ def test_release_bundle_accepts_active_launch_lane_without_future_lanes(
     assert summary["release_checklist"]["ready"] is False
     assert manifest["production_ready"] is True
     assert manifest["release_checklist_ready"] is True
+    future_crypto_rows = [
+        row
+        for row in report["cryptographic_evidence"]
+        if row["domain"] != load_report_module().ACTIVE_LAUNCH_DOMAIN
+    ]
+    assert future_crypto_rows
+    assert all(
+        row["route_canary_evidence_bound"] is False for row in future_crypto_rows
+    )
 
     verified = subprocess.run(
         ["python3", str(VERIFY_SCRIPT), str(output_dir)],
@@ -5181,6 +5564,82 @@ def test_release_bundle_verifier_release_notes_renderer_is_independent(
     )
 
 
+def test_release_bundle_verifier_release_notes_invariants_require_status_and_blockers(
+    tmp_path: Path,
+) -> None:
+    """Release-notes invariants must expose exact status and blocker markers."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    manifest = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    report["production_ready"] = "true"
+    report["blockers"] = "operator override"
+    notes = verifier._expected_release_notes_attachment(
+        report,
+        manifest["artifacts"],
+    )
+
+    assert (
+        verifier._release_notes_attachment_invariant_errors(
+            report,
+            manifest["artifacts"],
+            notes,
+        )
+        == []
+    )
+
+    errors = verifier._release_notes_attachment_invariant_errors(
+        report,
+        manifest["artifacts"],
+        notes.replace("Status: NOT READY", "Status: READY", 1).replace(
+            "- `<invalid blockers>`",
+            "- None",
+            1,
+        ),
+    )
+
+    assert "release notes attachment missing status line: NOT READY" in errors
+    assert (
+        "release notes attachment missing blocker: - `<invalid blockers>`"
+        in errors
+    )
+
+
+def test_release_bundle_verifier_rejects_release_notes_status_drift(
+    tmp_path: Path,
+) -> None:
+    """Release notes must not truthy-drift readiness status independently."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    notes_path = output_dir / "sccp-release-notes-attachment.md"
+    notes_path.write_text(
+        notes_path.read_text(encoding="utf-8").replace(
+            "Status: READY",
+            "Status: NOT READY",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-notes-attachment.md")
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert "release notes attachment missing status line: READY" in verified.stdout
+    assert "release notes attachment does not match manifest and report" in (
+        verified.stdout
+    )
+
+
 def test_release_bundle_verifier_rejects_manifest_artifact_order_drift(
     tmp_path: Path,
 ) -> None:
@@ -5739,6 +6198,130 @@ def test_release_bundle_verifier_rejects_missing_source_inventory_gate(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_missing_phase_evidence_source_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the phase-evidence source gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("phase_evidence_source_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "phase_evidence_source_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_release_bundle_source_copy_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the release source-copy gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("release_bundle_source_copy_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "release_bundle_source_copy_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_release_bundle_output_path_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the release output-path gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("release_bundle_output_path_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "release_bundle_output_path_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_release_artifact_path_text_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the artifact path text gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("release_artifact_path_text_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "release_artifact_path_text_gate"
+    ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_missing_launch_scope_inventory_gate(
     tmp_path: Path,
 ) -> None:
@@ -5922,6 +6505,502 @@ def test_release_bundle_verifier_rejects_missing_ethereum_native_receipt_finalit
     assert (
         "readiness report source_inventory missing required gate: "
         "ethereum_native_receipt_finality_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_inbound_adversarial_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the inbound adversarial gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_inbound_adversarial_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_inbound_adversarial_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_bsc_inbound_adversarial_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the BSC inbound adversarial gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("bsc_inbound_adversarial_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "bsc_inbound_adversarial_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_outbound_precallback_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the outbound pre-callback gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_outbound_precallback_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_outbound_precallback_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_local_admission_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the local-admission gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_local_admission_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_local_admission_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_outbound_provider_validation_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the outbound provider gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_outbound_provider_validation_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_outbound_provider_validation_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_receipt_root_zero_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the receipt-root zero gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_receipt_root_zero_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_receipt_root_zero_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_receipt_rlp_zero_topic_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the receipt-RLP zero-topic gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_receipt_rlp_zero_topic_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_receipt_rlp_zero_topic_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_receipt_rlp_zero_address_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the receipt-RLP zero-address gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_receipt_rlp_zero_address_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_receipt_rlp_zero_address_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_receipt_source_event_context_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the source-event context gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_receipt_source_event_context_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_receipt_source_event_context_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_receipt_source_event_mode_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the source-event mode gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_receipt_source_event_mode_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_receipt_source_event_mode_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_receipt_source_event_zero_digest_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the source-event zero-digest gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_receipt_source_event_zero_digest_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_receipt_source_event_zero_digest_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_receipt_rpc_duplicate_json_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the receipt duplicate-JSON gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_receipt_rpc_duplicate_json_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_receipt_rpc_duplicate_json_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_receipt_block_transaction_hash_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the block receipt tx-hash gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_receipt_block_transaction_hash_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_receipt_block_transaction_hash_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_js_receipt_admission_guard_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the JS receipt admission gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_js_receipt_admission_guard_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_js_receipt_admission_guard_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_sdk_receipt_metadata_guard_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the SDK receipt metadata gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_sdk_receipt_metadata_guard_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_sdk_receipt_metadata_guard_gate"
+    ) in verified.stdout
+
+
+def test_release_bundle_verifier_rejects_missing_ethereum_noncanonical_chain_id_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    """Readiness source inventory must keep the noncanonical chain-id gate."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["source_inventory"].pop("ethereum_noncanonical_chain_id_gate")
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report source_inventory missing required gate: "
+        "ethereum_noncanonical_chain_id_gate"
     ) in verified.stdout
 
 
@@ -6565,6 +7644,164 @@ def test_release_bundle_verifier_rejects_manifest_readiness_claim_drift(
         "manifest blockers do not match readiness report blockers"
         in verified.stdout
     )
+
+
+def test_release_bundle_verifier_compares_summary_launch_ready_exactly(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Manifest-vs-summary readiness comparison must not truthy-coerce values."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+
+    def malformed_launch_checklist(evidence, native_prover_bundle=None):
+        return {"ready": "true", "items": []}
+
+    monkeypatch.setattr(
+        verifier,
+        "_active_launch_release_checklist",
+        malformed_launch_checklist,
+    )
+
+    verified = verifier.verify_bundle(output_dir)
+
+    assert verified["verified"] is False
+    assert (
+        "manifest production_ready does not match all-lanes summary active "
+        f"{verifier.ACTIVE_LAUNCH_DISPLAY} launch readiness"
+    ) in verified["errors"]
+
+
+def test_release_bundle_verifier_recomputes_active_checklist_with_exact_metadata(
+    tmp_path: Path,
+) -> None:
+    """Verifier recomputed launch checklist must reject truthy or malformed evidence."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+    active_lane = next(
+        lane
+        for lane in summary["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["records"]["source_verifier_material"] = "true"
+    active_lane["source_record_hashes"][
+        "source_adapter_engine_deployment_hash"
+    ] = "0x" + "00" * 32
+    active_lane["source_adapter_gate"]["required"] = True
+    active_lane["route_allowlist"]["expected_route_allowlist_hash_matches"] = "true"
+    route_canary = active_lane["route_allowlist"]["route_canary"]
+    route_canary["evidence_hash"] = "0x" + "00" * 32
+    route_canary["evidence_source"] = "operator_review_note"
+    route_canary["receipt_block_number"] = 0
+    route_canary["receipt_block_finalized"] = False
+
+    checklist = verifier._active_launch_release_checklist(
+        summary,
+        report["native_evm_prover_bundle"],
+    )
+    item_by_id = {item["id"]: item for item in checklist["items"]}
+
+    assert checklist["ready"] is False
+    assert item_by_id["all_required_lane_records"]["ready"] is False
+    assert item_by_id["governed_deployment_evidence"]["ready"] is False
+    assert item_by_id["route_allowlist_binding"]["ready"] is False
+    assert item_by_id["live_route_canary_evidence"]["ready"] is False
+    assert any(
+        "missing source verifier material" in blocker
+        for blocker in item_by_id["all_required_lane_records"]["blockers"]
+    )
+    assert any(
+        "governed deployment source adapter engine deployment hash must be a "
+        "canonical non-zero bytes32 hex string" in blocker
+        for blocker in item_by_id["governed_deployment_evidence"]["blockers"]
+    )
+    assert any(
+        "active EVM source adapter gate summary must not be required" in blocker
+        for blocker in item_by_id["governed_deployment_evidence"]["blockers"]
+    )
+    assert any(
+        "route allowlist source adapter engine deployment hash must be a canonical "
+        "non-zero bytes32 hex string" in blocker
+        for blocker in item_by_id["route_allowlist_binding"]["blockers"]
+    )
+    assert any(
+        "route allowlist expected hash match flag must be true" in blocker
+        for blocker in item_by_id["route_allowlist_binding"]["blockers"]
+    )
+    assert any(
+        "route canary evidence hash must be a canonical non-zero bytes32 hex string"
+        in blocker
+        for blocker in item_by_id["live_route_canary_evidence"]["blockers"]
+    )
+    assert any(
+        "route canary evidence source must be "
+        f"{verifier.ACTIVE_LAUNCH_ROUTE_CANARY_EVIDENCE_SOURCE}" in blocker
+        for blocker in item_by_id["live_route_canary_evidence"]["blockers"]
+    )
+    assert any(
+        "route canary receipt block number must be a positive integer" in blocker
+        for blocker in item_by_id["live_route_canary_evidence"]["blockers"]
+    )
+    assert any(
+        "route canary receipt block must be finalized" in blocker
+        for blocker in item_by_id["live_route_canary_evidence"]["blockers"]
+    )
+
+
+def test_release_bundle_verifier_blocks_malformed_native_prover_blockers(
+    tmp_path: Path,
+) -> None:
+    """Verifier recomputed readiness must not filter malformed native blockers."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+    cases = (
+        (
+            "operator override",
+            "native EVM prover validation_blockers must be a list of non-empty canonical strings",
+        ),
+        (
+            [123],
+            "native EVM prover validation_blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            [" padded "],
+            "native EVM prover validation_blockers[0] must be a non-empty canonical string",
+        ),
+        (
+            ["operator launch hold"],
+            "operator launch hold",
+        ),
+    )
+
+    for blocker_value, expected_blocker in cases:
+        native_bundle = dict(report["native_evm_prover_bundle"])
+        native_bundle["validation_blockers"] = blocker_value
+
+        checklist = verifier._active_launch_release_checklist(
+            summary,
+            native_bundle,
+        )
+        item_by_id = {item["id"]: item for item in checklist["items"]}
+        native_item = item_by_id["native_evm_groth16_prover_bundle"]
+
+        assert checklist["ready"] is False, repr(blocker_value)
+        assert native_item["ready"] is False, repr(blocker_value)
+        assert expected_blocker in native_item["blockers"]
 
 
 def test_release_bundle_verifier_rejects_unknown_artifact_fields(
@@ -7608,6 +8845,108 @@ def test_release_bundle_verifier_rejects_duplicate_public_blocker_strings(
         and "blockers must not contain duplicate strings" in line
         for line in verified.stdout.splitlines()
     )
+
+
+def test_release_bundle_verifier_active_launch_blockers_reject_malformed_containers(
+    tmp_path: Path,
+) -> None:
+    """Verifier active-launch blockers must not flatten malformed containers."""
+
+    verifier = load_verify_helpers()
+    output_dir = build_ready_bundle(tmp_path)
+    summary = json.loads(
+        (output_dir / "sccp-all-lanes-summary.json").read_text(encoding="utf-8")
+    )
+    active_lane = next(
+        lane
+        for lane in summary["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    summary["blockers"] = "operator launch hold"
+    active_lane["blockers"] = "lane launch hold"
+
+    blockers = verifier._active_launch_blockers(summary)
+
+    assert blockers == [
+        "SCCP evidence blocker summary is malformed",
+        "domain 1 (eth): active launch lane blocker summary is malformed",
+    ]
+
+
+def test_release_bundle_verifier_rejects_malformed_active_launch_blockers(
+    tmp_path: Path,
+) -> None:
+    """Published summaries must expose malformed active-lane blocker containers."""
+
+    verifier = load_verify_helpers()
+    output_dir = build_ready_bundle(tmp_path)
+
+    def mutate(summary: dict) -> None:
+        active_lane = next(
+            lane
+            for lane in summary["lanes"]
+            if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+        )
+        summary["blockers"] = "operator launch hold"
+        active_lane["blockers"] = "lane launch hold"
+
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate(report["evidence"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate(summary)
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    assert (
+        "readiness report embedded evidence blockers must be a list of "
+        "non-empty strings"
+    ) in verified.stdout
+    assert (
+        "readiness report embedded evidence lane domain 1 blockers must be a "
+        "list of non-empty strings"
+        in verified.stdout
+    )
+    assert (
+        "readiness report embedded evidence has active Ethereum mainnet launch blockers"
+        in verified.stdout
+    )
+    assert (
+        "all-lanes summary blockers must be a list of non-empty strings"
+        in verified.stdout
+    )
+    assert (
+        "all-lanes summary lane domain 1 blockers must be a list of "
+        "non-empty strings"
+        in verified.stdout
+    )
+    assert (
+        "all-lanes summary has active Ethereum mainnet launch blockers"
+        in verified.stdout
+    )
+    assert "- o\n- p\n- e\n- r" not in verified.stdout
 
 
 def test_release_bundle_verifier_rejects_all_lanes_lane_not_ready(
@@ -9076,6 +10415,61 @@ def test_release_bundle_verifier_rejects_all_lanes_route_canary_field_drift(
     ) in verified.stdout
 
 
+def test_release_bundle_verifier_rejects_all_lanes_route_canary_evidence_drift(
+    tmp_path: Path,
+) -> None:
+    """All-lanes route canaries must keep canonical evidence hashes and sources."""
+
+    def mutate_lanes(lanes: list[dict]) -> None:
+        by_domain = {lane["domain"]: lane for lane in lanes}
+        eth_canary = by_domain[1]["route_allowlist"]["route_canary"]
+        eth_canary["evidence_hash"] = "0x" + "00" * 32
+        eth_canary["evidence_source"] = "operator_review_note"
+
+    output_dir = build_ready_bundle(tmp_path)
+    report_path = output_dir / "sccp-release-readiness.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    mutate_lanes(report["evidence"]["lanes"])
+    report_path.write_text(
+        json.dumps(report, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    summary_path = output_dir / "sccp-all-lanes-summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    mutate_lanes(summary["lanes"])
+    summary_path.write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    rewrite_manifest_artifact(output_dir, "sccp-release-readiness.json")
+    rewrite_manifest_artifact(output_dir, "sccp-all-lanes-summary.json")
+    rewrite_canonical_report_and_notes(output_dir)
+
+    verified = subprocess.run(
+        ["python3", str(VERIFY_SCRIPT), str(output_dir)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert verified.returncode == 1
+    for label in (
+        "readiness report embedded evidence",
+        "all-lanes summary",
+    ):
+        assert (
+            f"{label} lane domain 1 route_allowlist route_canary "
+            "evidence_hash must be a non-zero canonical bytes32 hex string"
+        ) in verified.stdout
+        assert (
+            f"{label} lane domain 1 route_allowlist route_canary "
+            "evidence_source must be evm_message_proof_accepted_transaction"
+        ) in verified.stdout
+
+
 def test_release_bundle_verifier_rejects_tron_route_canary_zero_addresses(
     tmp_path: Path,
 ) -> None:
@@ -10302,6 +11696,117 @@ def test_release_bundle_verifier_markdown_invariants_require_public_sections(
     )
 
 
+def test_release_bundle_verifier_markdown_invariants_require_blocker_text(
+    tmp_path: Path,
+) -> None:
+    """Public Markdown invariants must require blocker details in every section."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    checklist_item = report["release_checklist"]["items"][0]
+    checklist_item["blockers"] = ["release-checklist-blocker-unique"]
+    report["native_evm_prover_bundle"]["validation_blockers"] = [
+        "native-prover-blocker-unique"
+    ]
+    report["source_inventory"]["proof_request_bundle_gate"][
+        "validation_blockers"
+    ] = ["source-inventory-blocker-unique"]
+    surface = report["user_prover_submission_surfaces"][0]
+    surface["validation_status"] = "blocked"
+    surface["validation_blockers"] = ["user-surface-blocker-unique"]
+    active_lane = next(
+        lane
+        for lane in report["evidence"]["lanes"]
+        if lane["domain"] == verifier.ACTIVE_LAUNCH_DOMAIN
+    )
+    active_lane["blockers"] = ["lane-readiness-blocker-unique"]
+    report["blockers"] = ["top-level-blocker-unique"]
+
+    markdown = verifier._expected_readiness_markdown(report)
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    cases = [
+        (
+            "Release Checklist",
+            f"blockers for gate {checklist_item['id']}",
+            "release-checklist-blocker-unique",
+        ),
+        (
+            "Native Prover Bundle",
+            "native EVM prover validation_blockers",
+            "native-prover-blocker-unique",
+        ),
+        (
+            "Source Inventory",
+            "source inventory proof_request_bundle_gate validation_blockers",
+            "source-inventory-blocker-unique",
+        ),
+        (
+            "User Prover Submission Surfaces",
+            f"validation_blockers for lanes {surface['lanes']}",
+            "user-surface-blocker-unique",
+        ),
+        (
+            "Lane Readiness",
+            f"blockers for domain {verifier.ACTIVE_LAUNCH_DOMAIN}",
+            "lane-readiness-blocker-unique",
+        ),
+        ("Blocking Items", "blocker", "- top-level-blocker-unique"),
+    ]
+    for section, label, blocker in cases:
+        errors = verifier._readiness_markdown_invariant_errors(
+            report,
+            markdown.replace(blocker, "redacted", 1),
+        )
+        assert (
+            f"readiness report Markdown {section} section missing "
+            f"{label}: {blocker}"
+        ) in errors
+
+
+def test_release_bundle_verifier_markdown_invariants_require_invalid_blocker_markers(
+    tmp_path: Path,
+) -> None:
+    """Malformed blocker containers must stay visible in public Markdown."""
+
+    output_dir = build_ready_bundle(tmp_path)
+    verifier = load_verify_helpers()
+    report = json.loads(
+        (output_dir / "sccp-release-readiness.json").read_text(encoding="utf-8")
+    )
+    surface = report["user_prover_submission_surfaces"][0]
+    surface["validation_status"] = "blocked"
+    surface["validation_blockers"] = ""
+    report["blockers"] = "operator override"
+
+    markdown = verifier._expected_readiness_markdown(report)
+
+    assert verifier._readiness_markdown_invariant_errors(report, markdown) == []
+
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace("`<invalid validation_blockers>`", "-", 1),
+    )
+    assert (
+        "readiness report Markdown User Prover Submission Surfaces section "
+        f"missing validation_blockers for lanes {surface['lanes']}: "
+        "`<invalid validation_blockers>`"
+    ) in errors
+
+    errors = verifier._readiness_markdown_invariant_errors(
+        report,
+        markdown.replace("- `<invalid blockers>`", "- None", 1),
+    )
+    assert (
+        "readiness report Markdown Blocking Items section missing blocker: "
+        "- `<invalid blockers>`"
+    ) in errors
+
+
 def test_release_bundle_verifier_rejects_markdown_crypto_evidence_omission(
     tmp_path: Path,
 ) -> None:
@@ -10413,6 +11918,35 @@ def test_release_bundle_verifier_rejects_crypto_evidence_hash_drift(
         "readiness report cryptographic_evidence does not match embedded lane evidence"
         in verified.stdout
     )
+
+
+def test_release_bundle_verifier_expected_crypto_evidence_preserves_malformed_values(
+    tmp_path: Path,
+) -> None:
+    """Verifier expected rows must not truthy-coerce malformed embedded values."""
+
+    report = load_report_module()
+    verifier = load_verify_helpers()
+    evidence, _ = write_active_launch_evidence(tmp_path)
+    evidence_summary = report._load_evidence_summary([evidence])
+    active_lane = report._active_launch_lane(evidence_summary)
+    assert active_lane is not None
+
+    active_lane["route_allowlist"]["route_canary"]["evidence_bound"] = "false"
+    active_lane["source_adapter_gate"]["required"] = "false"
+    active_lane["source_adapter_gate"]["gate_hash"] = 0
+    active_lane["source_adapter_gate"]["audit_hashes"] = ["not", "an", "object"]
+
+    active_row = next(
+        row
+        for row in verifier._expected_cryptographic_evidence(evidence_summary)
+        if row["domain"] == report.ACTIVE_LAUNCH_DOMAIN
+    )
+
+    assert active_row["route_canary_evidence_bound"] == "false"
+    assert active_row["source_adapter_gate_required"] == "false"
+    assert active_row["source_adapter_gate_hash"] == 0
+    assert active_row["source_adapter_gate_audit_hashes"] == ["not", "an", "object"]
 
 
 def test_release_bundle_verifier_rejects_crypto_evidence_zero_hashes(
@@ -13182,6 +14716,183 @@ def test_release_bundle_verifier_guards_sccp_proof_request_bundle_gate_inventory
         and str(sparse_dist) in error
         and missing_dist_marker in error
         for error in dist_errors
+    )
+
+
+def test_release_bundle_verifier_guards_sccp_phase_evidence_source_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin phase evidence source handling."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_phase_evidence_source_inventory_errors() == []
+
+    sparse_bundle = tmp_path / "sccp_release_bundle.py"
+    sparse_bundle.write_text(
+        "duplicate SCCP corridor phase evidence for\n",
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_phase_evidence_source_inventory_errors(
+        (
+            (
+                sparse_bundle,
+                (
+                    "duplicate SCCP corridor phase evidence for",
+                    "already set by",
+                    "cannot set from",
+                    "source_labels",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and str(sparse_bundle) in error
+        and "missing marker: already set by" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP phase evidence duplicate-input source inventory" in error
+        and "missing marker: source_labels" in error
+        for error in errors
+    )
+
+
+def test_release_bundle_verifier_guards_sccp_release_bundle_source_copy_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin source-copy path preflights."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_release_bundle_source_copy_inventory_errors() == []
+
+    sparse_bundle = tmp_path / "sccp_release_bundle.py"
+    sparse_bundle.write_text(
+        "def _reject_path_control_characters(path, label):\n"
+        "    raise SystemExit('contains control character')\n",
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_release_bundle_source_copy_inventory_errors(
+        (
+            (
+                sparse_bundle,
+                (
+                    "def _reject_path_control_characters(",
+                    "contains control character",
+                    "def _reject_symlink_sources(",
+                    "release bundle source path must not be a symlink",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release bundle source-copy source inventory" in error
+        and str(sparse_bundle) in error
+        and "missing marker: def _reject_symlink_sources(" in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release bundle source-copy source inventory" in error
+        and "missing marker: release bundle source path must not be a symlink"
+        in error
+        for error in errors
+    )
+
+
+def test_release_bundle_verifier_guards_sccp_release_bundle_output_path_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin output-directory preflights."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_release_bundle_output_path_inventory_errors() == []
+
+    sparse_bundle = tmp_path / "sccp_release_bundle.py"
+    sparse_bundle.write_text(
+        "def _reject_symlinked_existing_output_path(output_dir):\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_release_bundle_output_path_inventory_errors(
+        (
+            (
+                sparse_bundle,
+                (
+                    "def _reject_symlinked_existing_output_path(",
+                    "release bundle output directory contains control character",
+                    "release bundle output directory must not be a symlink",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release bundle output-path source inventory" in error
+        and str(sparse_bundle) in error
+        and (
+            "missing marker: release bundle output directory contains "
+            "control character"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release bundle output-path source inventory" in error
+        and "missing marker: release bundle output directory must not be a symlink"
+        in error
+        for error in errors
+    )
+
+
+def test_release_bundle_verifier_guards_sccp_release_artifact_path_text_inventory(
+    tmp_path: Path,
+) -> None:
+    """Published bundle verification must pin Markdown-safe artifact paths."""
+
+    verifier = load_verify_helpers()
+    assert verifier._sccp_release_artifact_path_text_inventory_errors() == []
+
+    sparse_verifier = tmp_path / "sccp_verify_release_bundle.py"
+    sparse_verifier.write_text(
+        "MARKDOWN_UNSAFE_PATH_CHARACTERS = frozenset('|`<>')\n"
+        "def _path_markdown_unsafe_character(path):\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
+    errors = verifier._sccp_release_artifact_path_text_inventory_errors(
+        (
+            (
+                sparse_verifier,
+                (
+                    "MARKDOWN_UNSAFE_PATH_CHARACTERS",
+                    "def _path_markdown_unsafe_character(",
+                    "manifest artifact path contains Markdown-unsafe character",
+                    "bundle contains entry path with Markdown-unsafe character",
+                ),
+            ),
+        )
+    )
+
+    assert any(
+        "SCCP release artifact path text source inventory" in error
+        and str(sparse_verifier) in error
+        and (
+            "missing marker: manifest artifact path contains "
+            "Markdown-unsafe character"
+        )
+        in error
+        for error in errors
+    )
+    assert any(
+        "SCCP release artifact path text source inventory" in error
+        and (
+            "missing marker: bundle contains entry path with "
+            "Markdown-unsafe character"
+        )
+        in error
+        for error in errors
     )
 
 

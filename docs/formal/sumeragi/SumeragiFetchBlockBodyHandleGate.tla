@@ -216,8 +216,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+FetchBlockBodyHandleMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast ==
+  FetchBlockBodyHandleMatchesSpec
 
 DeferredCanonicalNotDispatched ==
   Matches("exact_canonical_defer")

@@ -159,6 +159,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("password_trust_unknown_secret", "trust_unknown_secret"),
             ("%70assword_trust_unknown_leak", "trust_unknown_leak"),
             ("private-key_trust_unknown_leak", "trust_unknown_leak"),
+            ("unexpected\x1btrust_key", "\x1b"),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -171,6 +172,83 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 self.assertIn("contains unknown keys", message)
                 self.assertNotIn("password", message)
                 self.assertNotIn(unknown_key, message)
+                self.assertNotIn(hidden, message)
+
+    def test_cli_argument_terminator_is_rejected_without_echo(self):
+        hidden = "token=trust-terminator-secret"
+        cases = (
+            (
+                "raw",
+                lambda: VERIFIER._preflight_raw_cli_secrets(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "path",
+                lambda: VERIFIER._preflight_output_cli_paths(
+                    ["--", "--summary-out", hidden],
+                    {"--summary-out"},
+                ),
+            ),
+            (
+                "boolean",
+                lambda: VERIFIER._preflight_boolean_cli_flags(
+                    ["--", "--allow-record-only", hidden],
+                    {"--allow-record-only"},
+                ),
+            ),
+            (
+                "positive_int",
+                lambda: VERIFIER._preflight_positive_int_cli_values(
+                    ["--", "--max-source-age-days", hidden],
+                    {"--max-source-age-days"},
+                ),
+            ),
+        )
+        for helper, run in cases:
+            with self.subTest(helper=helper):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    run()
+
+                message = str(caught.exception)
+                self.assertIn("argument terminator is not supported", message)
+                self.assertNotIn(hidden, message)
+                self.assertNotIn("trust-terminator-secret", message)
+
+    def test_parser_rejects_abbreviated_long_options(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            with self.assertRaises(SystemExit) as caught:
+                VERIFIER.build_parser().parse_args(
+                    ["--bundle", "bundle.json", "--summary-ou", "out"]
+                )
+
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("unrecognized arguments", stderr.getvalue())
+        self.assertIn("--summary-ou", stderr.getvalue())
+
+    def test_nested_control_material_in_bundle_is_rejected_without_echo(self):
+        cases = (
+            (
+                {"metadata": {"unexpected\x1btrust_key": "redacted"}},
+                "forbidden control-bearing field",
+                "trust_key",
+            ),
+            (
+                {"metadata": {"note": "warning \x1b[31mred"}},
+                "unsafe control characters",
+                "[31mred",
+            ),
+        )
+        for body, expected, hidden in cases:
+            with self.subTest(body=body):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._check_no_secret_material(body)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn("\x1b", message)
                 self.assertNotIn(hidden, message)
 
     def test_output_cli_path_flags_reject_flag_like_values(self):
@@ -208,6 +286,112 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 self.assertNotIn(raw_path, message)
                 self.assertNotIn(decoded_secret, message)
                 self.assertNotIn("trust-path-leak", message)
+
+    def test_local_path_validators_reject_percent_encoded_smuggling(self):
+        cases = (
+            (
+                "raw encoded dot",
+                lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%2e/summary.json",
+                "encoded dot or separator",
+            ),
+            (
+                "output encoded slash",
+                lambda raw: VERIFIER._reject_output_path_smuggling(Path(raw), "output path"),
+                "out/%2f/summary.json",
+                "encoded dot or separator",
+            ),
+            (
+                "raw uri prefix",
+                lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "file:out/summary.json",
+                "URI or drive prefixes",
+            ),
+            (
+                "output drive prefix",
+                lambda raw: VERIFIER._reject_output_path_smuggling(Path(raw), "output path"),
+                "C:/out/summary.json",
+                "URI or drive prefixes",
+            ),
+            (
+                "raw encoded semicolon",
+                lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%3b/summary.json",
+                "encoded semicolon",
+            ),
+            (
+                "raw encoded delimiter",
+                lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%40/summary.json",
+                "encoded URL delimiter",
+            ),
+            (
+                "raw encoded percent",
+                lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%25/summary.json",
+                "encoded percent",
+            ),
+            (
+                "raw encoded space",
+                lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%20/summary.json",
+                "percent-encoded control or space",
+            ),
+            (
+                "raw malformed percent",
+                lambda raw: VERIFIER._reject_raw_output_path_smuggling(raw, "raw path"),
+                "out/%zz/summary.json",
+                "malformed percent",
+            ),
+        )
+        for name, call, raw, expected in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    call(raw)
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(raw, message)
+
+    def test_url_paths_reject_raw_delimiter_smuggling(self):
+        cases = (
+            "https://pki.local-bank.bank/source:debug",
+            "https://pki.local-bank.bank/source@debug",
+            "https://pki.local-bank.bank/source[debug]",
+        )
+        for url in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._validate_source_url(
+                        url,
+                        "source.url",
+                        allow_insecure_source_url=False,
+                    )
+
+                message = str(caught.exception)
+                self.assertIn("path must not contain URL delimiter characters", message)
+                self.assertNotIn(url, message)
+
+    def test_url_paths_reject_non_ascii_smuggling(self):
+        cases = (
+            ("https://pki.local-bank.bank/source∕debug", "path must use printable ASCII"),
+            (
+                "https://pki.local-bank.bank/source%c3%a9",
+                "path must not contain percent-encoded non-ASCII bytes",
+            ),
+        )
+        for url, expected in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+                    VERIFIER._validate_source_url(
+                        url,
+                        "source.url",
+                        allow_insecure_source_url=False,
+                    )
+
+                message = str(caught.exception)
+                self.assertIn(expected, message)
+                self.assertNotIn(url, message)
 
     def test_boolean_cli_flags_reject_values_without_echo(self):
         cases = (
@@ -1212,6 +1396,35 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 0,
             )
 
+    def test_unused_local_overrides_are_rejected(self):
+        cases = (
+            (
+                "--allow-record-only",
+                "--allow-record-only requires at least one bundle with a "
+                "non-production embedded_signature_policy",
+            ),
+            (
+                "--allow-insecure-source-url",
+                "--allow-insecure-source-url requires at least one bundle with "
+                "an http:// source URL",
+            ),
+            (
+                "--allow-synthetic-der",
+                "--allow-synthetic-der requires at least one bundle with synthetic DER",
+            ),
+        )
+        for flag, message in cases:
+            with self.subTest(flag=flag):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    path = write_bundle(root, valid_bundle())
+
+                    rc, stdout, stderr = run_verify(["--bundle", str(path), flag])
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+
     def test_placeholder_source_summary_only_is_not_profile_emittable(self):
         cases = (
             ("authority", lambda bundle: bundle["source"].__setitem__("authority", "Rail PKI placeholder")),
@@ -1782,6 +1995,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             self.assertFalse(summary["profile_json_emittable"])
             self.assertFalse(summary["profile_json_emitted"])
             self.assertIsNone(summary["profile_json_sha256"])
+            self.assertNotIn("_uses_synthetic_der", json.dumps(summary))
 
     def test_synthetic_der_cannot_emit_profile_overrides(self):
         with tempfile.TemporaryDirectory() as raw_root:

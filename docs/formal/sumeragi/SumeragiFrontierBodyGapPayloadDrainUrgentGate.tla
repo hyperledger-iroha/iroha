@@ -349,7 +349,7 @@ AnyPayloadBacklogCanDriveUrgency ==
   /\ BacklogBlock \in ImplementationActions(AwaitBodySlotEvidenceBlock)
   /\ ImplementationUrgent(AwaitCommitQcAllEvidenceAllBacklog) = TRUE
 
-NoBugInvariant ==
+FrontierBodyGapPayloadDrainUrgentCoreSafety ==
   /\ ResultMatchesSpec
   /\ ActionsMatchSpec
   /\ SlotShapeRequired
@@ -358,6 +358,8 @@ NoBugInvariant ==
   /\ RelevantBacklogRequired
   /\ AnyPayloadBacklogCanDriveUrgency
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == FrontierBodyGapPayloadDrainUrgentCoreSafety
+
+SafetyFast == FrontierBodyGapPayloadDrainUrgentCoreSafety
 
 ====

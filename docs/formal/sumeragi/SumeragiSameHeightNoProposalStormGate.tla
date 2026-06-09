@@ -424,12 +424,15 @@ BreakSafety ==
 ActivePendingSafety ==
   \A c \in ActiveCases : ImplementationActions(c) = SpecActions(c)
 
-SafetyFast ==
+SameHeightNoProposalStormCoreSafety ==
   /\ ProgressSafety
   /\ ResetSafety
   /\ RecordSafety
   /\ BreakSafety
   /\ ActivePendingSafety
+
+SafetyFast ==
+  SameHeightNoProposalStormCoreSafety
 
 ProgressAnchors ==
   /\ ProgressSafety

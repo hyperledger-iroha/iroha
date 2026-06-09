@@ -318,8 +318,11 @@ RoundTripAnchors ==
   /\ SpecRoundTripSet("roundtrip_rotated_common") = {0, 2}
   /\ SpecRoundTripSet("roundtrip_missing_peer_filters") = {0, 2}
 
-SafetyFast ==
+SignerIndexNormalizationCoreSafety ==
   \A c \in Cases: ActualResult(c) = SpecResult(c)
+
+SafetyFast ==
+  SignerIndexNormalizationCoreSafety
 
 CanonicalNormalizationExact ==
   /\ ActualCanonicalSet("empty_to_canonical") = {}
@@ -352,7 +355,7 @@ SignerIndexNormalizationExactness ==
   /\ ViewIndexAnchors
   /\ ViewSetAnchors
   /\ RoundTripAnchors
-  /\ SafetyFast
+  /\ SignerIndexNormalizationCoreSafety
   /\ CanonicalNormalizationExact
   /\ ViewIndexNormalizationExact
   /\ ViewSetNormalizationExact

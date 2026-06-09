@@ -103,8 +103,11 @@ Next ==
 TypeInvariant ==
   checked = 0
 
-SafetyFast ==
+ValidationRedriveLabelsMatchSpec ==
   ActualLabels = SpecLabels
+
+SafetyFast ==
+  ValidationRedriveLabelsMatchSpec
 
 LabelsDistinct ==
   Cardinality(ActualLabelSet) = 4

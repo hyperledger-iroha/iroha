@@ -599,7 +599,7 @@ def create_slot(
                     "rollback_rejection_passed": True,
                     "abi6_recursive_spend_jni_probe": "passed",
                     "abi7_recursive_compact_jni_probe": "one_hop_verified",
-                    "abi7_recursive_compact_prover_state": "multi_hop_proof_composition_unavailable",
+                    "abi7_recursive_compact_prover_state": "multi_hop_proof_composed",
                     "raw_test_commands": raw_test_commands,
                     "signed_at_utc": "2026-06-06T00:00:00Z",
                     "signer_key_id": "android-lab-release-signer-v1",
@@ -640,7 +640,7 @@ def create_slot(
                 "rollback_rejection_passed": True,
                 "abi6_recursive_spend_jni_probe": "passed",
                 "abi7_recursive_compact_jni_probe": "one_hop_verified",
-                "abi7_recursive_compact_prover_state": "multi_hop_proof_composition_unavailable",
+                "abi7_recursive_compact_prover_state": "multi_hop_proof_composed",
                 "signed_evidence_artifact_path": "evidence/signed-evidence.json",
                 "signed_evidence_artifact_sha256": evidence_digest,
                 "raw_test_commands": raw_test_commands,
@@ -732,7 +732,7 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
             "rollback_rejection_passed": True,
             "abi6_recursive_spend_jni_probe": "passed",
             "abi7_recursive_compact_jni_probe": "one_hop_verified",
-            "abi7_recursive_compact_prover_state": "multi_hop_proof_composition_unavailable",
+            "abi7_recursive_compact_prover_state": "multi_hop_proof_composed",
             "signed_evidence_artifact_path": "evidence/signed-evidence.json",
             "signed_evidence_artifact_sha256": "0" * 64,
             "raw_test_commands": raw_test_commands,
@@ -3512,7 +3512,9 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             )
             metadata_path = slot / "slot.json"
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-            metadata["abi7_recursive_compact_prover_state"] = "proof_composition_unavailable"
+            metadata["abi7_recursive_compact_prover_state"] = (
+                "multi_hop_proof_composition_unavailable"
+            )
             write_json(metadata_path, metadata)
             rewrite_sha256sum(slot)
 
@@ -3524,7 +3526,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(report["status"], "error")
         self.assertIn(
-            "slot.json abi7_recursive_compact_prover_state must be one of ['multi_hop_proof_composition_unavailable']",
+            "slot.json abi7_recursive_compact_prover_state must be one of ['multi_hop_proof_composed']",
             report["errors"],
         )
 
@@ -5473,6 +5475,70 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertEqual(report["status"], "error")
         self.assertIn(
             "signed evidence artifact artifact_digests[logs/runtime.log] must be lowercase sha256 hex",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_signed_evidence_missing_release_apk_digest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            apk_path = metadata["offline_wallet_apk_path"]
+
+            def remove_release_apk_digest(evidence: dict) -> None:
+                evidence["artifact_digests"].pop(apk_path, None)
+
+            mutate_signed_evidence(slot, remove_release_apk_digest)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            f"signed evidence artifact artifact_digests[{apk_path}] must be lowercase sha256 hex",
+            report["errors"],
+        )
+
+    def test_production_metadata_rejects_signed_evidence_missing_attestation_chain_digest(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp))
+            trusted = trusted_signers_for(signer)
+            slot = create_slot(
+                Path(temp),
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            chain_path = metadata["attestation_certificate_chain_path"]
+
+            def remove_attestation_chain_digest(evidence: dict) -> None:
+                evidence["artifact_digests"].pop(chain_path, None)
+
+            mutate_signed_evidence(slot, remove_attestation_chain_digest)
+
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted,
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            f"signed evidence artifact artifact_digests[{chain_path}] must be lowercase sha256 hex",
             report["errors"],
         )
 
@@ -7942,6 +8008,33 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("not valid JSON", rendered)
         self.assertNotIn("token=supersecret", rendered)
         self.assertNotIn(str(slot), rendered)
+
+    def test_signer_artifact_digests_include_release_apk_and_attestation_chain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root,
+                "pixel8",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            errors: list[str] = []
+
+            digests = evidence_signer._artifact_digests(  # type: ignore[attr-defined]
+                slot,
+                errors,
+                metadata,
+            )
+
+        self.assertEqual(errors, [])
+        self.assertIsNotNone(digests)
+        assert digests is not None
+        self.assertIn(metadata["offline_wallet_apk_path"], digests)
+        self.assertIn(metadata["attestation_certificate_chain_path"], digests)
 
     def test_signer_artifact_digests_rejects_secret_slot_path_directly_before_hash(
         self,

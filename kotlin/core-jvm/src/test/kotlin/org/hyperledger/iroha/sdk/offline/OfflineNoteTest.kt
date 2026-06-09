@@ -34,12 +34,16 @@ import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.HttpTransportExecutor
+import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
 import org.hyperledger.iroha.sdk.client.ToriiCanonicalRequestAuth
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.core.model.WirePayload
+import org.hyperledger.iroha.sdk.crypto.Signer
+import org.hyperledger.iroha.sdk.tx.SignedTransaction
+import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class OfflineNoteTest {
     @Test
@@ -153,41 +157,118 @@ class OfflineNoteTest {
 
     @Test
     fun kagemushaRecordBackedNativeProverValidatesInput() {
-        assertFailsWith<IllegalArgumentException> {
+        val emptyPayloadArchive = kagemushaNoritoFrame(0x4b)
+        val oversizedArchive = ByteArray(KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1)
+        assertIllegalArgumentContains("recordBundleArchive must not be empty") {
             KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(ByteArray(0))
         }
-        if (KagemushaCompactPaymentTokenProver.isNativeAvailable()) {
-            assertFailsWith<IllegalArgumentException> {
-                KagemushaCompactPaymentTokenProver
-                    .proveVerifiedCompactPaymentTokenWithRecords(byteArrayOf(0x01, 0x02))
-            }
+        assertIllegalArgumentContains("recordBundleArchive must not exceed") {
+            KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(oversizedArchive)
+        }
+        assertIllegalArgumentContains("recordBundleArchive must be a valid Norito archive") {
+            KagemushaCompactPaymentTokenProver
+                .proveVerifiedCompactPaymentTokenWithRecords(byteArrayOf(0x01, 0x02))
+        }
+        assertIllegalArgumentContains("recordBundleArchive must contain a non-empty Norito payload") {
+            KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(emptyPayloadArchive)
         }
     }
 
     @Test
     fun kagemushaRecursiveAggregationNativeProverValidatesInput() {
-        assertFailsWith<IllegalArgumentException> {
+        val validArchive = kagemushaNoritoFrameWithPayload(0x4b)
+        val emptyPayloadArchive = kagemushaNoritoFrame(0x4b)
+        val oversizedArchive = ByteArray(KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1)
+        assertIllegalArgumentContains("recordBundleArchive must not be empty") {
             KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
                     ByteArray(0),
-                    byteArrayOf(0x01),
+                    validArchive,
                 )
         }
-        assertFailsWith<IllegalArgumentException> {
+        assertIllegalArgumentContains("pallasOpenEnvelopesArchive must not be empty") {
             KagemushaRecursiveAggregationProofBundleProver
                 .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                    byteArrayOf(0x01),
+                    validArchive,
                     ByteArray(0),
                 )
         }
-        if (KagemushaRecursiveAggregationProofBundleProver.isNativeAvailable()) {
-            assertFailsWith<IllegalArgumentException> {
-                KagemushaRecursiveAggregationProofBundleProver
-                    .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
-                        byteArrayOf(0x01, 0x02),
-                        byteArrayOf(0x03, 0x04),
-                    )
-            }
+        assertIllegalArgumentContains("recordBundleArchive must not exceed") {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    oversizedArchive,
+                    validArchive,
+                )
+        }
+        assertIllegalArgumentContains("pallasOpenEnvelopesArchive must not exceed") {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive,
+                    oversizedArchive,
+                )
+        }
+        assertIllegalArgumentContains("recordBundleArchive must be a valid Norito archive") {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    byteArrayOf(0x01, 0x02),
+                    validArchive,
+                )
+        }
+        assertIllegalArgumentContains("pallasOpenEnvelopesArchive must be a valid Norito archive") {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive,
+                    byteArrayOf(0x03, 0x04),
+                )
+        }
+        assertIllegalArgumentContains("recordBundleArchive must contain a non-empty Norito payload") {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    emptyPayloadArchive,
+                    validArchive,
+                )
+        }
+        assertIllegalArgumentContains("pallasOpenEnvelopesArchive must contain a non-empty Norito payload") {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive,
+                    emptyPayloadArchive,
+                )
+        }
+    }
+
+    @Test
+    fun kagemushaCompactNativeInputCopiesBeforeDispatch() {
+        val archive = kagemushaNoritoFrameWithPayload(0x4b)
+        val expected = archive.copyOf()
+        val ownedArchive = KagemushaCompactPaymentTokenProver.ownedNativeInput(
+            archive,
+            "recordBundleArchive",
+        )
+        archive[6] = 0x7f.toByte()
+        assertFalse(ownedArchive === archive)
+        assertContentEquals(expected, ownedArchive)
+    }
+
+    @Test
+    fun kagemushaRecordBackedNativeProversRejectJavaNullsWithStableFieldMarkers() {
+        val validArchive = kagemushaNoritoFrameWithPayload(0x4b)
+        assertIllegalArgumentContains("recordBundleArchive must not be empty") {
+            KagemushaCompactPaymentTokenProver.proveVerifiedCompactPaymentTokenWithRecords(null)
+        }
+        assertIllegalArgumentContains("recordBundleArchive must not be empty") {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    null,
+                    validArchive,
+                )
+        }
+        assertIllegalArgumentContains("pallasOpenEnvelopesArchive must not be empty") {
+            KagemushaRecursiveAggregationProofBundleProver
+                .proveVerifiedRecursiveAggregationProofBundleWithRecordsAndPallasOpenEnvelopes(
+                    validArchive,
+                    null,
+                )
         }
     }
 
@@ -206,6 +287,13 @@ class OfflineNoteTest {
             "kagemusha-recursive-aggregation-v1",
             KagemushaRecursiveSpendProver.RECURSIVE_AGGREGATION_PROOF_CIRCUIT_ID_V1,
         )
+        assertTrue(VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", byteArrayOf(1, 2, 3)).isNotEmpty())
+        assertFailsWith<IllegalArgumentException> {
+            VerifyingKeyBoxCodec.encodeNorito(" ", byteArrayOf(1))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", ByteArray(0))
+        }
         assertEquals(
             "kagemusha-recursive-spend-lineage-v1",
             KagemushaRecursiveSpendProver.RECURSIVE_SPEND_LINEAGE_PROOF_CIRCUIT_ID_V1,
@@ -339,6 +427,68 @@ class OfflineNoteTest {
     }
 
     @Test
+    fun chainVkOfflineNoteProofWrappersValidateInputs() {
+        assertFailsWith<IllegalArgumentException> {
+            ChainVkOfflineNoteProofProvider(ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ChainVkOfflineNoteProofVerifier(ByteArray(0))
+        }
+        ChainVkOfflineNoteProofProvider(byteArrayOf(0x01))
+        ChainVkOfflineNoteProofVerifier(byteArrayOf(0x01))
+
+        assertTrue(
+            NativeOfflineNoteProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = { throw IllegalArgumentException("empty native probe") },
+            ),
+        )
+        assertFalse(
+            NativeOfflineNoteProver.detectNativeAvailability(
+                loadLibrary = { throw UnsatisfiedLinkError("missing library") },
+                probeSymbol = {},
+            ),
+        )
+        assertFalse(
+            NativeOfflineNoteProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = { throw UnsatisfiedLinkError("missing symbol") },
+            ),
+        )
+        assertFalse(
+            NativeOfflineNoteProver.detectNativeAvailability(
+                loadLibrary = {},
+                probeSymbol = { throw SecurityException("native bridge denied") },
+            ),
+        )
+
+        assertFailsWith<IllegalArgumentException> {
+            NativeOfflineNoteProver.proveRedeem(ByteArray(0), byteArrayOf(0x01))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NativeOfflineNoteProver.proveRedeem(byteArrayOf(0x01), ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NativeOfflineNoteProver.proveAudit(ByteArray(0), byteArrayOf(0x01))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NativeOfflineNoteProver.proveAudit(byteArrayOf(0x01), ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NativeOfflineNoteProver.verifyRedeem(ByteArray(0), byteArrayOf(0x01))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NativeOfflineNoteProver.verifyRedeem(byteArrayOf(0x01), ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NativeOfflineNoteProver.verifyAudit(ByteArray(0), byteArrayOf(0x01))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            NativeOfflineNoteProver.verifyAudit(byteArrayOf(0x01), ByteArray(0))
+        }
+    }
+
+    @Test
     fun kagemushaNativeProversRejectMissingAndEmptyNativeOutputs() {
         val missing = assertFailsWith<IllegalStateException> {
             KagemushaCompactPaymentTokenProver.requireNativeOutput(null, "native test")
@@ -349,6 +499,24 @@ class OfflineNoteTest {
             KagemushaCompactPaymentTokenProver.requireNativeOutput(ByteArray(0), "native test")
         }
         assertTrue(empty.message!!.contains("returned empty output"))
+
+        val oversized = assertFailsWith<IllegalStateException> {
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(
+                ByteArray(KagemushaCompactPaymentTokenProver.NATIVE_ARCHIVE_MAX_BYTES + 1),
+                "native test",
+            )
+        }
+        assertTrue(oversized.message!!.contains("returned oversized output"))
+
+        val invalid = assertFailsWith<IllegalStateException> {
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(byteArrayOf(0x01, 0x02), "native test")
+        }
+        assertTrue(invalid.message!!.contains("returned invalid Norito archive"))
+
+        val emptyPayload = assertFailsWith<IllegalStateException> {
+            KagemushaCompactPaymentTokenProver.requireNativeOutput(kagemushaNoritoFrame(0x4b), "native test")
+        }
+        assertTrue(emptyPayload.message!!.contains("returned empty Norito payload"))
 
         val validOutput = issue(loadFixture()).noritoEncoded()
         assertContentEquals(
@@ -2214,6 +2382,7 @@ class OfflineNoteTest {
             issuerClient = issuerClient,
             transactionSubmitter = RecordingTransactionSubmitter(),
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             certificateVerifier = certificateVerifier(fixture),
             randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "source_note_secret_hex")))),
             idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -2255,6 +2424,7 @@ class OfflineNoteTest {
             issuerClient = issuerClient,
             transactionSubmitter = RecordingTransactionSubmitter(),
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             certificateVerifier = certificateVerifier(fixture),
             randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "source_note_secret_hex")))),
             idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -2314,6 +2484,7 @@ class OfflineNoteTest {
             issuerClient = SynchronouslyThrowingIssuerClient(loadContext),
             transactionSubmitter = RecordingTransactionSubmitter(),
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             certificateVerifier = certificateVerifier(fixture),
             randomSource = QueueRandomSource(listOf(hexBytes(string(derivation, "source_note_secret_hex")))),
             idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -2590,6 +2761,35 @@ class OfflineNoteTest {
 
     private fun chainRedeemAmount(fixture: Map<String, Any?>): String =
         string(obj(obj(fixture, "chain_vectors"), "redeem"), "amount")
+
+    @Test
+    fun offlineNoteTransactionSubmitterIncludesFeeMetadata() {
+        val fixture = loadFixture()
+        val chain = obj(fixture, "chain_vectors")
+        val derivation = obj(chain, "derivation")
+        val payment = obj(fixture, "payment_token")
+        val codec = NoritoJavaCodecAdapter()
+        val client = CapturingIrohaClient()
+        val metadata = IrohaOfflineNoteTransactionSubmitter.feeMetadata(
+            gasAssetId = "xor#universal",
+            feeSponsor = string(payment, "recipient_account_id"),
+        )
+        val submitter = IrohaOfflineNoteTransactionSubmitter(
+            client = client,
+            signer = FakeSigner(),
+            chainId = string(derivation, "chain_id"),
+            authority = string(payment, "sender_account_id"),
+            codecAdapter = codec,
+            clock = LongSupplier { 1_736_000_000_000L },
+            transactionMetadata = metadata,
+        )
+
+        submitter.submitAudit(audit(fixture)).get(5, TimeUnit.SECONDS)
+
+        val signed = assertNotNull(client.submittedTransaction)
+        val payload = codec.decodeTransaction(signed.encodedPayload())
+        assertEquals(metadata, payload.metadata)
+    }
 
     @Test
     fun walletRejectsExactAmountReceiveRequestReplayAfterRestart() {
@@ -2934,6 +3134,7 @@ class OfflineNoteTest {
             ),
             ownerCertificateSigner = defaultRejectingSigner,
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             randomSource = QueueRandomSource(emptyList()),
             idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
             clock = { 1_700_000_002_700L },
@@ -2952,6 +3153,7 @@ class OfflineNoteTest {
             attestationProvider = StaticAttestationProvider(testIssuer.issuerCertificate(senderAccountId)),
             ownerCertificateSigner = recipientSigner,
             proofProvider = BindingProofProvider,
+            proofVerifier = BindingProofVerifier,
             certificateVerifier = verifier,
             randomSource = QueueRandomSource(emptyList()),
             idGenerator = FixedIdGenerator(string(derivation, "payment_request_id")),
@@ -4490,6 +4692,25 @@ class OfflineNoteTest {
         }
     }
 
+    private class CapturingIrohaClient : IrohaClient {
+        var submittedTransaction: SignedTransaction? = null
+
+        override fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse> {
+            submittedTransaction = transaction
+            return CompletableFuture.completedFuture(ClientResponse(202, byteArrayOf(), "accepted"))
+        }
+    }
+
+    private class FakeSigner : Signer {
+        override fun sign(message: ByteArray): ByteArray =
+            message + "-signature".toByteArray()
+
+        override fun publicKey(): ByteArray =
+            "fake-public-key".toByteArray()
+
+        override fun algorithm(): String = "Ed25519"
+    }
+
     private class RejectingTransactionSubmitter : OfflineNoteTransactionSubmitter {
         override fun submitAudit(audit: OfflineNote.AuditBundle): CompletableFuture<ClientResponse> =
             CompletableFuture.completedFuture(ClientResponse(409, byteArrayOf(), "rejected"))
@@ -4702,6 +4923,49 @@ class OfflineNoteTest {
         assertFailsWith<CompletionException> {
             future.join()
         }
+    }
+
+    private fun assertIllegalArgumentContains(
+        expected: String,
+        block: () -> Unit,
+    ) {
+        val error = assertFailsWith<IllegalArgumentException> {
+            block()
+        }
+        assertTrue(
+            error.message.orEmpty().contains(expected),
+            "expected IllegalArgumentException to contain '$expected', actual: '${error.message}'",
+        )
+    }
+
+    private fun kagemushaNoritoFrame(schemaByte: Int): ByteArray {
+        val frame = ByteArray(40)
+        frame[0] = 'N'.code.toByte()
+        frame[1] = 'R'.code.toByte()
+        frame[2] = 'T'.code.toByte()
+        frame[3] = '0'.code.toByte()
+        frame.fill(schemaByte.toByte(), 6, 22)
+        return frame
+    }
+
+    private fun kagemushaNoritoFrameWithPayload(schemaByte: Int): ByteArray {
+        val frame = ByteArray(45)
+        kagemushaNoritoFrame(schemaByte).copyInto(frame, 0)
+        frame[23] = 3.toByte()
+        byteArrayOf(
+            0xb9.toByte(),
+            0xd3.toByte(),
+            0xa8.toByte(),
+            0x0c.toByte(),
+            0xcd.toByte(),
+            0x5d.toByte(),
+            0x13.toByte(),
+            0x24.toByte(),
+        ).copyInto(frame, 31)
+        frame[42] = 0xa5.toByte()
+        frame[43] = 0x5a.toByte()
+        frame[44] = 0x11.toByte()
+        return frame
     }
 }
 

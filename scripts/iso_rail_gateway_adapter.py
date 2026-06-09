@@ -183,12 +183,17 @@ def _check_no_secret_material(value: Any, label: str = "$") -> None:
         for key, child in value.items():
             if _is_secret_looking_key(str(key)):
                 raise AdapterError(f"{label} contains forbidden secret-looking field")
+            if _is_control_bearing_key(key):
+                raise AdapterError(f"{label} contains forbidden control-bearing field")
             _check_no_secret_material(child, f"{label}.{key}")
     elif isinstance(value, list):
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{label}[{offset}]")
-    elif isinstance(value, str) and _contains_secret_material(value):
-        raise AdapterError(f"{label} contains secret-looking material")
+    elif isinstance(value, str):
+        if _contains_unsafe_json_control(value):
+            raise AdapterError(f"{label} contains unsafe control characters")
+        if _contains_secret_material(value):
+            raise AdapterError(f"{label} contains secret-looking material")
 
 
 NO_REDIRECT_OPENER = urllib.request.build_opener(_NoRedirectHandler)
@@ -292,6 +297,17 @@ def _is_secret_looking_key(value: Any) -> bool:
     )
 
 
+def _is_control_bearing_key(value: Any) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+
+
+def _contains_unsafe_json_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        for ch in value
+    )
+
+
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
     if _contains_secret_material(value) or _is_secret_looking_key(value):
         raise AdapterError(f"{label} must not contain secret-looking material")
@@ -300,7 +316,7 @@ def _reject_secret_looking_identifier(value: str, label: str) -> None:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) for key in unknown):
+        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
             raise AdapterError(f"{label} contains unknown keys")
         raise AdapterError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -398,6 +414,35 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
             raise AdapterError(f"{current} must not be a symlink")
 
 
+def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
+    index = 0
+    while True:
+        index = raw.find("%", index)
+        if index == -1:
+            return
+        token = raw[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise AdapterError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise AdapterError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        if byte in {0x2E, 0x2F, 0x5C}:
+            raise AdapterError(
+                f"{label} must not contain encoded dot or separator characters"
+            )
+        if byte == 0x3B:
+            raise AdapterError(f"{label} must not contain encoded semicolon parameters")
+        if byte in {0x23, 0x3A, 0x3F, 0x40, 0x5B, 0x5D}:
+            raise AdapterError(
+                f"{label} must not contain encoded URL delimiter characters"
+            )
+        if byte == 0x25:
+            raise AdapterError(f"{label} must not contain encoded percent characters")
+        index += 3
+
+
 def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
@@ -414,8 +459,11 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise AdapterError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise AdapterError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise AdapterError(f"{label} must not contain leading-dash path segments")
@@ -438,8 +486,11 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise AdapterError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise AdapterError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -455,6 +506,8 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise AdapterError("argument terminator is not supported")
         if arg in value_flags:
             index += 2
             continue
@@ -471,6 +524,8 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise AdapterError("argument terminator is not supported")
         flag, separator, _value = arg.partition("=")
         if separator and flag in flags:
             raise AdapterError(f"{flag} does not take a value")
@@ -489,7 +544,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise AdapterError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -525,7 +580,7 @@ def _preflight_required_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise AdapterError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -570,7 +625,7 @@ def _preflight_numeric_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise AdapterError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -907,6 +962,9 @@ def _validate_path_argument(raw: str, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise AdapterError(f"{label} must not contain URI or drive prefixes")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     for offset, part in enumerate(parts):
         if part == "" and offset != 0:
@@ -1073,6 +1131,21 @@ def _reject_local_url_host(
         raise AdapterError(f"{label} must not embed local, private, or reserved IPv4 addresses")
 
 
+def _url_requires_insecure_http_override(parsed: urllib.parse.ParseResult) -> bool:
+    if parsed.scheme == "http":
+        return True
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    if _host_uses_rebinding_suffix(hostname):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return (not address.is_global) or _address_embeds_non_global_ipv4(address)
+
+
 def _host_uses_rebinding_suffix(hostname: str) -> bool:
     return hostname in LOCAL_REBINDING_HOST_SUFFIXES or any(
         hostname.endswith("." + suffix) for suffix in LOCAL_REBINDING_HOST_SUFFIXES
@@ -1125,10 +1198,14 @@ def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.I
 
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     path = parsed.path
+    if any(ord(ch) > 0x7E for ch in path):
+        raise AdapterError(f"{label} path must use printable ASCII")
     if "\\" in path:
         raise AdapterError(f"{label} path must use forward slashes")
     if ";" in path:
         raise AdapterError(f"{label} path must not contain semicolon parameters")
+    if any(token in path for token in (":", "@", "[", "]")):
+        raise AdapterError(f"{label} path must not contain URL delimiter characters")
     segments = path.split("/")
     checked_segments = segments[1:] if path.startswith("/") else segments
     if any(segment == "" for segment in checked_segments[:-1]):
@@ -1146,6 +1223,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise AdapterError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise AdapterError(f"{label} path must not contain encoded percent characters")
+    if re.search(r"%[89a-f][0-9a-f]", lowered):
+        raise AdapterError(f"{label} path must not contain percent-encoded non-ASCII bytes")
 
 
 def _validate_base_url(base_url: str, allow_insecure_http: bool) -> str:
@@ -1256,6 +1335,10 @@ def submit_message(
                     f"Torii response exceeded {response_limit_bytes} byte limit"
                 )
             status_code = int(response.status)
+            if 200 <= status_code <= 299 and _response_body_looks_secret(body):
+                raise AdapterError("Torii response body contains secret-looking material")
+            if 200 <= status_code <= 299 and _response_body_has_unsafe_control(body):
+                raise AdapterError("Torii response body contains unsafe control characters")
     except urllib.error.HTTPError as error:
         try:
             body = error.read(response_limit_bytes + 1)
@@ -1291,9 +1374,19 @@ def submit_message(
 
 def _response_preview(body: bytes) -> str:
     preview = body[:4096].decode("utf-8", errors="replace")
-    if _response_preview_looks_secret(preview):
+    if _response_preview_looks_secret(preview) or _contains_unsafe_preview_control(
+        preview
+    ):
         return REDACTED_RESPONSE_PREVIEW
     return preview
+
+
+def _response_body_looks_secret(body: bytes) -> bool:
+    return _response_preview_looks_secret(body.decode("utf-8", errors="replace"))
+
+
+def _response_body_has_unsafe_control(body: bytes) -> bool:
+    return _contains_unsafe_preview_control(body.decode("utf-8", errors="replace"))
 
 
 def _response_preview_looks_secret(preview: str) -> bool:
@@ -1305,9 +1398,18 @@ def _response_preview_looks_secret(preview: str) -> bool:
 
 
 def _receipt_error(message: str) -> str:
-    if _response_preview_looks_secret(message):
+    if _response_preview_looks_secret(message) or _contains_unsafe_preview_control(
+        message
+    ):
         return REDACTED_ERROR
     return message
+
+
+def _contains_unsafe_preview_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\t"}) or ord(ch) == 0x7F
+        for ch in value
+    )
 
 
 def receipt_value(message: GatewayMessage, result: SubmitResult, endpoint_url: str) -> dict[str, Any]:
@@ -1373,6 +1475,30 @@ def _reject_duplicate_gateway_messages(messages: list[GatewayMessage]) -> None:
         seen_rail_ids[rail_message_id] = offset
 
 
+def _reject_unused_local_overrides(
+    args: argparse.Namespace,
+    *,
+    base_url: str,
+    messages: list[GatewayMessage],
+) -> None:
+    if args.allow_insecure_http:
+        parsed = urllib.parse.urlparse(base_url)
+        if not _url_requires_insecure_http_override(parsed):
+            raise AdapterError(
+                "--allow-insecure-http requires an http:// or local/private Torii URL"
+            )
+    if args.allow_default_profile and not any(message.profile is None for message in messages):
+        raise AdapterError(
+            "--allow-default-profile requires at least one sidecar without profile"
+        )
+    if args.allow_legacy_colr007 and not any(
+        message.message_type in LEGACY_MESSAGE_TYPES for message in messages
+    ):
+        raise AdapterError(
+            "--allow-legacy-colr007 requires at least one legacy colr.007 message"
+        )
+
+
 def run(args: argparse.Namespace) -> int:
     timeout_secs = _require_positive_finite_cli_number(args.timeout_secs, "--timeout-secs")
     response_limit_bytes = _require_positive_cli_int(
@@ -1399,6 +1525,7 @@ def run(args: argparse.Namespace) -> int:
         for path in paths
     ]
     _reject_duplicate_gateway_messages(messages)
+    _reject_unused_local_overrides(args, base_url=base_url, messages=messages)
 
     if args.dry_run:
         summary = {
@@ -1440,7 +1567,8 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Verify ISO 20022 rail-gateway file drops and submit them to Torii."
+        description="Verify ISO 20022 rail-gateway file drops and submit them to Torii.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--inbox-dir",

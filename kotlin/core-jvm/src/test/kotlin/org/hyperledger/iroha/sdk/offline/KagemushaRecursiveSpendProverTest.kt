@@ -508,9 +508,9 @@ class KagemushaRecursiveSpendProverTest {
         )
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend(null, 1))
         assertFalse(KagemushaRecursiveSpendProver.requiresPreviousProofOpenEnvelopesForAppend("", 1))
+        assertEquals("checked_prefold_v1", KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName)
         assertEquals("recursive_compact_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName)
         assertEquals("recursive_spend_v1", KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName)
-        assertEquals("checked_prefold_v1", KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName)
         assertEquals(
             KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1,
             KagemushaRecursiveSpendProver.preferredMode(
@@ -590,6 +590,8 @@ class KagemushaRecursiveSpendProverTest {
             ),
         )
         val validRecursiveCompactInput = kagemushaNoritoFrameWithPayload(0x4b)
+        val validRecursiveCompactKeyArtifacts = kagemushaNoritoFrameWithPayload(0xe1)
+        val validRecursiveCompactVerifierKeys = kagemushaNoritoFrameWithPayload(0xe2)
         val recursiveCompactCopyInput = kagemushaNoritoFrameWithPayload(0x4c)
         val expectedRecursiveCompactInput = recursiveCompactCopyInput.copyOf()
         val ownedRecursiveCompactInput =
@@ -607,11 +609,21 @@ class KagemushaRecursiveSpendProverTest {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     ByteArray(0),
                     validRecursiveCompactInput,
+                    validRecursiveCompactKeyArtifacts,
                 )
         }
         assertIllegalArgumentContains("pallasOpenEnvelopesArchive must not be empty") {
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput,
+                    ByteArray(0),
+                    validRecursiveCompactKeyArtifacts,
+                )
+        }
+        assertIllegalArgumentContains("recursiveCompactKeyArtifactsArchive must not be empty") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput,
                     validRecursiveCompactInput,
                     ByteArray(0),
                 )
@@ -621,11 +633,21 @@ class KagemushaRecursiveSpendProverTest {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     oversizedRecursiveCompactInput,
                     validRecursiveCompactInput,
+                    validRecursiveCompactKeyArtifacts,
                 )
         }
         assertIllegalArgumentContains("pallasOpenEnvelopesArchive must not exceed") {
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput,
+                    oversizedRecursiveCompactInput,
+                    validRecursiveCompactKeyArtifacts,
+                )
+        }
+        assertIllegalArgumentContains("recursiveCompactKeyArtifactsArchive must not exceed") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput,
                     validRecursiveCompactInput,
                     oversizedRecursiveCompactInput,
                 )
@@ -635,11 +657,21 @@ class KagemushaRecursiveSpendProverTest {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     byteArrayOf(0x01, 0x02),
                     validRecursiveCompactInput,
+                    validRecursiveCompactKeyArtifacts,
                 )
         }
         assertIllegalArgumentContains("pallasOpenEnvelopesArchive must be a valid Norito archive") {
             KagemushaRecursiveCompactPaymentTokenProver
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput,
+                    byteArrayOf(0x01, 0x02),
+                    validRecursiveCompactKeyArtifacts,
+                )
+        }
+        assertIllegalArgumentContains("recursiveCompactKeyArtifactsArchive must be a valid Norito archive") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput,
                     validRecursiveCompactInput,
                     byteArrayOf(0x01, 0x02),
                 )
@@ -649,6 +681,7 @@ class KagemushaRecursiveSpendProverTest {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     kagemushaNoritoFrame(0x4b),
                     validRecursiveCompactInput,
+                    validRecursiveCompactKeyArtifacts,
                 )
         }
         assertIllegalArgumentContains("pallasOpenEnvelopesArchive must contain a non-empty Norito payload") {
@@ -656,6 +689,15 @@ class KagemushaRecursiveSpendProverTest {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     validRecursiveCompactInput,
                     kagemushaNoritoFrame(0x4b),
+                    validRecursiveCompactKeyArtifacts,
+                )
+        }
+        assertIllegalArgumentContains("recursiveCompactKeyArtifactsArchive must contain a non-empty Norito payload") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validRecursiveCompactInput,
+                    validRecursiveCompactInput,
+                    kagemushaNoritoFrame(0xe1),
                 )
         }
         assertIllegalArgumentContains("bundleArchive must not be empty") {
@@ -675,18 +717,23 @@ class KagemushaRecursiveSpendProverTest {
                 .recursiveSpendCompactPaymentTokenFromBundle(kagemushaNoritoFrame(0x4b))
         }
         val emptyCompactToken = assertFailsWith<IllegalArgumentException> {
-            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(ByteArray(0))
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                ByteArray(0),
+                validRecursiveCompactVerifierKeys,
+            )
         }
         assertTrue(emptyCompactToken.message.orEmpty().contains("compactTokenArchive"))
         val oversizedCompactToken = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 oversizedRecursiveCompactInput,
+                validRecursiveCompactVerifierKeys,
             )
         }
         assertTrue(oversizedCompactToken.message.orEmpty().contains("compactTokenArchive must not exceed"))
         val malformedCompactToken = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 byteArrayOf(0x01, 0x02),
+                validRecursiveCompactVerifierKeys,
             )
         }
         assertTrue(
@@ -695,11 +742,36 @@ class KagemushaRecursiveSpendProverTest {
         val emptyPayloadCompactToken = assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
                 kagemushaNoritoFrame(0x4b),
+                validRecursiveCompactVerifierKeys,
             )
         }
         assertTrue(
             emptyPayloadCompactToken.message.orEmpty().contains("non-empty Norito payload"),
         )
+        assertIllegalArgumentContains("recursiveCompactVerifierKeysArchive must not be empty") {
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                validRecursiveCompactInput,
+                ByteArray(0),
+            )
+        }
+        assertIllegalArgumentContains("recursiveCompactVerifierKeysArchive must not exceed") {
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                validRecursiveCompactInput,
+                oversizedRecursiveCompactInput,
+            )
+        }
+        assertIllegalArgumentContains("recursiveCompactVerifierKeysArchive must be a valid Norito archive") {
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                validRecursiveCompactInput,
+                byteArrayOf(0x01, 0x02),
+            )
+        }
+        assertIllegalArgumentContains("recursiveCompactVerifierKeysArchive must contain a non-empty Norito payload") {
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                validRecursiveCompactInput,
+                kagemushaNoritoFrame(0xe2),
+            )
+        }
         assertIllegalArgumentContains("verifierRecordArchive must not be empty") {
             KagemushaRecursiveCompactPaymentTokenProver
                 .verifyRecursiveSpendCompactPaymentTokenProjection(validRecursiveCompactInput, ByteArray(0))
@@ -1058,6 +1130,7 @@ class KagemushaRecursiveSpendProverTest {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     null,
                     validArchive,
+                    validArchive,
                 )
         }
         assertIllegalArgumentContains("pallasOpenEnvelopesArchive must not be empty") {
@@ -1065,10 +1138,28 @@ class KagemushaRecursiveSpendProverTest {
                 .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
                     validArchive,
                     null,
+                    validArchive,
+                )
+        }
+        assertIllegalArgumentContains("recursiveCompactKeyArtifactsArchive must not be empty") {
+            KagemushaRecursiveCompactPaymentTokenProver
+                .proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
+                    validArchive,
+                    validArchive,
+                    null,
                 )
         }
         assertIllegalArgumentContains("compactTokenArchive must not be empty") {
-            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(null)
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                null,
+                validArchive,
+            )
+        }
+        assertIllegalArgumentContains("recursiveCompactVerifierKeysArchive must not be empty") {
+            KagemushaRecursiveCompactPaymentTokenProver.verifyRecursiveCompactPaymentToken(
+                validArchive,
+                null,
+            )
         }
         assertIllegalArgumentContains("compactTokenArchive must not be empty") {
             KagemushaRecursiveCompactPaymentTokenProver

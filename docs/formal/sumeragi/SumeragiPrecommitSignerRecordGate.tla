@@ -246,8 +246,11 @@ SpecOutputAnchors ==
   /\ SpecOutput("npos_snapshot_error") = <<FALSE, FALSE, 0, 0>>
   /\ SpecOutput("npos_oob_signer") = <<FALSE, FALSE, 0, 0>>
 
-SafetyFast ==
+PrecommitSignerRecordMatchesSpec ==
   \A c \in Cases: ActualOutput(c) = SpecOutput(c)
+
+SafetyFast ==
+  PrecommitSignerRecordMatchesSpec
 
 PrecommitSignerPermissionedExact ==
   \A c \in PermissionedCases:

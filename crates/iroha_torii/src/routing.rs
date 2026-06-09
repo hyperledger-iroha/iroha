@@ -8745,6 +8745,64 @@ mod sccp_message_backend_tests {
         assert_eq!(empty.tron_verifier_address, None);
     }
 
+    #[tokio::test]
+    async fn sccp_evm_destination_query_extracts_numeric_looking_hex_as_strings() {
+        use axum::extract::FromRequestParts;
+
+        let network_id_hex = format!("{}1", "0".repeat(63));
+        let verifier_address_hex = "11".repeat(20);
+        let bridge_address_hex = "22".repeat(20);
+        let verifier_code_hash_hex = "33".repeat(32);
+        let verifier_key_hash_hex = "44".repeat(32);
+        let expected_destination_binding_hash_hex = "55".repeat(32);
+        let proof_bytes_hex = "66".repeat(SCCP_GROTH16_BN254_PROOF_ABI_BYTE_LENGTH_V1);
+        let request = axum::http::Request::builder()
+            .uri(format!(
+                "/v1/sccp/artifacts/message/{}?network_id_hex={network_id_hex}&verifier_address_hex={verifier_address_hex}&bridge_address_hex={bridge_address_hex}&verifier_code_hash_hex={verifier_code_hash_hex}&verifier_key_hash_hex={verifier_key_hash_hex}&expected_destination_binding_hash_hex={expected_destination_binding_hash_hex}&proof_bytes_hex={proof_bytes_hex}",
+                "aa".repeat(32)
+            ))
+            .body(())
+            .expect("request");
+        let (mut parts, _) = request.into_parts();
+
+        let crate::NoritoStringQuery(query) =
+            crate::NoritoStringQuery::<SccpEvmDestinationQuery>::from_request_parts(
+                &mut parts,
+                &(),
+            )
+            .await
+            .expect("SCCP destination query should decode");
+
+        assert_eq!(
+            query.network_id_hex.as_deref(),
+            Some(network_id_hex.as_str())
+        );
+        assert_eq!(
+            query.verifier_address_hex.as_deref(),
+            Some(verifier_address_hex.as_str())
+        );
+        assert_eq!(
+            query.bridge_address_hex.as_deref(),
+            Some(bridge_address_hex.as_str())
+        );
+        assert_eq!(
+            query.verifier_code_hash_hex.as_deref(),
+            Some(verifier_code_hash_hex.as_str())
+        );
+        assert_eq!(
+            query.verifier_key_hash_hex.as_deref(),
+            Some(verifier_key_hash_hex.as_str())
+        );
+        assert_eq!(
+            query.expected_destination_binding_hash_hex.as_deref(),
+            Some(expected_destination_binding_hash_hex.as_str())
+        );
+        assert_eq!(
+            query.proof_bytes_hex.as_deref(),
+            Some(proof_bytes_hex.as_str())
+        );
+    }
+
     #[test]
     fn sccp_message_backend_descriptor_uses_supported_counterparty_domain_suffix() {
         let outbound_eth = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {

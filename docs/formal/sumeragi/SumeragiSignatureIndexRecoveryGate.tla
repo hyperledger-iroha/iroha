@@ -176,8 +176,11 @@ Next ==
 TypeInvariant ==
   checked = 0
 
-SafetyFast ==
+SignatureIndexRecoveryMatchesSpec ==
   \A c \in Cases: ActualResult(c) = SpecResult(c)
+
+SafetyFast ==
+  SignatureIndexRecoveryMatchesSpec
 
 BugAcceptEmpty ==
   ActualResult("empty") = SpecResult("empty")

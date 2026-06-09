@@ -131,6 +131,15 @@ SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
     + r")",
     re.IGNORECASE | re.DOTALL,
 )
+SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT = "".join(
+    (
+        "Sub",
+        "strate",
+        "/Pol",
+        "kadot",
+        " networks are explicitly outside SCCP launch support for now.",
+    )
+)
 
 
 def _is_specific_no_support_scope_note_match(
@@ -291,6 +300,14 @@ def test_generic_no_support_note_stays_in_launch_scope_files() -> None:
     unsupported_text = "".join(("Sub", "strate", " lane support is active"))
     match = BANNED_PATTERNS[0].search(unsupported_text)
     assert match is not None
+
+
+def test_specific_no_support_note_uses_exact_launch_scope_sentence() -> None:
+    for relative in SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES:
+        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+        assert SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT in text, (
+            f"missing exact specific unsupported scope note in {relative}"
+        )
 
 
 def test_active_tree_excludes_retired_network_surface_tokens() -> None:

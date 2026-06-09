@@ -265,10 +265,13 @@ StatusStable ==
   /\ ActualDue(StatusStaleFuture) = 27
   /\ ActualDue(StatusStaleNow) = Now
 
-SafetyFast ==
+RbcNextDueCoreSafety ==
   /\ DueExact
   /\ EntryGatesStable
   /\ CooldownStable
   /\ StatusStable
+
+SafetyFast ==
+  RbcNextDueCoreSafety
 
 ====

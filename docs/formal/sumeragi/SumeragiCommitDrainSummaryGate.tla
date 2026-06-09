@@ -131,8 +131,10 @@ SpecOutput ==
 ActualOutput ==
   <<ActualNoTimings, ActualAllTimings, ActualProgressPreserved, ActualSaturating>>
 
-SafetyFast ==
+CommitDrainSummaryMatchesSpec ==
   ActualOutput = SpecOutput
+
+SafetyFast == CommitDrainSummaryMatchesSpec
 
 BugResultsIncremented ==
   ActualNoTimings = SpecNoTimings

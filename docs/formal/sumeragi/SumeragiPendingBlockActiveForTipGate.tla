@@ -350,7 +350,7 @@ LookupShapeMatchesShortCircuit ==
        (c \notin ConsensusInactiveCases /\ ExtendsTip(c)) =>
          CheckEvidence \in ImplementationActions(c)
 
-NoBugInvariant ==
+PendingBlockActiveForTipCoreSafety ==
   /\ ResultMatchesSpec
   /\ ActionsMatchSpec
   /\ EachEvidenceSourceCanKeepPendingActive
@@ -359,6 +359,8 @@ NoBugInvariant ==
   /\ ConsensusEvidenceIsRequired
   /\ LookupShapeMatchesShortCircuit
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == PendingBlockActiveForTipCoreSafety
+
+SafetyFast == PendingBlockActiveForTipCoreSafety
 
 ====

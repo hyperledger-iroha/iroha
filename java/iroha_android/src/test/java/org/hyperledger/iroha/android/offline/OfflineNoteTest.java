@@ -23,15 +23,21 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
+import org.hyperledger.iroha.android.SigningException;
 import org.hyperledger.iroha.android.client.CanonicalRequestSigner;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.HttpTransportExecutor;
+import org.hyperledger.iroha.android.client.IrohaClient;
 import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.client.ToriiCanonicalRequestAuth;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
+import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.model.InstructionBox;
+import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.tx.SignedTransaction;
 
 public final class OfflineNoteTest {
 
@@ -57,6 +63,7 @@ public final class OfflineNoteTest {
     kagemushaNativeProversRejectMissingAndEmptyNativeOutputs();
     kagemushaNativeAvailabilityRequiresJniEntrypoint();
     kagemushaRecursiveAggregationNativeAvailabilityRequiresJniEntrypoint();
+    chainVkOfflineNoteProofWrappersValidateInputs();
     nativeHalo2ProverProducesVerifyingPayloadWhenRequested();
     nativeHalo2ProverPerformanceWhenRequested();
     qrFixtureUsesSdkTextPrefix();
@@ -83,6 +90,7 @@ public final class OfflineNoteTest {
     toriiIssuerClientBodySignsRefillAndIssuesWalletCommitment();
     toriiIssuerClientRejectsMalformedCertificateUsageLimits();
     walletLifecycleBuildsAuditAcceptAndRedeemTransactions();
+    offlineNoteTransactionSubmitterIncludesFeeMetadata();
     walletSyncReconcilesPendingSpendChangeAndRedeemStates();
     walletRejectsDuplicateTokenAndAlreadyPendingInputs();
     walletRejectsExactAmountReceiveRequestReplayAfterRestart();
@@ -795,19 +803,28 @@ public final class OfflineNoteTest {
     assertTrue(
         KagemushaRecursiveSpendProver.preferredMode(false)
             == KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1,
-        "checked pre-fold should remain the compatibility fallback");
+        "checked prefold should remain the compatibility fallback");
+    assertEquals(
+        "checked_prefold_v1",
+        KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName(),
+        "checked prefold Kagemusha wire mode");
     assertEquals(
         "recursive_compact_v1",
         KagemushaRecursiveSpendProver.Mode.RECURSIVE_COMPACT_V1.wireName(),
         "recursive compact Kagemusha wire mode");
+    assertTrue(
+        VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", new byte[] {1, 2, 3}).length > 0,
+        "verifying key box codec should encode non-empty records");
+    assertThrows(
+        () -> VerifyingKeyBoxCodec.encodeNorito(" ", new byte[] {1}),
+        "blank verifying key backend should fail");
+    assertThrows(
+        () -> VerifyingKeyBoxCodec.encodeNorito("halo2/ipa", new byte[0]),
+        "empty verifying key bytes should fail");
     assertEquals(
         "recursive_spend_v1",
         KagemushaRecursiveSpendProver.Mode.RECURSIVE_SPEND_V1.wireName(),
         "recursive Kagemusha spend wire mode");
-    assertEquals(
-        "checked_prefold_v1",
-        KagemushaRecursiveSpendProver.Mode.CHECKED_PREFOLD_V1.wireName(),
-        "checked pre-fold wire mode");
     assertEquals(
         6,
         KagemushaRecursiveSpendProver.REQUIRED_BRIDGE_ABI_VERSION,
@@ -932,6 +949,83 @@ public final class OfflineNoteTest {
           () -> KagemushaRecursiveSpendProver.redeemSpend(new byte[] {0x01, 0x02}),
           "Kagemusha recursive spend redeem must reject malformed archives");
     }
+  }
+
+  private static void chainVkOfflineNoteProofWrappersValidateInputs() {
+    assertThrows(
+        () -> new ChainVkOfflineNoteProofProvider(null),
+        "chain VK proof provider must reject null verifier key boxes");
+    assertThrows(
+        () -> new ChainVkOfflineNoteProofProvider(new byte[0]),
+        "chain VK proof provider must reject empty verifier key boxes");
+    assertThrows(
+        () -> new ChainVkOfflineNoteProofVerifier(null),
+        "chain VK proof verifier must reject null verifier key boxes");
+    assertThrows(
+        () -> new ChainVkOfflineNoteProofVerifier(new byte[0]),
+        "chain VK proof verifier must reject empty verifier key boxes");
+    new ChainVkOfflineNoteProofProvider(new byte[] {0x01});
+    new ChainVkOfflineNoteProofVerifier(new byte[] {0x01});
+
+    assertTrue(
+        NativeOfflineNoteProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new IllegalArgumentException("empty native probe");
+            }),
+        "record-backed Offline Note prover accepts expected empty-probe rejection");
+    assertTrue(
+        !NativeOfflineNoteProver.detectNativeAvailability(
+            () -> {
+              throw new UnsatisfiedLinkError("missing library");
+            },
+            () -> {}),
+        "record-backed Offline Note prover fails closed when JNI is missing");
+    assertTrue(
+        !NativeOfflineNoteProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new UnsatisfiedLinkError("missing symbol");
+            }),
+        "record-backed Offline Note prover fails closed when required JNI symbols are missing");
+    assertTrue(
+        !NativeOfflineNoteProver.detectNativeAvailability(
+            () -> {},
+            () -> {
+              throw new SecurityException("native bridge denied");
+            }),
+        "record-backed Offline Note prover fails closed when symbol probing is denied");
+
+    assertThrows(
+        () -> NativeOfflineNoteProver.proveRedeem(null, new byte[] {0x01}),
+        "record-backed redeem prover must reject null redemption payloads before JNI");
+    assertThrows(
+        () -> NativeOfflineNoteProver.proveRedeem(new byte[0], new byte[] {0x01}),
+        "record-backed redeem prover must reject empty redemption payloads before JNI");
+    assertThrows(
+        () -> NativeOfflineNoteProver.proveRedeem(new byte[] {0x01}, null),
+        "record-backed redeem prover must reject null verifier key boxes before JNI");
+    assertThrows(
+        () -> NativeOfflineNoteProver.proveRedeem(new byte[] {0x01}, new byte[0]),
+        "record-backed redeem prover must reject empty verifier key boxes before JNI");
+    assertThrows(
+        () -> NativeOfflineNoteProver.proveAudit(null, new byte[] {0x01}),
+        "record-backed audit prover must reject null audit payloads before JNI");
+    assertThrows(
+        () -> NativeOfflineNoteProver.proveAudit(new byte[0], new byte[] {0x01}),
+        "record-backed audit prover must reject empty audit payloads before JNI");
+    assertThrows(
+        () -> NativeOfflineNoteProver.verifyRedeem(null, new byte[] {0x01}),
+        "record-backed redeem verifier must reject null redemption payloads before JNI");
+    assertThrows(
+        () -> NativeOfflineNoteProver.verifyRedeem(new byte[] {0x01}, new byte[0]),
+        "record-backed redeem verifier must reject empty verifier key boxes before JNI");
+    assertThrows(
+        () -> NativeOfflineNoteProver.verifyAudit(null, new byte[] {0x01}),
+        "record-backed audit verifier must reject null audit payloads before JNI");
+    assertThrows(
+        () -> NativeOfflineNoteProver.verifyAudit(new byte[] {0x01}, new byte[0]),
+        "record-backed audit verifier must reject empty verifier key boxes before JNI");
   }
 
   private static void kagemushaNativeProversRejectMissingAndEmptyNativeOutputs() {
@@ -3161,6 +3255,34 @@ public final class OfflineNoteTest {
         "defund audit trail token id");
   }
 
+  private static void offlineNoteTransactionSubmitterIncludesFeeMetadata() throws Exception {
+    final Map<String, Object> fixture = loadFixture();
+    final Map<String, Object> chain = obj(fixture, "chain_vectors");
+    final Map<String, Object> derivation = obj(chain, "derivation");
+    final Map<String, Object> payment = obj(fixture, "payment_token");
+    final NoritoJavaCodecAdapter codec = new NoritoJavaCodecAdapter();
+    final CapturingIrohaClient client = new CapturingIrohaClient();
+    final Map<String, String> metadata =
+        IrohaOfflineNoteTransactionSubmitter.feeMetadata(
+            "xor#universal", string(payment, "recipient_account_id"));
+    final IrohaOfflineNoteTransactionSubmitter submitter =
+        new IrohaOfflineNoteTransactionSubmitter(
+            client,
+            new FakeSigner(),
+            string(derivation, "chain_id"),
+            string(payment, "sender_account_id"),
+            codec,
+            () -> 1_736_000_000_000L,
+            metadata);
+
+    submitter.submitAudit(audit(fixture)).get(5, TimeUnit.SECONDS);
+
+    assertTrue(client.submittedTransaction != null, "submitter should submit a transaction");
+    final TransactionPayload payload =
+        codec.decodeTransaction(client.submittedTransaction.encodedPayload());
+    assertTrue(metadata.equals(payload.metadata()), "fee metadata should round-trip");
+  }
+
   private static void walletSyncReconcilesPendingSpendChangeAndRedeemStates() throws Exception {
     final Map<String, Object> fixture = loadFixture();
     final Map<String, Object> chain = obj(fixture, "chain_vectors");
@@ -3496,6 +3618,7 @@ public final class OfflineNoteTest {
             null,
             null,
             BindingProofProvider.INSTANCE,
+            BindingProofVerifier.INSTANCE,
             new QueueRandomSource(Collections.emptyList()),
             new FixedIdGenerator(string(derivation, "payment_request_id")),
             () -> 1_700_000_002_700L);
@@ -4816,6 +4939,37 @@ public final class OfflineNoteTest {
         final List<OfflineNote.AuditBundle> bearerAuditTrail) {
       defunds.add(new DefundSubmission(redemption, bearerAuditTrail));
       return CompletableFuture.completedFuture(new ClientResponse(202, new byte[0], "accepted"));
+    }
+  }
+
+  private static final class CapturingIrohaClient implements IrohaClient {
+    private SignedTransaction submittedTransaction;
+
+    @Override
+    public CompletableFuture<ClientResponse> submitTransaction(final SignedTransaction transaction) {
+      submittedTransaction = transaction;
+      return CompletableFuture.completedFuture(new ClientResponse(202, new byte[0], "accepted"));
+    }
+  }
+
+  private static final class FakeSigner implements Signer {
+    @Override
+    public byte[] sign(final byte[] message) throws SigningException {
+      final byte[] suffix = "-signature".getBytes(StandardCharsets.UTF_8);
+      final byte[] combined = new byte[message.length + suffix.length];
+      System.arraycopy(message, 0, combined, 0, message.length);
+      System.arraycopy(suffix, 0, combined, message.length, suffix.length);
+      return combined;
+    }
+
+    @Override
+    public byte[] publicKey() {
+      return "fake-public-key".getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Override
+    public String algorithm() {
+      return "Ed25519";
     }
   }
 

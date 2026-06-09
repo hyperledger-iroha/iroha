@@ -725,8 +725,13 @@ class PrivacyNativeBridgeTest {
         assertFalse(capabilities.productionGate.chainAdmission)
         assertFalse(capabilities.productionGate.sdkParity)
         assertFalse(capabilities.productionGate.walletState)
+        assertFalse(capabilities.productionGate.witnessPrivacyChecks)
         assertFalse(capabilities.productionGate.deterministicTests)
+        assertFalse(capabilities.productionGate.negativeAdversarialTests)
+        assertFalse(capabilities.productionGate.replayNullifierTests)
         assertFalse(capabilities.productionGate.fuzzing)
+        assertFalse(capabilities.productionGate.parserFuzzing)
+        assertFalse(capabilities.productionGate.verifierFuzzing)
         assertFalse(capabilities.productionGate.performanceGates)
         assertFalse(capabilities.productionGate.externalAudit)
         assertEquals(emptyList(), capabilities.productionGate.auditReferences)
@@ -746,7 +751,32 @@ class PrivacyNativeBridgeTest {
         )
         assertTrue(
             capabilities.productionGate.missing.contains(
-                "external audit signoff is missing",
+                "witness privacy checks are incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "negative/adversarial tests are incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "replay/nullifier rejection tests are incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "parser fuzzing gate is incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "verifier fuzzing gate is incomplete",
+            ),
+        )
+        assertTrue(
+            capabilities.productionGate.missing.contains(
+                "internal cryptographic review signoff is missing",
             ),
         )
         assertTrue(

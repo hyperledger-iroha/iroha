@@ -139,7 +139,7 @@ BugDataspaceOrderPreserved ==
   /\ ActualDataspaceSecondLane = SpecDataspaceSecondLane
   /\ ActualDataspaceSecondId = SpecDataspaceSecondId
 
-SafetyFast ==
+CommitmentSnapshotBuilderExactness ==
   /\ BugLaneHeightPreserved
   /\ BugLaneIdPreserved
   /\ BugLaneTxCountPreserved
@@ -153,5 +153,7 @@ SafetyFast ==
   /\ BugDataspaceByteAndTeuFieldsIndependent
   /\ BugDataspaceHashPreserved
   /\ BugDataspaceOrderPreserved
+
+SafetyFast == CommitmentSnapshotBuilderExactness
 
 ====

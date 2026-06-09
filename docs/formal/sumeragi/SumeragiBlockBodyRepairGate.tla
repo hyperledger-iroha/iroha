@@ -160,8 +160,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+RepairAdmissionMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == RepairAdmissionMatchesSpec
 
 BlockCreatedAllowed ==
   Matches("happy_block_created")

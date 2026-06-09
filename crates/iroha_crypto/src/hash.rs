@@ -16,6 +16,8 @@ use mv::json::JsonKeyCodec;
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 #[cfg(feature = "json")]
 use norito::literal;
+#[cfg(not(feature = "ffi_import"))]
+use sha2::Sha256;
 
 use crate::{ParseError, hex_decode};
 
@@ -51,6 +53,13 @@ impl Hash {
     fn is_lsb_1(hash: &[u8; Self::LENGTH]) -> bool {
         hash[Self::LENGTH - 1] & 1 == 1
     }
+}
+
+/// Compute raw SHA-256 bytes without Iroha hash marker semantics.
+#[cfg(not(feature = "ffi_import"))]
+#[must_use]
+pub fn sha256(bytes: impl AsRef<[u8]>) -> [u8; Hash::LENGTH] {
+    Sha256::digest(bytes.as_ref()).into()
 }
 
 impl Hash {
@@ -460,6 +469,14 @@ mod tests {
         assert_eq!(
             hash,
             hex_literal::hex!("BA67336EFD6A3DF3A70EEB757860763036785C182FF4CF587541A0068D09F5B2")
+        );
+    }
+
+    #[test]
+    fn sha256_returns_raw_digest_bytes() {
+        assert_eq!(
+            sha256(b"abc"),
+            hex_literal::hex!("BA7816BF8F01CFEA414140DE5DAE2223B00361A396177A9CB410FF61F20015AD")
         );
     }
 

@@ -434,7 +434,7 @@ LookupShapeMatchesPriority ==
          ~(PendingAllowed(c, m) \/ InflightAllowed(c, m) \/ DeferredPresent(c)) =>
            CheckKura \in ImplementationActions(c, m)
 
-NoBugInvariant ==
+LocalSignedBlockLookupCoreSafety ==
   /\ SourceMatchesSpec
   /\ ActionsMatchSpec
   /\ NormalLookupRejectsAbortedOwners
@@ -446,6 +446,8 @@ NoBugInvariant ==
   /\ AbsentBlocksRemainMissing
   /\ LookupShapeMatchesPriority
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == LocalSignedBlockLookupCoreSafety
+
+SafetyFast == LocalSignedBlockLookupCoreSafety
 
 ====

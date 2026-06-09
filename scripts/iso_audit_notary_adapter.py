@@ -283,6 +283,7 @@ class VerifiedAnchor:
     index_sha256: str
     anchor_sha256: str
     record_count: int
+    missing_record_sources: bool
 
 
 @dataclass(frozen=True)
@@ -379,6 +380,35 @@ def _reject_symlinked_existing_ancestors(path: Path) -> None:
             raise AdapterError(f"{current} must not be a symlink")
 
 
+def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
+    index = 0
+    while True:
+        index = raw.find("%", index)
+        if index == -1:
+            return
+        token = raw[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise AdapterError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise AdapterError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        if byte in {0x2E, 0x2F, 0x5C}:
+            raise AdapterError(
+                f"{label} must not contain encoded dot or separator characters"
+            )
+        if byte == 0x3B:
+            raise AdapterError(f"{label} must not contain encoded semicolon parameters")
+        if byte in {0x23, 0x3A, 0x3F, 0x40, 0x5B, 0x5D}:
+            raise AdapterError(
+                f"{label} must not contain encoded URL delimiter characters"
+            )
+        if byte == 0x25:
+            raise AdapterError(f"{label} must not contain encoded percent characters")
+        index += 3
+
+
 def _reject_output_path_smuggling(path: Path, label: str) -> None:
     raw = str(path)
     if not raw or not path.name:
@@ -395,8 +425,11 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise AdapterError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise AdapterError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise AdapterError(f"{label} must not contain leading-dash path segments")
@@ -419,8 +452,11 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in raw:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise AdapterError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise AdapterError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -436,6 +472,8 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise AdapterError("argument terminator is not supported")
         if arg in value_flags:
             index += 2
             continue
@@ -452,6 +490,8 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise AdapterError("argument terminator is not supported")
         flag, separator, _value = arg.partition("=")
         if separator and flag in flags:
             raise AdapterError(f"{flag} does not take a value")
@@ -470,7 +510,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise AdapterError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -506,7 +546,7 @@ def _preflight_required_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise AdapterError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -551,7 +591,7 @@ def _preflight_numeric_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise AdapterError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -723,7 +763,7 @@ def _reject_json_surrogates(value: Any) -> None:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) for key in unknown):
+        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
             raise AdapterError(f"{label} contains unknown keys")
         raise AdapterError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -763,6 +803,10 @@ def _is_secret_looking_key(value: Any) -> bool:
         for candidate in _secret_scan_values(str(value))
         for marker in markers
     )
+
+
+def _is_control_bearing_key(value: Any) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
 
 
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
@@ -836,6 +880,13 @@ def _require_clean_string(value: Any, label: str) -> str:
     return value
 
 
+def _require_nonsecret_clean_string(value: Any, label: str) -> str:
+    text = _require_clean_string(value, label)
+    if _contains_secret_material(text) or _contains_secret_identifier_material(text):
+        raise AdapterError(f"{label} must not contain secret-looking material")
+    return text
+
+
 def _require_clean_path_string(value: Any, label: str) -> str:
     path = _require_clean_string(value, label)
     if any(ch.isspace() for ch in path):
@@ -846,8 +897,11 @@ def _require_clean_path_string(value: Any, label: str) -> str:
         raise AdapterError(f"{label} must use forward slashes")
     if ";" in path:
         raise AdapterError(f"{label} must not contain semicolon path parameters")
+    if ":" in path:
+        raise AdapterError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(path) or _contains_secret_identifier_material(path):
         raise AdapterError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(path, label)
     parts = path.split("/")
     checked_parts = parts[1:] if path.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -863,6 +917,12 @@ def _require_optional_clean_string(value: Any, label: str) -> str | None:
     if value is None:
         return None
     return _require_clean_string(value, label)
+
+
+def _require_optional_nonsecret_clean_string(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    return _require_nonsecret_clean_string(value, label)
 
 
 def _require_nonnegative_int(value: Any, label: str) -> int:
@@ -945,7 +1005,7 @@ def _verify_optional_clean_string_fields(
     value: dict[str, Any], keys: set[str], label: str
 ) -> None:
     for key in keys:
-        _require_optional_clean_string(value.get(key), f"{label}.{key}")
+        _require_optional_nonsecret_clean_string(value.get(key), f"{label}.{key}")
 
 
 def _verify_persisted_context(value: Any, label: str) -> None:
@@ -996,8 +1056,8 @@ def _verify_persisted_history_entry(value: Any, label: str) -> tuple[str, str, i
         value.get("updated_at_ms"),
         f"{label}.updated_at_ms",
     )
-    _require_optional_clean_string(value.get("detail"), f"{label}.detail")
-    _require_optional_clean_string(value.get("reason_code"), f"{label}.reason_code")
+    _require_optional_nonsecret_clean_string(value.get("detail"), f"{label}.detail")
+    _require_optional_nonsecret_clean_string(value.get("reason_code"), f"{label}.reason_code")
     return status, code, updated_at_ms
 
 
@@ -1039,7 +1099,7 @@ def _verify_persisted_record_source(
         "hold_reason_code",
         "rejection_reason_code",
     ):
-        _require_optional_clean_string(value.get(key), f"{label}.{key}")
+        _require_optional_nonsecret_clean_string(value.get(key), f"{label}.{key}")
     if value.get("transaction_hash") != index_record.get("transaction_hash"):
         raise AdapterError(f"{label}.transaction_hash does not match audit index record")
     _require_bool(value.get("ledger_tx_queued"), f"{label}.ledger_tx_queued")
@@ -1047,7 +1107,7 @@ def _verify_persisted_record_source(
     if not isinstance(change_reason_codes, list):
         raise AdapterError(f"{label}.change_reason_codes must be an array")
     for offset, code in enumerate(change_reason_codes):
-        _require_clean_string(code, f"{label}.change_reason_codes[{offset}]")
+        _require_nonsecret_clean_string(code, f"{label}.change_reason_codes[{offset}]")
     _verify_persisted_context(value.get("context"), f"{label}.context")
     _verify_persisted_metadata(
         value.get("metadata"),
@@ -1096,18 +1156,18 @@ def _verify_persisted_record_sources(
     label: str,
     *,
     allow_missing_record_sources: bool,
-) -> None:
+) -> bool:
     records = audit_index.get("records")
     if not isinstance(records, list):
         raise AdapterError(f"{label}.records must be an array")
     if store_dir is None:
         if not allow_missing_record_sources and records:
             raise AdapterError(f"{label}.store_dir is required to verify audit records")
-        return
+        return bool(records)
     if not store_dir.exists():
         if not allow_missing_record_sources:
             raise AdapterError(f"{label}.store_dir {store_dir} does not exist")
-        return
+        return bool(records)
     _ensure_input_directory(store_dir, f"{label}.store_dir")
     messages_dir = store_dir / RECORDS_DIR
     if not messages_dir.exists():
@@ -1115,27 +1175,33 @@ def _verify_persisted_record_sources(
             raise AdapterError(
                 f"{label}.store_dir/{RECORDS_DIR} {messages_dir} does not exist"
             )
-        return
+        return bool(records)
     _ensure_input_directory(messages_dir, f"{label}.store_dir/{RECORDS_DIR}")
+    missing_record_sources = False
     for offset, record in enumerate(records):
         if not isinstance(record, dict):
             raise AdapterError(f"{label}.records[{offset}] must be an object")
         record_path = messages_dir / record["filename"]
         if not record_path.exists() and allow_missing_record_sources:
+            missing_record_sources = True
             continue
         _verify_persisted_record_source(
             record,
             record_path,
             f"{record_path}",
         )
+    return missing_record_sources
 
 
 def _verify_audit_index_record(record: Any, label: str) -> None:
     if not isinstance(record, dict):
         raise AdapterError(f"{label} must be an object")
     _require_exact_keys(record, AUDIT_INDEX_RECORD_KEYS, label)
-    message_id = _require_clean_string(record.get("message_id"), f"{label}.message_id")
-    filename = _require_clean_string(record.get("filename"), f"{label}.filename")
+    message_id = _require_nonsecret_clean_string(
+        record.get("message_id"),
+        f"{label}.message_id",
+    )
+    filename = _require_nonsecret_clean_string(record.get("filename"), f"{label}.filename")
     expected_filename = _expected_message_filename(message_id)
     if filename != expected_filename:
         raise AdapterError(
@@ -1146,21 +1212,27 @@ def _verify_audit_index_record(record: Any, label: str) -> None:
     _require_audit_record_status_consistency(record, label)
     _require_nonnegative_int(record.get("updated_at_ms"), f"{label}.updated_at_ms")
     _require_optional_nonnegative_int(record.get("settled_at_ms"), f"{label}.settled_at_ms")
-    _require_optional_clean_string(record.get("transaction_hash"), f"{label}.transaction_hash")
-    _require_optional_clean_string(record.get("profile_id"), f"{label}.profile_id")
-    _require_optional_clean_string(record.get("message_type"), f"{label}.message_type")
-    _require_optional_clean_string(
+    _require_optional_nonsecret_clean_string(
+        record.get("transaction_hash"),
+        f"{label}.transaction_hash",
+    )
+    _require_optional_nonsecret_clean_string(record.get("profile_id"), f"{label}.profile_id")
+    _require_optional_nonsecret_clean_string(
+        record.get("message_type"),
+        f"{label}.message_type",
+    )
+    _require_optional_nonsecret_clean_string(
         record.get("business_message_id"),
         f"{label}.business_message_id",
     )
-    _require_optional_clean_string(record.get("uetr"), f"{label}.uetr")
-    payload_hash = _require_optional_clean_string(
+    _require_optional_nonsecret_clean_string(record.get("uetr"), f"{label}.uetr")
+    payload_hash = _require_optional_nonsecret_clean_string(
         record.get("payload_hash"),
         f"{label}.payload_hash",
     )
     if payload_hash is not None and not _is_lower_hex_sha256(payload_hash):
         raise AdapterError(f"{label}.payload_hash must be a canonical SHA-256")
-    _require_optional_clean_string(
+    _require_optional_nonsecret_clean_string(
         record.get("reference_snapshot_id"),
         f"{label}.reference_snapshot_id",
     )
@@ -1245,7 +1317,7 @@ def verify_anchor_file(
         raise AdapterError(f"{anchor_path} record_count must be a non-negative integer")
     if anchor_record_count != audit_index.get("record_count"):
         raise AdapterError(f"{anchor_path} record_count does not match embedded audit index")
-    _verify_persisted_record_sources(
+    missing_record_sources = _verify_persisted_record_sources(
         audit_index,
         _record_store_dir(anchor_value, str(anchor_path)),
         str(anchor_path),
@@ -1287,6 +1359,7 @@ def verify_anchor_file(
         index_sha256=index_sha256,
         anchor_sha256=anchor_sha256,
         record_count=anchor_record_count,
+        missing_record_sources=missing_record_sources,
     )
 
 
@@ -1445,6 +1518,21 @@ def _reject_local_url_host(
         raise AdapterError(f"{label} must not embed local, private, or reserved IPv4 addresses")
 
 
+def _url_requires_insecure_http_override(parsed: urllib.parse.ParseResult) -> bool:
+    if parsed.scheme == "http":
+        return True
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    if _host_uses_rebinding_suffix(hostname):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return (not address.is_global) or _address_embeds_non_global_ipv4(address)
+
+
 def _host_uses_rebinding_suffix(hostname: str) -> bool:
     return hostname in LOCAL_REBINDING_HOST_SUFFIXES or any(
         hostname.endswith("." + suffix) for suffix in LOCAL_REBINDING_HOST_SUFFIXES
@@ -1497,10 +1585,14 @@ def _address_embeds_non_global_ipv4(address: ipaddress.IPv4Address | ipaddress.I
 
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     path = parsed.path
+    if any(ord(ch) > 0x7E for ch in path):
+        raise AdapterError(f"{label} path must use printable ASCII")
     if "\\" in path:
         raise AdapterError(f"{label} path must use forward slashes")
     if ";" in path:
         raise AdapterError(f"{label} path must not contain semicolon parameters")
+    if any(token in path for token in (":", "@", "[", "]")):
+        raise AdapterError(f"{label} path must not contain URL delimiter characters")
     segments = path.split("/")
     checked_segments = segments[1:] if path.startswith("/") else segments
     if any(segment == "" for segment in checked_segments[:-1]):
@@ -1518,6 +1610,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise AdapterError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise AdapterError(f"{label} path must not contain encoded percent characters")
+    if re.search(r"%[89a-f][0-9a-f]", lowered):
+        raise AdapterError(f"{label} path must not contain percent-encoded non-ASCII bytes")
 
 
 def _validate_endpoint(endpoint: str, allow_insecure_http: bool) -> None:
@@ -1571,6 +1665,33 @@ def _reject_duplicate_endpoints(endpoints: list[str]) -> None:
         seen[endpoint] = offset
 
 
+def _reject_unused_local_overrides(
+    args: argparse.Namespace,
+    *,
+    endpoints: list[str],
+) -> None:
+    if args.allow_insecure_http and not any(
+        _url_requires_insecure_http_override(urllib.parse.urlparse(endpoint))
+        for endpoint in endpoints
+    ):
+        raise AdapterError(
+            "--allow-insecure-http requires at least one http:// or local/private endpoint"
+        )
+
+
+def _reject_unused_anchor_overrides(
+    args: argparse.Namespace,
+    *,
+    anchors: list[VerifiedAnchor],
+) -> None:
+    if args.allow_missing_record_sources and not any(
+        anchor.missing_record_sources for anchor in anchors
+    ):
+        raise AdapterError(
+            "--allow-missing-record-sources requires at least one anchor with missing record sources"
+        )
+
+
 def _load_bearer_token(path: Path | None) -> str | None:
     if path is None:
         return None
@@ -1622,6 +1743,10 @@ def publish_anchor(
                     f"endpoint response exceeded {response_limit_bytes} byte limit"
                 )
             status_code = int(response.status)
+            if 200 <= status_code <= 299 and _response_body_looks_secret(body):
+                raise AdapterError("endpoint response body contains secret-looking material")
+            if 200 <= status_code <= 299 and _response_body_has_unsafe_control(body):
+                raise AdapterError("endpoint response body contains unsafe control characters")
     except urllib.error.HTTPError as error:
         try:
             body = error.read(response_limit_bytes + 1)
@@ -1662,9 +1787,19 @@ def publish_anchor(
 
 def _response_preview(body: bytes) -> str:
     preview = body[:4096].decode("utf-8", errors="replace")
-    if _response_preview_looks_secret(preview):
+    if _response_preview_looks_secret(preview) or _contains_unsafe_preview_control(
+        preview
+    ):
         return REDACTED_RESPONSE_PREVIEW
     return preview
+
+
+def _response_body_looks_secret(body: bytes) -> bool:
+    return _response_preview_looks_secret(body.decode("utf-8", errors="replace"))
+
+
+def _response_body_has_unsafe_control(body: bytes) -> bool:
+    return _contains_unsafe_preview_control(body.decode("utf-8", errors="replace"))
 
 
 def _response_preview_looks_secret(preview: str) -> bool:
@@ -1676,9 +1811,18 @@ def _response_preview_looks_secret(preview: str) -> bool:
 
 
 def _receipt_error(message: str) -> str:
-    if _response_preview_looks_secret(message):
+    if _response_preview_looks_secret(message) or _contains_unsafe_preview_control(
+        message
+    ):
         return REDACTED_ERROR
     return message
+
+
+def _contains_unsafe_preview_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\t"}) or ord(ch) == 0x7F
+        for ch in value
+    )
 
 
 def receipt_value(anchor: VerifiedAnchor, result: PublishResult) -> dict[str, Any]:
@@ -1736,6 +1880,7 @@ def run(args: argparse.Namespace) -> int:
     for endpoint in endpoints:
         _validate_endpoint(endpoint, args.allow_insecure_http)
     _reject_duplicate_endpoints(endpoints)
+    _reject_unused_local_overrides(args, endpoints=endpoints)
     bearer_token = _load_bearer_token(args.bearer_token_file)
 
     anchors = [
@@ -1746,6 +1891,7 @@ def run(args: argparse.Namespace) -> int:
         )
         for anchor_path in discover_anchor_paths(export_dir, args.all)
     ]
+    _reject_unused_anchor_overrides(args, anchors=anchors)
     if args.dry_run:
         summary = {
             "validated_anchors": len(anchors),
@@ -1789,7 +1935,8 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Verify and publish ISO 20022 audit_export_dir notary anchors."
+        description="Verify and publish ISO 20022 audit_export_dir notary anchors.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--export-dir",

@@ -260,11 +260,13 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+ModeFlipCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == ModeFlipCoreSafety
+
+SafetyFast == ModeFlipCoreSafety
 
 BugTrackerSameKeepsPending == NoBugInvariant
 BugTrackerNewDropsSignal == NoBugInvariant

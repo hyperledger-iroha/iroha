@@ -195,8 +195,11 @@ TypeInvariant ==
        /\ SpecActions(candidate) \subseteq Actions
        /\ ImplementationActions(candidate) \subseteq Actions
 
-Safety ==
+ActionsMatchSpec ==
   \A candidate \in Cases:
     ImplementationActions(candidate) = SpecActions(candidate)
+
+Safety ==
+  ActionsMatchSpec
 
 ====

@@ -475,7 +475,7 @@ ShortCircuitAndFallbackAnchors ==
   /\ CheckLocalSameHeightVote \in
        ImplementationActions(PendingInactiveWithLocalVote)
 
-NoBugInvariant ==
+RoundLivenessCoreSafety ==
   /\ ResultsMatchSpec
   /\ ActionsMatchSpec
   /\ AcceptedSourcesProduceLiveness
@@ -489,6 +489,8 @@ NoBugInvariant ==
   /\ RejectedSourceReturnAnchors
   /\ ShortCircuitAndFallbackAnchors
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == RoundLivenessCoreSafety
+
+SafetyFast == RoundLivenessCoreSafety
 
 ====

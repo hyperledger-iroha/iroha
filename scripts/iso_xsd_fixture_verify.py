@@ -321,8 +321,11 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise FixtureManifestError(f"{label} must use forward slashes")
     if ";" in raw:
         raise FixtureManifestError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise FixtureManifestError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise FixtureManifestError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise FixtureManifestError(f"{label} must not contain leading-dash path segments")
@@ -345,8 +348,11 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise FixtureManifestError(f"{label} must use forward slashes")
     if ";" in raw:
         raise FixtureManifestError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise FixtureManifestError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise FixtureManifestError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -357,11 +363,48 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise FixtureManifestError(f"{label} must not contain dot or parent segments")
 
 
+def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
+    index = 0
+    while True:
+        index = raw.find("%", index)
+        if index == -1:
+            return
+        token = raw[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise FixtureManifestError(
+                f"{label} must not contain malformed percent escapes"
+            )
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise FixtureManifestError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        if byte in {0x2E, 0x2F, 0x5C}:
+            raise FixtureManifestError(
+                f"{label} must not contain encoded dot or separator characters"
+            )
+        if byte == 0x3B:
+            raise FixtureManifestError(
+                f"{label} must not contain encoded semicolon parameters"
+            )
+        if byte in {0x23, 0x3A, 0x3F, 0x40, 0x5B, 0x5D}:
+            raise FixtureManifestError(
+                f"{label} must not contain encoded URL delimiter characters"
+            )
+        if byte == 0x25:
+            raise FixtureManifestError(
+                f"{label} must not contain encoded percent characters"
+            )
+        index += 3
+
+
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
     raw_args = sys.argv[1:] if argv is None else argv
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise FixtureManifestError("argument terminator is not supported")
         if arg in value_flags:
             index += 2
             continue
@@ -378,6 +421,8 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise FixtureManifestError("argument terminator is not supported")
         flag, separator, _value = arg.partition("=")
         if separator and flag in flags:
             raise FixtureManifestError(f"{flag} does not take a value")
@@ -396,7 +441,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise FixtureManifestError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -443,7 +488,7 @@ def _preflight_numeric_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise FixtureManifestError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -868,7 +913,7 @@ def _require_array(value: Any, label: str) -> list[Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) for key in unknown):
+        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
             raise FixtureManifestError(f"{label} contains unknown keys")
         raise FixtureManifestError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -903,6 +948,17 @@ def _is_secret_looking_key(value: Any) -> bool:
     )
 
 
+def _is_control_bearing_key(value: Any) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
+
+
+def _contains_unsafe_json_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        for ch in value
+    )
+
+
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
     if _contains_secret_material(value) or _is_secret_looking_key(value):
         raise FixtureManifestError(f"{label} must not contain secret-looking material")
@@ -930,14 +986,17 @@ def _check_no_secret_material(value: Any, label: str = "$") -> None:
         for key, child in value.items():
             if _is_secret_looking_key(str(key)):
                 raise FixtureManifestError(f"{label} contains forbidden secret-looking field")
+            if _is_control_bearing_key(key):
+                raise FixtureManifestError(f"{label} contains forbidden control-bearing field")
             _check_no_secret_material(child, f"{label}.{key}")
     elif isinstance(value, list):
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{label}[{offset}]")
-    elif isinstance(value, str) and (
-        _contains_secret_material(value) or _is_secret_looking_key(value)
-    ):
-        raise FixtureManifestError(f"{label} contains secret-looking material")
+    elif isinstance(value, str):
+        if _contains_unsafe_json_control(value):
+            raise FixtureManifestError(f"{label} contains unsafe control characters")
+        if _contains_secret_material(value) or _is_secret_looking_key(value):
+            raise FixtureManifestError(f"{label} contains secret-looking material")
 
 
 def _required_string(value: dict[str, Any], key: str, label: str) -> str:
@@ -1264,6 +1323,9 @@ def _validate_source_path(raw: str, label: str) -> str:
         raise FixtureManifestError(f"{label} must not start with a dash")
     if ";" in raw:
         raise FixtureManifestError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise FixtureManifestError(f"{label} must not contain URI or drive prefixes")
+    _reject_percent_encoded_path_smuggling(raw, label)
     if any(part.startswith("-") for part in raw.split("/") if part):
         raise FixtureManifestError(f"{label} must not contain leading-dash path segments")
     path = Path(raw)
@@ -1624,6 +1686,9 @@ def _validate_relative_path(
         raise FixtureManifestError(f"{label} must not start with a dash")
     if ";" in raw:
         raise FixtureManifestError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise FixtureManifestError(f"{label} must not contain URI or drive prefixes")
+    _reject_percent_encoded_path_smuggling(raw, label)
     if any(part.startswith("-") for part in raw.split("/") if part):
         raise FixtureManifestError(f"{label} must not contain leading-dash path segments")
     path = Path(raw)
@@ -1776,14 +1841,9 @@ def _validate_fixture_xml_schema(
         )
     output_truncated = stdout_truncated or stderr_truncated
     if returncode != 0:
-        detail = (stderr or stdout).strip()
+        detail = _xmllint_output_detail(stderr or stdout)
         if detail:
-            if _contains_secret_material(detail) or _contains_secret_identifier_material(
-                detail
-            ):
-                detail = ": [xmllint output redacted: secret-looking material]"
-            else:
-                detail = ": " + detail[:4096]
+            detail = ": " + detail
         if output_truncated:
             detail = (
                 f"{detail} [xmllint output truncated at "
@@ -1794,6 +1854,44 @@ def _validate_fixture_xml_schema(
         raise FixtureManifestError(
             f"{label} xmllint output exceeded {MAX_XMLLINT_OUTPUT_BYTES} byte limit"
         )
+    unexpected_output = _unexpected_xmllint_success_output(stdout, stderr, fixture_path)
+    if unexpected_output is not None:
+        detail = _xmllint_output_detail(unexpected_output)
+        raise FixtureManifestError(
+            f"{label} xmllint emitted unexpected output on successful XML schema "
+            f"validation: {detail}"
+        )
+
+
+def _unexpected_xmllint_success_output(
+    stdout: str,
+    stderr: str,
+    fixture_path: Path,
+) -> str | None:
+    allowed = {f"{fixture_path} validates"}
+    for output in (stdout, stderr):
+        stripped = output.strip()
+        if stripped and stripped not in allowed:
+            return stripped
+    return None
+
+
+def _xmllint_output_detail(output: str) -> str:
+    detail = output.strip()
+    if not detail:
+        return ""
+    if _contains_secret_material(detail) or _contains_secret_identifier_material(detail):
+        return "[xmllint output redacted: secret-looking material]"
+    if _contains_unsafe_diagnostic_control(detail):
+        return "[xmllint output redacted: control characters]"
+    return detail[:4096]
+
+
+def _contains_unsafe_diagnostic_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\t"}) or ord(ch) == 0x7F
+        for ch in value
+    )
 
 
 def verify_fixture_entry(
@@ -2276,7 +2374,8 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Verify ISO 20022 checked-in XSD/XML fixture manifest wiring."
+        description="Verify ISO 20022 checked-in XSD/XML fixture manifest wiring.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--manifest",

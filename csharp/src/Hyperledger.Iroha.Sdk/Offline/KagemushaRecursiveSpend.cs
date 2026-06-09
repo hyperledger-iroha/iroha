@@ -1011,7 +1011,8 @@ public static class KagemushaRecursiveSpendNative
 
     public static KagemushaRecursiveCompactPaymentTokenArchive ProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
         ReadOnlySpan<byte> recordBundleArchive,
-        ReadOnlySpan<byte> pallasOpenEnvelopesArchive)
+        ReadOnlySpan<byte> pallasOpenEnvelopesArchive,
+        ReadOnlySpan<byte> recursiveCompactKeyArtifactsArchive)
     {
         var recordBundle = RequireValidInputArchive(
             recordBundleArchive,
@@ -1021,6 +1022,10 @@ public static class KagemushaRecursiveSpendNative
             pallasOpenEnvelopesArchive,
             nameof(pallasOpenEnvelopesArchive),
             "Pallas open-envelopes archive");
+        var recursiveCompactKeyArtifacts = RequireValidInputArchive(
+            recursiveCompactKeyArtifactsArchive,
+            nameof(recursiveCompactKeyArtifactsArchive),
+            "Recursive compact key artifacts archive");
         if (!IsRecursiveCompactPaymentTokenProverAvailable())
         {
             throw new InvalidOperationException(
@@ -1031,6 +1036,8 @@ public static class KagemushaRecursiveSpendNative
             (UIntPtr)recordBundle.Length,
             pallasOpenEnvelopes,
             (UIntPtr)pallasOpenEnvelopes.Length,
+            recursiveCompactKeyArtifacts,
+            (UIntPtr)recursiveCompactKeyArtifacts.Length,
             out var outPtr,
             out var outLen);
         return new KagemushaRecursiveCompactPaymentTokenArchive(ReadBridgeOutput(
@@ -1064,7 +1071,9 @@ public static class KagemushaRecursiveSpendNative
             outLen));
     }
 
-    public static bool VerifyRecursiveCompactPaymentToken(ReadOnlySpan<byte> compactTokenArchive)
+    public static bool VerifyRecursiveCompactPaymentToken(
+        ReadOnlySpan<byte> compactTokenArchive,
+        ReadOnlySpan<byte> recursiveCompactVerifierKeysArchive)
     {
         if (compactTokenArchive.IsEmpty)
         {
@@ -1080,6 +1089,10 @@ public static class KagemushaRecursiveSpendNative
         }
         var compactToken = compactTokenArchive.ToArray();
         RequireValidRecursiveCompactTokenArchive(compactToken);
+        var recursiveCompactVerifierKeys = RequireValidInputArchive(
+            recursiveCompactVerifierKeysArchive,
+            nameof(recursiveCompactVerifierKeysArchive),
+            "Recursive compact verifier keys archive");
         if (!IsRecursiveCompactPaymentTokenVerifierAvailable())
         {
             throw new InvalidOperationException(
@@ -1088,6 +1101,8 @@ public static class KagemushaRecursiveSpendNative
         var code = NativeVerifyRecursiveCompactPaymentToken(
             compactToken,
             (UIntPtr)compactToken.Length,
+            recursiveCompactVerifierKeys,
+            (UIntPtr)recursiveCompactVerifierKeys.Length,
             out var valid);
         return NormalizeRecursiveCompactVerifierOutput(
             "connect_norito_kagemusha_verify_recursive_compact_payment_token",
@@ -1447,7 +1462,7 @@ public static class KagemushaRecursiveSpendNative
     {
         try
         {
-            var ok = Probe((NativeArchivePairCall)NativeRecursiveCompactPaymentToken);
+            var ok = Probe((NativeArchiveTripleCall)NativeRecursiveCompactPaymentToken);
             NativeFree(IntPtr.Zero);
             return ok;
         }
@@ -1550,6 +1565,8 @@ public static class KagemushaRecursiveSpendNative
         try
         {
             var code = NativeVerifyRecursiveCompactPaymentToken(
+                MalformedArchiveProbe,
+                (UIntPtr)MalformedArchiveProbe.Length,
                 MalformedArchiveProbe,
                 (UIntPtr)MalformedArchiveProbe.Length,
                 out var valid);
@@ -1814,6 +1831,8 @@ public static class KagemushaRecursiveSpendNative
         UIntPtr recordBundleLen,
         byte[] pallasOpenEnvelopesPtr,
         UIntPtr pallasOpenEnvelopesLen,
+        byte[] recursiveCompactKeyArtifactsPtr,
+        UIntPtr recursiveCompactKeyArtifactsLen,
         out IntPtr outPtr,
         out UIntPtr outLen);
 
@@ -1821,6 +1840,8 @@ public static class KagemushaRecursiveSpendNative
     private static extern int NativeVerifyRecursiveCompactPaymentToken(
         byte[] compactTokenPtr,
         UIntPtr compactTokenLen,
+        byte[] recursiveCompactVerifierKeysPtr,
+        UIntPtr recursiveCompactVerifierKeysLen,
         out byte valid);
 
     [DllImport(LibraryName, EntryPoint = "connect_norito_kagemusha_recursive_spend_compact_payment_token_from_bundle", CallingConvention = CallingConvention.Cdecl)]

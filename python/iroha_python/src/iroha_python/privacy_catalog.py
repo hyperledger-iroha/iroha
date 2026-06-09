@@ -25,10 +25,15 @@ PRODUCTION_GATE_REQUIREMENTS = (
     ("chain_admission", "chain admission path is not enabled"),
     ("sdk_parity", "cross-SDK parity is incomplete"),
     ("wallet_state", "wallet/state support is incomplete"),
+    ("witness_privacy_checks", "witness privacy checks are incomplete"),
     ("deterministic_tests", "deterministic tests are incomplete"),
+    ("negative_adversarial_tests", "negative/adversarial tests are incomplete"),
+    ("replay_nullifier_tests", "replay/nullifier rejection tests are incomplete"),
     ("fuzzing", "fuzzing gate is incomplete"),
+    ("parser_fuzzing", "parser fuzzing gate is incomplete"),
+    ("verifier_fuzzing", "verifier fuzzing gate is incomplete"),
     ("performance_gates", "performance gate is incomplete"),
-    ("external_audit", "external audit signoff is missing"),
+    ("external_audit", "internal cryptographic review signoff is missing"),
 )
 PRODUCTION_GATE_MISSING_IMPLEMENTATION_STAGE = (
     "implementation stage is not production-hardened"
@@ -500,7 +505,7 @@ REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = {
     "zk-ams-recursive-admission-v0": ("duplicate credential admission", "wrong issuer root", "batch omission or account commitment substitution", "recursive proof parameter mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
     "vega-existing-credential-zk-v0": ("expired credential", "wrong issuer", "predicate mismatch", "wallet-binding replay", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
     "silent-threshold-anoncred-v0": ("insufficient issuer threshold", "issuer-set substitution", "credential showing replay", "verifier-policy mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
-    "zk-x509-onchain-identity-v0": ("expired certificate", "revoked certificate", "unknown CA root", "wrong wallet address binding", "stale revocation root", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
+    "zk-x509-onchain-identity-v0": ("expired certificate", "revoked certificate", "unknown CA root", "wrong wallet address binding", "address-binding replay", "stale revocation root", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
     "jindo-lattice-pcs-zk-v0": ("parameter mismatch", "opening claim substitution", "unsupported query set", "backend misclassified as production-ready", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
     "sis-hints-anoncred-pq-v0": ("wrong parameter set", "issuer parameter substitution", "credential showing replay", "overclaiming production readiness from assumption research", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
     "zk-ace-pq-authorization-v0": ("transaction digest substitution", "chain-id or domain-separator mismatch", "replayed nullifier", "revoked identity commitment", "policy hash mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
@@ -512,22 +517,22 @@ REQUIRED_PRIVACY_PLAN_FAILURE_MODES_BY_ALGORITHM_ID = {
     "pq-masp-stark-v0": ("stale asset-set root", "duplicate PQ nullifier", "ML-DSA or ML-KEM domain mismatch", "malformed proof bytes", "wrong verifier key", "public input mismatch"),
 }
 REQUIRED_PRIVACY_PLAN_SECURITY_NOTES_BY_ALGORITHM_ID = {
-    "anonymous-pgc-k-out-of-n-v1": ("Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "verange-transparent-range-v1": ("This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "zkat-policy-private-auth-v1": ("Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "zk-ams-recursive-admission-v0": ("Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "vega-existing-credential-zk-v0": ("Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "silent-threshold-anoncred-v0": ("Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "zk-x509-onchain-identity-v0": ("Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "jindo-lattice-pcs-zk-v0": ("This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "sis-hints-anoncred-pq-v0": ("This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "zk-ace-pq-authorization-v0": ("Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "orchard-halo2-actions-v1": ("Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "penumbra-masp-v1": ("Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "monero-fcmp-plus-plus-v1": ("Full-chain membership roots must be canonical and replay protected.", "Link tags/key images must be unique without revealing owned outputs.", "Range-proof and amount-commitment parameters require production verifier review.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "miden-stark-note-v1": ("Private note data and off-chain delivery metadata must stay wallet-local.", "Account-local transition proofs must bind initial and final account commitments.", "Reference blocks must prevent replay against stale account state.", "Production Miden note transactions require audited STARK parameters and account-state integration review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "aztec-private-rollup-v1": ("Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.", "Encrypted log delivery metadata must not leak wallet note ownership.", "Recursive verifier registration must distinguish private-kernel versions and rollup state roots.", "Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
-    "pq-masp-stark-v0": ("PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.", "ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.", "Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Production hardening requires parser fuzzing, performance gates, and external audit or verifier review."),
+    "anonymous-pgc-k-out-of-n-v1": ("Requires fresh anonymity-set roots and replay/link-tag state.", "Amount privacy depends on the range-proof component and commitment binding.", "Receiver ciphertext commitments must bind to the same transaction digest as the proof.", "The SDK dev fixture verifies deterministic binding only; chain execution and production Anonymous PGC proofs remain unavailable.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "verange-transparent-range-v1": ("This is a component, not a complete payment protocol.", "Range parameters must be bound to the transaction payload and verifier key.", "Aggregated proof limits must be enforced by validators.", "Local verification is limited to deterministic dev fixtures; the production VeRange prover remains unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "zkat-policy-private-auth-v1": ("Hides authorization policy, not payment fields.", "Policy commitments require explicit epoch, replay, and rotation semantics.", "Combining with ZK-ACE requires both proofs to bind the same transaction digest.", "The SDK dev fixture verifies deterministic binding only; chain policy state and production zkAt proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "zk-ams-recursive-admission-v0": ("Admission privacy is separate from later payment privacy.", "Duplicate admission prevention depends on issuer-scoped nullifiers.", "Recursive batching must bind every admitted account commitment.", "The SDK dev fixture verifies deterministic binding only; chain admission state and production recursive proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "vega-existing-credential-zk-v0": ("Credential schema parsing must be deterministic and versioned.", "Proofs must bind to wallet or identity commitments to prevent credential replay.", "Issuer trust and revocation semantics remain external policy inputs.", "The SDK dev fixture verifies deterministic binding only; chain credential policy state and production Vega proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "silent-threshold-anoncred-v0": ("Credential issuance and revocation governance are as important as proof verification.", "Issuer-set commitments need rotation and downgrade protections.", "This is a credential layer, not a private payment protocol.", "The SDK dev fixture verifies deterministic binding only; chain credential state and production silent-threshold proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "zk-x509-onchain-identity-v0": ("Legacy X.509 trust roots are usually not post-quantum.", "Revocation root freshness must be explicit in the public inputs.", "Address binding must prevent proof replay across wallets and chains.", "The SDK dev fixture verifies deterministic public-input binding only; chain trust-root, revocation, policy state, and production ZK-X.509 proofs remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "jindo-lattice-pcs-zk-v0": ("This is a proof backend candidate, not a transaction algorithm.", "PQ proof coverage alone does not imply PQ authorization or note encryption.", "Parameter selection and implementation security require independent review.", "The SDK dev fixture verifies deterministic public-input binding only; production Jindo lattice proving and verifier backends remain unavailable.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "sis-hints-anoncred-pq-v0": ("This is a credential foundation, not an immediately deployable wallet protocol.", "PQ credential proof coverage does not make a payment flow end-to-end post-quantum.", "Parameter choices and reduction assumptions need explicit governance.", "The SDK dev fixture verifies deterministic public-input binding only; production SIS-with-hints credential proving and verifier backends remain unavailable.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "zk-ace-pq-authorization-v0": ("Authorization is only one PQ layer; proof backend and note encryption must also be PQ before a payment flow is end-to-end post-quantum.", "Replay nullifiers must be chain-domain separated and irreversible after acceptance.", "A dev verifier must never be accepted under a production verifier key id.", "Native AIR openings are blinded so sampled rows do not recover identity or replay witness limbs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "orchard-halo2-actions-v1": ("Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.", "Viewing-key and outgoing-viewing metadata must remain wallet-local.", "Production readiness requires audited Halo2 parameters and note-encryption review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "penumbra-masp-v1": ("Typed asset values must bind asset identifiers to balance commitments.", "Groth16 parameter registration must distinguish spend and output circuits.", "Wallet note plaintexts and position metadata must not be exposed through public APIs.", "Production MASP use requires audited parameter governance and chain-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "monero-fcmp-plus-plus-v1": ("Full-chain membership roots must be canonical and replay protected.", "Link tags/key images must be unique without revealing owned outputs.", "Range-proof and amount-commitment parameters require production verifier review.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "miden-stark-note-v1": ("Private note data and off-chain delivery metadata must stay wallet-local.", "Account-local transition proofs must bind initial and final account commitments.", "Reference blocks must prevent replay against stale account state.", "Production Miden note transactions require audited STARK parameters and account-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "aztec-private-rollup-v1": ("Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.", "Encrypted log delivery metadata must not leak wallet note ownership.", "Recursive verifier registration must distinguish private-kernel versions and rollup state roots.", "Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
+    "pq-masp-stark-v0": ("PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.", "ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.", "Post-quantum readiness still requires parameter review, parser fuzzing, and internal cryptographic review.", "Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.", "Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.", "Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review."),
 }
 REQUIRED_PRIVACY_PLAN_SOURCE_REFERENCES_BY_ALGORITHM_ID = {
     "anonymous-pgc-k-out-of-n-v1": (
@@ -879,7 +884,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "e PQ before a payment flow is end-to-end post-quantum.\",\"Replay nullifiers must be chain-domain "
     "separated and irreversible after acceptance.\",\"A dev verifier must never be accepted under a pro"
     "duction verifier key id.\",\"Native AIR openings are blinded so sampled rows do not recover"
-    " identity or replay witness limbs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"active identity commitment registry\",\"replay nullif"
+    " identity or replay witness limbs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"active identity commitment registry\",\"replay nullif"
     "ier set\",\"authorization verifier registry\",\"wallet identity witness and replay-secret store\"],\"f"
     "ailureModes\":[\"transaction digest substitution\",\"chain-id or domain-separator mismatch\",\"replaye"
     "d nullifier\",\"revoked identity commitment\",\"policy hash mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register a ZK-"
@@ -909,7 +914,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "rityNotes\":[\"Requires fresh anonymity-set roots and replay/link-tag state.\",\"Amount privacy depe"
     "nds on the range-proof component and commitment binding.\",\"Receiver ciphertext commitments must "
     "bind to the same transaction digest as the proof.\",\"The SDK dev fixture verifies deterministic "
-    "binding only; chain execution and production Anonymous PGC proofs remain unavailable.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requir"
+    "binding only; chain execution and production Anonymous PGC proofs remain unavailable.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requir"
     "edState\":[\"anonymous account commitme"
     "nt set\",\"recent anonymity-set roots\",\"spent link-tag set\",\"range-proof verifier parameters\",\"wal"
     "let account blinding and receiver recovery metadata\"],\"failureModes\":[\"stale or unknown anonymit"
@@ -937,7 +942,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "25/528\"}],\"securityNotes\":[\"This is a component, not a complete payment protocol.\",\"Range parame"
     "ters must be bound to the transaction payload and verifier key.\",\"Aggregated proof limits must b"
     "e enforced by validators.\",\"Local verification is limited to deterministic dev fixtures; the prod"
-    "uction VeRange prover remains unavailable.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"range-proof verifier parameters\",\"VeRange verifier key registry\","
+    "uction VeRange prover remains unavailable.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"range-proof verifier parameters\",\"VeRange verifier key registry\","
     "\"range commitment"
     " domain separators\",\"maximum aggregation policy\"],\"failureModes\":[\"wrong bit length\",\"commitment"
     " substitution\",\"verifier-parameter mismatch\",\"oversized aggregation\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register Ve"
@@ -961,7 +966,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "Ics.AFT.2025.2\"}],\"securityNotes\":[\"Hides authorization policy, not payment fields.\",\"Policy com"
     "mitments require explicit epoch, replay, and rotation semantics.\",\"Combining with ZK-ACE requires both pr"
     "oofs to bind the same transaction digest.\",\"The SDK dev fixture verifies deterministic binding o"
-    "nly; chain policy state and production zkAt proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"poli"
+    "nly; chain policy state and production zkAt proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"poli"
     "cy commitment registry\",\"polic"
     "y epoch state\",\"authorization replay guard\",\"authorization verifier registry\",\"wallet policy witness store\"],\"failureModes\":[\"policy-root substitution\",\"st"
     "ale policy epoch\",\"unauthorized signer witness\",\"transaction digest mismatch\",\"authorization replay\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Re"
@@ -986,7 +991,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "16130\"}],\"securityNotes\":[\"Admission privacy is separate from later payment privacy.\",\"Duplicate"
     " admission prevention depends on issuer-scoped nullifiers.\",\"Recursive batching must bind every "
     "admitted account commitment.\",\"The SDK dev fixture verifies deterministic binding only; chain a"
-    "dmission state and production recursive proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"issuer root"
+    "dmission state and production recursive proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"issuer root"
     " registry\",\"admission nullifier set\""
     ",\"anonymous account commitment registry\",\"recursive verifier parameters\",\"recursive admission verifier key registry\",\"wallet admission witness store\"],\"failureModes\":[\"dupli"
     "cate credential admission\",\"wrong issuer root\",\"batch omission or account commitment substitutio"
@@ -1012,7 +1017,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "otes\":[\"Credential schema parsing must be deterministic and versioned.\",\"Proofs must bind to wal"
     "let or identity commitments to prevent credential replay.\",\"Issuer trust and revocation semantic"
     "s remain external policy inputs.\",\"The SDK dev fixture verifies deterministic binding only; chai"
-    "n credential policy state and production Vega proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"cre"
+    "n credential policy state and production Vega proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"cre"
     "dential issuer registry\",\"supported cred"
     "ential schema registry\",\"predicate registry\",\"revocation or expiration policy\",\"wallet credential predicate witness store\",\"credential predicate commitment registry\",\"credential predicate verifier key registry\"],\"failureModes\":["
     "\"expired credential\",\"wrong issuer\",\"predicate mismatch\",\"wallet-binding replay\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":["
@@ -1038,7 +1043,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "ntial issuance and revocation governance are as important as proof verification.\",\"Issuer-set co"
     "mmitments need rotation and downgrade protections.\",\"This is a credential layer, not a private p"
     "ayment protocol.\",\"The SDK dev fixture verifies deterministic binding only; chain credential sta"
-    "te and production silent-threshold proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"threshold issuer registry\",\"credential parameter registry\","
+    "te and production silent-threshold proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"threshold issuer registry\",\"credential parameter registry\","
     "\"verifier policy registry\",\"credential showing nullifier policy\",\"wallet credential showing witness store\",\"credential showing commitment registry\",\"anonymous credential verifier key registry\"],\"failureModes\":[\"insufficient "
     "issuer threshold\",\"issuer-set substitution\",\"credential showing replay\",\"verifier-policy mismatc"
     "h\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register issuer sets, threshold policies, and credential parameters.\",\"Define"
@@ -1061,10 +1066,10 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "oots are usually not post-quantum.\",\"Revocation root freshness must be explicit in the public in"
     "puts.\",\"Address binding must prevent proof replay across wallets and chains.\",\"The SDK dev fixture"
     " verifies deterministic public-input binding only; chain trust-root, revocation, policy state, "
-    "and production ZK-X.509 proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":["
+    "and production ZK-X.509 proofs remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":["
     "\"trusted CA root registry\",\"certificate policy registry\",\"revocation root registry\",\"identity pr"
     "oof verifier\",\"wallet certificate witness store\",\"certificate subject commitment registry\",\"ZK-X.509 verifier key registry\"],\"failureModes\":[\"expired certificate\",\"revoked certificate\",\"unknown CA root\",\"wr"
-    "ong wallet address binding\",\"stale revocation root\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register trusted CA roots, c"
+    "ong wallet address binding\",\"address-binding replay\",\"stale revocation root\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register trusted CA roots, c"
     "ertificate policies, and revocation-root feeds.\",\"Define wallet address binding and domain-separ"
     "ation rules.\"],\"executionSteps\":[\"Generate a proof of certificate validity, ownership, and revoc"
     "ation status.\",\"Bind the proof to an institution wallet or ZK-ACE identity commitment.\"],\"sdkEnt"
@@ -1084,7 +1089,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "s is a proof backend candidate, not a transaction algorithm.\",\"PQ proof coverage alone does not "
     "imply PQ authorization or note encryption.\",\"Parameter selection and implementation security req"
     "uire independent review.\",\"The SDK dev fixture verifies deterministic public-input binding only;"
-    " production Jindo lattice proving and verifier backends remain unavailable.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\""
+    " production Jindo lattice proving and verifier backends remain unavailable.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\""
     "lattice PCS parameter registry\",\"backend verifier i"
     "mplementation\",\"lattice PCS verifier key registry\",\"benchmark fixtures\"],\"failureModes\":[\"parameter mismatch\",\"opening claim substit"
     "ution\",\"unsupported query set\",\"backend misclassified as production-ready\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Track"
@@ -1109,7 +1114,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "t an immediately deployable wallet protocol.\",\"PQ credential proof coverage does not make a paym"
     "ent flow end-to-end post-quantum.\",\"Parameter choices and reduction assumptions need explicit go"
     "vernance.\",\"The SDK dev fixture verifies deterministic public-input binding only; production SI"
-    "S-with-hints credential proving and verifier backends remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"la"
+    "S-with-hints credential proving and verifier backends remain unavailable.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"la"
     "ttice credential parameter registry\",\"issuer parameter registry\""
     ",\"credential showing verifier\",\"wallet lattice credential witness store\",\"lattice credential commitment registry\",\"lattice credential verifier key registry\"],\"failureModes\":[\"wrong parameter set\",\"issuer parameter substitu"
     "tion\",\"credential showing replay\",\"overclaiming production readiness from assumption research\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],"
@@ -1131,7 +1136,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "te/nullifier wallet design\",\"compact client proofs without Groth16 ceremonies\"],\"sourceReference"
     "s\":[{\"label\":\"ZIP 224 Orchard Shielded Protocol\",\"url\":\"https://zips.z.cash/zip-0224\"},{\"label\":"
     "\"Zcash Protocol Specification\",\"url\":\"https://zips.z.cash/protocol/protocol.pdf\"}],\"securityNote"
-    "s\":[\"Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.\",\"Viewing-key and outgoing-viewing metadata must remain wallet-local.\",\"Production readiness requires audited Halo2 parameters and note-encryption review.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"Orchard note commitment tree\",\"Orchard nullifier set\",\"Orchard action-bundle verifier key registry\",\"wallet Orchard witness store\"],\"failureModes\":[\"stale anchor\",\"duplicate nullifier\",\"invalid action-bundle proof\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add Orchard-compatible note, nullifier"
+    "s\":[\"Orchard actions require circuit-compatible note/nullifier semantics and domain-separated action hashes.\",\"Viewing-key and outgoing-viewing metadata must remain wallet-local.\",\"Production readiness requires audited Halo2 parameters and note-encryption review.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"Orchard note commitment tree\",\"Orchard nullifier set\",\"Orchard action-bundle verifier key registry\",\"wallet Orchard witness store\"],\"failureModes\":[\"stale anchor\",\"duplicate nullifier\",\"invalid action-bundle proof\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add Orchard-compatible note, nullifier"
     ", action, and anchor data model types.\",\"Register Orchard Halo2 verifier parameters and action-b"
     "undle public input layout.\",\"Persist wallet note plaintexts, diversifiers, Merkle witnesses, and"
     " outgoing viewing data.\"],\"executionSteps\":[\"Select spend notes and anchors from the wallet witn"
@@ -1150,7 +1155,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "d pools\",\"IBC-style asset privacy\",\"asset-id hiding with typed-value notes\"],\"sourceReferences\":"
     "[{\"label\":\"Penumbra Multi-Asset Shielded Pool\",\"url\":\"https://protocol.penumbra.zone/main/shield"
     "ed_pool.html\"},{\"label\":\"Penumbra Cryptographic Primitives\",\"url\":\"https://protocol.penumbra.zon"
-    "e/main/crypto.html\"}],\"securityNotes\":[\"Typed asset values must bind asset identifiers to balance commitments.\",\"Groth16 parameter registration must distinguish spend and output circuits.\",\"Wallet note plaintexts and position metadata must not be exposed through public APIs.\",\"Production MASP use requires audited parameter governance and chain-state integration review.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"multi-asset state commitment tree\",\"typed nullifier set\",\"Groth16 spend/output verifier key registry\",\"wallet asset metadata witness store\"],\"failureModes\":[\"stale state commitment anchor\",\"duplicate nullifier\",\"asset balance commitment mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add"
+    "e/main/crypto.html\"}],\"securityNotes\":[\"Typed asset values must bind asset identifiers to balance commitments.\",\"Groth16 parameter registration must distinguish spend and output circuits.\",\"Wallet note plaintexts and position metadata must not be exposed through public APIs.\",\"Production MASP use requires audited parameter governance and chain-state integration review.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"multi-asset state commitment tree\",\"typed nullifier set\",\"Groth16 spend/output verifier key registry\",\"wallet asset metadata witness store\"],\"failureModes\":[\"stale state commitment anchor\",\"duplicate nullifier\",\"asset balance commitment mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add"
     " typed-value notes, asset identifiers, state commitments, and nullifier state.\",\"Register Groth1"
     "6/BLS12-377 verifier parameters for spend and output proofs.\",\"Persist wallet note plaintexts, a"
     "sset metadata, state commitment positions, and nullifier keys.\"],\"executionSteps\":[\"Select posit"
@@ -1169,7 +1174,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "e},\"implementationStage\":\"research-target-as-of-2026-05\",\"recommendedFor\":[\"maximal sender anony"
     "mity sets\",\"decoy-ring replacement research\",\"account-independent UTXO spend privacy\"],\"sourceRe"
     "ferences\":[{\"label\":\"Monero FCMP++ Development\",\"url\":\"https://web.getmonero.org/2024/04/27/fcmp"
-    "s.html\"}],\"securityNotes\":[\"Full-chain membership roots must be canonical and replay protected.\",\"Link tags/key images must be unique without revealing owned outputs.\",\"Range-proof and amount-commitment parameters require production verifier review.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"full-output-set commitment accumulator\",\"spent link-tag set\",\"FCMP++ verifier key registry\",\"wallet output ownership scan state\"],\"failureModes\":[\"stale membership root\",\"duplicate link tag\",\"amount commitment mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add output comm"
+    "s.html\"}],\"securityNotes\":[\"Full-chain membership roots must be canonical and replay protected.\",\"Link tags/key images must be unique without revealing owned outputs.\",\"Range-proof and amount-commitment parameters require production verifier review.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"full-output-set commitment accumulator\",\"spent link-tag set\",\"FCMP++ verifier key registry\",\"wallet output ownership scan state\"],\"failureModes\":[\"stale membership root\",\"duplicate link tag\",\"amount commitment mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add output comm"
     "itment accumulator state suitable for full-chain membership proofs.\",\"Define link tags/key image"
     "s and spent-output rejection for Iroha assets.\",\"Implement wallet scanning, ownership recovery, "
     "and amount commitment witness storage.\"],\"executionSteps\":[\"Select owned outputs from the wallet"
@@ -1188,7 +1193,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "ommendedFor\":[\"client-side proving\",\"private programmable note workflows\",\"parallel account-loca"
     "l transaction execution\"],\"sourceReferences\":[{\"label\":\"Miden Transaction Model\",\"url\":\"https://"
     "docs.miden.xyz/core-concepts/miden-base/transaction/\"},{\"label\":\"Miden Notes\",\"url\":\"https://doc"
-    "s.miden.xyz/core-concepts/miden-base/note/\"}],\"securityNotes\":[\"Private note data and off-chain delivery metadata must stay wallet-local.\",\"Account-local transition proofs must bind initial and final account commitments.\",\"Reference blocks must prevent replay against stale account state.\",\"Production Miden note transactions require audited STARK parameters and account-state integration review.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"private note hash database\",\"input note nullifier set\",\"account commitment state\",\"STARK VM verifier key registry\",\"wallet private note witness store\"],\"failureModes\":[\"stale reference block\",\"duplicate input note nullifier\",\"account commitment transition mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add private note hash/nullifier state and account-local transition verifica"
+    "s.miden.xyz/core-concepts/miden-base/note/\"}],\"securityNotes\":[\"Private note data and off-chain delivery metadata must stay wallet-local.\",\"Account-local transition proofs must bind initial and final account commitments.\",\"Reference blocks must prevent replay against stale account state.\",\"Production Miden note transactions require audited STARK parameters and account-state integration review.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"private note hash database\",\"input note nullifier set\",\"account commitment state\",\"STARK VM verifier key registry\",\"wallet private note witness store\"],\"failureModes\":[\"stale reference block\",\"duplicate input note nullifier\",\"account commitment transition mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Add private note hash/nullifier state and account-local transition verifica"
     "tion.\",\"Register a STARK VM verifier and public-input commitment layout.\",\"Persist private note "
     "data and off-chain delivery metadata in the wallet note store.\"],\"executionSteps\":[\"Execute the "
     "account-local transition against private note witnesses.\",\"Produce a STARK proof for the transac"
@@ -1208,7 +1213,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     " encrypted note discovery\"],\"sourceReferences\":[{\"label\":\"Aztec State Management\",\"url\":\"https:/"
     "/docs.aztec.network/developers/docs/foundational-topics/state_management\"},{\"label\":\"Aztec Priva"
     "te Kernel Circuit\",\"url\":\"https://docs.aztec.network/developers/nightly/docs/foundational-topics"
-    "/advanced/circuits/private_kernel\"}],\"securityNotes\":[\"Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.\",\"Encrypted log delivery metadata must not leak wallet note ownership.\",\"Recursive verifier registration must distinguish private-kernel versions and rollup state roots.\",\"Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"private note-hash tree\",\"nullifier tree\",\"encrypted log delivery store\",\"private-kernel verifier key registry\",\"wallet private execution witness store\"],\"failureModes\":[\"stale rollup state root\",\"duplicate nullifier\",\"private-kernel public input mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"se"
+    "/advanced/circuits/private_kernel\"}],\"securityNotes\":[\"Private-kernel proofs must bind note hashes, nullifiers, encrypted logs, and public calls.\",\"Encrypted log delivery metadata must not leak wallet note ownership.\",\"Recursive verifier registration must distinguish private-kernel versions and rollup state roots.\",\"Production private-rollup use requires audited private-kernel parameters and rollup-state integration review.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"private note-hash tree\",\"nullifier tree\",\"encrypted log delivery store\",\"private-kernel verifier key registry\",\"wallet private execution witness store\"],\"failureModes\":[\"stale rollup state root\",\"duplicate nullifier\",\"private-kernel public input mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"se"
     "tupSteps\":[\"Add private note-hash and nullifier trees plus encrypted log delivery metadata.\",\"Re"
     "gister a private-kernel verifier and public-input layout for private contract side effects.\",\"Pe"
     "rsist wallet PXE-style note discovery, private call witnesses, and app-scoped nullifier keys.\"],"
@@ -1230,7 +1235,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "l\":\"https://www.nist.gov/news-events/news/2024/08/nist-releases-first-3-finalized-post-quantum-e"
     "ncryption-standards\"},{\"label\":\"FIPS 203 ML-KEM\",\"url\":\"https://csrc.nist.gov/pubs/fips/203/fina"
     "l\"},{\"label\":\"FIPS 204 ML-DSA\",\"url\":\"https://csrc.nist.gov/pubs/fips/204/final\"},{\"label\":\"FIPS"
-    " 205 SLH-DSA\",\"url\":\"https://csrc.nist.gov/pubs/fips/205/final\"}],\"securityNotes\":[\"PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.\",\"ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.\",\"Post-quantum readiness still requires parameter review, parser fuzzing, and external audit.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Production hardening requires parser fuzzing, performance gates, and external audit or verifier review.\"],\"requiredState\":[\"PQ MASP asset-set commitment root\",\"PQ nullifier set\",\"ML-KEM encrypted note payload store\",\"wallet PQ note witness store\"],\"failureModes\":[\"stale asset-set root\",\"duplicate PQ nullifier\",\"ML-DSA or ML-KEM domain mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register STARK/FRI verifier parameters and PQ MASP public input layout.\",\"Define ML-DSA authorization domains and ML-KEM note-encryption payload formats.\",\"Persist wallet PQ note witnesses, nullifier positions, and encapsulation metadata.\"],\"executionSteps\":[\"Select PQ MASP input notes and derive nullifiers.\",\"Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM output-note encryption.\",\"Submit nullifiers, output commitments, PQ policy hash, and proof for verifier admission.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"b"
+    " 205 SLH-DSA\",\"url\":\"https://csrc.nist.gov/pubs/fips/205/final\"}],\"securityNotes\":[\"PQ MASP combines experimental STARK/FRI proving with production PQ authorization and note encryption requirements.\",\"ML-DSA domains and ML-KEM ciphertext formats must be bound to verifier keys and pool identifiers.\",\"Post-quantum readiness still requires parameter review, parser fuzzing, and internal cryptographic review.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"PQ MASP asset-set commitment root\",\"PQ nullifier set\",\"ML-KEM encrypted note payload store\",\"wallet PQ note witness store\"],\"failureModes\":[\"stale asset-set root\",\"duplicate PQ nullifier\",\"ML-DSA or ML-KEM domain mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register STARK/FRI verifier parameters and PQ MASP public input layout.\",\"Define ML-DSA authorization domains and ML-KEM note-encryption payload formats.\",\"Persist wallet PQ note witnesses, nullifier positions, and encapsulation metadata.\"],\"executionSteps\":[\"Select PQ MASP input notes and derive nullifiers.\",\"Generate STARK/FRI transfer proofs with ML-DSA authorization and ML-KEM output-note encryption.\",\"Submit nullifiers, output commitments, PQ policy hash, and proof for verifier admission.\"],\"sdkEntrypoints\":[],\"plannedSdkEntrypoints\":[\"b"
     "uildPqMaspStarkTransferProofV0\",\"buildPqMaspStarkRegisterPoolInstruction\",\"buildPqMaspSt"
     "arkTransferInstruction\",\"generateMlDsaKeyPair\",\"encapsulateMlKem\"],\"chainRequirements\":["
     "\"STARK/FRI verifier enabled\",\"ML-DSA transaction authorization\",\"ML-KEM note payload encryption\""
@@ -1410,6 +1415,16 @@ _POST_QUANTUM_REQUIRED_PLANNED_ENTRYPOINT_FRAGMENTS = (
     "MlDsa",
     "MlKem",
 )
+_FORBIDDEN_ENTRYPOINT_EVIDENCE_FRAGMENT_PREFIXES = (
+    "Fake",
+    "Forged",
+    "Missing",
+    "No",
+    "Non",
+    "Not",
+    "Placeholder",
+    "Without",
+)
 _POST_QUANTUM_REQUIRED_SECURITY_NOTE_TOKENS = ("ML-DSA", "ML-KEM")
 _POST_QUANTUM_REQUIRED_FAILURE_MODE_TOKENS = ("ML-DSA", "ML-KEM")
 _POST_QUANTUM_REQUIRED_STATE_TOKENS = ("ML-KEM",)
@@ -1475,6 +1490,10 @@ _STATEFUL_LEDGER_PERSISTENCE_TOKEN_GROUPS = (
     ("persist", "persistence", "restart", "recovery"),
     ("replay", "nullifier", "revocation", "link-tag", "link tag"),
 )
+_STATEFUL_LEDGER_FAILURE_MODE_TOKEN_GROUPS = (
+    ("stale", "expired", "revoked", "unknown", "wrong"),
+    ("duplicate", "replay", "replayed", "nullifier", "link-tag", "link tag"),
+)
 _WALLET_STATE_REQUIRED_IMPLEMENTATION_STAGES = frozenset(
     (
         "chain-executable",
@@ -1488,13 +1507,31 @@ _WALLET_STATE_METADATA_TOKENS = ("wallet", "witness")
 _CREDENTIAL_STATE_REQUIRED_CATEGORIES = frozenset(
     ("admission", "credential", "identity")
 )
-_CREDENTIAL_STATE_METADATA_TOKENS = ("commitment", "accumulator")
+_CREDENTIAL_STATE_METADATA_TOKENS = (
+    "commitment",
+    "commitments",
+    "accumulator",
+    "accumulators",
+)
 _VERIFIER_KEY_RECORD_METADATA_FIELDS = (
     "required_state",
     "chain_requirements",
     "setup_steps",
 )
 _VERIFIER_KEY_RECORD_METADATA_TOKENS = ("verifier key", "verifier-key")
+_AFFIRMED_METADATA_FORBIDDEN_EVIDENCE_PREFIXES = frozenset(
+    ("no", "non", "not", "without")
+)
+_AFFIRMED_METADATA_TOKEN_VARIANTS = {
+    "persist": (
+        "persist",
+        "persists",
+        "persisted",
+        "persisting",
+        "persistence",
+        "persistent",
+    ),
+}
 _CHAIN_DOMAIN_BINDING_METADATA_FIELDS = (
     "public_inputs_schema",
     "security_notes",
@@ -1504,23 +1541,56 @@ _CHAIN_DOMAIN_BINDING_METADATA_FIELDS = (
 )
 _CHAIN_DOMAIN_BINDING_METADATA_TOKENS = (
     "domain_separator",
-    "domain-separat",
     "domain separat",
+    "domain separated",
+    "domain separation",
+    "domain separator",
+    "domain-separated",
+    "domain-separation",
+    "domain-separator",
     "chain_id",
+    "chain-id",
     "chain_tag",
+    "chain tag",
     "tx_digest",
-    "transaction",
+    "tx digest",
+    "transaction digest",
+    "transaction-digest",
     "reference_block",
     "reference block",
+    "reference-block",
     "rollup_state",
     "rollup state",
+    "rollup-state",
     "anchor",
     "epoch",
 )
+_CHAIN_DOMAIN_BINDING_FORBIDDEN_EVIDENCE_PREFIXES = frozenset(
+    ("no", "non", "not", "without")
+)
+_PUBLIC_INPUT_SCHEMA_CHAIN_DOMAIN_BINDING_TOKEN_FRAGMENTS = (
+    "domain_separator",
+    "chain_id",
+    "chain_tag",
+    "tx_digest",
+    "anchor",
+    "reference_block",
+    "rollup_state",
+)
+_PUBLIC_INPUT_SCHEMA_FORBIDDEN_EVIDENCE_PREFIXES = frozenset(
+    ("no", "non", "not", "without")
+)
 _SOURCE_REFERENCED_HARDENING_NOTE_TOKEN_GROUPS = (
+    ("deterministic vector", "deterministic vectors"),
+    ("negative/adversarial", "negative test", "adversarial test"),
+    ("replay/nullifier", "replay", "nullifier"),
+    ("parser/verifier fuzzing", "parser fuzzing"),
+    ("parser/verifier fuzzing", "verifier fuzzing"),
     ("audit", "audited", "review"),
-    ("fuzz", "fuzzing"),
     ("performance", "benchmark", "latency"),
+)
+_SOURCE_REFERENCED_HARDENING_FORBIDDEN_EVIDENCE_PREFIXES = frozenset(
+    ("no", "non", "not", "without")
 )
 _WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS = (
     ("wallet", "witness", "private input", "private inputs", "plaintext", "secret"),
@@ -1533,6 +1603,17 @@ _WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS = (
         "must not leak",
         "never leave",
     ),
+)
+_WALLET_WITNESS_POSITIVE_NEGATION_PREFIXES = (
+    "not leak",
+    "must not leak",
+    "not expose",
+    "must not expose",
+    "not exposed",
+    "not be exposed",
+    "must not be exposed",
+    "never leave",
+    "never leave the",
 )
 _VERIFIER_NEGATIVE_FAILURE_MODE_TOKEN_GROUPS = (
     ("malformed proof", "invalid proof", "proof parse", "proof rejected"),
@@ -1573,10 +1654,10 @@ _SECURITY_NOTE_COMPLETED_AUDIT_CLAIM_COMPACT_FRAGMENTS = (
     "auditapproved",
     "auditcleared",
     "auditsignoff",
-    "externalauditcomplete",
-    "externalauditcompleted",
-    "externalauditpassed",
-    "externalauditapproved",
+    "internalcryptographicreviewcomplete",
+    "internalcryptographicreviewcompleted",
+    "internalcryptographicreviewpassed",
+    "internalcryptographicreviewapproved",
     "securityreviewcomplete",
     "securityreviewcompleted",
     "securityreviewpassed",
@@ -1619,7 +1700,7 @@ _DISPLAY_FIELD_PRODUCTION_CLAIM_COMPACT_FRAGMENTS = (
     "thirdpartyaudited",
     "boiaudited",
     "auditedmainnet",
-    "externalaudit",
+    "internalcryptographicreview",
     "auditpassed",
     "auditapproved",
     "auditsignoff",
@@ -1646,10 +1727,10 @@ _DISPLAY_FIELD_PRODUCTION_CLAIM_COMPACT_FRAGMENTS = (
     "auditcompleted",
     "auditclaim",
     "claimedaudit",
-    "externalauditcomplete",
-    "externalauditcompleted",
-    "externalauditpassed",
-    "externalauditapproved",
+    "internalcryptographicreviewcomplete",
+    "internalcryptographicreviewcompleted",
+    "internalcryptographicreviewpassed",
+    "internalcryptographicreviewapproved",
     "securityreviewcomplete",
     "securityreviewcompleted",
     "securityreviewapproved",
@@ -1739,6 +1820,301 @@ def _public_input_schema_token_has_payload_metadata(value: str) -> bool:
     return any(
         segment in _PUBLIC_INPUT_SCHEMA_FORBIDDEN_PAYLOAD_TOKEN_SEGMENTS
         for segment in value.split("_")
+    )
+
+
+def _public_inputs_schema_has_chain_domain_binding(value: str) -> bool:
+    return any(
+        _public_input_schema_token_has_fragment(token, fragment)
+        for token in value.split(",")
+        for fragment in _PUBLIC_INPUT_SCHEMA_CHAIN_DOMAIN_BINDING_TOKEN_FRAGMENTS
+    )
+
+
+def _entrypoint_name_has_evidence_fragment(
+    name: str,
+    fragment: str,
+) -> bool:
+    start = 0
+    while True:
+        index = name.find(fragment, start)
+        if index == -1:
+            return False
+        prefix = name[:index]
+        suffix = name[index + len(fragment) :]
+        has_prefix_boundary = index == 0 or _is_ascii_alnum(name[index - 1])
+        has_suffix_boundary = not suffix or (
+            "A" <= suffix[0] <= "Z" or "0" <= suffix[0] <= "9"
+        )
+        has_forbidden_prefix = any(
+            prefix.endswith(forbidden_prefix)
+            for forbidden_prefix in _FORBIDDEN_ENTRYPOINT_EVIDENCE_FRAGMENT_PREFIXES
+        )
+        if has_prefix_boundary and has_suffix_boundary and not has_forbidden_prefix:
+            return True
+        start = index + 1
+
+
+def _entrypoint_name_has_terminal_evidence_fragment(
+    name: str,
+    fragment: str,
+) -> bool:
+    start = 0
+    while True:
+        index = name.find(fragment, start)
+        if index == -1:
+            return False
+        prefix = name[:index]
+        suffix = name[index + len(fragment) :]
+        has_prefix_boundary = index == 0 or _is_ascii_alnum(name[index - 1])
+        has_terminal_suffix = not suffix or (
+            len(suffix) > 1
+            and suffix[0] == "V"
+            and all("0" <= char <= "9" for char in suffix[1:])
+        )
+        has_forbidden_prefix = any(
+            prefix.endswith(forbidden_prefix)
+            for forbidden_prefix in _FORBIDDEN_ENTRYPOINT_EVIDENCE_FRAGMENT_PREFIXES
+        )
+        if has_prefix_boundary and has_terminal_suffix and not has_forbidden_prefix:
+            return True
+        start = index + 1
+
+
+def _planned_entrypoint_name_has_primitive_fragment(
+    name: str,
+    fragment: str,
+) -> bool:
+    return _entrypoint_name_has_evidence_fragment(name, fragment)
+
+
+def _public_input_schema_token_has_fragment(token: str, fragment: str) -> bool:
+    token_segments = token.split("_")
+    fragment_segments = fragment.split("_")
+    for index in range(len(token_segments) - len(fragment_segments) + 1):
+        if token_segments[index : index + len(fragment_segments)] != fragment_segments:
+            continue
+        has_forbidden_prefix = any(
+            prefix in _PUBLIC_INPUT_SCHEMA_FORBIDDEN_EVIDENCE_PREFIXES
+            for prefix in token_segments[:index]
+        )
+        if not has_forbidden_prefix:
+            return True
+    return False
+
+
+def _catalog_text_contains_bounded_token(value: str, token: str) -> bool:
+    start = value.find(token)
+    while start != -1:
+        before = "" if start == 0 else value[start - 1]
+        after_index = start + len(token)
+        after = "" if after_index >= len(value) else value[after_index]
+        if not _is_ascii_alnum(before) and not _is_ascii_alnum(after):
+            return True
+        start = value.find(token, start + 1)
+    return False
+
+
+def _catalog_text_values_contain_bounded_token(
+    values: list[str],
+    token: str,
+) -> bool:
+    return any(_catalog_text_contains_bounded_token(value, token) for value in values)
+
+
+def _catalog_text_values_contain_affirmed_metadata_token(
+    values: list[str],
+    token: str,
+) -> bool:
+    return any(
+        _catalog_text_contains_affirmed_metadata_token(value, token)
+        for value in values
+    )
+
+
+def _catalog_text_contains_metadata_token(value: str, token: str) -> bool:
+    if token == "zk::":
+        return _catalog_text_contains_namespace_token(value, token)
+    return _catalog_text_contains_bounded_token(value, token)
+
+
+def _catalog_text_contains_typed_admission_token(value: str, token: str) -> bool:
+    if token == "zk::":
+        return _catalog_text_contains_affirmed_namespace_token(value, token)
+    return _catalog_text_contains_affirmed_metadata_token(value, token)
+
+
+def _catalog_text_contains_affirmed_namespace_token(value: str, token: str) -> bool:
+    start = value.find(token)
+    while start != -1:
+        before = "" if start == 0 else value[start - 1]
+        if (
+            not _is_ascii_alnum(before)
+            and before != "_"
+            and not _catalog_text_has_forbidden_evidence_prefix(
+                value,
+                start,
+                _AFFIRMED_METADATA_FORBIDDEN_EVIDENCE_PREFIXES,
+            )
+        ):
+            return True
+        start = value.find(token, start + 1)
+    return False
+
+
+def _catalog_text_contains_affirmed_metadata_token(value: str, token: str) -> bool:
+    for candidate in _AFFIRMED_METADATA_TOKEN_VARIANTS.get(token, (token,)):
+        start = value.find(candidate)
+        while start != -1:
+            before = "" if start == 0 else value[start - 1]
+            after_index = start + len(candidate)
+            after = "" if after_index >= len(value) else value[after_index]
+            if (
+                not _is_ascii_alnum(before)
+                and not _is_ascii_alnum(after)
+                and not _catalog_text_has_forbidden_evidence_prefix(
+                    value,
+                    start,
+                    _AFFIRMED_METADATA_FORBIDDEN_EVIDENCE_PREFIXES,
+                )
+            ):
+                return True
+            start = value.find(candidate, start + 1)
+    return False
+
+
+def _catalog_text_contains_wallet_witness_privacy_token(
+    value: str,
+    token: str,
+) -> bool:
+    if token.startswith("not ") or token.startswith("must not ") or token == "never leave":
+        return _catalog_text_contains_metadata_token(value, token)
+    if _catalog_text_contains_affirmed_metadata_token(value, token):
+        return True
+    start = value.find(token)
+    while start != -1:
+        before = "" if start == 0 else value[start - 1]
+        after_index = start + len(token)
+        after = "" if after_index >= len(value) else value[after_index]
+        if (
+            not _is_ascii_alnum(before)
+            and not _is_ascii_alnum(after)
+            and _catalog_text_has_positive_wallet_witness_privacy_prefix(
+                value,
+                start,
+            )
+        ):
+            return True
+        start = value.find(token, start + 1)
+    return False
+
+
+def _catalog_text_has_positive_wallet_witness_privacy_prefix(
+    value: str,
+    index: int,
+) -> bool:
+    segments: list[str] = []
+    segment: list[str] = []
+    for char in reversed(value[:index].lower()):
+        if "a" <= char <= "z" or "0" <= char <= "9":
+            segment.append(char)
+            continue
+        if segment:
+            segments.append("".join(reversed(segment)))
+            if len(segments) >= 5:
+                break
+            segment = []
+    if segment and len(segments) < 5:
+        segments.append("".join(reversed(segment)))
+    tail = " ".join(reversed(segments))
+    return any(
+        tail.endswith(prefix)
+        for prefix in _WALLET_WITNESS_POSITIVE_NEGATION_PREFIXES
+    )
+
+
+def _catalog_text_contains_chain_domain_binding_token(
+    value: str,
+    token: str,
+) -> bool:
+    start = value.find(token)
+    while start != -1:
+        before = "" if start == 0 else value[start - 1]
+        after_index = start + len(token)
+        after = "" if after_index >= len(value) else value[after_index]
+        if (
+            not _is_ascii_alnum(before)
+            and not _is_ascii_alnum(after)
+            and not _catalog_text_has_forbidden_evidence_prefix(
+                value,
+                start,
+                _CHAIN_DOMAIN_BINDING_FORBIDDEN_EVIDENCE_PREFIXES,
+            )
+        ):
+            return True
+        start = value.find(token, start + 1)
+    return False
+
+
+def _catalog_text_contains_source_hardening_token(
+    value: str,
+    token: str,
+) -> bool:
+    start = value.find(token)
+    while start != -1:
+        before = "" if start == 0 else value[start - 1]
+        after_index = start + len(token)
+        after = "" if after_index >= len(value) else value[after_index]
+        if (
+            not _is_ascii_alnum(before)
+            and not _is_ascii_alnum(after)
+            and not _catalog_text_has_forbidden_evidence_prefix(
+                value,
+                start,
+                _SOURCE_REFERENCED_HARDENING_FORBIDDEN_EVIDENCE_PREFIXES,
+            )
+        ):
+            return True
+        start = value.find(token, start + 1)
+    return False
+
+
+def _catalog_text_has_forbidden_evidence_prefix(
+    value: str,
+    index: int,
+    forbidden_prefixes: frozenset[str],
+) -> bool:
+    segments: list[str] = []
+    segment: list[str] = []
+    for char in reversed(value[:index].lower()):
+        if "a" <= char <= "z" or "0" <= char <= "9":
+            segment.append(char)
+            continue
+        if segment:
+            segments.append("".join(reversed(segment)))
+            if len(segments) >= 3:
+                break
+            segment = []
+    if segment and len(segments) < 3:
+        segments.append("".join(reversed(segment)))
+    return any(segment in forbidden_prefixes for segment in segments)
+
+
+def _catalog_text_contains_namespace_token(value: str, token: str) -> bool:
+    start = value.find(token)
+    while start != -1:
+        before = "" if start == 0 else value[start - 1]
+        if not _is_ascii_alnum(before) and before != "_":
+            return True
+        start = value.find(token, start + 1)
+    return False
+
+
+def _is_ascii_alnum(value: str) -> bool:
+    return len(value) == 1 and (
+        "a" <= value <= "z"
+        or "A" <= value <= "Z"
+        or "0" <= value <= "9"
     )
 
 
@@ -2158,42 +2534,47 @@ def _entrypoint_is_dev_fixture(entrypoint: str) -> bool:
 
 
 def _entrypoint_is_explicit_dev_fixture(entrypoint: str) -> bool:
-    normalized = entrypoint.replace("-", "_").lower()
-    compact = "".join(
-        char for char in entrypoint.lower()
-        if char in "abcdefghijklmnopqrstuvwxyz0123456789"
+    name = entrypoint.rsplit(".", 1)[-1]
+    parts = entrypoint.split(".")
+    dotted_dev_fixture = (
+        len(parts) >= 2
+        and parts[-1] == "Fixture"
+        and _entrypoint_name_has_terminal_evidence_fragment(parts[-2], "Dev")
+    )
+    dotted_dev_proof_fixture = (
+        len(parts) >= 3
+        and parts[-2:] == ["Proof", "Fixture"]
+        and _entrypoint_name_has_terminal_evidence_fragment(parts[-3], "Dev")
     )
     return (
-        "devfixture" in normalized
-        or "dev_fixture" in normalized
-        or "devprooffixture" in normalized
-        or "dev_proof_fixture" in normalized
-        or "devfixture" in compact
-        or "devprooffixture" in compact
+        _entrypoint_name_has_terminal_evidence_fragment(name, "DevFixture")
+        or _entrypoint_name_has_terminal_evidence_fragment(name, "DevProofFixture")
+        or dotted_dev_fixture
+        or dotted_dev_proof_fixture
     )
 
 
 def _entrypoint_is_local_verifier(entrypoint: str) -> bool:
     name = entrypoint.rsplit(".", 1)[-1]
-    lower = name.lower()
-    return lower.startswith("verify") and (
-        lower.endswith("locally")
-        or lower.endswith("local")
-        or "localverifier" in lower
-        or "localonly" in lower
+    return name.startswith("verify") and (
+        _entrypoint_name_has_evidence_fragment(name, "Local")
+        or _entrypoint_name_has_evidence_fragment(name, "Locally")
     )
 
 
 def _entrypoint_is_instruction_builder(entrypoint: str) -> bool:
-    return entrypoint.rsplit(".", 1)[-1].endswith("Instruction")
+    name = entrypoint.rsplit(".", 1)[-1]
+    return _entrypoint_name_has_terminal_evidence_fragment(name, "Instruction")
 
 
 def _entrypoint_is_planned_ledger_mutation(entrypoint: str) -> bool:
     name = entrypoint.rsplit(".", 1)[-1]
     return (
-        name.endswith("Instruction")
-        or name.endswith("Transaction")
-        or "Submit" in name
+        any(
+            _entrypoint_name_has_terminal_evidence_fragment(name, fragment)
+            for fragment in ("Instruction", "Transaction")
+        )
+        or _entrypoint_name_has_evidence_fragment(name, "Submit")
     )
 
 
@@ -2212,7 +2593,7 @@ def _entrypoint_is_production_proof_builder(entrypoint: str) -> bool:
     name = entrypoint.rsplit(".", 1)[-1]
     return (
         name.startswith("build")
-        and "Proof" in name
+        and _entrypoint_name_has_evidence_fragment(name, "Proof")
         and not _entrypoint_is_instruction_builder(entrypoint)
         and not _entrypoint_is_planned_ledger_mutation(entrypoint)
         and not _entrypoint_is_proof_helper(entrypoint)
@@ -2224,9 +2605,18 @@ def _has_dev_fixture_non_production_warning(notes: list[str]) -> bool:
     for note in notes:
         normalized = note.lower()
         if (
-            "dev fixture" in normalized
-            and "production" in normalized
-            and "unavailable" in normalized
+            any(
+                _catalog_text_contains_affirmed_metadata_token(normalized, token)
+                for token in ("dev fixture", "dev fixtures")
+            )
+            and _catalog_text_contains_affirmed_metadata_token(
+                normalized,
+                "production",
+            )
+            and _catalog_text_contains_affirmed_metadata_token(
+                normalized,
+                "unavailable",
+            )
         ):
             return True
     return False
@@ -2748,9 +3138,11 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             if isinstance(value, str)
         ]
         if not any(
-            token in value
+            _catalog_text_values_contain_affirmed_metadata_token(
+                protection_values,
+                token,
+            )
             for token in _LEDGER_MUTATION_PROTECTION_METADATA_TOKENS
-            for value in protection_values
         ):
             raise RuntimeError(
                 "privacy algorithm catalog entry "
@@ -2766,10 +3158,10 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             if isinstance(value, str)
         )
         has_typed_admission_metadata = any(
-            token in typed_admission_text
+            _catalog_text_contains_typed_admission_token(typed_admission_text, token)
             for token in _TYPED_CHAIN_ADMISSION_TYPE_TOKENS
         ) and any(
-            token in typed_admission_text
+            _catalog_text_contains_typed_admission_token(typed_admission_text, token)
             for token in _TYPED_CHAIN_ADMISSION_MUTATION_TOKENS
         )
         if not has_typed_admission_metadata:
@@ -2785,7 +3177,7 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             if isinstance(value, str)
         )
         has_stateful_ledger_state = any(
-            token in required_state_text
+            _catalog_text_contains_affirmed_metadata_token(required_state_text, token)
             for token in _STATEFUL_LEDGER_STATE_TOKENS
         )
         if has_stateful_ledger_state:
@@ -2798,7 +3190,13 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             missing_persistence_groups = [
                 tokens
                 for tokens in _STATEFUL_LEDGER_PERSISTENCE_TOKEN_GROUPS
-                if not any(token in persistence_text for token in tokens)
+                if not any(
+                    _catalog_text_contains_affirmed_metadata_token(
+                        persistence_text,
+                        token,
+                    )
+                    for token in tokens
+                )
             ]
             if missing_persistence_groups:
                 raise RuntimeError(
@@ -2807,6 +3205,29 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
                     "restart/persistence metadata for root, nullifier, "
                     "revocation, or replay state; missing persistence "
                     f"metadata for {planned_ledger_mutations}"
+                )
+            failure_modes_text = " ".join(
+                str(value).lower()
+                for value in descriptor.get("failure_modes", [])
+                if isinstance(value, str)
+            )
+            missing_stateful_failure_mode_groups = [
+                tokens
+                for tokens in _STATEFUL_LEDGER_FAILURE_MODE_TOKEN_GROUPS
+                if not any(
+                    _catalog_text_contains_affirmed_metadata_token(
+                        failure_modes_text,
+                        token,
+                    )
+                    for token in tokens
+                )
+            ]
+            if missing_stateful_failure_mode_groups:
+                raise RuntimeError(
+                    "privacy algorithm catalog entry "
+                    f"{index} field 'failure_modes' must include stale-state "
+                    "and duplicate/replay rejection for ledger-mutating root, "
+                    "nullifier, revocation, or replay state"
                 )
 
     if "source_references" in descriptor:
@@ -3026,7 +3447,10 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             for value in descriptor.get("required_state", [])
             if isinstance(value, str)
         )
-        if not any(token in required_state_text for token in _WALLET_STATE_METADATA_TOKENS):
+        if not any(
+            _catalog_text_contains_affirmed_metadata_token(required_state_text, token)
+            for token in _WALLET_STATE_METADATA_TOKENS
+        ):
             raise RuntimeError(
                 "privacy algorithm catalog entry "
                 f"{index} field 'required_state' must include wallet or witness "
@@ -3040,7 +3464,13 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
         missing_witness_privacy_groups = [
             tokens
             for tokens in _WALLET_WITNESS_PRIVACY_NOTE_TOKEN_GROUPS
-            if not any(token in security_notes_text for token in tokens)
+            if not any(
+                _catalog_text_contains_wallet_witness_privacy_token(
+                    security_notes_text,
+                    token,
+                )
+                for token in tokens
+            )
         ]
         if missing_witness_privacy_groups:
             raise RuntimeError(
@@ -3058,7 +3488,10 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             for value in descriptor.get("required_state", [])
             if isinstance(value, str)
         )
-        if not any(token in required_state_text for token in _CREDENTIAL_STATE_METADATA_TOKENS):
+        if not any(
+            _catalog_text_contains_affirmed_metadata_token(required_state_text, token)
+            for token in _CREDENTIAL_STATE_METADATA_TOKENS
+        ):
             raise RuntimeError(
                 "privacy algorithm catalog entry "
                 f"{index} field 'required_state' must include credential, "
@@ -3077,7 +3510,13 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
         missing_negative_failure_mode_groups = [
             tokens
             for tokens in _VERIFIER_NEGATIVE_FAILURE_MODE_TOKEN_GROUPS
-            if not any(token in failure_modes_text for token in tokens)
+            if not any(
+                _catalog_text_contains_affirmed_metadata_token(
+                    failure_modes_text,
+                    token,
+                )
+                for token in tokens
+            )
         ]
         if missing_negative_failure_mode_groups:
             raise RuntimeError(
@@ -3093,7 +3532,10 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             if isinstance(value, str)
         )
         if not any(
-            token in verifier_key_record_text
+            _catalog_text_contains_affirmed_metadata_token(
+                verifier_key_record_text,
+                token,
+            )
             for token in _VERIFIER_KEY_RECORD_METADATA_TOKENS
         ):
             raise RuntimeError(
@@ -3117,13 +3559,25 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             if isinstance(value, str)
         )
         if not any(
-            token in chain_domain_binding_text
+            _catalog_text_contains_chain_domain_binding_token(
+                chain_domain_binding_text,
+                token,
+            )
             for token in _CHAIN_DOMAIN_BINDING_METADATA_TOKENS
         ):
             raise RuntimeError(
                 "privacy algorithm catalog entry "
                 f"{index} must include chain/domain binding metadata for "
                 "source-referenced verifier entries"
+            )
+        if not _public_inputs_schema_has_chain_domain_binding(
+            str(descriptor.get("public_inputs_schema", ""))
+        ):
+            raise RuntimeError(
+                "privacy algorithm catalog entry "
+                f"{index} field 'public_inputs_schema' must include "
+                "chain/domain binding public input for source-referenced "
+                "verifier entries"
             )
     if (
         descriptor.get("implementation_stage")
@@ -3137,14 +3591,21 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
         missing_hardening_groups = [
             tokens
             for tokens in _SOURCE_REFERENCED_HARDENING_NOTE_TOKEN_GROUPS
-            if not any(token in security_notes_text for token in tokens)
+            if not any(
+                _catalog_text_contains_source_hardening_token(
+                    security_notes_text,
+                    token,
+                )
+                for token in tokens
+            )
         ]
         if missing_hardening_groups:
             raise RuntimeError(
                 "privacy algorithm catalog entry "
-                f"{index} field 'security_notes' must include audit/review, "
-                "fuzzing, and performance hardening gates for "
-                "source-referenced entries"
+                f"{index} field 'security_notes' must include deterministic "
+                "vectors, negative/adversarial cases, replay/nullifier "
+                "rejection tests, parser/verifier fuzzing, performance, and "
+                "audit/review hardening gates for source-referenced entries"
             )
     if descriptor.get("implementation_stage") == "research-target-as-of-2026-05":
         security_notes_text = " ".join(
@@ -3153,11 +3614,11 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             if isinstance(note, str)
         )
         has_readiness_marker = all(
-            token in security_notes_text
+            _catalog_text_contains_affirmed_metadata_token(security_notes_text, token)
             for token in _RESEARCH_TARGET_PRODUCTION_READINESS_TOKENS
         )
         has_evidence_marker = any(
-            token in security_notes_text
+            _catalog_text_contains_affirmed_metadata_token(security_notes_text, token)
             for token in _RESEARCH_TARGET_READINESS_EVIDENCE_TOKENS
         )
         if not has_readiness_marker or not has_evidence_marker:
@@ -3228,7 +3689,10 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
         missing_planned_entrypoint_fragments = [
             fragment
             for fragment in _POST_QUANTUM_REQUIRED_PLANNED_ENTRYPOINT_FRAGMENTS
-            if not any(fragment in name for name in planned_entrypoint_names)
+            if not any(
+                _planned_entrypoint_name_has_primitive_fragment(name, fragment)
+                for name in planned_entrypoint_names
+            )
         ]
         if missing_planned_entrypoint_fragments:
             raise RuntimeError(
@@ -3264,7 +3728,13 @@ def _validate_descriptor_shape(descriptor: Mapping[str, Any], index: int) -> Non
             missing_tokens = [
                 token
                 for token in required_tokens
-                if not any(token in value for value in values)
+                if not any(
+                    _catalog_text_contains_affirmed_metadata_token(
+                        value,
+                        token,
+                    )
+                    for value in values
+                )
             ]
             if missing_tokens:
                 raise RuntimeError(
@@ -3505,7 +3975,10 @@ def _validate_required_privacy_plan_rows(
         for state_token in REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID[
             algorithm_id
         ]:
-            if state_token not in state_text:
+            if not _catalog_text_contains_affirmed_metadata_token(
+                state_text,
+                state_token,
+            ):
                 raise RuntimeError(
                     "privacy algorithm catalog required production privacy "
                     f"plan row {algorithm_id!r} must retain required state "
@@ -3519,7 +3992,10 @@ def _validate_required_privacy_plan_rows(
             REQUIRED_PRIVACY_PLAN_COMMON_FAILURE_MODE_TOKENS
             + REQUIRED_PRIVACY_PLAN_FAILURE_TOKENS_BY_ALGORITHM_ID[algorithm_id]
         ):
-            if failure_token not in failure_mode_text:
+            if not _catalog_text_contains_affirmed_metadata_token(
+                failure_mode_text,
+                failure_token,
+            ):
                 raise RuntimeError(
                     "privacy algorithm catalog required production privacy "
                     f"plan row {algorithm_id!r} must retain required "

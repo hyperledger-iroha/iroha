@@ -2398,18 +2398,24 @@ pub fn kagemusha_prove_verified_recursive_aggregation_proof_bundle_with_records_
 pub fn kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
     record_bundle_archive: Uint8Array,
     pallas_open_envelopes_archive: Uint8Array,
+    recursive_compact_key_artifacts_archive: Uint8Array,
 ) -> napi::Result<Buffer> {
     let record_bundle: iroha_data_model::offline::KagemushaVerifiedFoldRecordBundle =
         decode_kagemusha_recursive_archive(&record_bundle_archive, "Kagemusha record bundle")?;
+    let key_artifacts: iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1 =
+        decode_kagemusha_recursive_archive(
+            &recursive_compact_key_artifacts_archive,
+            "Kagemusha recursive compact key artifacts",
+        )?;
     ensure_kagemusha_recursive_archive_len(
         pallas_open_envelopes_archive.len(),
         "pallasOpenEnvelopesArchive",
     )?;
     let token =
-        iroha_core::zk::prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive(
+        iroha_core::zk::prove_verified_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelope_archive_with_key_artifacts(
             &record_bundle,
             pallas_open_envelopes_archive.as_ref(),
-            None,
+            &key_artifacts,
         )
         .map_err(|err| {
             if err.starts_with(
@@ -2523,22 +2529,32 @@ pub fn kagemusha_verify_recursive_spend_compact_payment_token_projection_at_heig
 #[napi(js_name = "kagemushaVerifyRecursiveCompactPaymentToken")]
 pub fn kagemusha_verify_recursive_compact_payment_token(
     compact_token_archive: Uint8Array,
+    recursive_compact_verifier_keys_archive: Uint8Array,
 ) -> napi::Result<bool> {
     let token: iroha_data_model::offline::KagemushaCompactPaymentToken =
         decode_kagemusha_recursive_archive(
             &compact_token_archive,
             "Kagemusha recursive compact payment token",
         )?;
-    let vk_box = iroha_core::zk::kagemusha_recursive_compact_payment_token_vk_box()
+    let verifier_keys: iroha_data_model::offline::KagemushaRecursiveCompactVerifierKeysV1 =
+        decode_kagemusha_recursive_archive(
+            &recursive_compact_verifier_keys_archive,
+            "Kagemusha recursive compact verifier keys",
+        )?;
+    let vk_box =
+        iroha_core::zk::kagemusha_recursive_compact_payment_token_verifier_key_from_package(
+            &token,
+            &verifier_keys,
+        )
         .map_err(|err| napi::Error::new(napi::Status::GenericFailure, err))?;
-    match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
+    match iroha_core::zk::preverify_kagemusha_recursive_compact_payment_token(&token, vk_box) {
         Err(err) if is_kagemusha_recursive_compact_unavailable_error(&err) => {
             return Ok(false);
         }
         Err(err) => return Err(napi::Error::new(napi::Status::InvalidArg, err)),
         Ok(()) => {}
     }
-    if iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, &vk_box) {
+    if iroha_core::zk::verify_kagemusha_recursive_compact_payment_token(&token, vk_box) {
         return Ok(true);
     }
     Ok(false)
@@ -10119,7 +10135,7 @@ const PRIVACY_PRODUCTION_GATE_MISSING_ENGINE: &str =
     "real protocol engine is not production-enabled";
 const PRIVACY_PRODUCTION_GATE_MISSING_ALLOWLIST: &str =
     "Iroha production allowlist is not enabled for this audited row";
-const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, deterministic tests, fuzzing, performance gates, external audit, real protocol engine enablement, and Iroha production allowlist evidence all pass";
+const PRIVACY_PRODUCTION_DISABLED_MESSAGE: &str = "privacy production is disabled until exact protocol implementation, real proving, real verification, chain admission, cross-SDK parity, wallet/state support, witness privacy checks, deterministic tests, negative/adversarial tests, replay/nullifier rejection tests, fuzzing, parser fuzzing, verifier fuzzing, performance gates, internal cryptographic review, real protocol engine enablement, and Iroha production allowlist evidence all pass";
 #[cfg(test)]
 const PRIVACY_NATIVE_AVAILABILITY_PROBE_ARCHIVE: &[u8] =
     b"iroha-privacy-native-availability-probe-v1";
@@ -10163,10 +10179,27 @@ const PRIVACY_PRODUCTION_GATE_REQUIREMENTS: &[(&str, &str)] = &[
     ("chain_admission", "chain admission path is not enabled"),
     ("sdk_parity", "cross-SDK parity is incomplete"),
     ("wallet_state", "wallet/state support is incomplete"),
+    (
+        "witness_privacy_checks",
+        "witness privacy checks are incomplete",
+    ),
     ("deterministic_tests", "deterministic tests are incomplete"),
+    (
+        "negative_adversarial_tests",
+        "negative/adversarial tests are incomplete",
+    ),
+    (
+        "replay_nullifier_tests",
+        "replay/nullifier rejection tests are incomplete",
+    ),
     ("fuzzing", "fuzzing gate is incomplete"),
+    ("parser_fuzzing", "parser fuzzing gate is incomplete"),
+    ("verifier_fuzzing", "verifier fuzzing gate is incomplete"),
     ("performance_gates", "performance gate is incomplete"),
-    ("external_audit", "external audit signoff is missing"),
+    (
+        "external_audit",
+        "internal cryptographic review signoff is missing",
+    ),
 ];
 
 const PRIVACY_REQUIRED_PRODUCTION_PLAN_ROWS: &[(&str, &str, &str)] = &[
@@ -14260,7 +14293,7 @@ mod tests {
                     .production_gate
                     .missing
                     .iter()
-                    .any(|missing| missing.contains("external audit")),
+                    .any(|missing| missing.contains("internal cryptographic review")),
             );
         }
     }
@@ -14565,7 +14598,7 @@ mod tests {
         missing_audit
             .production_gate
             .missing
-            .retain(|missing| missing != "external audit signoff is missing");
+            .retain(|missing| missing != "internal cryptographic review signoff is missing");
         assert!(
             !privacy_capability_invariants_hold(&missing_audit),
             "removed external-audit evidence must be rejected",
@@ -14602,7 +14635,7 @@ mod tests {
         forged_missing_reason
             .production_gate
             .missing
-            .push("external audit signoff passed without evidence".to_owned());
+            .push("internal cryptographic review signoff passed without evidence".to_owned());
         assert!(
             !privacy_capability_invariants_hold(&forged_missing_reason),
             "unknown production-gate missing reasons must be rejected",
@@ -15491,10 +15524,15 @@ mod tests {
             "chain admission",
             "cross-SDK parity",
             "wallet/state support",
+            "witness privacy checks",
             "deterministic tests",
+            "negative/adversarial tests",
+            "replay/nullifier rejection tests",
             "fuzzing",
+            "parser fuzzing",
+            "verifier fuzzing",
             "performance gates",
-            "external audit",
+            "internal cryptographic review",
             "real protocol engine",
             "Iroha production allowlist",
         ] {
@@ -15555,10 +15593,15 @@ mod tests {
             "chain admission",
             "cross-SDK parity",
             "wallet/state support",
+            "witness privacy checks",
             "deterministic tests",
+            "negative/adversarial tests",
+            "replay/nullifier rejection tests",
             "fuzzing",
+            "parser fuzzing",
+            "verifier fuzzing",
             "performance gates",
-            "external audit",
+            "internal cryptographic review",
             "real protocol engine",
             "Iroha production allowlist",
         ] {
@@ -16036,11 +16079,45 @@ mod tests {
         to_bytes(&token).expect("encode JS host multi-row recursive compact token")
     }
 
+    fn recursive_compact_key_artifacts_for_js_host()
+    -> &'static iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1 {
+        static KEY_ARTIFACTS: OnceLock<
+            iroha_data_model::offline::KagemushaRecursiveCompactKeyArtifactsV1,
+        > = OnceLock::new();
+        KEY_ARTIFACTS.get_or_init(|| {
+            iroha_core::zk::kagemusha_recursive_compact_payment_token_key_artifacts()
+                .expect("JS host recursive compact key artifacts")
+        })
+    }
+
+    fn recursive_compact_key_artifacts_archive_for_js_host() -> Vec<u8> {
+        static ARCHIVE: OnceLock<Vec<u8>> = OnceLock::new();
+        ARCHIVE
+            .get_or_init(|| {
+                to_bytes(recursive_compact_key_artifacts_for_js_host())
+                    .expect("encode JS host recursive compact key artifacts")
+            })
+            .clone()
+    }
+
+    fn recursive_compact_verifier_keys_archive_for_js_host() -> Vec<u8> {
+        static ARCHIVE: OnceLock<Vec<u8>> = OnceLock::new();
+        ARCHIVE
+            .get_or_init(|| {
+                let verifier_keys = recursive_compact_key_artifacts_for_js_host()
+                    .verifier_keys()
+                    .expect("JS host recursive compact verifier keys");
+                to_bytes(&verifier_keys).expect("encode JS host recursive compact verifier keys")
+            })
+            .clone()
+    }
+
     #[test]
     fn kagemusha_recursive_compact_payment_token_js_host_rejects_malformed_inputs() {
         let empty_record = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(Vec::<u8>::new()),
             Uint8Array::from(vec![2]),
+            Uint8Array::from(Vec::<u8>::new()),
         ) {
             Ok(_) => panic!("empty record bundle must reject"),
             Err(err) => err,
@@ -16051,6 +16128,7 @@ mod tests {
         let malformed_record = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(vec![1]),
             Uint8Array::from(vec![2]),
+            Uint8Array::from(Vec::<u8>::new()),
         ) {
             Ok(_) => panic!("malformed record bundle must reject"),
             Err(err) => err,
@@ -16066,6 +16144,7 @@ mod tests {
         let oversized_record = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(oversized_archive.clone()),
             Uint8Array::from(vec![2]),
+            Uint8Array::from(Vec::<u8>::new()),
         ) {
             Ok(_) => panic!("oversized record bundle must reject before Norito decode"),
             Err(err) => err,
@@ -16081,6 +16160,7 @@ mod tests {
         let malformed_pallas = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(empty_kagemusha_record_bundle_archive_for_js_host()),
             Uint8Array::from(vec![2]),
+            Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("malformed recursive compact Pallas archive must reject"),
             Err(err) => err,
@@ -16095,6 +16175,7 @@ mod tests {
         let oversized_pallas = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(empty_kagemusha_record_bundle_archive_for_js_host()),
             Uint8Array::from(oversized_archive.clone()),
+            Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("oversized recursive compact Pallas archive must reject before core preflight"),
             Err(err) => err,
@@ -16112,6 +16193,7 @@ mod tests {
         let detached_pallas = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(empty_kagemusha_record_bundle_archive_for_js_host()),
             Uint8Array::from(one_hop_pallas_archive.clone()),
+            Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("detached valid recursive compact Pallas archive must reject"),
             Err(err) => err,
@@ -16140,6 +16222,7 @@ mod tests {
         let extra_pallas = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(one_hop_record_archive),
             Uint8Array::from(extra_pallas_archive),
+            Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("recursive compact prover must reject extra valid Pallas opening archive"),
             Err(err) => err,
@@ -16167,6 +16250,7 @@ mod tests {
         let missing_pallas = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(multi_hop_record_archive.clone()),
             Uint8Array::from(missing_pallas_archive),
+            Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("recursive compact prover must reject missing valid Pallas opening archive"),
             Err(err) => err,
@@ -16191,6 +16275,7 @@ mod tests {
         let duplicated_pallas = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(multi_hop_record_archive.clone()),
             Uint8Array::from(duplicated_pallas_archive),
+            Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("recursive compact prover must reject duplicated multi-hop valid Pallas opening archive"),
             Err(err) => err,
@@ -16216,6 +16301,7 @@ mod tests {
         let forged_metadata_pallas = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(multi_hop_record_archive.clone()),
             Uint8Array::from(forged_metadata_pallas_archive),
+            Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("recursive compact prover must reject forged multi-hop Pallas metadata"),
             Err(err) => err,
@@ -16236,6 +16322,7 @@ mod tests {
         let reordered_pallas = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(multi_hop_record_archive.clone()),
             Uint8Array::from(reordered_pallas_archive),
+            Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("recursive compact prover must reject reordered valid Pallas opening archive"),
             Err(err) => err,
@@ -16253,23 +16340,20 @@ mod tests {
         let multi_hop = match kagemusha_prove_verified_recursive_compact_payment_token_with_records_and_pallas_open_envelopes(
             Uint8Array::from(multi_hop_record_archive),
             Uint8Array::from(multi_hop_pallas_archive),
+            Uint8Array::from(recursive_compact_key_artifacts_archive_for_js_host().to_vec()),
         ) {
-            Ok(_) => panic!("valid multi-hop recursive compact archive must remain unavailable"),
+            Ok(token_archive) => token_archive,
+            Err(err) => panic!("valid multi-hop recursive compact archive must produce a token: {err}"),
+        };
+        assert!(!multi_hop.is_empty());
+
+        let malformed_token = match kagemusha_verify_recursive_compact_payment_token(
+            Uint8Array::from(vec![1]),
+            Uint8Array::from(recursive_compact_verifier_keys_archive_for_js_host().to_vec()),
+        ) {
+            Ok(_) => panic!("malformed recursive compact token must reject"),
             Err(err) => err,
         };
-        assert_eq!(multi_hop.status, napi::Status::GenericFailure);
-        assert!(
-            multi_hop
-                .reason
-                .contains(iroha_core::zk::KAGEMUSHA_RECURSIVE_COMPACT_MULTI_HOP_PROOF_UNAVAILABLE),
-            "unexpected multi-hop recursive compact error: {multi_hop}"
-        );
-
-        let malformed_token =
-            match kagemusha_verify_recursive_compact_payment_token(Uint8Array::from(vec![1])) {
-                Ok(_) => panic!("malformed recursive compact token must reject"),
-                Err(err) => err,
-            };
         assert_eq!(malformed_token.status, napi::Status::InvalidArg);
         assert!(
             malformed_token
@@ -16279,6 +16363,7 @@ mod tests {
 
         let oversized_token = match kagemusha_verify_recursive_compact_payment_token(
             Uint8Array::from(oversized_archive),
+            Uint8Array::from(recursive_compact_verifier_keys_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("oversized recursive compact token must reject before Norito decode"),
             Err(err) => err,
@@ -16293,6 +16378,7 @@ mod tests {
 
         let malformed_binding = match kagemusha_verify_recursive_compact_payment_token(
             Uint8Array::from(malformed_recursive_compact_token_archive_for_js_host()),
+            Uint8Array::from(recursive_compact_verifier_keys_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("recursive compact token with malformed binding must reject"),
             Err(err) => err,
@@ -16309,6 +16395,7 @@ mod tests {
             Uint8Array::from(recursive_compact_forged_vk_hash_token_archive_for_js_host(
                 &one_hop_record_bundle,
             )),
+            Uint8Array::from(recursive_compact_verifier_keys_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("recursive compact token with forged verifier-key hash must reject"),
             Err(err) => err,
@@ -16325,6 +16412,7 @@ mod tests {
             Uint8Array::from(recursive_compact_multi_row_token_archive_for_js_host(
                 &one_hop_record_bundle,
             )),
+            Uint8Array::from(recursive_compact_verifier_keys_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => {
                 panic!("JS host recursive compact verifier must reject multi-row public instances")
@@ -16339,6 +16427,7 @@ mod tests {
 
         let sentinel_spoofed_binding = match kagemusha_verify_recursive_compact_payment_token(
             Uint8Array::from(sentinel_spoofed_recursive_compact_token_archive_for_js_host()),
+            Uint8Array::from(recursive_compact_verifier_keys_archive_for_js_host().to_vec()),
         ) {
             Ok(_) => panic!("sentinel-spoofed recursive compact token must reject"),
             Err(err) => err,

@@ -160,8 +160,11 @@ Next ==
 TypeInvariant ==
   checked = 0
 
-SafetyFast ==
+ValidationEvidenceQcMatchesSpec ==
   \A c \in Cases: ActualSelected(c) = SpecSelected(c)
+
+SafetyFast ==
+  ValidationEvidenceQcMatchesSpec
 
 BugAcceptWithoutParent ==
   ActualSelected("no_parent") = SpecSelected("no_parent")

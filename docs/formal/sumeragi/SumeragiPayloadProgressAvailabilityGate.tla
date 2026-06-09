@@ -214,7 +214,7 @@ InvalidOwnersDoNotFallThroughToFallbackStores ==
     /\ ~(ReturnAvailable \in ImplementationActions(c))
     /\ ~(KuraPayloadAccepted \in ImplementationActions(c))
 
-NoBugInvariant ==
+PayloadProgressAvailabilityCoreSafety ==
   /\ ActionsMatchSpec
   /\ PendingPayloadOwnersGateProgress
   /\ InflightPayloadOwnersGateProgress
@@ -222,6 +222,8 @@ NoBugInvariant ==
   /\ HashOnlyAndAbsentPayloadsDoNotGateProgress
   /\ InvalidOwnersDoNotFallThroughToFallbackStores
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == PayloadProgressAvailabilityCoreSafety
+
+SafetyFast == PayloadProgressAvailabilityCoreSafety
 
 ====

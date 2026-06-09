@@ -305,8 +305,11 @@ Next ==
 TypeInvariant ==
   checked = 0
 
-SafetyFast ==
+VoteRosterSelectionCoreSafety ==
   \A c \in Cases: ActualActions(c) = SpecActions(c)
+
+SafetyFast ==
+  VoteRosterSelectionCoreSafety
 
 BugSkipCacheForPast ==
   ActualActions(VoteCachedPastWins) = SpecActions(VoteCachedPastWins)

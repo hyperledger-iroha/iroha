@@ -937,6 +937,35 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
     () =>
       buildBscTairaXorRouteConfigToml(
         productionReadyManifest({
+          sourceEventTransactionProductionBlockers: [
+            "source event transaction has not been observed on mainnet",
+          ],
+        }),
+      ),
+    /empty postDeployLiveEvidence production blockers.*sourceEventTransactionProductionBlockers/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          productionBlockers: "source event transaction is still pending",
+        }),
+      ),
+    /productionBlockers must be a list of non-empty strings/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
+          routeCanaryProductionBlockers: [" route canary evidence is stale"],
+        }),
+      ),
+    /routeCanaryProductionBlockers\[0\] must be a non-empty canonical string/u,
+  );
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(
+        productionReadyManifest({
           sourceEventExplorerUrl: `https://bscscan.com/tx/${HASH_55}`,
         }),
       ),
@@ -1595,6 +1624,10 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     [
       { postDeployLiveEvidence: { sourceEventTransactionUrl: ROUTE_CANARY_EXPLORER_URL } },
       /sourceEventExplorerUrl|transaction hash/u,
+    ],
+    [
+      { postDeployLiveEvidence: { post_deploy_production_blockers: [""] } },
+      /post_deploy_production_blockers\[0\] must be a non-empty canonical string/u,
     ],
     [{ secret_key: "0xabc" }, /private key|secrets/u],
   ];

@@ -118,6 +118,10 @@ def build_evidence(
         if artifact_size <= 0:
             errors.append(f"lineage artifact {artifact} must be non-empty")
             continue
+        content_errors = readiness.validate_lineage_artifact_content(path, artifact)
+        if content_errors:
+            errors.extend(content_errors)
+            continue
         artifact_digests[artifact] = digest
         artifact_sizes[artifact] = artifact_size
 

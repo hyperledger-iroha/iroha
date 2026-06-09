@@ -210,8 +210,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+QcValidationEvidenceMatchesSpec ==
   \A c \in AllCases: Matches(c)
+
+SafetyFast ==
+  QcValidationEvidenceMatchesSpec
 
 BugBitmapLengthNoEvidence ==
   Matches(BitmapLengthMismatch)

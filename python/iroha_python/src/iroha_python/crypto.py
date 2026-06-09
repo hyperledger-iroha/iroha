@@ -1090,6 +1090,25 @@ def _privacy_output_archive(operation: str, result: object) -> bytes:
     return archive
 
 
+def _clear_privacy_native_output(result: object) -> None:
+    if result is None or isinstance(result, str):
+        return
+    try:
+        view = _privacy_unsigned_byte_view(
+            result,
+            bytes_like_message="native privacy output must be bytes-like",
+            typed_message="native privacy output must use unsigned byte elements",
+        )
+    except TypeError:
+        return
+    if view.readonly or view.nbytes == 0:
+        return
+    try:
+        view[:] = b"\x00" * view.nbytes
+    except (TypeError, ValueError, BufferError):
+        return
+
+
 def _privacy_crc64_table() -> tuple[int, ...]:
     table: list[int] = []
     for index in range(256):
@@ -1278,6 +1297,7 @@ def _privacy_native_probe_returns_bytes(
     if not callable(method):
         return False
     request = bytearray(request_archive) if request_archive is not None else None
+    result: object | None = None
     try:
         if request is None:
             result = method()
@@ -1288,6 +1308,7 @@ def _privacy_native_probe_returns_bytes(
     except Exception:
         return False
     finally:
+        _clear_privacy_native_output(result)
         if request is not None:
             _clear_privacy_request_archive(request)
 

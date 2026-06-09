@@ -31,18 +31,25 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
   }
 
   public static byte[] proveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-      final byte[] recordBundleArchive, final byte[] pallasOpenEnvelopesArchive) {
+      final byte[] recordBundleArchive,
+      final byte[] pallasOpenEnvelopesArchive,
+      final byte[] recursiveCompactKeyArtifactsArchive) {
     requireNativeInput(recordBundleArchive, "recordBundleArchive");
     requireNativeInput(pallasOpenEnvelopesArchive, "pallasOpenEnvelopesArchive");
+    requireNativeInput(
+        recursiveCompactKeyArtifactsArchive, "recursiveCompactKeyArtifactsArchive");
     final byte[] recordBundle = ownedNativeInput(recordBundleArchive, "recordBundleArchive");
     final byte[] pallasOpenEnvelopes =
         ownedNativeInput(pallasOpenEnvelopesArchive, "pallasOpenEnvelopesArchive");
+    final byte[] keyArtifacts =
+        ownedNativeInput(
+            recursiveCompactKeyArtifactsArchive, "recursiveCompactKeyArtifactsArchive");
     requireNative();
     final byte[] tokenArchive;
     try {
       tokenArchive =
           nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-              recordBundle, pallasOpenEnvelopes);
+              recordBundle, pallasOpenEnvelopes, keyArtifacts);
     } catch (final IllegalArgumentException error) {
       if (isRecursiveCompactUnavailable(error)) {
         throw new IllegalStateException(
@@ -101,10 +108,14 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
     }
   }
 
-  public static boolean verifyRecursiveCompactPaymentToken(final byte[] compactTokenArchive) {
+  public static boolean verifyRecursiveCompactPaymentToken(
+      final byte[] compactTokenArchive, final byte[] recursiveCompactVerifierKeysArchive) {
     final byte[] compactToken = ownedNativeInput(compactTokenArchive, "compactTokenArchive");
+    final byte[] verifierKeys =
+        ownedNativeInput(
+            recursiveCompactVerifierKeysArchive, "recursiveCompactVerifierKeysArchive");
     requireVerifierNative();
-    return nativeVerifyRecursiveCompactPaymentToken(compactToken);
+    return nativeVerifyRecursiveCompactPaymentToken(compactToken, verifierKeys);
   }
 
   public static boolean verifyRecursiveSpendCompactPaymentTokenProjection(
@@ -164,10 +175,10 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
               KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe(
                   () ->
                       nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-                          new byte[0], new byte[0]));
+                          new byte[0], new byte[0], new byte[0]));
           final boolean verifierRejects =
               KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe(
-                  () -> nativeVerifyRecursiveCompactPaymentToken(new byte[0]));
+                  () -> nativeVerifyRecursiveCompactPaymentToken(new byte[0], new byte[0]));
           final boolean projectionRejects =
               KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe(
                   () -> nativeRecursiveSpendCompactPaymentTokenFromBundle(new byte[0]));
@@ -182,7 +193,7 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
         KagemushaRecursiveCompactPaymentTokenProver::nativeBridgeAbiVersion,
         () ->
             KagemushaCompactPaymentTokenProver.expectIllegalArgumentProbe(
-                () -> nativeVerifyRecursiveCompactPaymentToken(new byte[0])),
+                () -> nativeVerifyRecursiveCompactPaymentToken(new byte[0], new byte[0])),
         REQUIRED_BRIDGE_ABI_VERSION);
   }
 
@@ -210,10 +221,12 @@ public final class KagemushaRecursiveCompactPaymentTokenProver {
 
   private static native byte[]
       nativeProveVerifiedRecursiveCompactPaymentTokenWithRecordsAndPallasOpenEnvelopes(
-          byte[] recordBundleArchive, byte[] pallasOpenEnvelopesArchive);
+          byte[] recordBundleArchive,
+          byte[] pallasOpenEnvelopesArchive,
+          byte[] recursiveCompactKeyArtifactsArchive);
 
   private static native boolean nativeVerifyRecursiveCompactPaymentToken(
-      byte[] compactTokenArchive);
+      byte[] compactTokenArchive, byte[] recursiveCompactVerifierKeysArchive);
 
   private static native byte[] nativeRecursiveSpendCompactPaymentTokenFromBundle(
       byte[] bundleArchive);

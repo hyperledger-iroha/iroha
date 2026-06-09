@@ -124,7 +124,7 @@ jobs:
           cargo test -p connect_norito_bridge kagemusha_verified_record_compact_token_ffi_rejects_bad_records --lib -- --test-threads=1
           cargo test -p connect_norito_bridge kagemusha_verified_record_recursive_aggregation_proof_bundle_ffi_rejects_adversarial_inputs --lib -- --test-threads=1
           cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_rejects_windowed_records_before_unavailable --lib -- --test-threads=1
-          cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib -- --test-threads=1
+          RUST_MIN_STACK=67108864 CARGO_PROFILE_TEST_OPT_LEVEL=3 CARGO_PROFILE_TEST_DEBUG=0 cargo test -p connect_norito_bridge kagemusha_recursive_compact_ffi_fails_closed_and_rejects_adversarial_inputs --lib -- --test-threads=1
 
   kagemusha_swift_sdk_parse:
     runs-on: macos-latest
@@ -239,16 +239,33 @@ jobs:
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-helper-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-boundary
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-proof-chain-accumulator
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-native-owned-accumulator-boundary
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-proof-chain-accumulator-input
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-digest-inputs
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-accumulator-boundary-digest-inputs
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-availability-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-recursive-compact-unavailable
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-compact-projection-verifier
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-stale-future-lineage
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-readme-native-output-csharp
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-helper-bodies
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-cross-sdk-preferred-mode-fallback
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-mobile-halo2-vk-hash
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-rust-recursive-compact-unavailable-classifier
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-sdk-recursive-compact-unavailable-helper
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-verifier-surface
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-compact-key-package-arity
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-compact-probe-arity
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-recursive-compact-key-package-dispatch
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-recursive-compact-declarations
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-declarations
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-accumulator-digest-denylist
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-terminal-accumulator-digest-denylist
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-declaration-sweep
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-nexus-declaration-sweep
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-package-dist-kotodama-declaration-sweep
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-dts-recursive-compact-key-package
+          ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-recursive-compact-root-export
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-recursive-spend-compact-projection-surface
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-native-bridge-zero-envelope-pallas-guard
           ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-kagemusha-abi-probe-bounds
@@ -351,6 +368,8 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-sdk-default
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-open
           ci/check_kagemusha_production_readiness.sh --negative-control-abi7-core-contract-open
+          ci/check_kagemusha_production_readiness.sh --negative-control-abi7-one-hop-runtime-keygen-fallback
+          ci/check_kagemusha_production_readiness.sh --negative-control-abi7-append-runtime-keygen-fallback
           ci/check_kagemusha_production_readiness.sh --negative-control-abi7-bridge-unavailable-mapping
           ci/check_kagemusha_production_readiness.sh --negative-control-abi7-offline-doc-one-hop-boundary
           ci/check_kagemusha_production_readiness.sh --negative-control-abi7-source-marker-file-aliases
@@ -535,6 +554,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-cli-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-raw-command-exact
           ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-freshness-report
+          ci/check_kagemusha_production_readiness.sh --negative-control-android-signed-evidence-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-rollup-path-safety
           ci/check_kagemusha_production_readiness.sh --negative-control-kagemusha-readiness-android-report-secret-redaction
@@ -582,7 +602,9 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-timestamp-raw
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-drift
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-summary-section-schema
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-signed-evidence-summary-schema
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-artifact-inventory
+          ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-android-slot-artifact-inventory
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-compact-placeholder-inventory
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-compact-generator-log-inventory
           ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-atomic-output
@@ -627,6 +649,7 @@ jobs:
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-artifact-dir-metadata-failure
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-direct-hash-read-failure
+          ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-generator-log-strict-read
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-secret-paths
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-shape
           ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-direct-hash-read-failure
@@ -672,10 +695,26 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-append-cap-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-self-consistent-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-transition-profile-current-hop-sets
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-proof-public-input-circuit-binding
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-field-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-lineage-key-package-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-profile-split
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-proof-chain-accumulator
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fixed-window-table-base-accumulator
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-accumulator
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-previous-accumulator-boundary
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-resulting-accumulator-boundary
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-digest-match
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-context-matches
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-digest-unchecked-surface
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-digest-wrapper-bypass
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-boundary-profile-comparison
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-public-input-schema-order
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-public-input-index-map
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-public-input-value-order
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-public-input-nonzero-groups
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-recursive-append-semantic-nonzero-groups
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-vesta-ipa-h-fold
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-vesta-ipa-g-fold
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-opening-preflight-splices
@@ -683,6 +722,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-verifier-slice-preflight-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-one-hop-verifier-slice-evidence-binding
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fold-overlap-predecode
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-fold-public-input-preverify-order
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-record-backed-fold-public-input-preverify-order
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-fold-predecode
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-record-predecode
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-lineage-witness-note-predecode
@@ -721,6 +762,8 @@ jobs:
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-missing-payload-workflow
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-negative-controls-workflow
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-reserved-lineage-payload-negative-controls-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-benchmark-name-negative-controls-workflow
+          ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-hop-list-negative-controls-workflow
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-negative-controls-comment-workflow
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-negative-controls-order-workflow
           ci/check_kagemusha_recursive_spend_policy.sh --negative-control-payload-benchmark-manifest-workflow
@@ -771,6 +814,14 @@ jobs:
           ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-conflicting-transition-profile-size
           ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-conflicting-reserved-lineage-payload-size
           ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-conflicting-reserved-lineage-transition-profile-size
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-malformed-payload-benchmark-name
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-empty-hop-list
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-blank-hop-list
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-non-integer-hop
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-zero-hop
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-duplicate-hop
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-unsorted-hop
+          ci/check_kagemusha_recursive_spend_payload_bench.sh --negative-control-leading-zero-hop
       - name: Kagemusha recursive spend payload benchmark
         run: ci/check_kagemusha_recursive_spend_payload_bench.sh
       - name: Upload Kagemusha payload benchmark summary

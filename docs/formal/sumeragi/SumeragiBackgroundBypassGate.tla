@@ -233,8 +233,10 @@ TypeInvariant ==
        /\ SpecAction(c) \in Actions
        /\ ActualAction(c) \in Actions
 
-SafetyFast ==
+BypassMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == BypassMatchesSpec
 
 PostBypassMatrix ==
   \A c \in Cases:

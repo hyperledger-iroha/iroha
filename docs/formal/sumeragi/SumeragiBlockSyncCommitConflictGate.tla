@@ -325,8 +325,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+CommitConflictMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == CommitConflictMatchesSpec
 
 ZeroHeightSkips ==
   Matches("height_zero_skips")

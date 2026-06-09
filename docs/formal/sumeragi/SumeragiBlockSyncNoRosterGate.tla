@@ -349,8 +349,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+NoRosterMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == NoRosterMatchesSpec
 
 KnownVoteOnlyProcessesWithoutSnapshot ==
   Matches("known_vote_no_snapshot")

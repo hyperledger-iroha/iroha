@@ -2335,6 +2335,32 @@ def cfg_semantic_check_errors(
     ]
 
 
+def cfg_fast_generic_check_errors(
+    mode: str,
+    cfg_file: Path,
+    runner_name: str,
+) -> list[str]:
+    if not cfg_file.name.endswith("_fast.cfg"):
+        return []
+
+    references, parse_errors = cfg_operator_references(cfg_file)
+    if parse_errors:
+        return []
+
+    errors: list[str] = []
+    for line_number, directive, operator in references:
+        if directive not in CFG_CHECK_DIRECTIVES:
+            continue
+        if operator not in {"NoBugInvariant", "Safety", "SafetyFast"}:
+            continue
+        errors.append(
+            f"{mode}: {runner_name} cfg {display_path(cfg_file)}:{line_number} "
+            f"references generic check {operator}; fast configs must use a "
+            "model-specific direct invariant"
+        )
+    return errors
+
+
 def cfg_trivial_check_operator_errors(
     mode: str,
     module_path: Path,
@@ -2985,6 +3011,9 @@ def main() -> int:
             reference_errors.extend(
                 cfg_semantic_check_errors(mode, cfg_file, "Apalache")
             )
+            reference_errors.extend(
+                cfg_fast_generic_check_errors(mode, cfg_file, "Apalache")
+            )
         if len(spec_files) == 1:
             for cfg_file in cfg_files:
                 reference_errors.extend(
@@ -3120,6 +3149,9 @@ def main() -> int:
                 )
                 tlc_reference_errors.extend(
                     cfg_semantic_check_errors(mode, cfg_file, "TLC")
+                )
+                tlc_reference_errors.extend(
+                    cfg_fast_generic_check_errors(mode, cfg_file, "TLC")
                 )
         if len(module_files) == 1:
             tlc_reference_errors.extend(

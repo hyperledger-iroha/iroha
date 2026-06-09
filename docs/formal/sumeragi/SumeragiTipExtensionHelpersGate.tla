@@ -144,11 +144,14 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+TipExtensionHelpersMatchSpec ==
   /\ \A c \in PendingCases:
        ActualPendingOutput(c) = SpecPendingOutput(c)
   /\ \A c \in ChainCases:
        ActualChainResult(c) = SpecChainResult(c)
+
+SafetyFast ==
+  TipExtensionHelpersMatchSpec
 
 BugPendingMissingCommittedStale ==
   ActualPendingOutput("pending_missing_committed") =

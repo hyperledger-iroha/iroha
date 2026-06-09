@@ -290,7 +290,7 @@ DropCountUsesOneBasedPositions ==
   EffectiveDropEnabled(candidate) =>
     dropped_count = ChunkCount(candidate) \div DropEvery(candidate)
 
-Safety ==
+RbcChunkBroadcastOrderCoreSafety ==
   /\ ShuffleApplicationMatchesSpec
   /\ DroppedCountMatchesSpec
   /\ OutputLengthMatchesSpec
@@ -306,5 +306,7 @@ Safety ==
   /\ NoOutOfRangeIndices
   /\ ShuffleDoesNotChangeCardinalityWithoutDrop
   /\ DropCountUsesOneBasedPositions
+
+Safety == RbcChunkBroadcastOrderCoreSafety
 
 ====

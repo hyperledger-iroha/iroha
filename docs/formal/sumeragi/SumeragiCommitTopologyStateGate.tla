@@ -306,8 +306,10 @@ Next ==
 TypeInvariant ==
   checked = 0
 
-SafetyFast ==
+CommitTopologyStateMatchesSpec ==
   \A c \in Cases: ActualActions(c) = SpecActions(c)
+
+SafetyFast == CommitTopologyStateMatchesSpec
 
 BugRefreshSameOrderMutates ==
   ActualActions(RefreshSameOrderNoop) = SpecActions(RefreshSameOrderNoop)

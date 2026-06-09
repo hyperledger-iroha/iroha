@@ -9,6 +9,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                             ttlMs: UInt64?,
                             nonce: UInt32?,
                             issue: OfflineNoteIssueV2,
+                            metadata: [String: ToriiJSONValue],
                             signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         let instruction = try encodeInstruction(
             wireName: OfflineNoteV2TypeNames.issueInstruction,
@@ -22,6 +23,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
             ttlMs: ttlMs,
             nonce: nonce,
             instructionPayload: instruction,
+            metadata: metadata,
             signingKey: signingKey
         )
     }
@@ -32,6 +34,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                              ttlMs: UInt64?,
                              nonce: UInt32?,
                              redemption: OfflineNoteRedeemV2,
+                             metadata: [String: ToriiJSONValue],
                              signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         try redemption.validateProofBinding()
         let instruction = try encodeInstruction(
@@ -46,6 +49,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
             ttlMs: ttlMs,
             nonce: nonce,
             instructionPayload: instruction,
+            metadata: metadata,
             signingKey: signingKey
         )
     }
@@ -56,6 +60,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                             ttlMs: UInt64?,
                             nonce: UInt32?,
                             audit: OfflineNoteAuditBundleV2,
+                            metadata: [String: ToriiJSONValue],
                             signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         try audit.validateProofBinding()
         let instruction = try encodeInstruction(
@@ -70,6 +75,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
             ttlMs: ttlMs,
             nonce: nonce,
             instructionPayload: instruction,
+            metadata: metadata,
             signingKey: signingKey
         )
     }
@@ -97,6 +103,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                                           ttlMs: UInt64?,
                                           nonce: UInt32?,
                                           instructionPayload: Data,
+                                          metadata: [String: ToriiJSONValue],
                                           signingKey: SigningKey) throws -> SignedTransactionEnvelope {
         let transactionPayload = try encodeTransactionPayload(
             chainId: chainId,
@@ -104,7 +111,8 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
             creationTimeMs: creationTimeMs,
             ttlMs: ttlMs,
             nonce: nonce,
-            instructionPayload: instructionPayload
+            instructionPayload: instructionPayload,
+            metadata: metadata
         )
         let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
         let signedTransaction = encodeSignedTransaction(
@@ -127,7 +135,8 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
                                                  creationTimeMs: UInt64,
                                                  ttlMs: UInt64?,
                                                  nonce: UInt32?,
-                                                 instructionPayload: Data) throws -> Data {
+                                                 instructionPayload: Data,
+                                                 metadata: [String: ToriiJSONValue]) throws -> Data {
         var transactionPayload = OfflineNoritoWriter()
         transactionPayload.writeField(OfflineNorito.encodeString(chainId))
         transactionPayload.writeField(OfflineNorito.encodeString(authority))
@@ -135,7 +144,7 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
         transactionPayload.writeField(encodeExecutable(instructionPayload: instructionPayload))
         transactionPayload.writeField(try OfflineNorito.encodeOption(ttlMs, encode: OfflineNorito.encodeUInt64))
         transactionPayload.writeField(try OfflineNorito.encodeOption(nonce, encode: OfflineNorito.encodeUInt32))
-        transactionPayload.writeField(encodeEmptyMetadata())
+        transactionPayload.writeField(try OfflineNorito.encodeMetadata(metadata))
         return transactionPayload.data
     }
 
@@ -167,11 +176,6 @@ private enum OfflineNoteV2SwiftNoritoEncoder {
         return entrypoint.data
     }
 
-    private static func encodeEmptyMetadata() -> Data {
-        var metadata = OfflineNoritoWriter()
-        metadata.writeLength(0)
-        return metadata.data
-    }
 }
 
 extension SwiftTransactionEncoder {
@@ -200,6 +204,7 @@ extension SwiftTransactionEncoder {
             ttlMs: request.ttlMs,
             nonce: request.nonce,
             issue: request.issue,
+            metadata: request.metadata,
             signingKey: signingKey
         )
     }
@@ -229,6 +234,7 @@ extension SwiftTransactionEncoder {
             ttlMs: request.ttlMs,
             nonce: request.nonce,
             redemption: request.redemption,
+            metadata: request.metadata,
             signingKey: signingKey
         )
     }
@@ -258,6 +264,7 @@ extension SwiftTransactionEncoder {
             ttlMs: request.ttlMs,
             nonce: request.nonce,
             audit: request.audit,
+            metadata: request.metadata,
             signingKey: signingKey
         )
     }

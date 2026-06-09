@@ -168,8 +168,11 @@ Next ==
 TypeInvariant ==
   checked = 0
 
-SafetyFast ==
+ValidationFailureFinalizeMatchesSpec ==
   \A c \in Cases: ActualOutput(c) = SpecOutput(c)
+
+SafetyFast ==
+  ValidationFailureFinalizeMatchesSpec
 
 BugDeferEqualPrevHeight ==
   ActualOutput("equal_prev_height") = SpecOutput("equal_prev_height")
@@ -248,8 +251,7 @@ ActualEvidenceAttached(c) == ActualOutput(c)[10]
 ActualPreviousRosterRecovery(c) == ActualOutput(c)[11]
 
 AllFinalizeCasesMatchSpec ==
-  \A c \in Cases:
-    ActualOutput(c) = SpecOutput(c)
+  ValidationFailureFinalizeMatchesSpec
 
 PrevHeightDeferralBoundaryAnchors ==
   /\ ActualKind("future_prev_height") = "deferred"

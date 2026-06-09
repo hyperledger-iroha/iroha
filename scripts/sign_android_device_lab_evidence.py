@@ -482,7 +482,11 @@ def _normalise_output_path(
     return slot_path / relative, relative
 
 
-def _artifact_digests(slot_path: Path, errors: list[str]) -> dict[str, str] | None:
+def _artifact_digests(
+    slot_path: Path,
+    errors: list[str],
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, str] | None:
     digests: dict[str, str] = {}
     initial_error_count = len(errors)
     preflight_errors = _preflight_slot_metadata_reads(slot_path)
@@ -492,7 +496,10 @@ def _artifact_digests(slot_path: Path, errors: list[str]) -> dict[str, str] | No
     device_lab.validate_required_kagemusha_slot_artifact_shapes(slot_path, errors)
     if len(errors) != initial_error_count:
         return None
-    for relative in device_lab._required_signed_evidence_digest_paths(slot_path):
+    for relative in device_lab._required_signed_evidence_digest_paths(
+        slot_path,
+        metadata=metadata,
+    ):
         digest, digest_errors = _slot_artifact_sha256(slot_path, relative)
         if digest_errors:
             errors.extend(digest_errors)
@@ -550,7 +557,7 @@ def build_signed_evidence(
     if signer_public_key_sha256 is not None:
         evidence["signer_public_key_sha256"] = signer_public_key_sha256
     evidence["signature_algorithm"] = "ed25519"
-    artifact_digests = _artifact_digests(slot_path, errors)
+    artifact_digests = _artifact_digests(slot_path, errors, metadata)
     if artifact_digests is not None:
         evidence["artifact_digests"] = artifact_digests
 

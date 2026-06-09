@@ -227,13 +227,16 @@ TypeInvariant ==
      }
   /\ checked \in 0..25
 
-SafetyFast ==
+RbcSamplingCoreSafety ==
   /\ \A c \in Cases:
        ActualKind(c) = SpecKind(c)
   /\ \A c \in OkCases:
        /\ SampleWellFormed(c, ActualSampleSeq(c))
        /\ ActualSampleSeq(c) = SpecSampleSeq(c)
        /\ MetadataMatches(c)
+
+SafetyFast ==
+  RbcSamplingCoreSafety
 
 AllKindsMatchSpec ==
   \A c \in Cases:

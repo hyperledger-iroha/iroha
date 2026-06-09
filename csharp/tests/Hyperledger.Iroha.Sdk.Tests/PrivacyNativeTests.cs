@@ -977,8 +977,13 @@ public sealed class PrivacyNativeTests
         Assert.False(capabilities.ProductionGate.ChainAdmission);
         Assert.False(capabilities.ProductionGate.SdkParity);
         Assert.False(capabilities.ProductionGate.WalletState);
+        Assert.False(capabilities.ProductionGate.WitnessPrivacyChecks);
         Assert.False(capabilities.ProductionGate.DeterministicTests);
+        Assert.False(capabilities.ProductionGate.NegativeAdversarialTests);
+        Assert.False(capabilities.ProductionGate.ReplayNullifierTests);
         Assert.False(capabilities.ProductionGate.Fuzzing);
+        Assert.False(capabilities.ProductionGate.ParserFuzzing);
+        Assert.False(capabilities.ProductionGate.VerifierFuzzing);
         Assert.False(capabilities.ProductionGate.PerformanceGates);
         Assert.False(capabilities.ProductionGate.ExternalAudit);
         Assert.Empty(capabilities.ProductionGate.AuditReferences);
@@ -990,7 +995,22 @@ public sealed class PrivacyNativeTests
             "chain admission path is not enabled",
             capabilities.ProductionGate.Missing);
         Assert.Contains(
-            "external audit signoff is missing",
+            "witness privacy checks are incomplete",
+            capabilities.ProductionGate.Missing);
+        Assert.Contains(
+            "negative/adversarial tests are incomplete",
+            capabilities.ProductionGate.Missing);
+        Assert.Contains(
+            "replay/nullifier rejection tests are incomplete",
+            capabilities.ProductionGate.Missing);
+        Assert.Contains(
+            "parser fuzzing gate is incomplete",
+            capabilities.ProductionGate.Missing);
+        Assert.Contains(
+            "verifier fuzzing gate is incomplete",
+            capabilities.ProductionGate.Missing);
+        Assert.Contains(
+            "internal cryptographic review signoff is missing",
             capabilities.ProductionGate.Missing);
         Assert.Contains(
             "implementation stage is not production-hardened",

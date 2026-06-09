@@ -259,11 +259,13 @@ TypeInvariant ==
        /\ SpecActions(c) \subseteq Actions
        /\ ImplementationActions(c) \subseteq Actions
 
-NoBugInvariant ==
+HotspotLogSummaryCoreSafety ==
   \A c \in Cases:
     ImplementationActions(c) = SpecActions(c)
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == HotspotLogSummaryCoreSafety
+
+SafetyFast == HotspotLogSummaryCoreSafety
 
 BugInitKeepsCounts == NoBugInvariant
 BugInitKeepsLastEmit == NoBugInvariant

@@ -263,11 +263,14 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+ProposalStaleVoteMatchesSpec ==
   /\ \A c \in BaseCases: ActualBaseOutput(c) = SpecBaseOutput(c)
   /\ \A c \in RepairCases: ActualRepairOutput(c) = SpecRepairOutput(c)
   /\ \A c \in AssemblyCases:
        ActualAssemblyOutput(c) = SpecAssemblyOutput(c)
+
+SafetyFast ==
+  ProposalStaleVoteMatchesSpec
 
 BugBaseAllowsFutureView ==
   ActualBaseOutput("future_view_blocks") = SpecBaseOutput("future_view_blocks")

@@ -44,7 +44,7 @@ from typing import Any
 
 EVIDENCE_VERSION = 1
 CANARY_SUMMARY_VERSION = 1
-RECEIPT_SUMMARY_VERSION = 1
+RECEIPT_SUMMARY_VERSION = 2
 TRUST_SUMMARY_VERSION = 1
 REQUIRE_VERIFIED = "require-verified"
 TRUST_SIGNATURE_POLICIES = {"record-only", "reject-unsupported", REQUIRE_VERIFIED}
@@ -61,6 +61,10 @@ KNOWN_RAILS = {
 EXPECTED_CANARY_STAGE_ORDER = ("rail", "notary", "verify")
 REQUIRED_CANARY_STAGES = set(EXPECTED_CANARY_STAGE_ORDER)
 REQUIRED_RECEIPT_KINDS = {"iso-audit-notary", "iso-rail-gateway"}
+STAGE_RECEIPT_KINDS = {
+    "rail": "iso-rail-gateway",
+    "notary": "iso-audit-notary",
+}
 RECEIPT_PATH_SUFFIX = ".receipt.json"
 SUMMARY_DIGEST_FIELD = "summary_sha256"
 LEGACY_RAIL_MESSAGE_TYPES = {"colr.007"}
@@ -286,6 +290,8 @@ RECEIPT_ENTRY_KEYS = {
     "receipt_sha256",
     "ok",
     "status_code",
+    "response_body_sha256",
+    "endpoint_requires_insecure_http",
     "anchor_sha256",
     "index_sha256",
     "record_count",
@@ -448,6 +454,31 @@ def _contains_secret_identifier_material(value: str) -> bool:
     )
 
 
+def _receipt_verifier_stderr_detail(stderr: str) -> str:
+    detail = stderr.strip()
+    if not detail:
+        return ""
+    if _contains_secret_material(detail) or _contains_secret_identifier_material(detail):
+        return "[receipt verifier stderr redacted: secret-looking material]"
+    if _contains_unsafe_diagnostic_control(detail):
+        return "[receipt verifier stderr redacted: control characters]"
+    return detail[:4096]
+
+
+def _contains_unsafe_diagnostic_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\t"}) or ord(ch) == 0x7F
+        for ch in value
+    )
+
+
+def _contains_unsafe_preview_control(value: str) -> bool:
+    return any(
+        (ord(ch) < 0x20 and ch not in {"\n", "\r", "\t"}) or ord(ch) == 0x7F
+        for ch in value
+    )
+
+
 class EvidenceError(RuntimeError):
     """Raised when archived ISO operator evidence is unsafe or malformed."""
 
@@ -527,8 +558,11 @@ def _reject_output_path_smuggling(path: Path, label: str) -> None:
         raise EvidenceError(f"{label} must use forward slashes")
     if ";" in raw:
         raise EvidenceError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise EvidenceError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise EvidenceError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = path.parts[1:] if path.is_absolute() else path.parts
     if any(part.startswith("-") for part in parts if part):
         raise EvidenceError(f"{label} must not contain leading-dash path segments")
@@ -551,8 +585,11 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise EvidenceError(f"{label} must use forward slashes")
     if ";" in raw:
         raise EvidenceError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise EvidenceError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise EvidenceError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -563,11 +600,42 @@ def _reject_raw_output_path_smuggling(raw: str, label: str) -> None:
         raise EvidenceError(f"{label} must not contain dot or parent segments")
 
 
+def _reject_percent_encoded_path_smuggling(raw: str, label: str) -> None:
+    index = 0
+    while True:
+        index = raw.find("%", index)
+        if index == -1:
+            return
+        token = raw[index + 1 : index + 3]
+        if len(token) != 2 or any(ch not in "0123456789abcdefABCDEF" for ch in token):
+            raise EvidenceError(f"{label} must not contain malformed percent escapes")
+        byte = int(token, 16)
+        if byte <= 0x20 or byte == 0x7F:
+            raise EvidenceError(
+                f"{label} must not contain percent-encoded control or space characters"
+            )
+        if byte in {0x2E, 0x2F, 0x5C}:
+            raise EvidenceError(
+                f"{label} must not contain encoded dot or separator characters"
+            )
+        if byte == 0x3B:
+            raise EvidenceError(f"{label} must not contain encoded semicolon parameters")
+        if byte in {0x23, 0x3A, 0x3F, 0x40, 0x5B, 0x5D}:
+            raise EvidenceError(
+                f"{label} must not contain encoded URL delimiter characters"
+            )
+        if byte == 0x25:
+            raise EvidenceError(f"{label} must not contain encoded percent characters")
+        index += 3
+
+
 def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) -> None:
     raw_args = sys.argv[1:] if argv is None else argv
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise EvidenceError("argument terminator is not supported")
         if arg in value_flags:
             index += 2
             continue
@@ -584,6 +652,8 @@ def _preflight_boolean_cli_flags(argv: list[str] | None, flags: set[str]) -> Non
     index = 0
     while index < len(raw_args):
         arg = raw_args[index]
+        if arg == "--":
+            raise EvidenceError("argument terminator is not supported")
         flag, separator, _value = arg.partition("=")
         if separator and flag in flags:
             raise EvidenceError(f"{flag} does not take a value")
@@ -606,7 +676,7 @@ def _preflight_required_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise EvidenceError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -636,7 +706,7 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise EvidenceError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -683,7 +753,7 @@ def _preflight_numeric_cli_values(
     while index < len(raw_args):
         arg = raw_args[index]
         if arg == "--":
-            return
+            raise EvidenceError("argument terminator is not supported")
         matched = False
         for flag in flags:
             if arg == flag:
@@ -931,7 +1001,7 @@ def _require_object(value: Any, label: str) -> dict[str, Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) for key in unknown):
+        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
             raise EvidenceError(f"{label} contains unknown keys")
         raise EvidenceError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -941,6 +1011,10 @@ def _is_secret_looking_key(value: Any) -> bool:
         SECRET_IDENTIFIER_PATTERN.search(candidate)
         for candidate in _secret_scan_values(str(value))
     )
+
+
+def _is_control_bearing_key(value: Any) -> bool:
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in str(value))
 
 
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
@@ -1098,7 +1172,12 @@ def _verify_receipt_entry_metadata(
 
 def _receipt_entry_content_metadata(receipt_entry: dict[str, Any]) -> tuple[tuple[str, Any], ...]:
     receipt_kind = receipt_entry["receipt_kind"]
-    generic_keys = ("ok", "status_code")
+    generic_keys = (
+        "ok",
+        "status_code",
+        "response_body_sha256",
+        "endpoint_requires_insecure_http",
+    )
     if receipt_kind == "iso-audit-notary":
         keys = ("anchor_sha256", "index_sha256", "record_count")
     elif receipt_kind == "iso-rail-gateway":
@@ -1492,8 +1571,11 @@ def _reject_path_smuggling(raw: str, label: str) -> None:
         raise EvidenceError(f"{label} must not start with a dash")
     if ";" in raw:
         raise EvidenceError(f"{label} must not contain semicolon path parameters")
+    if ":" in raw:
+        raise EvidenceError(f"{label} must not contain URI or drive prefixes")
     if _contains_secret_material(raw) or _contains_secret_identifier_material(raw):
         raise EvidenceError(f"{label} must not contain secret-looking material")
+    _reject_percent_encoded_path_smuggling(raw, label)
     parts = raw.split("/")
     checked_parts = parts[1:] if raw.startswith("/") else parts
     if any(part == "" for part in checked_parts):
@@ -1607,6 +1689,8 @@ def _verify_receipt_verifier_summary(
     receipt_entry_kinds: set[str] = set()
     seen_receipt_paths: dict[str, int] = {}
     seen_receipt_digests: dict[str, int] = {}
+    has_failed_receipt = False
+    has_insecure_receipt_endpoint = False
     for offset, receipt_entry_raw in enumerate(receipt_entries_raw):
         entry_label = f"{label}.receipts[{offset}]"
         receipt_entry = _require_object(receipt_entry_raw, entry_label)
@@ -1646,19 +1730,46 @@ def _verify_receipt_verifier_summary(
         status_success = 200 <= status_code <= 299
         if ok != status_success:
             raise EvidenceError(f"{entry_label}.ok does not match status_code success state")
-        if not ok:
+        if not ok and not allow_failed:
             raise EvidenceError(f"{entry_label} did not succeed")
+        has_failed_receipt = has_failed_receipt or not ok
+        if not _is_lower_sha256(receipt_entry.get("response_body_sha256")):
+            raise EvidenceError(
+                f"{entry_label}.response_body_sha256 must be a canonical SHA-256"
+            )
+        endpoint_requires_insecure_http = receipt_entry.get(
+            "endpoint_requires_insecure_http"
+        )
+        if not isinstance(endpoint_requires_insecure_http, bool):
+            raise EvidenceError(
+                f"{entry_label}.endpoint_requires_insecure_http must be a boolean"
+            )
+        if endpoint_requires_insecure_http and not allow_insecure_http:
+            raise EvidenceError(
+                f"{entry_label}.endpoint_requires_insecure_http requires "
+                "allow_insecure_http=true"
+            )
+        has_insecure_receipt_endpoint = (
+            has_insecure_receipt_endpoint or endpoint_requires_insecure_http
+        )
         _verify_receipt_entry_metadata(
             receipt_entry,
             entry_label,
             receipt_kind=entry_kind,
-            allow_legacy_colr007=args.allow_legacy_colr007,
+            allow_legacy_colr007=allow_legacy_colr007,
             allow_default_profile=allow_default_profile,
         )
         receipt_entry_kinds.add(entry_kind)
         receipt_entries.append(dict(receipt_entry))
     if receipt_kind_set != receipt_entry_kinds:
         raise EvidenceError(f"{label}.receipt_kind does not match receipts[].receipt_kind")
+    if allow_failed and not has_failed_receipt:
+        raise EvidenceError(f"{label}.allow_failed requires at least one failed receipt")
+    if allow_insecure_http and not has_insecure_receipt_endpoint:
+        raise EvidenceError(
+            f"{label}.allow_insecure_http requires at least one http:// "
+            "or local/private receipt endpoint"
+        )
 
     return {
         "version": version,
@@ -1684,16 +1795,20 @@ def _check_no_secret_material(value: Any, label: str = "$") -> None:
         for key, child in value.items():
             if _is_secret_looking_key(key):
                 raise EvidenceError(f"{label} contains forbidden secret-looking field")
+            if _is_control_bearing_key(key):
+                raise EvidenceError(f"{label} contains forbidden control-bearing field")
             _check_no_secret_material(child, f"{label}.{key}")
     elif isinstance(value, list):
         for offset, child in enumerate(value):
             _check_no_secret_material(child, f"{label}[{offset}]")
     elif isinstance(value, str):
+        if _contains_unsafe_preview_control(value):
+            raise EvidenceError(f"{label} contains unsafe control characters")
         _reject_secret_string(value, label)
 
 
 def _command_has_script(command: list[str], script_name: str) -> bool:
-    return any(Path(item).name == script_name for item in command)
+    return len(command) > 1 and Path(command[1]).name == script_name
 
 
 def _command_has_flag(command: list[str], flag: str) -> bool:
@@ -1791,6 +1906,29 @@ def _command_has_http_url(command: list[str]) -> bool:
     return any(item.startswith("http://") for item in command)
 
 
+def _url_requires_insecure_http_override(parsed: urllib.parse.ParseResult) -> bool:
+    if parsed.scheme == "http":
+        return True
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname == "localhost" or hostname.endswith(".localhost"):
+        return True
+    if _host_uses_rebinding_suffix(hostname):
+        return True
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        return False
+    return (not address.is_global) or _address_embeds_non_global_ipv4(address)
+
+
+def _command_uses_insecure_http_policy(command: list[str], label: str) -> bool:
+    for flag in COMMAND_URL_FLAGS:
+        for _offset, url in _command_flag_values(command, flag, label):
+            if _url_requires_insecure_http_override(urllib.parse.urlparse(url)):
+                return True
+    return False
+
+
 def _check_command_urls(
     command: list[str],
     label: str,
@@ -1856,6 +1994,7 @@ def _check_command_policy(
     command: list[str],
     label: str,
     *,
+    stage_name: str,
     allow_dry_run: bool,
     allow_insecure_http: bool,
     allow_default_profile: bool,
@@ -1883,6 +2022,18 @@ def _check_command_policy(
     ) and not allow_insecure_http:
         raise EvidenceError(f"{label} used insecure HTTP evidence")
     _check_command_urls(command, label, allow_insecure_http=allow_insecure_http)
+    command_requires_insecure_http = _command_uses_insecure_http_policy(command, label)
+    command_allows_insecure_http = "--allow-insecure-http" in command
+    if stage_name in STAGE_RECEIPT_KINDS:
+        if command_requires_insecure_http and not command_allows_insecure_http:
+            raise EvidenceError(
+                f"{label}.command URL requires --allow-insecure-http"
+            )
+        if command_allows_insecure_http and not command_requires_insecure_http:
+            raise EvidenceError(
+                f"{label}.command uses --allow-insecure-http without an http:// "
+                "or local/private endpoint"
+            )
     if _command_has_flag(command, "--allow-default-profile") and not allow_default_profile:
         raise EvidenceError(f"{label} used --allow-default-profile")
     if _command_has_flag(command, "--allow-failed") and not allow_failed_receipts:
@@ -1895,6 +2046,17 @@ def _check_stage_script(stage_name: str, command: list[str], label: str) -> None
     expected = EXPECTED_STAGE_SCRIPTS.get(stage_name)
     if expected is None:
         raise EvidenceError(f"{label}.name has unsupported canary stage {stage_name!r}")
+    if len(command) < 2:
+        raise EvidenceError(
+            f"{label}.command must start with a Python interpreter and {expected}"
+        )
+    interpreter = command[0]
+    _reject_path_smuggling(interpreter, f"{label}.command[0]")
+    interpreter_name = Path(interpreter).name.lower()
+    if re.fullmatch(r"(?:python|pypy)(?:\d+(?:\.\d+)*)?(?:\.exe)?", interpreter_name) is None:
+        raise EvidenceError(f"{label}.command[0] must be a Python interpreter path")
+    script = command[1]
+    _reject_path_smuggling(script, f"{label}.command[1]")
     if not _command_has_script(command, expected):
         raise EvidenceError(f"{label}.command does not invoke {expected}")
 
@@ -1930,10 +2092,14 @@ def _check_stage_command_flags(stage_name: str, command: list[str], label: str) 
         label,
     )
     for offset, item in enumerate(command):
+        if offset < 2:
+            continue
         if offset in value_offsets:
             continue
         if not item.startswith("--"):
-            continue
+            raise EvidenceError(
+                f"{label}.command[{offset}] uses unsupported positional argument"
+            )
         flag = item.split("=", 1)[0]
         if flag in local_only:
             raise EvidenceError(
@@ -1978,6 +2144,11 @@ def _check_receipt_dir_binding(command: list[str], receipt_dir: str, label: str)
         raise EvidenceError(f"{label}.receipt_dir does not match command --receipt-dir")
 
 
+def _check_stage_receipt_dir_scope(stage: dict[str, Any], name: str, label: str) -> None:
+    if name not in STAGE_RECEIPT_KINDS and stage.get("receipt_dir") is not None:
+        raise EvidenceError(f"{label}.receipt_dir must be null for {name} stage")
+
+
 def _verify_receipt_stdout(
     stage: dict[str, Any],
     label: str,
@@ -2001,11 +2172,98 @@ def _verify_receipt_stdout(
     return _verify_receipt_verifier_summary(receipt_obj, f"{label}.stdout_preview", args)
 
 
+def _receipt_parent_dir(path: str) -> str:
+    return path.rsplit("/", 1)[0] if "/" in path else "."
+
+
+def _check_verify_receipt_selectors(
+    command: list[str],
+    label: str,
+) -> tuple[list[str], list[str]]:
+    receipt_dirs = [
+        (
+            offset,
+            _validate_artifact_path(value, f"{label}.command[{offset}]"),
+        )
+        for offset, value in _command_flag_values(command, "--receipt-dir", label)
+    ]
+    receipt_files = [
+        (
+            offset,
+            _validate_receipt_path(value, f"{label}.command[{offset}]"),
+        )
+        for offset, value in _command_flag_values(command, "--receipt", label)
+    ]
+
+    seen_dirs: dict[str, int] = {}
+    for offset, receipt_dir in receipt_dirs:
+        previous = seen_dirs.get(receipt_dir)
+        if previous is not None:
+            raise EvidenceError(
+                f"{label}.command[{offset}] duplicates --receipt-dir at "
+                f"{label}.command[{previous}]"
+            )
+        seen_dirs[receipt_dir] = offset
+
+    seen_files: dict[str, int] = {}
+    selected_dirs = set(seen_dirs)
+    for offset, receipt_file in receipt_files:
+        previous = seen_files.get(receipt_file)
+        if previous is not None:
+            raise EvidenceError(
+                f"{label}.command[{offset}] duplicates --receipt at "
+                f"{label}.command[{previous}]"
+            )
+        seen_files[receipt_file] = offset
+        if _receipt_parent_dir(receipt_file) in selected_dirs:
+            raise EvidenceError(
+                f"{label}.command[{offset}] --receipt is already covered by "
+                "--receipt-dir"
+            )
+
+    return (
+        [receipt_dir for _offset, receipt_dir in receipt_dirs],
+        [receipt_file for _offset, receipt_file in receipt_files],
+    )
+
+
+def _check_receipt_stdout_policy_binding(
+    command: list[str],
+    receipt_summary: dict[str, Any],
+    label: str,
+) -> None:
+    checks = (
+        ("--allow-failed", "allow_failed"),
+        ("--allow-insecure-http", "allow_insecure_http"),
+        ("--allow-legacy-colr007", "allow_legacy_colr007"),
+        ("--allow-default-profile", "allow_default_profile"),
+        ("--require-source-files", "require_source_files"),
+    )
+    for flag, field in checks:
+        command_has_flag = _command_has_flag(command, flag)
+        if receipt_summary[field] != command_has_flag:
+            raise EvidenceError(
+                f"{label}.stdout_preview.{field} does not match command {flag}"
+            )
+
+
 def _check_stage_output_not_truncated(stage: dict[str, Any], label: str) -> None:
     if _required_bool(stage, "stdout_truncated", label):
         raise EvidenceError(f"{label}.stdout_preview is truncated")
     if _required_bool(stage, "stderr_truncated", label):
         raise EvidenceError(f"{label}.stderr_preview is truncated")
+
+
+def _required_stage_preview(stage: dict[str, Any], key: str, label: str) -> str:
+    preview = stage.get(key)
+    preview_label = f"{label}.{key}"
+    if not isinstance(preview, str):
+        raise EvidenceError(f"{preview_label} must be a string")
+    if _contains_unsafe_preview_control(preview):
+        raise EvidenceError(f"{preview_label} contains unsafe control characters")
+    if _contains_secret_material(preview) or _contains_secret_identifier_material(preview):
+        raise EvidenceError(f"{preview_label} contains secret-looking material")
+    return preview
 
 
 def _stage_summary(
@@ -2027,6 +2285,8 @@ def _stage_summary(
     skipped = _required_bool(stage, "skipped", label)
     if skipped:
         raise EvidenceError(f"{label} was skipped")
+    if stage.get("reason") is not None:
+        raise EvidenceError(f"{label}.reason must be null for successful stage")
     if _required_bool(stage, "timed_out", label):
         raise EvidenceError(f"{label} timed out")
     returncode = stage.get("returncode")
@@ -2035,19 +2295,27 @@ def _stage_summary(
     if returncode != 0:
         raise EvidenceError(f"{label} failed with returncode {returncode}")
     _check_stage_output_not_truncated(stage, label)
+    _required_stage_preview(stage, "stdout_preview", label)
+    stderr_preview = _required_stage_preview(stage, "stderr_preview", label)
+    if stderr_preview.strip():
+        raise EvidenceError(f"{label}.stderr_preview must be empty for successful stage")
     command = _require_list(stage.get("command"), f"{label}.command")
     if not all(isinstance(item, str) for item in command):
         raise EvidenceError(f"{label}.command must contain strings")
     _check_command_policy(
         command,
         label,
+        stage_name=name,
         allow_dry_run=args.allow_dry_run,
         allow_insecure_http=args.allow_insecure_http,
         allow_default_profile=args.allow_default_profile,
         allow_failed_receipts=args.allow_failed_receipts,
         allow_legacy_colr007=args.allow_legacy_colr007,
     )
+    command_uses_dry_run = _command_has_flag(command, "--dry-run")
+    command_uses_insecure_http = _command_uses_insecure_http_policy(command, label)
     _check_stage_script(name, command, label)
+    _check_stage_receipt_dir_scope(stage, name, label)
     if name in {"rail", "notary"}:
         receipt_dir = stage.get("receipt_dir")
         if not isinstance(receipt_dir, str) or not receipt_dir.strip():
@@ -2055,15 +2323,13 @@ def _stage_summary(
         _check_receipt_dir_binding(command, receipt_dir, label)
     _check_stage_command_flags(name, command, label)
     if name == "verify":
-        receipt_dirs = [
-            _validate_artifact_path(value, f"{label}.command[{offset}]")
-            for offset, value in _command_flag_values(command, "--receipt-dir", label)
-        ]
+        receipt_dirs, receipt_files = _check_verify_receipt_selectors(command, label)
         result = {
             "name": name,
             "_started_at": started_at,
             "_finished_at": finished_at,
             "_receipt_dirs": receipt_dirs,
+            "_receipt_files": receipt_files,
             "started_at": started_at_raw,
             "finished_at": finished_at_raw,
         }
@@ -2072,13 +2338,34 @@ def _stage_summary(
             and not args.allow_receipt_source_missing
         ):
             raise EvidenceError(f"{label} did not require receipt source files")
-        result["receipt_summary"] = _verify_receipt_stdout(stage, label, args)
+        receipt_summary = _verify_receipt_stdout(stage, label, args)
+        _check_receipt_stdout_policy_binding(command, receipt_summary, label)
+        result["receipt_summary"] = receipt_summary
+        result["_uses_dry_run_policy"] = command_uses_dry_run
+        result["_uses_insecure_http_policy"] = (
+            command_uses_insecure_http or receipt_summary["allow_insecure_http"]
+        )
+        result["_uses_failed_receipt_policy"] = receipt_summary["allow_failed"]
         return result
     return {
         "name": name,
         "_started_at": started_at,
         "_finished_at": finished_at,
-        "_dry_run": _command_has_flag(command, "--dry-run"),
+        "_dry_run": command_uses_dry_run,
+        "_uses_dry_run_policy": command_uses_dry_run,
+        "_uses_insecure_http_policy": command_uses_insecure_http,
+        "_uses_default_profile_policy": _command_has_flag(
+            command,
+            "--allow-default-profile",
+        ),
+        "_uses_legacy_colr007_policy": _command_has_flag(
+            command,
+            "--allow-legacy-colr007",
+        ),
+        "_requires_insecure_http_receipt_kind": STAGE_RECEIPT_KINDS.get(name)
+        if command_uses_insecure_http
+        else None,
+        "_uses_failed_receipt_policy": False,
         "started_at": started_at_raw,
         "finished_at": finished_at_raw,
         "receipt_dir": _validate_artifact_path(receipt_dir, f"{label}.receipt_dir")
@@ -2091,7 +2378,7 @@ def _planned_stage_summary(
     stage: dict[str, Any],
     label: str,
     args: argparse.Namespace,
-) -> str:
+) -> dict[str, Any]:
     _reject_unknown_keys(stage, CANARY_PLANNED_STAGE_KEYS, label)
     name = _required_stage_name(stage, "name", label)
     dry_run = _required_bool(stage, "dry_run", label)
@@ -2103,26 +2390,244 @@ def _planned_stage_summary(
     _check_command_policy(
         command,
         label,
+        stage_name=name,
         allow_dry_run=args.allow_dry_run,
         allow_insecure_http=args.allow_insecure_http,
         allow_default_profile=args.allow_default_profile,
         allow_failed_receipts=args.allow_failed_receipts,
         allow_legacy_colr007=args.allow_legacy_colr007,
     )
+    command_uses_dry_run = _command_has_flag(command, "--dry-run")
+    if dry_run != command_uses_dry_run:
+        raise EvidenceError(f"{label}.dry_run does not match command --dry-run")
     _check_stage_script(name, command, label)
+    _check_stage_receipt_dir_scope(stage, name, label)
+    receipt_dir = None
     if name in {"rail", "notary"}:
         receipt_dir = stage.get("receipt_dir")
         if not isinstance(receipt_dir, str) or not receipt_dir.strip():
             raise EvidenceError(f"{label}.receipt_dir must be recorded")
         _check_receipt_dir_binding(command, receipt_dir, label)
     _check_stage_command_flags(name, command, label)
+    receipt_dirs: list[str] = []
+    receipt_files: list[str] = []
+    if name == "verify":
+        receipt_dirs, receipt_files = _check_verify_receipt_selectors(command, label)
     if (
         name == "verify"
         and not _command_has_flag(command, "--require-source-files")
         and not args.allow_receipt_source_missing
     ):
         raise EvidenceError(f"{label} did not require receipt source files")
-    return name
+    return {
+        "name": name,
+        "_receipt_dirs": receipt_dirs,
+        "_receipt_files": receipt_files,
+        "_dry_run": dry_run,
+        "receipt_dir": _validate_artifact_path(receipt_dir, f"{label}.receipt_dir")
+        if name in {"rail", "notary"}
+        else None,
+        "_uses_dry_run_policy": dry_run,
+        "_uses_insecure_http_policy": _command_uses_insecure_http_policy(
+            command,
+            label,
+        ),
+        "_uses_failed_receipt_policy": False,
+    }
+
+
+def _receipt_summary_endpoint_evidence_kinds(
+    receipt_summary: dict[str, Any] | None,
+) -> set[str]:
+    if receipt_summary is None:
+        return set()
+    return {
+        receipt["receipt_kind"]
+        for receipt in receipt_summary["receipts"]
+        if receipt["endpoint_requires_insecure_http"]
+    }
+
+
+def _check_stage_receipt_kind_binding(
+    path: Path,
+    stage_results: list[dict[str, Any]],
+    receipt_summary: dict[str, Any] | None,
+) -> None:
+    stage_receipt_kinds = {
+        STAGE_RECEIPT_KINDS[stage["name"]]
+        for stage in stage_results
+        if stage["name"] in STAGE_RECEIPT_KINDS
+    }
+    required_receipt_kinds = {
+        STAGE_RECEIPT_KINDS[stage["name"]]
+        for stage in stage_results
+        if stage["name"] in STAGE_RECEIPT_KINDS and not stage.get("_dry_run")
+    }
+    receipt_kinds = set(receipt_summary["receipt_kind"]) if receipt_summary else set()
+    missing_receipt_kinds = sorted(required_receipt_kinds - receipt_kinds)
+    if missing_receipt_kinds:
+        raise EvidenceError(
+            f"{path}.receipt_summary is missing receipt kinds for executed stages: "
+            + ", ".join(missing_receipt_kinds)
+        )
+    unexecuted_receipt_kinds = sorted(receipt_kinds - stage_receipt_kinds)
+    if unexecuted_receipt_kinds:
+        raise EvidenceError(
+            f"{path}.receipt_summary contains receipt kinds for stages not executed: "
+            + ", ".join(unexecuted_receipt_kinds)
+        )
+
+
+def _check_verify_receipt_dir_scope(
+    path: Path,
+    stage_results: list[dict[str, Any]],
+    *,
+    branch_label: str,
+) -> None:
+    verify_stage = next(
+        (
+            stage
+            for stage in stage_results
+            if stage["name"] == "verify"
+        ),
+        None,
+    )
+    if verify_stage is None:
+        return
+    verify_receipt_dirs = verify_stage["_receipt_dirs"]
+    verify_receipt_files = verify_stage.get("_receipt_files", [])
+    stage_receipt_dirs = {
+        stage["receipt_dir"]
+        for stage in stage_results
+        if stage["name"] in STAGE_RECEIPT_KINDS and stage.get("receipt_dir") is not None
+    }
+    if set(verify_receipt_dirs) - stage_receipt_dirs:
+        raise EvidenceError(
+            f"{path}.{branch_label} verify command includes receipt_dir for stages not present"
+        )
+    if {
+        receipt_file.rsplit("/", 1)[0] if "/" in receipt_file else "."
+        for receipt_file in verify_receipt_files
+    } - stage_receipt_dirs:
+        raise EvidenceError(
+            f"{path}.{branch_label} verify command includes receipt file for stages not present"
+        )
+
+
+def _check_verify_receipt_dir_coverage(
+    path: Path,
+    stage_results: list[dict[str, Any]],
+    *,
+    branch_label: str,
+) -> None:
+    verify_stage = next(
+        (
+            stage
+            for stage in stage_results
+            if stage["name"] == "verify"
+        ),
+        None,
+    )
+    if verify_stage is None:
+        return
+    verify_receipt_dirs = set(verify_stage["_receipt_dirs"])
+    for stage in stage_results:
+        if stage["name"] not in STAGE_RECEIPT_KINDS or stage.get("_dry_run"):
+            continue
+        receipt_dir = stage.get("receipt_dir")
+        if receipt_dir is not None and receipt_dir not in verify_receipt_dirs:
+            raise EvidenceError(
+                f"{path}.{branch_label} verify command does not include "
+                f"{stage['name']} receipt_dir"
+            )
+
+
+def _check_stage_receipt_dirs_unique(
+    path: Path,
+    stage_results: list[dict[str, Any]],
+    *,
+    branch_label: str,
+) -> None:
+    seen: dict[str, str] = {}
+    for stage in stage_results:
+        if stage["name"] not in STAGE_RECEIPT_KINDS:
+            continue
+        receipt_dir = stage.get("receipt_dir")
+        if receipt_dir is None:
+            continue
+        previous_stage = seen.get(receipt_dir)
+        if previous_stage is not None:
+            raise EvidenceError(
+                f"{path}.{branch_label} {stage['name']} receipt_dir duplicates "
+                f"{previous_stage} receipt_dir"
+            )
+        seen[receipt_dir] = stage["name"]
+
+
+def _receipt_summary_has_default_profile(
+    receipt_summary: dict[str, Any] | None,
+) -> bool:
+    if receipt_summary is None:
+        return False
+    return any(
+        receipt["receipt_kind"] == "iso-rail-gateway" and receipt.get("profile") is None
+        for receipt in receipt_summary["receipts"]
+    )
+
+
+def _receipt_summary_has_legacy_colr007(
+    receipt_summary: dict[str, Any] | None,
+) -> bool:
+    if receipt_summary is None:
+        return False
+    return any(
+        receipt["receipt_kind"] == "iso-rail-gateway"
+        and receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES
+        for receipt in receipt_summary["receipts"]
+    )
+
+
+def _check_rail_receipt_policy_binding(
+    path: Path,
+    stage_results: list[dict[str, Any]],
+    receipt_summary: dict[str, Any] | None,
+) -> None:
+    rail_stage = next(
+        (
+            stage
+            for stage in stage_results
+            if stage["name"] == "rail" and not stage.get("_dry_run")
+        ),
+        None,
+    )
+    if rail_stage is None:
+        return
+
+    receipt_has_default_profile = _receipt_summary_has_default_profile(receipt_summary)
+    receipt_has_legacy_colr007 = _receipt_summary_has_legacy_colr007(receipt_summary)
+    rail_uses_default_profile = rail_stage["_uses_default_profile_policy"]
+    rail_uses_legacy_colr007 = rail_stage["_uses_legacy_colr007_policy"]
+
+    if receipt_has_default_profile and not rail_uses_default_profile:
+        raise EvidenceError(
+            f"{path}.receipt_summary records default rail profile but rail command "
+            "omitted --allow-default-profile"
+        )
+    if rail_uses_default_profile and not receipt_has_default_profile:
+        raise EvidenceError(
+            f"{path}.stages rail command used --allow-default-profile but "
+            "receipt_summary has no default-profile rail receipt"
+        )
+    if receipt_has_legacy_colr007 and not rail_uses_legacy_colr007:
+        raise EvidenceError(
+            f"{path}.receipt_summary records legacy colr.007 but rail command "
+            "omitted --allow-legacy-colr007"
+        )
+    if rail_uses_legacy_colr007 and not receipt_has_legacy_colr007:
+        raise EvidenceError(
+            f"{path}.stages rail command used --allow-legacy-colr007 but "
+            "receipt_summary has no legacy colr.007 rail receipt"
+        )
 
 
 def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]:
@@ -2185,7 +2690,7 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
         if "stages" in summary:
             raise EvidenceError(f"{path}.stages must be omitted for plan-only evidence")
         stages = _require_list(summary.get("planned_stages"), f"{path}.planned_stages")
-        stage_names = [
+        planned_stage_results = [
             _planned_stage_summary(
                 _require_object(stage, f"{path}.planned_stages[{offset}]"),
                 f"{path}.planned_stages[{offset}]",
@@ -2193,6 +2698,7 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
             )
             for offset, stage in enumerate(stages)
         ]
+        stage_names = [stage["name"] for stage in planned_stage_results]
     else:
         if "planned_stages" in summary:
             raise EvidenceError(f"{path}.planned_stages must be omitted for executed evidence")
@@ -2231,22 +2737,23 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
             raise EvidenceError(
                 f"{path} is missing required canary stages: {', '.join(missing)}"
             )
-    verify_receipt_dirs = next(
-        (
-            stage["_receipt_dirs"]
-            for stage in stage_results
-            if stage["name"] == "verify"
-        ),
-        [],
+    stage_branch_label = "planned_stages" if plan_only else "stages"
+    stage_results_for_receipts = planned_stage_results if plan_only else stage_results
+    _check_stage_receipt_dirs_unique(
+        path,
+        stage_results_for_receipts,
+        branch_label=stage_branch_label,
     )
-    for stage in stage_results:
-        if stage["name"] not in {"rail", "notary"} or stage.get("_dry_run"):
-            continue
-        receipt_dir = stage.get("receipt_dir")
-        if receipt_dir is not None and receipt_dir not in verify_receipt_dirs:
-            raise EvidenceError(
-                f"{path}.stages verify command does not include {stage['name']} receipt_dir"
-            )
+    _check_verify_receipt_dir_coverage(
+        path,
+        stage_results_for_receipts,
+        branch_label=stage_branch_label,
+    )
+    _check_verify_receipt_dir_scope(
+        path,
+        stage_results_for_receipts,
+        branch_label=stage_branch_label,
+    )
     receipt_summary = next(
         (
             stage["receipt_summary"]
@@ -2255,6 +2762,24 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
         ),
         None,
     )
+    required_endpoint_evidence_kinds = {
+        stage["_requires_insecure_http_receipt_kind"]
+        for stage in stage_results
+        if stage.get("_requires_insecure_http_receipt_kind") is not None
+    }
+    endpoint_evidence_kinds = _receipt_summary_endpoint_evidence_kinds(receipt_summary)
+    missing_endpoint_evidence_kinds = sorted(
+        required_endpoint_evidence_kinds - endpoint_evidence_kinds
+    )
+    if missing_endpoint_evidence_kinds:
+        raise EvidenceError(
+            f"{path}.receipt_summary is missing endpoint_requires_insecure_http "
+            "evidence for insecure command receipt kinds: "
+            + ", ".join(missing_endpoint_evidence_kinds)
+        )
+    _check_stage_receipt_kind_binding(path, stage_results, receipt_summary)
+    _check_rail_receipt_policy_binding(path, stage_results, receipt_summary)
+    policy_stage_results = planned_stage_results if plan_only else stage_results
 
     return {
         "version": version,
@@ -2276,6 +2801,15 @@ def verify_canary_summary(path: Path, args: argparse.Namespace) -> dict[str, Any
             for stage in stage_results
         ],
         "receipt_summary": receipt_summary,
+        "_uses_dry_run_policy": any(
+            stage["_uses_dry_run_policy"] for stage in policy_stage_results
+        ),
+        "_uses_insecure_http_policy": any(
+            stage["_uses_insecure_http_policy"] for stage in policy_stage_results
+        ),
+        "_uses_failed_receipt_policy": any(
+            stage["_uses_failed_receipt_policy"] for stage in policy_stage_results
+        ),
         "summary_sha256": digest,
     }
 
@@ -2469,10 +3003,14 @@ def _reject_legacy_ipv4_host_notation(raw_host: str, label: str) -> None:
 
 def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
     path = parsed.path
+    if any(ord(ch) > 0x7E for ch in path):
+        raise EvidenceError(f"{label} path must use printable ASCII")
     if "\\" in path:
         raise EvidenceError(f"{label} path must use forward slashes")
     if ";" in path:
         raise EvidenceError(f"{label} path must not contain semicolon parameters")
+    if any(token in path for token in (":", "@", "[", "]")):
+        raise EvidenceError(f"{label} path must not contain URL delimiter characters")
     segments = path.split("/")
     checked_segments = segments[1:] if path.startswith("/") else segments
     if any(segment == "" for segment in checked_segments[:-1]):
@@ -2490,6 +3028,8 @@ def _validate_url_path(parsed: urllib.parse.ParseResult, label: str) -> None:
         raise EvidenceError(f"{label} path must not contain encoded URL delimiter characters")
     if "%25" in lowered:
         raise EvidenceError(f"{label} path must not contain encoded percent characters")
+    if re.search(r"%[89a-f][0-9a-f]", lowered):
+        raise EvidenceError(f"{label} path must not contain percent-encoded non-ASCII bytes")
 
 
 def _check_https_url(url: str, label: str, *, allow_insecure_http: bool) -> None:
@@ -2598,6 +3138,12 @@ def _computed_profile_json_emittable(
         ):
             return False
     return True
+
+
+def _trust_source_requires_insecure_override(source: dict[str, str] | None) -> bool:
+    if source is None:
+        return False
+    return _url_requires_insecure_http_override(urllib.parse.urlparse(source["url"]))
 
 
 def _check_trust_bundle(
@@ -2998,6 +3544,22 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
         )
         for offset, bundle in enumerate(bundle_objects)
     ]
+    if any(
+        bundle["embedded_signature_policy"] != REQUIRE_VERIFIED
+        for bundle in bundle_summaries
+    ) and not allow_record_only:
+        raise EvidenceError(
+            f"{path}.allow_record_only must be true when a bundle records "
+            "a non-production embedded_signature_policy"
+        )
+    if any(
+        _trust_source_requires_insecure_override(bundle["source"])
+        for bundle in bundle_summaries
+    ) and not allow_insecure_source_url:
+        raise EvidenceError(
+            f"{path}.allow_insecure_source_url must be true when a bundle records "
+            "an http:// or local/private source URL"
+        )
     profile_json_non_emittable_allowed = (
         (allow_synthetic_der and args.allow_synthetic_trust)
         or (allow_record_only and args.allow_record_only_trust)
@@ -3053,6 +3615,22 @@ def verify_trust_summary(path: Path, args: argparse.Namespace) -> dict[str, Any]
                 f"{path}.bundles[{seen_bundle_digests[bundle_sha256]}].bundle_sha256"
             )
         seen_bundle_digests[bundle_sha256] = offset
+    if allow_record_only and not any(
+        bundle["embedded_signature_policy"] != REQUIRE_VERIFIED
+        for bundle in bundle_summaries
+    ):
+        raise EvidenceError(
+            f"{path}.allow_record_only requires at least one non-production "
+            "embedded_signature_policy"
+        )
+    if allow_insecure_source_url and not any(
+        _trust_source_requires_insecure_override(bundle["source"])
+        for bundle in bundle_summaries
+    ):
+        raise EvidenceError(
+            f"{path}.allow_insecure_source_url requires at least one http:// "
+            "or local/private source URL"
+        )
     return {
         "version": version,
         "path": str(path),
@@ -3108,12 +3686,7 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
             f"{args.receipt_verifier_timeout_secs:g} seconds"
         )
     if returncode != 0:
-        detail = stderr.strip()[:4096]
-        if detail and (
-            _contains_secret_material(detail)
-            or _contains_secret_identifier_material(detail)
-        ):
-            detail = "[receipt verifier stderr redacted: secret-looking material]"
+        detail = _receipt_verifier_stderr_detail(stderr)
         if stderr_truncated:
             detail = (
                 f"{detail} [stderr truncated at "
@@ -3129,6 +3702,11 @@ def verify_receipts(args: argparse.Namespace) -> dict[str, Any] | None:
         raise EvidenceError(
             "receipt verifier stderr exceeded "
             f"{MAX_RECEIPT_VERIFIER_OUTPUT_BYTES} byte limit"
+        )
+    if stderr.strip():
+        detail = _receipt_verifier_stderr_detail(stderr)
+        raise EvidenceError(
+            "receipt verifier emitted stderr on successful verification: " + detail
         )
     try:
         receipt_summary = json.loads(
@@ -3204,6 +3782,54 @@ def _verify_direct_receipts_cover_canaries(
             )
 
 
+def _compact_receipt_summaries(
+    canaries: list[dict[str, Any]],
+    receipt_summary: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Return direct and canary receipt summaries already verified into compact form."""
+
+    summaries: list[dict[str, Any]] = []
+    if receipt_summary is not None:
+        summaries.append(receipt_summary)
+    for canary in canaries:
+        canary_receipt_summary = canary.get("receipt_summary")
+        if isinstance(canary_receipt_summary, dict):
+            summaries.append(canary_receipt_summary)
+    return summaries
+
+
+def _receipt_summaries_have_legacy_colr007(
+    receipt_summaries: list[dict[str, Any]],
+) -> bool:
+    return any(
+        receipt.get("receipt_kind") == "iso-rail-gateway"
+        and receipt.get("message_type") in LEGACY_RAIL_MESSAGE_TYPES
+        for summary in receipt_summaries
+        for receipt in summary["receipts"]
+    )
+
+
+def _receipt_summaries_have_default_profile(
+    receipt_summaries: list[dict[str, Any]],
+) -> bool:
+    return any(
+        receipt.get("receipt_kind") == "iso-rail-gateway"
+        and receipt.get("profile") is None
+        for summary in receipt_summaries
+        for receipt in summary["receipts"]
+    )
+
+
+def _receipt_summaries_have_source_file_gap(
+    receipt_summaries: list[dict[str, Any]],
+) -> bool:
+    return any(not summary["require_source_files"] for summary in receipt_summaries)
+
+
+def _public_canary_summary(canary: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in canary.items() if not key.startswith("_")}
+
+
 def _reject_cross_canary_receipt_reuse(canaries: list[dict[str, Any]]) -> None:
     """Reject receipt path or digest reuse across distinct canary summaries."""
 
@@ -3261,6 +3887,14 @@ def _reject_cross_trust_profile_reuse(trusts: list[dict[str, Any]]) -> None:
                     f"[{first_profile}].bundle_sha256"
                 )
             seen_bundle_digests[bundle_sha256] = (trust_offset, profile_offset)
+
+
+def _trusts_have_missing_source(trusts: list[dict[str, Any]]) -> bool:
+    return any(
+        profile.get("source") is None
+        for trust in trusts
+        for profile in trust["profiles"]
+    )
 
 
 def _reject_canary_rail_receipts_without_trust(
@@ -3346,6 +3980,31 @@ def run(args: argparse.Namespace) -> int:
 
     canaries = [verify_canary_summary(path, args) for path in canary_paths]
     trusts = [verify_trust_summary(path, args) for path in trust_paths]
+    if args.allow_plan_only and not any(canary["plan_only"] for canary in canaries):
+        raise EvidenceError(
+            "--allow-plan-only requires at least one canary summary with plan_only=true"
+        )
+    if args.allow_partial_canary and not any(
+        set(canary["stage_names"]) != REQUIRED_CANARY_STAGES for canary in canaries
+    ):
+        raise EvidenceError(
+            "--allow-partial-canary requires at least one canary summary "
+            "missing a rail or notary stage"
+        )
+    if args.allow_profile_json_not_emitted and not any(
+        not trust["profile_json_emitted"] for trust in trusts
+    ):
+        raise EvidenceError(
+            "--allow-profile-json-not-emitted requires at least one trust "
+            "summary with profile_json_emitted=false"
+        )
+    if args.allow_dry_run and not any(
+        canary["_uses_dry_run_policy"] for canary in canaries
+    ):
+        raise EvidenceError(
+            "--allow-dry-run requires at least one canary stage command or "
+            "planned stage with dry_run=true"
+        )
     _reject_duplicate_summary_digests(canaries, "canary_summaries")
     _reject_duplicate_summary_digests(trusts, "trust_summaries")
     _reject_cross_canary_receipt_reuse(canaries)
@@ -3356,14 +4015,73 @@ def run(args: argparse.Namespace) -> int:
             "provide --receipt or --receipt-dir for direct receipt archive verification"
         )
     if receipt_summary is not None:
+        if args.allow_canary_stage_receipts_only:
+            raise EvidenceError(
+                "--allow-canary-stage-receipts-only cannot be combined with "
+                "--receipt or --receipt-dir"
+            )
         _verify_direct_receipts_cover_canaries(canaries, receipt_summary)
+    receipt_summaries = _compact_receipt_summaries(canaries, receipt_summary)
+    if args.allow_legacy_colr007 and not _receipt_summaries_have_legacy_colr007(
+        receipt_summaries
+    ):
+        raise EvidenceError(
+            "--allow-legacy-colr007 requires at least one rail receipt with "
+            "legacy colr.007 message_type"
+        )
+    if args.allow_default_profile and not _receipt_summaries_have_default_profile(
+        receipt_summaries
+    ):
+        raise EvidenceError(
+            "--allow-default-profile requires at least one rail receipt without "
+            "an explicit profile"
+        )
+    if args.allow_receipt_source_missing and not _receipt_summaries_have_source_file_gap(
+        receipt_summaries
+    ):
+        raise EvidenceError(
+            "--allow-receipt-source-missing requires at least one receipt summary "
+            "with require_source_files=false"
+        )
+    if args.allow_failed_receipts and not (
+        any(canary["_uses_failed_receipt_policy"] for canary in canaries)
+        or any(summary["allow_failed"] for summary in receipt_summaries)
+    ):
+        raise EvidenceError(
+            "--allow-failed-receipts requires at least one receipt summary "
+            "with allow_failed=true"
+        )
+    if args.allow_insecure_http and not (
+        any(canary["_uses_insecure_http_policy"] for canary in canaries)
+        or any(summary["allow_insecure_http"] for summary in receipt_summaries)
+        or any(trust["allow_insecure_source_url"] for trust in trusts)
+    ):
+        raise EvidenceError(
+            "--allow-insecure-http requires at least one canary command, "
+            "receipt summary, or trust summary verified with insecure HTTP"
+        )
+    if args.allow_record_only_trust and not any(trust["allow_record_only"] for trust in trusts):
+        raise EvidenceError(
+            "--allow-record-only-trust requires at least one trust summary "
+            "verified with allow_record_only=true"
+        )
+    if args.allow_synthetic_trust and not any(trust["allow_synthetic_der"] for trust in trusts):
+        raise EvidenceError(
+            "--allow-synthetic-trust requires at least one trust summary "
+            "verified with allow_synthetic_der=true"
+        )
+    if args.allow_missing_trust_source and not _trusts_have_missing_source(trusts):
+        raise EvidenceError(
+            "--allow-missing-trust-source requires at least one trust profile "
+            "with source=null"
+        )
     _reject_canary_rail_receipts_without_trust(canaries, trusts, args)
 
     output: dict[str, Any] = {
         "version": EVIDENCE_VERSION,
         "verified_at": dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat(),
         "ok": True,
-        "canary_summaries": canaries,
+        "canary_summaries": [_public_canary_summary(canary) for canary in canaries],
         "trust_summaries": trusts,
         "receipt_verification": receipt_summary,
         "policy": {
@@ -3397,7 +4115,8 @@ def run(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Verify archived ISO 20022 operator canary and trust evidence."
+        description="Verify archived ISO 20022 operator canary and trust evidence.",
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--canary-summary",

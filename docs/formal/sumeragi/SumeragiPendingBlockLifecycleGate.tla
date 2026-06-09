@@ -276,10 +276,12 @@ PendingBlockLifecycleExactness ==
   /\ PendingBlockRetireAbortExact
   /\ PendingBlockRetiredPayloadRefreshExact
 
-NoBugInvariant ==
+PendingBlockLifecycleCoreSafety ==
   PendingBlockLifecycleExactness
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == PendingBlockLifecycleCoreSafety
+
+SafetyFast == PendingBlockLifecycleCoreSafety
 
 BugNewNotPending == NoBugInvariant
 BugNewSetsInactive == NoBugInvariant

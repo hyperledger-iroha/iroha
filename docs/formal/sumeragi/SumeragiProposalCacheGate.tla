@@ -484,7 +484,7 @@ PruneNoopLeavesFutureEntries ==
     /\ final_proposal_count = 1
     /\ observed_count = 1
 
-Safety ==
+ProposalCacheCoreSafety ==
   /\ HintCountMatchesSpec
   /\ ProposalCountMatchesSpec
   /\ ObservedCountMatchesSpec
@@ -508,5 +508,7 @@ Safety ==
   /\ PruneRemovesCommittedEntries
   /\ PruneKeepsFutureEntries
   /\ PruneNoopLeavesFutureEntries
+
+Safety == ProposalCacheCoreSafety
 
 ====

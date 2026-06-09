@@ -411,7 +411,7 @@ LookupShapeMatchesShortCircuit ==
                        \cup KuraAcceptedCases):
        CheckRbc \in ImplementationActions(c)
 
-NoBugInvariant ==
+SlotAuthoritativePayloadCoreSafety ==
   /\ ResultMatchesSpec
   /\ ActionsMatchSpec
   /\ PendingSlotPolicy
@@ -420,6 +420,8 @@ NoBugInvariant ==
   /\ RbcSlotPolicy
   /\ LookupShapeMatchesShortCircuit
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == SlotAuthoritativePayloadCoreSafety
+
+SafetyFast == SlotAuthoritativePayloadCoreSafety
 
 ====

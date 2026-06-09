@@ -363,8 +363,10 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-SafetyFast ==
+SelectedSignatureMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == SelectedSignatureMatchesSpec
 
 CacheAndValidation ==
   Matches("cache_hit")

@@ -153,8 +153,10 @@ TypeInvariant ==
        /\ SpecWidenCompact(c) \in BOOLEAN
        /\ ActualWidenCompact(c) \in BOOLEAN
 
-SafetyFast ==
+HeightViewMatchesSpec ==
   \A c \in Cases: Matches(c)
+
+SafetyFast == HeightViewMatchesSpec
 
 NoSlotMessagesStayUnfiltered ==
   \A c \in NoSlotCases:

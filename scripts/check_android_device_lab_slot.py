@@ -100,9 +100,7 @@ MAX_ATTESTATION_CERTIFICATE_CHAIN_BYTES = 64 * 1024
 SIGNED_EVIDENCE_SIGNATURE_ALGORITHMS = {"ed25519"}
 REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 7
 ABI7_RECURSIVE_COMPACT_ONE_HOP_JNI_PROBE_STATES = {"one_hop_verified"}
-ABI7_RECURSIVE_COMPACT_MULTI_HOP_PROVER_STATES = {
-    "multi_hop_proof_composition_unavailable"
-}
+ABI7_RECURSIVE_COMPACT_MULTI_HOP_PROVER_STATES = {"multi_hop_proof_composed"}
 SIGNED_EVIDENCE_SLOT_STRING_FIELDS: tuple[str, ...] = (
     "slot_id",
     "device_family",
@@ -118,6 +116,12 @@ SIGNED_EVIDENCE_SLOT_STRING_FIELDS: tuple[str, ...] = (
     "abi6_recursive_spend_jni_probe",
     "abi7_recursive_compact_jni_probe",
     "abi7_recursive_compact_prover_state",
+)
+SIGNED_EVIDENCE_SLOT_ARTIFACT_PATH_FIELDS: tuple[str, ...] = (
+    "attestation_certificate_chain_path",
+    "offline_wallet_apk_path",
+    "d2d_payment_transcript_path",
+    "wallet_integrity_transcript_path",
 )
 SIGNED_EVIDENCE_SLOT_SHA256_FIELDS: tuple[str, ...] = (
     "app_signing_certificate_sha256",
@@ -2080,16 +2084,32 @@ def _validate_signed_at_utc(value: str | None, errors: list[str]) -> None:
 
 
 def _required_signed_evidence_digest_paths(
-    slot_path: Path, errors: list[str] | None = None
+    slot_path: Path,
+    errors: list[str] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> list[str]:
-    return sorted(
-        {
-            relative
-            for relative in _slot_files(slot_path, errors)
-            if relative.split("/", 1)[0] in set(EXPECTED_DIRS) | {"handoff", "wallet"}
-        }
-        | set(REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS)
-    )
+    paths = {
+        relative
+        for relative in _slot_files(slot_path, errors)
+        if relative.split("/", 1)[0] in set(EXPECTED_DIRS) | {"handoff", "wallet"}
+        or (
+            relative.split("/", 1)[0] == "evidence"
+            and relative != KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH
+        )
+    } | set(REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS)
+    if metadata is not None:
+        path_errors = errors if errors is not None else []
+        for field in SIGNED_EVIDENCE_SLOT_ARTIFACT_PATH_FIELDS:
+            value = metadata.get(field)
+            if isinstance(value, str):
+                relative = _normalise_safe_relative_path(
+                    value,
+                    path_errors,
+                    f"slot.json {field}",
+                )
+                if relative is not None:
+                    paths.add(relative)
+    return sorted(paths)
 
 
 def validate_required_kagemusha_slot_artifact_shapes(
@@ -2355,7 +2375,7 @@ def validate_signed_evidence_artifact(
 
     validate_required_kagemusha_slot_artifact_shapes(slot_path, errors)
 
-    required_paths = _required_signed_evidence_digest_paths(slot_path, errors)
+    required_paths = _required_signed_evidence_digest_paths(slot_path, errors, metadata)
     required_path_set = set(required_paths)
     for raw_relative in digests:
         if not isinstance(raw_relative, str):

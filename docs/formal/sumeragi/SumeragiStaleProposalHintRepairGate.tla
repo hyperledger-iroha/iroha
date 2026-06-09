@@ -238,7 +238,7 @@ DaDisabledNeverRepairs ==
   /\ NoRepairWithoutDa \in ImplementationActions(DaDisabled)
   /\ ~(ReturnAllow \in ImplementationActions(DaDisabled))
 
-NoBugInvariant ==
+StaleProposalHintRepairCoreSafety ==
   /\ ActionsMatchSpec
   /\ ExactCommittedQcStaleHintSeedsRepair
   /\ RepairRequiresDaActiveHeightAndOneLateView
@@ -246,6 +246,8 @@ NoBugInvariant ==
   /\ RejectedStaleHintsHaveNoSideEffects
   /\ DaDisabledNeverRepairs
 
-SafetyFast == NoBugInvariant
+NoBugInvariant == StaleProposalHintRepairCoreSafety
+
+SafetyFast == StaleProposalHintRepairCoreSafety
 
 ====

@@ -146,8 +146,11 @@ TypeInvariant ==
      }
   /\ checked = 0
 
-Safety ==
+AllCasesMatchSpec ==
   \A c \in Cases: Matches(c)
+
+Safety ==
+  AllCasesMatchSpec
 
 CurrentViewAllowed ==
   Matches("valid_current_view")

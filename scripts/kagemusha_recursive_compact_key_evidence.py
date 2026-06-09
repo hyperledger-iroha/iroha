@@ -159,7 +159,12 @@ def build_evidence(
             except OSError:
                 errors.append("recursive compact key generator log metadata could not be read")
             try:
-                generator_log_text = generator_log_path.read_text(encoding="utf-8")
+                with generator_log_path.open(
+                    "r",
+                    encoding="utf-8",
+                    newline="",
+                ) as handle:
+                    generator_log_text = handle.read()
             except (OSError, UnicodeDecodeError):
                 errors.append("recursive compact key generator log could not be read")
             else:
