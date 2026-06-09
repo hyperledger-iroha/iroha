@@ -1340,6 +1340,18 @@ public final class EvmSccpProverTests {
     try {
       EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
           sampleEthereumNativeEvmProverBundleJson(binding.hash)
+              .replace("\"sdk\":\"java-android\"", "\"sdk\":\" java-android \""),
+          binding.hash);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains("nativeSdkArtifacts.sdk")
+              && ex.getMessage().contains("canonical string");
+    }
+    assert threw : "Ethereum native prover bundle parser must reject padded SDK ids";
+    threw = false;
+    try {
+      EvmSccpProver.EthereumMainnetNativeEvmProverBundle.fromJson(
+          sampleEthereumNativeEvmProverBundleJson(binding.hash)
               .replace(
                   "\"bundle_id\":\"sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1\"",
                   "\"bundle_id\":\"forged\","
@@ -1648,6 +1660,21 @@ public final class EvmSccpProverTests {
     threw = false;
     try {
       verifiedBundle.verifiedArtifacts(
+          " java-android ",
+          path -> {
+            final byte[] bytes = artifactBytesByPath.get(path);
+            if (bytes == null) {
+              throw new IllegalArgumentException(path);
+            }
+            return bytes;
+          });
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sdk must be a non-empty canonical string");
+    }
+    assert threw : "Android native prover artifact resolver must reject padded sdk";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
           "java-android",
           path -> {
             if (verifiedBundle.crossSdkFixtureParityArtifact().equals(path)) {
@@ -1725,6 +1752,47 @@ public final class EvmSccpProverTests {
         : "Ethereum native prover self-test preflight must run the app-linked self-test";
     assert ("0x" + repeat("e4", 32)).equals(preflightSelfTestResult.proofHash())
         : "Ethereum native prover self-test preflight must return the fixture proof hash";
+    final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts paddedSdkArtifacts =
+        new EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts(
+            EvmSccpProver.NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
+            verifiedBundle,
+            proofArtifactHash,
+            provingKeyHash,
+            verifierKeyHash,
+            parityFixtureHash,
+            verifiedArtifacts.crossSdkFixtureParity(),
+            selfTestFixtureHash,
+            verifiedArtifacts.nativeProverSelfTest(),
+            " java-android ",
+            "native-java",
+            implementationHash);
+    final boolean[] paddedSelfTestHookCalled = new boolean[] {false};
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              paddedSdkArtifacts,
+              (fixture, expected, artifacts) -> {
+                paddedSelfTestHookCalled[0] = true;
+                return expected;
+              },
+              null)
+          .runNativeProverSelfTest();
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage().contains(
+              "nativeProverArtifacts.sdk must be a non-empty canonical string");
+    }
+    assert threw : "Ethereum native prover self-test must reject padded artifact sdk";
+    assert !paddedSelfTestHookCalled[0]
+        : "Ethereum native prover self-test callback must not run with padded sdk";
     artifactBoundSelfTestCalled[0] = false;
     final EvmSccpProver.ProofResult artifactBoundResult =
         artifactBoundFacade.proveOutboundToEthereum(artifactInput);
@@ -1897,6 +1965,32 @@ public final class EvmSccpProverTests {
     assert threw : "Android native prover artifacts must bind implementation hash";
     assert !implementationUnboundProverCalled[0]
         : "Android prover callback must not run with unbound implementation artifacts";
+    final boolean[] paddedSdkProverCalled = new boolean[] {false};
+    threw = false;
+    try {
+      new EthereumMainnetSccp(
+              null,
+              proofRequest -> {
+                paddedSdkProverCalled[0] = true;
+                return proofBytes;
+              },
+              null,
+              null,
+              null,
+              null,
+              null,
+              null,
+              paddedSdkArtifacts,
+              null)
+          .proveOutboundToEthereum(artifactInput);
+    } catch (final IllegalArgumentException ex) {
+      threw =
+          ex.getMessage()
+              .contains("nativeProverArtifacts must bind sdk implementation and implementationHash");
+    }
+    assert threw : "Android native prover artifacts must reject padded sdk";
+    assert !paddedSdkProverCalled[0]
+        : "Android prover callback must not run with padded sdk artifacts";
     threw = false;
     final EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts verifierKeyUnboundArtifacts =
         new EvmSccpProver.EthereumMainnetNativeEvmProverArtifacts(
@@ -2012,9 +2106,23 @@ public final class EvmSccpProverTests {
           parityFixtureBytes,
           selfTestFixtureBytes);
     } catch (final IllegalArgumentException ex) {
-      threw = ex.getMessage().contains("sdk must be a non-empty string");
+      threw = ex.getMessage().contains("sdk must be a non-empty canonical string");
     }
     assert threw : "Android native prover artifact verifier must require sdk for implementation bytes";
+    threw = false;
+    try {
+      verifiedBundle.verifiedArtifacts(
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          " java-android ",
+          implementationBytes,
+          parityFixtureBytes,
+          selfTestFixtureBytes);
+    } catch (final IllegalArgumentException ex) {
+      threw = ex.getMessage().contains("sdk must be a non-empty canonical string");
+    }
+    assert threw : "Android native prover artifact verifier must reject padded sdk";
     threw = false;
     try {
       verifiedBundle.verifiedArtifacts(

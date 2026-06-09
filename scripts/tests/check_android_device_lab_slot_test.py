@@ -6626,20 +6626,24 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     ) -> None:
         original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
         original_run = device_lab.subprocess.run
-        original_read_bytes = Path.read_bytes
+        original_read_staged_bytes = device_lab._read_staged_bytes  # type: ignore[attr-defined]
 
         def unexpected_run(*args, **kwargs):
             raise AssertionError("OpenSSL should not run after staging readback drift")
 
-        def drifting_payload_read(path: Path) -> bytes:
+        def drifting_payload_read(
+            path: Path,
+            expected_stat: os.stat_result,
+            verification_error: str,
+        ) -> tuple[bytes | None, list[str]]:
             if path.name == "payload.bin":
-                return b"mutated payload"
-            return original_read_bytes(path)
+                return b"mutated payload", []
+            return original_read_staged_bytes(path, expected_stat, verification_error)
 
         try:
             device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
             device_lab.subprocess.run = unexpected_run
-            Path.read_bytes = drifting_payload_read
+            device_lab._read_staged_bytes = drifting_payload_read  # type: ignore[attr-defined]
             with tempfile.TemporaryDirectory() as temp:
                 public_key = Path(temp) / "public.pem"
                 public_key.write_text("not used by mocked openssl\n", encoding="utf-8")
@@ -6655,7 +6659,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         finally:
             device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
             device_lab.subprocess.run = original_run
-            Path.read_bytes = original_read_bytes
+            device_lab._read_staged_bytes = original_read_staged_bytes  # type: ignore[attr-defined]
 
         self.assertEqual(
             errors,
@@ -6667,20 +6671,24 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     ) -> None:
         original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
         original_run = device_lab.subprocess.run
-        original_read_bytes = Path.read_bytes
+        original_read_staged_bytes = device_lab._read_staged_bytes  # type: ignore[attr-defined]
 
         def unexpected_run(*args, **kwargs):
             raise AssertionError("OpenSSL should not run after staging readback drift")
 
-        def drifting_signature_read(path: Path) -> bytes:
+        def drifting_signature_read(
+            path: Path,
+            expected_stat: os.stat_result,
+            verification_error: str,
+        ) -> tuple[bytes | None, list[str]]:
             if path.name == "signature.bin":
-                return b"mutated signature"
-            return original_read_bytes(path)
+                return b"mutated signature", []
+            return original_read_staged_bytes(path, expected_stat, verification_error)
 
         try:
             device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
             device_lab.subprocess.run = unexpected_run
-            Path.read_bytes = drifting_signature_read
+            device_lab._read_staged_bytes = drifting_signature_read  # type: ignore[attr-defined]
             with tempfile.TemporaryDirectory() as temp:
                 public_key = Path(temp) / "public.pem"
                 public_key.write_text("not used by mocked openssl\n", encoding="utf-8")
@@ -6696,12 +6704,44 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         finally:
             device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
             device_lab.subprocess.run = original_run
-            Path.read_bytes = original_read_bytes
+            device_lab._read_staged_bytes = original_read_staged_bytes  # type: ignore[attr-defined]
 
         self.assertEqual(
             errors,
             ["signature verification staged signature did not match input"],
         )
+
+    def test_write_staged_bytes_rejects_regular_file_swap_before_readback(
+        self,
+    ) -> None:
+        original_open = Path.open
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stage = root / "payload.bin"
+            replacement = root / "replacement.bin"
+            replacement.write_bytes(b"replacement")
+            swapped = False
+
+            def swapping_open(path: Path, *args, **kwargs):
+                nonlocal swapped
+                mode = args[0] if args else kwargs.get("mode", "r")
+                if path == stage and "r" in mode and not swapped:
+                    replacement.replace(stage)
+                    swapped = True
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", swapping_open):
+                errors = device_lab._write_staged_bytes(  # type: ignore[attr-defined]
+                    stage,
+                    b"payload",
+                    write_error="stage could not be written",
+                    verification_error="stage readback mismatch",
+                )
+            stage_payload = stage.read_bytes()
+
+        self.assertEqual(errors, ["stage readback mismatch"])
+        self.assertEqual(stage_payload, b"replacement")
 
     def test_verify_signature_rejects_tempdir_failure_before_staging(
         self,
@@ -10314,20 +10354,24 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     ) -> None:
         original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
         original_run = evidence_signer.subprocess.run
-        original_read_bytes = Path.read_bytes
+        original_read_staged_bytes = device_lab._read_staged_bytes  # type: ignore[attr-defined]
 
         def unexpected_run(*args, **kwargs):
             raise AssertionError("OpenSSL should not run after staging readback drift")
 
-        def drifting_payload_read(path: Path) -> bytes:
+        def drifting_payload_read(
+            path: Path,
+            expected_stat: os.stat_result,
+            verification_error: str,
+        ) -> tuple[bytes | None, list[str]]:
             if path.name == "payload.bin":
-                return b"mutated payload"
-            return original_read_bytes(path)
+                return b"mutated payload", []
+            return original_read_staged_bytes(path, expected_stat, verification_error)
 
         try:
             device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
             evidence_signer.subprocess.run = unexpected_run
-            Path.read_bytes = drifting_payload_read
+            device_lab._read_staged_bytes = drifting_payload_read  # type: ignore[attr-defined]
             with tempfile.TemporaryDirectory() as temp:
                 private_key = Path(temp) / "signing.pem"
                 private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
@@ -10341,7 +10385,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         finally:
             device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
             evidence_signer.subprocess.run = original_run
-            Path.read_bytes = original_read_bytes
+            device_lab._read_staged_bytes = original_read_staged_bytes  # type: ignore[attr-defined]
 
         self.assertIsNone(signature)
         self.assertEqual(errors, ["signature payload staging verification failed"])

@@ -3420,6 +3420,60 @@ def test_duplicate_values_reports_each_duplicate_once() -> None:
     ) == ["frontier-fast", "quorum-fast"]
 
 
+def test_pr_tlc_cross_check_errors_rejects_missing_non_allowlisted_mode() -> None:
+    module = load_coverage_module()
+
+    errors = module.pr_tlc_cross_check_errors(
+        {"fast", "deep", "fork-npos"},
+        {"fast"},
+        {"fast"},
+    )
+
+    assert len(errors) == 2
+    assert errors[0] == (
+        "Sumeragi PR baseline modes without TLC runner cases "
+        "(not explicitly Apalache-only):\n"
+        "  - fork-npos"
+    )
+    assert errors[1] == (
+        "Sumeragi PR baseline modes without README TLC commands "
+        "(not explicitly Apalache-only):\n"
+        "  - fork-npos"
+    )
+
+
+def test_pr_tlc_cross_check_errors_accepts_documented_apalache_only_deep() -> None:
+    module = load_coverage_module()
+
+    assert (
+        module.pr_tlc_cross_check_errors(
+            {"fast", "deep", "fork-npos"},
+            {"fast", "fork-npos"},
+            {"fast", "fork-npos"},
+        )
+        == []
+    )
+
+
+def test_pr_tlc_cross_check_errors_rejects_stale_or_routed_allowlist() -> None:
+    module = load_coverage_module()
+
+    errors = module.pr_tlc_cross_check_errors(
+        {"fast"},
+        {"fast", "deep"},
+        {"fast", "deep"},
+    )
+
+    assert errors == [
+        "Sumeragi Apalache-only PR mode allowlist entries are stale:\n"
+        "  - deep",
+        "Sumeragi Apalache-only PR modes unexpectedly have TLC runner cases:\n"
+        "  - deep",
+        "Sumeragi Apalache-only PR modes unexpectedly have README TLC commands:\n"
+        "  - deep",
+    ]
+
+
 def test_runner_case_labels_parse_duplicates_for_guarding(tmp_path: Path) -> None:
     module = load_coverage_module()
     runner = tmp_path / "runner.sh"

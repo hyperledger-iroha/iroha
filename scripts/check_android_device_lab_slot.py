@@ -2225,19 +2225,64 @@ def _write_staged_bytes(
 ) -> list[str]:
     """Write OpenSSL staging bytes durably enough for immediate subprocess use."""
 
+    staged_stat: os.stat_result | None = None
     try:
         with path.open("xb") as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
+            staged_stat = os.fstat(handle.fileno())
     except OSError:
         return [write_error]
-    try:
-        if path.read_bytes() != payload:
-            return [verification_error]
-    except OSError:
+    assert staged_stat is not None
+    readback, readback_errors = _read_staged_bytes(
+        path,
+        staged_stat,
+        verification_error,
+    )
+    if readback_errors:
+        return readback_errors
+    if readback != payload:
         return [verification_error]
     return []
+
+
+def _read_staged_bytes(
+    path: Path,
+    expected_stat: os.stat_result,
+    verification_error: str,
+) -> tuple[bytes | None, list[str]]:
+    """Read staged bytes without accepting a swapped staging path."""
+
+    chunks: list[bytes] = []
+    staged_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [verification_error]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                return None, [verification_error]
+            staged_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if staged_open_identity != staged_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != staged_expected_identity:
+                return None, [verification_error]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != staged_expected_identity:
+                return None, [verification_error]
+    except OSError:
+        return None, [verification_error]
+    return b"".join(chunks), []
 
 
 def _verify_ed25519_signature(

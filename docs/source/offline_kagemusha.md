@@ -450,7 +450,8 @@ symlink output leaves as symlinks even when the target is missing,
 rerun parent and ancestor checks after creating missing output parents, write
 `signed-evidence.json` and `sha256sum.txt` through fsynced same-directory
 temporary files, atomically replace the final outputs, read them back before
-success, and preserve existing outputs if replacement fails. The
+success through opened-file identity binding, and preserve existing outputs if
+replacement fails. The
 signing helper revalidates the signed-evidence output as a regular non-symlink,
 non-hardlinked file before hashing it back into `slot.json`, then binds that
 digest read to the opened file identity. Direct SHA-256 manifest parser and verifier helper

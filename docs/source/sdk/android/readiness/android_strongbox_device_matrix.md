@@ -203,7 +203,8 @@ Production release criteria:
 		  `signed evidence output path could not be resolved` error, reject unreadable
 		  output parent or leaf metadata before write or digest reads, classify
 		  output parents with `lstat()` before any `Path.is_dir()` preflight, reject
-		  dangling symlink output leaves before following them, rerun parent and
+		  dangling symlink output leaves before following them, bind post-write
+		  readback verification to the opened output file identity, rerun parent and
 		  ancestor checks after creating missing output parents, and the signing helper revalidates the
 		  signed-evidence output as a regular non-symlink, non-hardlinked file before
 		  hashing it back into `slot.json`, then bind that digest read to the

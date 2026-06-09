@@ -115,6 +115,10 @@ SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES = {
     Path("status.md"),
 }
 
+SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES = (
+    SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES
+)
+
 SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
     r"retired\s+runtime-network families\b.{0,96}\b("
     r"outside|not supported|unsupported"
@@ -122,35 +126,27 @@ SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
-    re.escape("".join(("Sub", "strate")))
-    + r"\s*/\s*"
-    + re.escape("".join(("Pol", "kadot")))
-    + r"(?:-family)?\s+networks\b.{0,160}\b("
-    + r"outside|not supported|unsupported"
-    + r")",
-    re.IGNORECASE | re.DOTALL,
+_FAMILY_ONE = "Sub" "strate"
+_FAMILY_TWO = "Pol" "kadot"
+SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT = (
+    f"{_FAMILY_ONE}/{_FAMILY_TWO} networks are explicitly outside SCCP launch "
+    "support for now."
 )
-SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT = "".join(
-    (
-        "Sub",
-        "strate",
-        "/Pol",
-        "kadot",
-        " networks are explicitly outside SCCP launch support for now.",
-    )
+SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
+    re.escape(SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT),
 )
 
 
-def _is_specific_no_support_scope_note_match(
-    relative: Path, text: str, match: re.Match[str]
+def _is_allowed_family_specific_scope_note_match(
+    relative: Path,
+    text: str,
+    match: re.Match[str],
 ) -> bool:
-    if relative not in SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES:
+    if relative not in SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES:
         return False
-
     return any(
         note_match.start() <= match.start() and match.end() <= note_match.end()
-        for note_match in SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE.finditer(text)
+        for note_match in SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE.finditer(text)
     )
 
 
@@ -259,55 +255,45 @@ def test_retired_network_surface_scan_covers_pipeline_translations() -> None:
     assert pipeline_docs <= scanned
 
 
-def test_retired_network_surface_scan_rejects_family_specific_notes() -> None:
-    text = "Current scope. " + "".join(
-        (
-            "Sub",
-            "strate",
-            "/Pol",
-            "kadot",
-            " networks are explicitly outside SCCP launch support for now.",
-        )
-    )
-    for pattern in BANNED_PATTERNS[:3]:
-        match = pattern.search(text)
-        assert match is not None
-        assert _is_specific_no_support_scope_note_match(
-            Path("docs/source/bridge_proofs.md"), text, match
-        )
-        assert not _is_specific_no_support_scope_note_match(
-            Path("scripts/sccp_release_bundle.py"), text, match
-        )
-
-    unsupported_text = "".join(("Sub", "strate", " lane support is active"))
-    match = BANNED_PATTERNS[0].search(unsupported_text)
-    assert match is not None
-    assert not _is_specific_no_support_scope_note_match(
-        Path("docs/source/bridge_proofs.md"), unsupported_text, match
-    )
-
-
 def test_generic_no_support_note_stays_in_launch_scope_files() -> None:
     for relative in SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES:
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
         assert SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE.search(text), (
             f"missing generic unsupported scope note in {relative}"
         )
-        assert SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE.search(text), (
-            f"missing specific unsupported scope note in {relative}"
-        )
-
-    unsupported_text = "".join(("Sub", "strate", " lane support is active"))
-    match = BANNED_PATTERNS[0].search(unsupported_text)
-    assert match is not None
 
 
-def test_specific_no_support_note_uses_exact_launch_scope_sentence() -> None:
-    for relative in SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES:
+def test_family_specific_no_support_note_stays_in_launch_scope_files() -> None:
+    for relative in SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES:
         text = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        assert SCCP_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT in text, (
-            f"missing exact specific unsupported scope note in {relative}"
+        assert SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE.search(text), (
+            f"missing exact family-specific unsupported scope note in {relative}"
         )
+
+
+def test_retired_network_surface_scan_flags_family_specific_notes() -> None:
+    allowed_text = SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT
+    allowed_match = BANNED_PATTERNS[0].search(allowed_text)
+    assert allowed_match is not None
+    assert _is_allowed_family_specific_scope_note_match(
+        Path("docs/source/bridge_proofs.md"),
+        allowed_text,
+        allowed_match,
+    )
+
+    forbidden_text = f"{_FAMILY_ONE} networks will be supported later."
+    forbidden_match = BANNED_PATTERNS[0].search(forbidden_text)
+    assert forbidden_match is not None
+    assert not _is_allowed_family_specific_scope_note_match(
+        Path("docs/source/bridge_proofs.md"),
+        forbidden_text,
+        forbidden_match,
+    )
+    assert not _is_allowed_family_specific_scope_note_match(
+        Path("docs/source/new_pipeline.md"),
+        allowed_text,
+        allowed_match,
+    )
 
 
 def test_active_tree_excludes_retired_network_surface_tokens() -> None:
@@ -319,8 +305,14 @@ def test_active_tree_excludes_retired_network_surface_tokens() -> None:
         for pattern in BANNED_PATTERNS:
             match = pattern.search(text)
             while match is not None:
-                if not _is_specific_no_support_scope_note_match(relative, text, match):
-                    violations.append(f"{relative}:{match.start()}: {match.group(0)!r}")
+                if not _is_allowed_family_specific_scope_note_match(
+                    relative,
+                    text,
+                    match,
+                ):
+                    violations.append(
+                        f"{relative}:{match.start()}: {match.group(0)!r}"
+                    )
                 match = pattern.search(text, match.end())
 
     assert violations == []

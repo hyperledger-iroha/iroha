@@ -880,6 +880,16 @@ class EvmSccpProverTest {
         assertFailsWith<IllegalArgumentException> {
             SccpEvm.EthereumMainnetNativeEvmProverBundle.fromJson(
                 sampleEthereumNativeEvmProverBundleJson(binding.hash)
+                    .replace("\"sdk\": \"kotlin\"", "\"sdk\": \" kotlin \""),
+                expectedDestinationBindingHash = binding.hash,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("nativeSdkArtifacts.sdk") == true)
+            assertTrue(error.message?.contains("canonical string") == true)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            SccpEvm.EthereumMainnetNativeEvmProverBundle.fromJson(
+                sampleEthereumNativeEvmProverBundleJson(binding.hash)
                     .replace(
                         "\"bundle_id\": \"sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1\"",
                         "\"bundle_id\": \"forged\", \"bundle_id\": \"sccp:eth:native-evm-groth16-prover:ethereum-mainnet:v1\"",
@@ -1110,6 +1120,13 @@ class EvmSccpProverTest {
         assertEquals(parityFixtureHash, verifiedFromResolver.crossSdkFixtureParityHash)
         assertEquals(selfTestFixtureHash, verifiedFromResolver.nativeProverSelfTestHash)
         assertFailsWith<IllegalArgumentException> {
+            verifiedBundle.verifiedArtifacts(" kotlin ") { path ->
+                artifactBytesByPath[path] ?: throw IllegalArgumentException(path)
+            }
+        }.also { error ->
+            assertTrue(error.message?.contains("sdk must be a non-empty canonical string") == true)
+        }
+        assertFailsWith<IllegalArgumentException> {
             verifiedBundle.verifiedArtifacts("kotlin") { path ->
                 if (path == verifiedBundle.crossSdkFixtureParityArtifact) {
                     throw IllegalArgumentException("crossSdkFixtureParityArtifact")
@@ -1162,6 +1179,24 @@ class EvmSccpProverTest {
         val preflightResult = artifactBoundFacade.runNativeProverSelfTest()
         assertTrue(artifactBoundSelfTestCalled)
         assertEquals("0x" + "e4".repeat(32), preflightResult.proofHash)
+        val paddedSdkArtifacts = verifiedArtifacts.copy(sdk = " kotlin ")
+        var paddedSelfTestHookCalled = false
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                nativeProverSelfTest = EthereumMainnetNativeProverSelfTest { _, expected, _ ->
+                    paddedSelfTestHookCalled = true
+                    expected
+                },
+                nativeProverArtifacts = paddedSdkArtifacts,
+            ).runNativeProverSelfTest()
+        }.also { error ->
+            assertTrue(
+                error.message?.contains(
+                    "nativeProverArtifacts sdk must be a non-empty canonical string",
+                ) == true,
+            )
+        }
+        assertFalse(paddedSelfTestHookCalled)
         artifactBoundSelfTestCalled = false
         val artifactBoundResult = artifactBoundFacade.proveOutboundToEthereum(artifactInput)
         assertTrue(artifactBoundSelfTestCalled)
@@ -1260,6 +1295,23 @@ class EvmSccpProverTest {
             )
         }
         assertFalse(implementationUnboundProverCalled)
+        var paddedSdkProverCalled = false
+        assertFailsWith<IllegalArgumentException> {
+            EthereumMainnetSccp(
+                proofEngine = EvmSccpProofEngine {
+                    paddedSdkProverCalled = true
+                    proofBytes
+                },
+                nativeProverArtifacts = paddedSdkArtifacts,
+            ).proveOutboundToEthereum(artifactInput)
+        }.also { error ->
+            assertTrue(
+                error.message?.contains(
+                    "nativeProverArtifacts must bind sdk implementation and implementationHash",
+                ) == true,
+            )
+        }
+        assertFalse(paddedSdkProverCalled)
         val verifierKeyUnboundArtifacts = SccpEvm.EthereumMainnetNativeEvmProverArtifacts(
             hashAlgorithm = SccpEvm.NATIVE_EVM_PROVER_ARTIFACT_HASH_ALGORITHM_V1,
             nativeProverBundle = verifiedBundle,
@@ -1373,7 +1425,20 @@ class EvmSccpProverTest {
                 implementationBytes = implementationBytes,
             )
         }.also { error ->
-            assertTrue(error.message?.contains("sdk must be a non-empty string") == true)
+            assertTrue(error.message?.contains("sdk must be a non-empty canonical string") == true)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            verifiedBundle.verifiedArtifacts(
+                proofArtifactBytes = proofArtifactBytes,
+                provingKeyBytes = provingKeyBytes,
+                verifierKeyBytes = verifierKeyBytes,
+                crossSdkFixtureParityBytes = parityFixtureBytes,
+                nativeProverSelfTestBytes = selfTestFixtureBytes,
+                sdk = " kotlin ",
+                implementationBytes = implementationBytes,
+            )
+        }.also { error ->
+            assertTrue(error.message?.contains("sdk must be a non-empty canonical string") == true)
         }
         assertFailsWith<IllegalArgumentException> {
             verifiedBundle.verifiedArtifacts(

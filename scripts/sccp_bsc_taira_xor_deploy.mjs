@@ -11,7 +11,7 @@
 //   variable such as SCCP_BSC_DEPLOYER_PRIVATE_KEY.
 import { createRequire } from "node:module";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { sha256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha256.js";
 import { keccak_256 } from "../javascript/iroha_js/node_modules/@noble/hashes/sha3.js";
@@ -257,6 +257,9 @@ const SOURCE_BRIDGE_ABI = Object.freeze([
   "function owner() view returns (address)",
   "function transferOwnership(address newOwner)",
 ]);
+const VERIFIER_ABI = Object.freeze([
+  "function verifyingKeyHash() view returns (bytes32)",
+]);
 const ROUTE_BRIDGE_ABI = Object.freeze([
   "function destinationBindingHash() view returns (bytes32)",
   "function verifier() view returns (address)",
@@ -442,6 +445,28 @@ function hexToBytes(
 
 export function normalizeHex32(value, label = "value") {
   return bytesToHex(hexToBytes(value, label, 32));
+}
+
+function normalizeCanonicalHex32(value, label = "value") {
+  const text = canonicalRecordString(value, label);
+  if (!text) {
+    throw new Error(`${label} is required.`);
+  }
+  if (/^0X/u.test(text) || /[A-F]/u.test(text.replace(/^0x/u, ""))) {
+    throw new Error(`${label} must be canonical lowercase hex.`);
+  }
+  return normalizeHex32(text, label);
+}
+
+function normalizeCanonicalEvmAddress(value, label = "address") {
+  const text = canonicalRecordString(value, label);
+  if (!text) {
+    throw new Error(`${label} is required.`);
+  }
+  if (/^0X/u.test(text) || /[A-F]/u.test(text.replace(/^0x/u, ""))) {
+    throw new Error(`${label} must be canonical lowercase hex.`);
+  }
+  return normalizeEvmAddress(text, label);
 }
 
 export function isKnownDiagnosticBscVerifierKeyHash(value) {
@@ -826,14 +851,24 @@ function hasOwn(record, key) {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
 
+function canonicalRecordString(value, label) {
+  if (typeof value !== "string" || value.length === 0) {
+    return "";
+  }
+  if (value.trim() !== value) {
+    throw new Error(`${label} must be a non-empty canonical string.`);
+  }
+  return value;
+}
+
 function readFirstString(record, ...keys) {
   if (!isRecord(record)) {
     return "";
   }
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
+    const value = canonicalRecordString(record[key], key);
+    if (value) {
+      return value;
     }
   }
   return "";
@@ -1326,6 +1361,14 @@ export function validateBscReadbackEvidence({
     throw new Error("BSC readback bridge verifier key hash does not match.");
   }
   if (
+    normalizeHex32(readback.verifierKeyHash, "verifierKeyHash") !==
+    verifierKeyHash
+  ) {
+    throw new Error(
+      "BSC readback deployed verifier key hash does not match declared verifier key hash.",
+    );
+  }
+  if (
     normalizeHex32(readback.bridgeNetworkId, "bridgeNetworkId") !==
     profile.networkIdHex
   ) {
@@ -1460,6 +1503,10 @@ async function readArtifactUnderRoot(root, value, label) {
 const PRODUCTION_PROOF_MATERIAL_SHAPE_MIN_BYTES = 4096;
 const PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES = 16;
 const PRODUCTION_PROOF_MATERIAL_MAX_REPEATED_PATTERN_BYTES = 64;
+const PRODUCTION_PROOF_MATERIAL_MAX_DOMINANT_BYTE_FRACTION = 0.98;
+const SNARKJS_R1CS_MAGIC = [0x72, 0x31, 0x63, 0x73];
+const SNARKJS_ZKEY_MAGIC = [0x7a, 0x6b, 0x65, 0x79];
+const WASM_MAGIC = [0x00, 0x61, 0x73, 0x6d];
 
 function repeatedPrefixPatternLength(
   bytes,
@@ -1494,7 +1541,92 @@ function constantByteDelta(bytes) {
   return delta;
 }
 
-function assertProductionProofMaterialShape(artifact, label) {
+function dominantByteFrequency(bytes) {
+  const counts = new Uint32Array(256);
+  let dominantByte = 0;
+  let dominantCount = 0;
+  for (const byte of bytes) {
+    const count = counts[byte] + 1;
+    counts[byte] = count;
+    if (count > dominantCount) {
+      dominantByte = byte;
+      dominantCount = count;
+    }
+  }
+  return { byte: dominantByte, count: dominantCount };
+}
+
+function u32le(bytes, offset) {
+  return (
+    bytes[offset] |
+    (bytes[offset + 1] << 8) |
+    (bytes[offset + 2] << 16) |
+    (bytes[offset + 3] << 24)
+  ) >>> 0;
+}
+
+function hasBytePrefix(bytes, prefix) {
+  return prefix.every((byte, index) => bytes[index] === byte);
+}
+
+function assertSnarkjsBinaryHeader(artifact, label, magic, formatLabel) {
+  const bytes = artifact.bytes;
+  if (bytes.length < 12) {
+    throw new Error(`${label} ${formatLabel} header is truncated.`);
+  }
+  if (!hasBytePrefix(bytes, magic)) {
+    throw new Error(`${label} must start with ${formatLabel} magic bytes.`);
+  }
+  const version = u32le(bytes, 4);
+  if (version < 1 || version > 2) {
+    throw new Error(`${label} ${formatLabel} version is unsupported.`);
+  }
+  const sectionCount = u32le(bytes, 8);
+  if (sectionCount < 1 || sectionCount > 128) {
+    throw new Error(`${label} ${formatLabel} section count is invalid.`);
+  }
+}
+
+function assertWasmHeader(artifact, label) {
+  const bytes = artifact.bytes;
+  if (bytes.length < 8) {
+    throw new Error(`${label} WebAssembly header is truncated.`);
+  }
+  if (!hasBytePrefix(bytes, WASM_MAGIC)) {
+    throw new Error(`${label} must start with WebAssembly magic bytes.`);
+  }
+  if (u32le(bytes, 4) !== 1) {
+    throw new Error(`${label} WebAssembly version is unsupported.`);
+  }
+}
+
+function assertProductionProofMaterialFormat(artifact, label, kind) {
+  const extension = extname(artifact.path).toLowerCase();
+  if (kind === "proof-artifact") {
+    if (extension === ".r1cs") {
+      assertSnarkjsBinaryHeader(artifact, label, SNARKJS_R1CS_MAGIC, ".r1cs");
+      return;
+    }
+    if (extension === ".wasm") {
+      assertWasmHeader(artifact, label);
+      return;
+    }
+    throw new Error(
+      `${label} must be a .r1cs or .wasm artifact; received ${artifact.path}.`,
+    );
+  }
+  if (kind === "proving-key") {
+    if (extension === ".zkey") {
+      assertSnarkjsBinaryHeader(artifact, label, SNARKJS_ZKEY_MAGIC, ".zkey");
+      return;
+    }
+    throw new Error(
+      `${label} must be a .zkey artifact; received ${artifact.path}.`,
+    );
+  }
+}
+
+function assertProductionProofMaterialShape(artifact, label, kind = null) {
   const bytes = artifact.bytes;
   if (bytes.length < PRODUCTION_PROOF_MATERIAL_SHAPE_MIN_BYTES) {
     return;
@@ -1511,12 +1643,29 @@ function assertProductionProofMaterialShape(artifact, label) {
       `${label} looks like placeholder proof material: arithmetic byte sequence with step ${arithmeticDelta}.`,
     );
   }
+  const dominant = dominantByteFrequency(bytes);
+  if (
+    dominant.count / bytes.length >
+    PRODUCTION_PROOF_MATERIAL_MAX_DOMINANT_BYTE_FRACTION
+  ) {
+    throw new Error(
+      `${label} looks like placeholder proof material: byte 0x${dominant.byte
+        .toString(16)
+        .padStart(2, "0")} dominates ${dominant.count} of ${bytes.length} bytes.`,
+    );
+  }
   const uniqueBytes = new Set();
   for (const byte of bytes) {
     uniqueBytes.add(byte);
     if (uniqueBytes.size >= PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES) {
-      return;
+      break;
     }
+  }
+  if (uniqueBytes.size >= PRODUCTION_PROOF_MATERIAL_MIN_UNIQUE_BYTES) {
+    if (kind) {
+      assertProductionProofMaterialFormat(artifact, label, kind);
+    }
+    return;
   }
   throw new Error(
     `${label} looks like placeholder proof material: only ${uniqueBytes.size} unique byte values across ${bytes.length} bytes.`,
@@ -1612,19 +1761,24 @@ function extractBscBundleRouteBinding(record, label) {
   if (networkIdHex && networkIdHex !== profile.networkIdHex) {
     throw new Error(`${label} networkIdHex must be ${profile.label}.`);
   }
+  const verifierKeyHashSources = [
+    {
+      record,
+      keys: ["verifierKeyHash", "verifier_key_hash"],
+      pathName: label,
+    },
+    {
+      record: destinationRollout,
+      keys: ["verifierKeyHash", "verifier_key_hash"],
+      pathName: `${label} destinationRollout`,
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    verifierKeyHashSources,
+    `${label} verifierKeyHash`,
+  );
   const verifierKeyHash = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: ["verifierKeyHash", "verifier_key_hash"],
-        pathName: label,
-      },
-      {
-        record: destinationRollout,
-        keys: ["verifierKeyHash", "verifier_key_hash"],
-        pathName: `${label} destinationRollout`,
-      },
-    ],
+    verifierKeyHashSources,
     `${label} verifierKeyHash`,
     (value, fieldLabel) => normalizeHex32(value, fieldLabel),
   );
@@ -1633,40 +1787,50 @@ function extractBscBundleRouteBinding(record, label) {
       `${label} verifierKeyHash is a known diagnostic BSC verifier key hash.`,
     );
   }
+  const destinationBindingHashSources = [
+    {
+      record,
+      keys: ["destinationBindingHash", "destination_binding_hash"],
+      pathName: label,
+    },
+    {
+      record: destinationRollout,
+      keys: ["destinationBindingHash", "destination_binding_hash"],
+      pathName: `${label} destinationRollout`,
+    },
+    {
+      record: destinationBinding,
+      keys: ["bindingHash", "binding_hash"],
+      pathName: `${label} destinationBinding`,
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    destinationBindingHashSources,
+    `${label} destinationBindingHash`,
+  );
   const destinationBindingHash = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: ["destinationBindingHash", "destination_binding_hash"],
-        pathName: label,
-      },
-      {
-        record: destinationRollout,
-        keys: ["destinationBindingHash", "destination_binding_hash"],
-        pathName: `${label} destinationRollout`,
-      },
-      {
-        record: destinationBinding,
-        keys: ["bindingHash", "binding_hash"],
-        pathName: `${label} destinationBinding`,
-      },
-    ],
+    destinationBindingHashSources,
     `${label} destinationBindingHash`,
     (value, fieldLabel) => normalizeHex32(value, fieldLabel),
   );
-  const optionalRouteHash = (fieldLabel, keys) =>
-    readConsistentNormalizedString(
-      [
-        { record, keys, pathName: label },
-        {
-          record: destinationRollout,
-          keys,
-          pathName: `${label} destinationRollout`,
-        },
-      ],
-      `${label} ${fieldLabel}`,
-      (value, hashLabel) => normalizeHex32(value, hashLabel),
-    ) || null;
+  const optionalRouteHash = (fieldLabel, keys) => {
+    const sources = [
+      { record, keys, pathName: label },
+      {
+        record: destinationRollout,
+        keys,
+        pathName: `${label} destinationRollout`,
+      },
+    ];
+    assertSingleStringAliasPerSource(sources, `${label} ${fieldLabel}`);
+    return (
+      readConsistentNormalizedString(
+        sources,
+        `${label} ${fieldLabel}`,
+        (value, hashLabel) => normalizeHex32(value, hashLabel),
+      ) || null
+    );
+  };
   return {
     routeId,
     assetKey,
@@ -1844,8 +2008,12 @@ export async function buildBscNativeEvmProverBundleFromArtifacts(options = {}) {
     );
     sdkArtifacts.push({ ...artifact, sdk, implementation });
   }
-  assertProductionProofMaterialShape(proofArtifact, "proof artifact");
-  assertProductionProofMaterialShape(provingKey, "proving key");
+  assertProductionProofMaterialShape(
+    proofArtifact,
+    "proof artifact",
+    "proof-artifact",
+  );
+  assertProductionProofMaterialShape(provingKey, "proving key", "proving-key");
   const auditHashes = await readNativeProverAuditHashes(root, options, {
     parityFixture,
     selfTestFixture,
@@ -2050,6 +2218,11 @@ async function fetchReadback(
     SOURCE_BRIDGE_ABI,
     provider,
   );
+  const verifier = new ethers.Contract(
+    addresses.verifier,
+    VERIFIER_ABI,
+    provider,
+  );
   const bridge = new ethers.Contract(
     addresses.bridge,
     ROUTE_BRIDGE_ABI,
@@ -2061,6 +2234,7 @@ async function fetchReadback(
     tokenBridgeAddress,
     tokenBridgeLocked,
     sourceBridgeOwner,
+    verifierKeyHash,
     bridgeDestinationBindingHash,
     bridgeVerifierAddress,
     bridgeVerifierCodeHash,
@@ -2074,6 +2248,7 @@ async function fetchReadback(
     token.bridge(),
     token.bridgeLocked(),
     sourceBridge.owner(),
+    verifier.verifyingKeyHash(),
     bridge.destinationBindingHash(),
     bridge.verifier(),
     bridge.verifierCodeHash(),
@@ -2088,6 +2263,7 @@ async function fetchReadback(
     tokenBridgeAddress: normalizeEvmAddress(tokenBridgeAddress),
     tokenBridgeLocked,
     sourceBridgeOwner: normalizeEvmAddress(sourceBridgeOwner),
+    verifierKeyHash: normalizeHex32(verifierKeyHash),
     bridgeDestinationBindingHash: normalizeHex32(bridgeDestinationBindingHash),
     bridgeVerifierAddress: normalizeEvmAddress(bridgeVerifierAddress),
     bridgeVerifierCodeHash: normalizeHex32(bridgeVerifierCodeHash),
@@ -2232,11 +2408,11 @@ function readConsistentString(record, keys, label) {
   let selected = "";
   let selectedKey = "";
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value !== "string" || !value.trim()) {
+    const value = canonicalRecordString(record[key], `${label}.${key}`);
+    if (!value) {
       continue;
     }
-    const normalized = value.trim();
+    const normalized = value;
     if (!selected) {
       selected = normalized;
       selectedKey = key;
@@ -2257,12 +2433,12 @@ function collectStringEntries(record, keys, pathName) {
   }
   const entries = [];
   for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
+    const value = canonicalRecordString(record[key], `${pathName}.${key}`);
+    if (value) {
       entries.push({
         key,
         path: `${pathName}.${key}`,
-        value: value.trim(),
+        value,
       });
     }
   }
@@ -2308,6 +2484,41 @@ function readConsistentNormalizedString(sources, label, normalizeValue) {
     }
   }
   return selected?.normalized ?? "";
+}
+
+function assertSingleStringAliasPerSource(sources, label) {
+  for (const source of sources) {
+    const entries = collectStringEntries(
+      source.record,
+      source.keys,
+      source.pathName,
+    );
+    if (entries.length > 1) {
+      throw new Error(
+        `${label} must not use multiple aliases in ${source.pathName}: ${entries
+          .map((entry) => entry.key)
+          .join(", ")}.`,
+      );
+    }
+  }
+}
+
+function assertSingleValueAlias(record, keys, pathName, label) {
+  if (!isRecord(record)) {
+    return;
+  }
+  const presentKeys = keys.filter((key) => {
+    const value = record[key];
+    return (
+      (typeof value === "string" && value.trim()) ||
+      typeof value === "boolean"
+    );
+  });
+  if (presentKeys.length > 1) {
+    throw new Error(
+      `${label} must not use multiple aliases in ${pathName}: ${presentKeys.join(", ")}.`,
+    );
+  }
 }
 
 function readRequiredConsistentNormalizedString(
@@ -2491,10 +2702,15 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error(`route manifest assetKey must be ${ASSET_KEY}.`);
   }
 
-  const bscNetwork = normalizeBscTestnetKey(
+  const bscNetworkText =
     readFirstString(record, "bscNetwork", "bsc_network", "network") ||
-      readFirstString(record, "chain") ||
-      "testnet",
+    readFirstString(record, "chain") ||
+    "testnet";
+  if (bscNetworkText !== bscNetworkText.toLowerCase() || bscNetworkText.includes("_")) {
+    throw new Error("route manifest bscNetwork must be canonical lowercase text.");
+  }
+  const bscNetwork = normalizeBscTestnetKey(
+    bscNetworkText,
     "route manifest bscNetwork",
   );
   const bscProfile = BSC_NETWORK_PROFILES[bscNetwork];
@@ -2502,7 +2718,10 @@ function normalizeRouteManifestForConfig(manifest) {
     record,
     ["chain"],
     "route manifest chain",
-  ).toLowerCase();
+  );
+  if (chain !== chain.toLowerCase()) {
+    throw new Error("route manifest chain must be canonical lowercase text.");
+  }
   if (chain !== bscProfile.chain) {
     throw new Error(`route manifest chain must be ${bscProfile.chain}.`);
   }
@@ -2510,7 +2729,10 @@ function normalizeRouteManifestForConfig(manifest) {
     record,
     ["chainIdHex", "chain_id_hex"],
     "route manifest chainIdHex",
-  ).toLowerCase();
+  );
+  if (/^0X/u.test(chainIdHex) || /[A-F]/u.test(chainIdHex.replace(/^0x/u, ""))) {
+    throw new Error("route manifest chainIdHex must be canonical lowercase hex.");
+  }
   if (chainIdHex !== bscProfile.chainIdHex) {
     throw new Error(
       `route manifest chainIdHex must be ${bscProfile.label} ${bscProfile.chainIdHex}.`,
@@ -2535,7 +2757,7 @@ function normalizeRouteManifestForConfig(manifest) {
       },
     ],
     "route manifest networkIdHex",
-    (value, label) => normalizeHex32(value, label),
+    (value, label) => normalizeCanonicalHex32(value, label),
   );
   if (networkIdHex !== bscProfile.networkIdHex) {
     throw new Error(`route manifest networkIdHex must be ${bscProfile.label}.`);
@@ -2598,95 +2820,115 @@ function normalizeRouteManifestForConfig(manifest) {
     throw new Error("route manifest productionReady must be true or false.");
   }
   const productionReady = record.productionReady === true;
-  const tokenAddress = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: [
-          "bscTokenAddress",
-          "bsc_token_address",
-          "tairaXorTokenAddress",
-          "taira_xor_token_address",
-          "tokenAddress",
-          "token_address",
-        ],
-        pathName: "route manifest",
-      },
-    ],
+  const tokenAddressSources = [
+    {
+      record,
+      keys: [
+        "bscTokenAddress",
+        "bsc_token_address",
+        "tairaXorTokenAddress",
+        "taira_xor_token_address",
+        "tokenAddress",
+        "token_address",
+      ],
+      pathName: "route manifest",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    tokenAddressSources,
     "route manifest BSC token address",
-    (value, label) => normalizeEvmAddress(value, label),
+  );
+  const tokenAddress = readRequiredConsistentNormalizedString(
+    tokenAddressSources,
+    "route manifest BSC token address",
+    (value, label) => normalizeCanonicalEvmAddress(value, label),
+  );
+  const bridgeAddressSources = [
+    {
+      record,
+      keys: [
+        "bscBridgeAddress",
+        "bsc_bridge_address",
+        "tairaXorBridgeAddress",
+        "taira_xor_bridge_address",
+        "bridgeAddress",
+        "bridge_address",
+      ],
+      pathName: "route manifest",
+    },
+    {
+      record: destinationRollout,
+      keys: ["destinationBridgeAddress", "destination_bridge_address"],
+      pathName: "route manifest destinationRollout",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    bridgeAddressSources,
+    "route manifest BSC bridge address",
   );
   const bridgeAddress = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: [
-          "bscBridgeAddress",
-          "bsc_bridge_address",
-          "tairaXorBridgeAddress",
-          "taira_xor_bridge_address",
-          "bridgeAddress",
-          "bridge_address",
-        ],
-        pathName: "route manifest",
-      },
-      {
-        record: destinationRollout,
-        keys: ["destinationBridgeAddress", "destination_bridge_address"],
-        pathName: "route manifest destinationRollout",
-      },
-    ],
+    bridgeAddressSources,
     "route manifest BSC bridge address",
-    (value, label) => normalizeEvmAddress(value, label),
+    (value, label) => normalizeCanonicalEvmAddress(value, label),
+  );
+  const sourceBridgeAddressSources = [
+    {
+      record,
+      keys: [
+        "sccpBscSourceBridgeAddress",
+        "sccp_bsc_source_bridge_address",
+        "bscSourceBridgeAddress",
+        "bsc_source_bridge_address",
+        "sccpTronSourceBridgeAddress",
+        "sccp_tron_source_bridge_address",
+        "sourceBridgeAddress",
+        "source_bridge_address",
+      ],
+      pathName: "route manifest",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    sourceBridgeAddressSources,
+    "route manifest BSC source bridge address",
   );
   const sourceBridgeAddress = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: [
-          "sccpBscSourceBridgeAddress",
-          "sccp_bsc_source_bridge_address",
-          "bscSourceBridgeAddress",
-          "bsc_source_bridge_address",
-          "sccpTronSourceBridgeAddress",
-          "sccp_tron_source_bridge_address",
-          "sourceBridgeAddress",
-          "source_bridge_address",
-        ],
-        pathName: "route manifest",
-      },
-    ],
+    sourceBridgeAddressSources,
     "route manifest BSC source bridge address",
-    (value, label) => normalizeEvmAddress(value, label),
+    (value, label) => normalizeCanonicalEvmAddress(value, label),
+  );
+  const verifierAddressSources = [
+    {
+      record,
+      keys: [
+        "destinationVerifierAddress",
+        "destination_verifier_address",
+        "verifierAddress",
+        "verifier_address",
+        "sccpBscDestinationVerifierAddress",
+        "sccp_bsc_destination_verifier_address",
+        "bscVerifierAddress",
+        "bsc_verifier_address",
+        "evmVerifierAddress",
+        "evm_verifier_address",
+        "tronVerifierAddress",
+        "tron_verifier_address",
+      ],
+      pathName: "route manifest",
+    },
+    {
+      record: destinationRollout,
+      keys: ["verifierIdentity", "verifier_identity"],
+      pathName: "route manifest destinationRollout",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    verifierAddressSources,
+    "route manifest BSC verifier address",
   );
   const verifierAddress = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: [
-          "destinationVerifierAddress",
-          "destination_verifier_address",
-          "verifierAddress",
-          "verifier_address",
-          "sccpBscDestinationVerifierAddress",
-          "sccp_bsc_destination_verifier_address",
-          "bscVerifierAddress",
-          "bsc_verifier_address",
-          "evmVerifierAddress",
-          "evm_verifier_address",
-          "tronVerifierAddress",
-          "tron_verifier_address",
-        ],
-        pathName: "route manifest",
-      },
-      {
-        record: destinationRollout,
-        keys: ["verifierIdentity", "verifier_identity"],
-        pathName: "route manifest destinationRollout",
-      },
-    ],
+    verifierAddressSources,
     "route manifest BSC verifier address",
-    (value, label) => normalizeEvmAddress(value, label),
+    (value, label) => normalizeCanonicalEvmAddress(value, label),
   );
   if (
     new Set([tokenAddress, bridgeAddress, sourceBridgeAddress, verifierAddress])
@@ -2696,51 +2938,66 @@ function normalizeRouteManifestForConfig(manifest) {
       "route manifest BSC token, bridge, source bridge, and verifier addresses must be distinct.",
     );
   }
-  const verifierCodeHash = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: ["verifierCodeHash", "verifier_code_hash"],
-        pathName: "route manifest",
-      },
-      {
-        record: destinationRollout,
-        keys: ["verifierCodeHash", "verifier_code_hash"],
-        pathName: "route manifest destinationRollout",
-      },
-    ],
+  const verifierCodeHashSources = [
+    {
+      record,
+      keys: ["verifierCodeHash", "verifier_code_hash"],
+      pathName: "route manifest",
+    },
+    {
+      record: destinationRollout,
+      keys: ["verifierCodeHash", "verifier_code_hash"],
+      pathName: "route manifest destinationRollout",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    verifierCodeHashSources,
     "route manifest verifierCodeHash",
-    (value, label) => normalizeHex32(value, label),
+  );
+  const verifierCodeHash = readRequiredConsistentNormalizedString(
+    verifierCodeHashSources,
+    "route manifest verifierCodeHash",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  const verifierKeyHashSources = [
+    {
+      record,
+      keys: ["verifierKeyHash", "verifier_key_hash"],
+      pathName: "route manifest",
+    },
+    {
+      record: destinationRollout,
+      keys: ["verifierKeyHash", "verifier_key_hash"],
+      pathName: "route manifest destinationRollout",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    verifierKeyHashSources,
+    "route manifest verifierKeyHash",
   );
   const verifierKeyHash = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: ["verifierKeyHash", "verifier_key_hash"],
-        pathName: "route manifest",
-      },
+    verifierKeyHashSources,
+    "route manifest verifierKeyHash",
+    (value, label) => normalizeCanonicalHex32(value, label),
+  );
+  const optionalRouteHash = (label, keys) => {
+    const sources = [
+      { record, keys, pathName: "route manifest" },
       {
         record: destinationRollout,
-        keys: ["verifierKeyHash", "verifier_key_hash"],
+        keys,
         pathName: "route manifest destinationRollout",
       },
-    ],
-    "route manifest verifierKeyHash",
-    (value, label) => normalizeHex32(value, label),
-  );
-  const optionalRouteHash = (label, keys) =>
-    readConsistentNormalizedString(
-      [
-        { record, keys, pathName: "route manifest" },
-        {
-          record: destinationRollout,
-          keys,
-          pathName: "route manifest destinationRollout",
-        },
-      ],
-      label,
-      (value, fieldLabel) => normalizeHex32(value, fieldLabel),
-    ) || null;
+    ];
+    assertSingleStringAliasPerSource(sources, label);
+    return (
+      readConsistentNormalizedString(
+        sources,
+        label,
+        (value, fieldLabel) => normalizeCanonicalHex32(value, fieldLabel),
+      ) || null
+    );
+  };
   const proofArtifactHash = optionalRouteHash(
     "route manifest proofArtifactHash",
     [
@@ -2843,26 +3100,31 @@ function normalizeRouteManifestForConfig(manifest) {
     verifierCodeHash,
     verifierKeyHash,
   });
+  const destinationBindingHashSources = [
+    {
+      record,
+      keys: ["destinationBindingHash", "destination_binding_hash"],
+      pathName: "route manifest",
+    },
+    {
+      record: destinationRollout,
+      keys: ["destinationBindingHash", "destination_binding_hash"],
+      pathName: "route manifest destinationRollout",
+    },
+    {
+      record: destinationBinding,
+      keys: ["bindingHash", "binding_hash"],
+      pathName: "route manifest destinationBinding",
+    },
+  ];
+  assertSingleStringAliasPerSource(
+    destinationBindingHashSources,
+    "route manifest destinationBindingHash",
+  );
   const destinationBindingHash = readRequiredConsistentNormalizedString(
-    [
-      {
-        record,
-        keys: ["destinationBindingHash", "destination_binding_hash"],
-        pathName: "route manifest",
-      },
-      {
-        record: destinationRollout,
-        keys: ["destinationBindingHash", "destination_binding_hash"],
-        pathName: "route manifest destinationRollout",
-      },
-      {
-        record: destinationBinding,
-        keys: ["bindingHash", "binding_hash"],
-        pathName: "route manifest destinationBinding",
-      },
-    ],
+    destinationBindingHashSources,
     "route manifest destination binding hash",
-    (value, label) => normalizeHex32(value, label),
+    (value, label) => normalizeCanonicalHex32(value, label),
   );
   if (destinationBindingHash !== expectedBindingHash) {
     throw new Error(
@@ -2919,7 +3181,7 @@ function normalizeRouteManifestForConfig(manifest) {
     "route manifest tairaXorBurnRecord.contractArtifactB64",
   );
   const artifactSha256 = bytesToHex(sha256(new Uint8Array(artifact.bytes)));
-  const declaredArtifactSha256 = normalizeHex32(
+  const declaredArtifactSha256 = normalizeCanonicalHex32(
     readFirstString(burnRecord, "artifactSha256", "artifact_sha256"),
     "route manifest tairaXorBurnRecord.artifactSha256",
   );
@@ -2966,6 +3228,12 @@ function normalizeRouteManifestForConfig(manifest) {
   }
   let normalizedPostDeployLiveEvidence = null;
   if (postDeployLiveEvidence) {
+    assertSingleValueAlias(
+      postDeployLiveEvidence,
+      ["fullTomlReady", "full_toml_ready"],
+      "route manifest postDeployLiveEvidence",
+      "route manifest postDeployLiveEvidence.fullTomlReady",
+    );
     const fullTomlReady = readConsistentBoolean(
       postDeployLiveEvidence,
       ["fullTomlReady", "full_toml_ready"],
@@ -2976,6 +3244,17 @@ function normalizeRouteManifestForConfig(manifest) {
         "route manifest productionReady requires postDeployLiveEvidence.fullTomlReady true.",
       );
     }
+    const sourceBridgeConfigHashSources = [
+      {
+        record: postDeployLiveEvidence,
+        keys: ["sourceBridgeConfigHash", "source_bridge_config_hash"],
+        pathName: "route manifest postDeployLiveEvidence",
+      },
+    ];
+    assertSingleStringAliasPerSource(
+      sourceBridgeConfigHashSources,
+      "route manifest postDeployLiveEvidence.sourceBridgeConfigHash",
+    );
     const postDeployProductionBlockers =
       postDeployLiveEvidenceProductionBlockers(postDeployLiveEvidence);
     if (productionReady && postDeployProductionBlockers.length > 0) {
@@ -2985,62 +3264,76 @@ function normalizeRouteManifestForConfig(manifest) {
       );
     }
     const sourceBridgeConfigHash = readRequiredConsistentNormalizedString(
-      [
-        {
-          record: postDeployLiveEvidence,
-          keys: ["sourceBridgeConfigHash", "source_bridge_config_hash"],
-          pathName: "route manifest postDeployLiveEvidence",
-        },
-      ],
+      sourceBridgeConfigHashSources,
       "route manifest postDeployLiveEvidence.sourceBridgeConfigHash",
-      (value, label) => normalizeHex32(value, label),
+      (value, label) => normalizeCanonicalHex32(value, label),
+    );
+    const sourceEventTransactionIdSources = [
+      {
+        record: postDeployLiveEvidence,
+        keys: ["sourceEventTransactionId", "source_event_transaction_id"],
+        pathName: "route manifest postDeployLiveEvidence",
+      },
+    ];
+    assertSingleStringAliasPerSource(
+      sourceEventTransactionIdSources,
+      "route manifest postDeployLiveEvidence.sourceEventTransactionId",
     );
     const sourceEventTransactionId = readRequiredConsistentNormalizedString(
-      [
-        {
-          record: postDeployLiveEvidence,
-          keys: ["sourceEventTransactionId", "source_event_transaction_id"],
-          pathName: "route manifest postDeployLiveEvidence",
-        },
-      ],
+      sourceEventTransactionIdSources,
       "route manifest postDeployLiveEvidence.sourceEventTransactionId",
-      (value, label) => normalizeHex32(value, label),
+      (value, label) => normalizeCanonicalHex32(value, label),
+    );
+    const routeCanaryEvidenceHashSources = [
+      {
+        record: postDeployLiveEvidence,
+        keys: ["routeCanaryEvidenceHash", "route_canary_evidence_hash"],
+        pathName: "route manifest postDeployLiveEvidence",
+      },
+    ];
+    assertSingleStringAliasPerSource(
+      routeCanaryEvidenceHashSources,
+      "route manifest postDeployLiveEvidence.routeCanaryEvidenceHash",
     );
     const routeCanaryEvidenceHash = readRequiredConsistentNormalizedString(
-      [
-        {
-          record: postDeployLiveEvidence,
-          keys: ["routeCanaryEvidenceHash", "route_canary_evidence_hash"],
-          pathName: "route manifest postDeployLiveEvidence",
-        },
-      ],
+      routeCanaryEvidenceHashSources,
       "route manifest postDeployLiveEvidence.routeCanaryEvidenceHash",
-      (value, label) => normalizeHex32(value, label),
+      (value, label) => normalizeCanonicalHex32(value, label),
+    );
+    const routeCanaryTransactionIdSources = [
+      {
+        record: postDeployLiveEvidence,
+        keys: ["routeCanaryTransactionId", "route_canary_transaction_id"],
+        pathName: "route manifest postDeployLiveEvidence",
+      },
+    ];
+    assertSingleStringAliasPerSource(
+      routeCanaryTransactionIdSources,
+      "route manifest postDeployLiveEvidence.routeCanaryTransactionId",
     );
     const routeCanaryTransactionId = readRequiredConsistentNormalizedString(
-      [
-        {
-          record: postDeployLiveEvidence,
-          keys: ["routeCanaryTransactionId", "route_canary_transaction_id"],
-          pathName: "route manifest postDeployLiveEvidence",
-        },
-      ],
+      routeCanaryTransactionIdSources,
       "route manifest postDeployLiveEvidence.routeCanaryTransactionId",
-      (value, label) => normalizeHex32(value, label),
+      (value, label) => normalizeCanonicalHex32(value, label),
+    );
+    const sourceEventExplorerUrlSources = [
+      {
+        record: postDeployLiveEvidence,
+        keys: [
+          "sourceEventExplorerUrl",
+          "source_event_explorer_url",
+          "sourceEventTransactionUrl",
+          "source_event_transaction_url",
+        ],
+        pathName: "route manifest postDeployLiveEvidence",
+      },
+    ];
+    assertSingleStringAliasPerSource(
+      sourceEventExplorerUrlSources,
+      "route manifest postDeployLiveEvidence.sourceEventExplorerUrl",
     );
     const sourceEventExplorerUrl = readConsistentNormalizedString(
-      [
-        {
-          record: postDeployLiveEvidence,
-          keys: [
-            "sourceEventExplorerUrl",
-            "source_event_explorer_url",
-            "sourceEventTransactionUrl",
-            "source_event_transaction_url",
-          ],
-          pathName: "route manifest postDeployLiveEvidence",
-        },
-      ],
+      sourceEventExplorerUrlSources,
       "route manifest postDeployLiveEvidence.sourceEventExplorerUrl",
       (value, label) =>
         normalizeBscExplorerTxUrl(
@@ -3050,19 +3343,24 @@ function normalizeRouteManifestForConfig(manifest) {
           bscProfile,
         ),
     );
+    const routeCanaryExplorerUrlSources = [
+      {
+        record: postDeployLiveEvidence,
+        keys: [
+          "routeCanaryExplorerUrl",
+          "route_canary_explorer_url",
+          "routeCanaryTransactionUrl",
+          "route_canary_transaction_url",
+        ],
+        pathName: "route manifest postDeployLiveEvidence",
+      },
+    ];
+    assertSingleStringAliasPerSource(
+      routeCanaryExplorerUrlSources,
+      "route manifest postDeployLiveEvidence.routeCanaryExplorerUrl",
+    );
     const routeCanaryExplorerUrl = readConsistentNormalizedString(
-      [
-        {
-          record: postDeployLiveEvidence,
-          keys: [
-            "routeCanaryExplorerUrl",
-            "route_canary_explorer_url",
-            "routeCanaryTransactionUrl",
-            "route_canary_transaction_url",
-          ],
-          pathName: "route manifest postDeployLiveEvidence",
-        },
-      ],
+      routeCanaryExplorerUrlSources,
       "route manifest postDeployLiveEvidence.routeCanaryExplorerUrl",
       (value, label) =>
         normalizeBscExplorerTxUrl(
@@ -3072,16 +3370,21 @@ function normalizeRouteManifestForConfig(manifest) {
           bscProfile,
         ),
     );
-    const offlineFullTomlSha256 = readConsistentNormalizedString(
-      [
-        {
-          record: postDeployLiveEvidence,
-          keys: ["offlineFullTomlSha256", "offline_full_toml_sha256"],
-          pathName: "route manifest postDeployLiveEvidence",
-        },
-      ],
+    const offlineFullTomlSha256Sources = [
+      {
+        record: postDeployLiveEvidence,
+        keys: ["offlineFullTomlSha256", "offline_full_toml_sha256"],
+        pathName: "route manifest postDeployLiveEvidence",
+      },
+    ];
+    assertSingleStringAliasPerSource(
+      offlineFullTomlSha256Sources,
       "route manifest postDeployLiveEvidence.offlineFullTomlSha256",
-      (value, label) => normalizeHex32(value, label),
+    );
+    const offlineFullTomlSha256 = readConsistentNormalizedString(
+      offlineFullTomlSha256Sources,
+      "route manifest postDeployLiveEvidence.offlineFullTomlSha256",
+      (value, label) => normalizeCanonicalHex32(value, label),
     );
     if (productionReady && !sourceEventExplorerUrl) {
       throw new Error(
@@ -3157,7 +3460,7 @@ function normalizeRouteManifestForConfig(manifest) {
     settlementAssetDefinitionId,
     contractArtifactB64: artifact.text,
     artifactSha256,
-    codeHash: normalizeHex32(
+    codeHash: normalizeCanonicalHex32(
       readFirstString(burnRecord, "codeHash", "code_hash"),
       "route manifest tairaXorBurnRecord.codeHash",
     ),
@@ -3211,6 +3514,11 @@ export function buildBscTairaXorRouteConfigToml(manifest, options = {}) {
   if (!route.productionReady && !allowUnready) {
     throw new Error(
       "non-production route manifests require --allow-unready true.",
+    );
+  }
+  if (route.productionReady && allowUnready) {
+    throw new Error(
+      "production-ready route manifests cannot enable --allow-unready.",
     );
   }
   const lines = [
@@ -3721,6 +4029,7 @@ async function commandSelfTest() {
     tokenBridgeAddress: bridgeAddress,
     tokenBridgeLocked: true,
     sourceBridgeOwner: bridgeAddress,
+    verifierKeyHash,
     bridgeDestinationBindingHash: bindingHash,
     bridgeVerifierAddress: verifierAddress,
     bridgeVerifierCodeHash: verifierCodeHash,

@@ -1377,6 +1377,46 @@ test("route manifest draft binds deployment evidence, verifier material, and TAI
   });
 });
 
+test("TRON route-config refuses allow-unready for production-ready manifests", async () => {
+  await withTempDir(async (dir) => {
+    const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
+    const liveEvidencePath = join(dir, "live-evidence.json");
+    const verifierCodeHash = routeHash("deployed-verifier-code");
+    await writeJson(liveEvidencePath, routeLiveEvidence({ verifierCodeHash }));
+
+    const manifest = await buildTairaXorRouteManifestDraft({
+      evidence: evidencePath,
+      "taira-contract": contractPath,
+      verifier: verifierPath,
+      "verifier-code-hash": verifierCodeHash,
+      "settlement-asset-definition-id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+      "vk-backend": "halo2/ipa",
+      "vk-name": "taira_xor_burn_record_v1",
+      "live-evidence": liveEvidencePath,
+      "production-ready": "true",
+      "live-readback-checked": "true",
+      "confirm-mainnet": "taira_tron_xor",
+    });
+    const toml = buildTairaXorRouteConfigToml(manifest);
+    assert.match(toml, /production_ready = true/u);
+    assert.match(toml, /sccp_allow_unready_transparent_proofs = false/u);
+
+    assert.throws(
+      () => buildTairaXorRouteConfigToml(manifest, { "allow-unready": "true" }),
+      /production-ready route manifests cannot enable --allow-unready/u,
+    );
+    assert.throws(
+      () =>
+        buildMergedTairaXorRouteConfigToml(
+          "[zk]\nother_setting = true\n",
+          manifest,
+          { "allow-unready": "true" },
+        ),
+      /production-ready route manifests cannot enable --allow-unready/u,
+    );
+  });
+});
+
 test("route manifest draft defaults to disabled and requires production readiness acknowledgements", async () => {
   await withTempDir(async (dir) => {
     const { evidencePath, contractPath, verifierPath } = await writeRouteManifestInputs(dir);
@@ -1543,7 +1583,9 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
     const cases = [
       [{ version: 2 }, /route manifest version/u],
       [{ routeId: "taira_bsc_xor" }, /routeId/u],
+      [{ routeId: " taira_tron_xor" }, /routeId.*without surrounding whitespace/u],
       [{ assetKey: "dot" }, /assetKey/u],
+      [{ assetKey: "xor " }, /assetKey.*without surrounding whitespace/u],
       [{ counterpartyDomain: 2 }, /counterpartyDomain/u],
       [{ verifierTarget: "EvmContract" }, /verifierTarget/u],
       [{ postDeployReadbackChecked: undefined }, /postDeployReadbackChecked true/u],
@@ -1574,13 +1616,27 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
         },
         /productionReady requires tronNetwork mainnet/u,
       ],
+      [{ tronNetwork: "TRON-MAINNET" }, /tronNetwork.*canonical lowercase text/u],
+      [{ tronNetwork: "tron_mainnet" }, /tronNetwork.*canonical lowercase text/u],
       [{ chain: "tron-nile" }, /chain must match tronNetwork/u],
+      [{ chain: "TRON-MAINNET" }, /chain.*canonical lowercase text/u],
       [{ chainIdHex: "0xcd8690dc" }, /chainIdHex must match tronNetwork/u],
+      [{ chainIdHex: "0X2B6653DC" }, /chainIdHex.*canonical lowercase hex/u],
       [{ networkIdHex: TRON_NILE_NETWORK_ID_HEX }, /networkIdHex must match tronNetwork/u],
+      [{ networkIdHex: ` ${TRON_MAINNET_NETWORK_ID_HEX}` }, /networkIdHex.*without surrounding whitespace/u],
+      [{ networkIdHex: TRON_MAINNET_NETWORK_ID_HEX.toUpperCase() }, /networkIdHex.*canonical lowercase hex/u],
       [{ destinationRollout: { version: 2 } }, /destinationRollout\.version/u],
       [{ destinationRollout: { verifierBackend: "evm-groth16-bn254-v1" } }, /verifier backend/u],
       [{ destinationRollout: { proofFamily: "debug-proof-family" } }, /proof family/u],
       [{ destinationRollout: { destinationNetworkId: TRON_NILE_NETWORK_ID_HEX } }, /destinationNetworkId/u],
+      [
+        { destinationRollout: { destinationNetworkId: `${TRON_MAINNET_NETWORK_ID_HEX} ` } },
+        /destinationNetworkId.*without surrounding whitespace/u,
+      ],
+      [
+        { destinationRollout: { destinationNetworkId: TRON_MAINNET_NETWORK_ID_HEX.toUpperCase() } },
+        /destinationNetworkId.*canonical lowercase hex/u,
+      ],
       [{ destinationRollout: { verifierIdentity: manifest.tairaXorBridgeAddress } }, /verifierIdentity/u],
       [{ destinationRollout: { sourceDomain: 5 } }, /destinationRollout.*SORA -> TRON/u],
       [{ destinationRollout: { targetDomain: 0 } }, /destinationRollout.*SORA -> TRON/u],
@@ -1624,6 +1680,38 @@ test("TRON route-config rejects malformed or foreign route manifests", async () 
       [
         { postDeployLiveEvidence: { full_toml_production_blockers: [123] } },
         /postDeployLiveEvidence\.full_toml_production_blockers\[0\].*without surrounding whitespace/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            sourceEventTransactionId: ` ${routeHash("source-event-transaction")}`,
+          },
+        },
+        /postDeployLiveEvidence\.sourceEventTransactionId.*without surrounding whitespace/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            sourceEventTransactionId: routeHash("source-event-transaction").toUpperCase(),
+          },
+        },
+        /postDeployLiveEvidence\.sourceEventTransactionId.*canonical lowercase hex/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            offlineFullTomlSha256: `${routeHash("offline-full-toml")} `,
+          },
+        },
+        /postDeployLiveEvidence\.offlineFullTomlSha256.*without surrounding whitespace/u,
+      ],
+      [
+        {
+          postDeployLiveEvidence: {
+            offlineFullTomlSha256: routeHash("offline-full-toml").toUpperCase(),
+          },
+        },
+        /postDeployLiveEvidence\.offlineFullTomlSha256.*canonical lowercase hex/u,
       ],
     ];
 

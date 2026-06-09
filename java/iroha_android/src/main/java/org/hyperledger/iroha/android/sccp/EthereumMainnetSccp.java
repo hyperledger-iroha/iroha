@@ -893,6 +893,7 @@ public final class EthereumMainnetSccp {
     }
     if (artifacts.sdk() == null
         || artifacts.sdk().isEmpty()
+        || !artifacts.sdk().trim().equals(artifacts.sdk())
         || artifacts.implementation() == null
         || artifacts.implementation().isEmpty()
         || artifacts.implementationHash() == null
@@ -925,6 +926,10 @@ public final class EthereumMainnetSccp {
       final NativeProverSelfTest nativeProverSelfTest) {
     Objects.requireNonNull(artifacts, "nativeProverArtifacts");
     final String sdk = Objects.requireNonNull(artifacts.sdk(), "nativeProverArtifacts.sdk");
+    if (sdk.isEmpty() || !sdk.trim().equals(sdk)) {
+      throw new IllegalArgumentException(
+          "nativeProverArtifacts.sdk must be a non-empty canonical string");
+    }
     final EvmSccpProver.EthereumMainnetNativeEvmProverSelfTestFixture fixture =
         Objects.requireNonNull(
             artifacts.nativeProverSelfTest(), "nativeProverArtifacts.nativeProverSelfTest");
@@ -987,6 +992,7 @@ public final class EthereumMainnetSccp {
     }
     if (artifacts.sdk() == null
         || artifacts.sdk().isEmpty()
+        || !artifacts.sdk().trim().equals(artifacts.sdk())
         || artifacts.implementation() == null
         || artifacts.implementation().isEmpty()
         || artifacts.implementationHash() == null
