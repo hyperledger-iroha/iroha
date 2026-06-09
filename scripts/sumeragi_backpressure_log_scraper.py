@@ -7,7 +7,8 @@ The script scans one or more Iroha log files (plain text or JSON lines), finds
 every occurrence of the debug message
 ``Pacemaker deferred proposal assembly due to saturated transaction queue`` and
 reports nearby DA/RBC maintenance events such as:
-* ``DA availability still missing (advisory)``
+* ``DA availability gate still active``
+* ``DA availability still missing (advisory)`` from older logs
 * ``DA availability evidence observed``
 * ``failed to purge persisted RBC session``
 
@@ -38,7 +39,12 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 PACEMAKER_MESSAGE = (
     "Pacemaker deferred proposal assembly due to saturated transaction queue"
 )
-DA_AVAILABILITY_MESSAGE = "DA availability still missing (advisory)"
+DA_AVAILABILITY_MESSAGE = "DA availability gate still active"
+DA_AVAILABILITY_LEGACY_MESSAGE = "DA availability still missing (advisory)"
+DA_AVAILABILITY_MISSING_MESSAGES = (
+    DA_AVAILABILITY_MESSAGE,
+    DA_AVAILABILITY_LEGACY_MESSAGE,
+)
 DA_AVAILABILITY_SATISFIED_MESSAGE = "DA availability evidence observed"
 RBC_PURGE_FAIL_MESSAGE = "failed to purge persisted RBC session"
 
@@ -172,7 +178,7 @@ def classify_event(event: LogEvent) -> Optional[str]:
     lower_message = event.message.lower()
     if PACEMAKER_MESSAGE.lower() in lower_message:
         return "pacemaker-deferral"
-    if DA_AVAILABILITY_MESSAGE.lower() in lower_message:
+    if any(message.lower() in lower_message for message in DA_AVAILABILITY_MISSING_MESSAGES):
         return "da-availability-missing"
     if DA_AVAILABILITY_SATISFIED_MESSAGE.lower() in lower_message:
         return "da-availability-satisfied"
@@ -304,7 +310,7 @@ def human_summary(
                     details = f"{details}, block_hash={block_hash}" if details else f"block_hash={block_hash}"
                 print(f"    • {rbc.timestamp.isoformat()} — {rbc.event_type} ({details or 'no context'})")
         else:
-            print("    • No DA availability warning logs within correlation window.")
+            print("    • No DA availability gate logs within correlation window.")
 
 
 def json_summary(
@@ -337,7 +343,7 @@ def json_summary(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Correlate pacemaker backpressure deferrals with DA availability warning and RBC retry/abort logs."
+        description="Correlate pacemaker backpressure deferrals with DA availability gate and RBC maintenance logs."
     )
     parser.add_argument("logs", nargs="*", help="Path(s) to log files to analyse.")
     parser.add_argument("--window-before", type=float, default=30.0, help="Seconds before a pacemaker deferral to consider DA/RBC events (default: 30).")
@@ -352,8 +358,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     if args.self_test:
-        run_self_tests()
-        return 0
+        return 0 if run_self_tests() else 1
     if not args.logs:
         parser.error("at least one log file must be provided")
 
@@ -381,7 +386,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 # Self tests
 # ---------------------------------------------------------------------------
 
-def run_self_tests() -> None:
+def run_self_tests() -> bool:
     import io
     import unittest
 
@@ -408,8 +413,21 @@ def run_self_tests() -> None:
         def test_parse_text_da_availability(self) -> None:
             line = (
                 "2025-01-10T12:00:05.000Z INFO iroha_core::sumeragi::main_loop "
-                "height=125 view=0 attempts=2 block_hash=abc123 "
+                "height=125 view=0 reason=missing_local_data block_hash=abc123 "
                 f"{DA_AVAILABILITY_MESSAGE}"
+            )
+            event = parse_log_line(line)
+            self.assertIsNotNone(event)
+            assert event
+            self.assertEqual(event.event_type, "da-availability-missing")
+            self.assertEqual(event.fields.get("height"), "125")
+            self.assertEqual(event.fields.get("reason"), "missing_local_data")
+
+        def test_parse_legacy_text_da_availability(self) -> None:
+            line = (
+                "2025-01-10T12:00:05.000Z INFO iroha_core::sumeragi::main_loop "
+                "height=125 view=0 attempts=2 block_hash=abc123 "
+                f"{DA_AVAILABILITY_LEGACY_MESSAGE}"
             )
             event = parse_log_line(line)
             self.assertIsNotNone(event)
@@ -468,7 +486,7 @@ def run_self_tests() -> None:
     suite = unittest.TestSuite()
     suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(ParserTests))
     runner = unittest.TextTestRunner()
-    runner.run(suite)
+    return runner.run(suite).wasSuccessful()
 
 
 if __name__ == "__main__":

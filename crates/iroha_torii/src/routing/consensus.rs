@@ -1118,7 +1118,7 @@ pub struct EvidenceSubmitRequestDto {
     pub evidence_hex: String,
 }
 
-/// Handle POST `/v1/sumeragi/evidence/submit`, validating and forwarding consensus evidence.
+/// Handle POST `/v1/sumeragi/evidence`, validating and forwarding consensus evidence.
 pub fn handle_post_sumeragi_evidence_submit(
     sumeragi: SumeragiHandle,
     request: EvidenceSubmitRequestDto,

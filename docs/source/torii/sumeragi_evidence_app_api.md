@@ -84,7 +84,7 @@ The keys vary per `EvidenceKind` and mirror the JSON produced by
 `evidence_to_json`. When `Accept: application/x-norito` the response is a binary
 `EvidenceListWire` payload (`total: u64`, `items: Vec<EvidenceRecord>`).【crates/iroha_torii/src/routing.rs:2915】【crates/iroha_torii/src/routing.rs:2954】
 
-### `POST /v1/sumeragi/evidence/submit`
+### `POST /v1/sumeragi/evidence`
 
 Submits slashing evidence to the running Sumeragi instance.
 

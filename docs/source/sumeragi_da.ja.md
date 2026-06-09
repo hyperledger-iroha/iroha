@@ -11,13 +11,13 @@ translator: manual
 # Sumeragi データ可用性 & RBC シナリオ
 
 統合テスト [`sumeragi_rbc_da_large_payload_four_peers`] と
-[`sumeragi_rbc_da_large_payload_six_peers`]（`integration_tests/tests/sumeragi_da.rs`）は、`sumeragi.da.enabled = true`（DA + RBC）とした 4 ノードおよび 6 ノード構成を起動します。それぞれ 10 MiB 以上のログ命令を投入し、RBC の配信とコミットを観測し、ペイロードの可用性クォーラムが形成できることを確認し、ダッシュボードや回帰ツールで取り込める構造化サマリを出力します。
+[`sumeragi_rbc_da_large_payload_six_peers`]（`integration_tests/tests/sumeragi_da.rs`）は、`sumeragi.da.enabled = true`（DA + RBC）とした 4 ノードおよび 6 ノード構成を起動します。各実行は統合ハーネス既定の `LARGE_PAYLOAD_BYTES = 1024` を使い、RBC の配送とコミットを観測し、本来の READY クォーラム（4 ピアは 3 票以上、6 ピアは 4 票以上）を確認し、ダッシュボードや回帰ツールで取り込める構造化サマリを出力します。
 
 RBC ペイロードをライトクライアントがサンプリングする手順については [`light_client_da.md`](light_client_da.md) を参照してください。認証付き `/v1/sumeragi/rbc/sample` エンドポイントと関連するレート制限・予算を解説しています。
 
-### DA タイムアウトと警告
+### DA タイムアウトと可用性追跡
 
-`sumeragi.da.enabled=true` の場合、コミットパイプラインは `availability evidence` または RBC `READY` クォーラムを可用性証跡として記録し、advisory として追跡します（コミットは待機せずに進行）。ローカル payload が不足する場合は RBC `DELIVER` または BlockCreated/ブロック同期で取得します。証跡が不足している場合は運用向けにログが出ます。`sumeragi_da_gate_block_total{reason="missing_local_data"}` が増加し、`status_snapshot().da_reschedule_total` はレガシーのため通常 0 のままです。
+`sumeragi.da.enabled=true` の場合、コミットパイプラインはローカル payload 可用性（`BlockCreated` または RBC 配送）を DA gate に記録します。`availability evidence` や RBC `READY` クォーラムは監査・テレメトリ・決定論的リカバリのために追跡されますが、別個のコミットクォーラムではありません。`missing_local_data` が有効な間、ローカル finalize は待機し、BlockCreated または RBC/ブロック同期による回復で payload がローカルに揃うと続行します。
 
 可用性タイムアウトは block/commit 時間と DA タイムアウト調整値から導出され、ログと再ブロードキャストの判定にのみ使われます:
 - `sumeragi.advanced.da.quorum_timeout_multiplier` は DA 有効時の `block_time + 3 * commit_time` をスケールします（既定 `3`）。
@@ -50,20 +50,20 @@ cargo test -p integration_tests \
 
 各実行は `sumeragi_da_summary::<scenario>::{...}` で始まる行を出力し、オートメーションが JSON ペイロードを収集できるようにします。`SUMERAGI_DA_ARTIFACT_DIR=/path/to/dir` を設定すると、出力サマリと各ピアの生 Prometheus スナップショットを保存します。`scripts/run_sumeragi_da.py` は夜間ジョブ向けに自動的に環境変数を有効化し、収集済みアーティファクトを `cargo run -p build-support --bin sumeragi_da_report` へ渡して `sumeragi-da-report.md` を生成します。定期タスク `.github/workflows/sumeragi-da-nightly.yml` はサマリ・メトリクス・Markdown レポートを含むディレクトリ全体を GitHub Actions にアップロードし、オペレーターが結果を直接確認できます。
 
-これらのシナリオでは `sumeragi.debug.rbc.force_deliver_quorum_one = true` を有効化し、最初の READY で DELIVER を確定させます。運用環境では無効のままにして READY の 2f+1 クォーラムを維持してください。
+これらのシナリオでは `sumeragi.debug.rbc.force_deliver_quorum_one = false` のまま、プロトコル本来の READY クォーラムを検証します。デバッグ用ノブは個別診断向けに限定し、通常の DA/RBC 検証では無効のままにして、配送・スループット予算が本番クォーラムの挙動を測るようにしてください。
 
 ## 想定ベースライン
 
-既定の `sumeragi.advanced.rbc.chunk_max_bytes = 256 KiB` と命令サイズ 10.5 MiB（11 010 048 バイト）に加え、`force_deliver_quorum_one` を有効化した前提で次の不変条件が成り立ちます。
+統合ハーネスの `LARGE_PAYLOAD_BYTES = 1024` とプロトコル READY クォーラムを前提に、既定の開発向けスモーク実行では次の不変条件を確認します。より大きなペイロードは、この既定チェックではなく soak/performance 作業として扱います。
 
 注記: `sumeragi.advanced.rbc.chunk_max_bytes` は起動時にクランプされ、`network.max_frame_bytes_block_sync` から暗号化オーバーヘッドを差し引いた平文上限に収まるよう調整されます。
 
 | シナリオ | チャンク数 | READY 閾値 | ピアごとのカウンタ | タイミング予算 |
 | --- | --- | --- | --- | --- |
-| 4 ピア | 42 チャンク（全て必要） | READY 投票 ≥1（デバッグ強制；通常は `f=1` の 2f+1 で ≥3） | `payload_bytes_delivered_total ≥ 11 010 048`、`deliver_broadcasts_total = 1`、`ready_broadcasts_total = 1` | `commit_ms` と `rbc_deliver_ms` が `commit_time_ms`（既定 `4000`）の範囲に収まること |
-| 6 ピア | 42 チャンク | READY 投票 ≥1（デバッグ強制；通常は `f=2` の 2f+1 で ≥4） | 上と同じ | 上と同じ |
+| 4 ピア | plain は 1 チャンク、RS16 は 4 チャンク | READY 投票 ≥3（`f=1` の 2f+1） | `payload_bytes_delivered_total ≥ 1024`、`deliver_broadcasts_total ≥ 1`、`ready_broadcasts_total ≥ 1` または同等の永続 READY 証拠 | ハーネスの配送・コミット予算 |
+| 6 ピア | plain は 1 チャンク、RS16 は 6 チャンク | READY 投票 ≥4（`f=2` の 2f+1） | 上と同じ | 上と同じ |
 
-コミット猶予 4 秒以内に収まるには、平均スループットが最低でも約 2.7 MiB/s 必要です。`commit_time_ms` 付近まで DELIVER 遅延が伸びた場合、スループットが閾値を下回った場合、またはピア間でカウンタが乖離した場合（コレクタのスロットリングやチャンク欠落の兆候）はアラートを推奨します。
+これらのスモーク実行は主にクォーラム、配送、キュー回帰を検証します。DELIVER 遅延がハーネス予算に近づく場合、構成済みペイロードの計算済みスループット下限を下回る場合、またはピア間でカウンタが乖離する場合（コレクタのスロットリングやチャンク欠落の兆候）はアラートを推奨します。
 
 `cargo run -p build-support --bin sumeragi_da_report [ARTIFACT_DIR]` は `.summary.json` を読み込み、レイテンシ／スループット／スナップショットをまとめた Markdown レポートを生成します。引数でアーティファクトディレクトリを指定するか、`SUMERAGI_DA_ARTIFACT_DIR` を設定してください。2025-10-05 のフィクスチャから生成されたレポートでは、RBC DELIVER の中央値が 3.12〜3.34 秒、コミットが 4 秒枠内、実効スループットが 3.1 MiB/s 以上でした。
 
@@ -75,9 +75,9 @@ cargo test -p integration_tests \
 
 | 指標 | 予算 | 適用テスト | アラート指針 |
 | --- | --- | --- | --- |
-| RBC DELIVER レイテンシ（10.5 MiB） | ≤ 3.6 s | `sumeragi_rbc_da_large_payload_*` | 3.2 s 以上で警告、コレクタ飽和を調査 |
-| コミットレイテンシ | ≤ 4.0 s | 同上 | 3.6 s 以上で警告、ペースメーカー期限・ビュー変更を確認 |
-| 実効スループット | ≥ 2.7 MiB/s | 同上 | 2 回連続で 3 MiB/s 未満なら警告 |
+| RBC DELIVER レイテンシ | 基本 30 秒 + 4 ピア超過分ごとに 60 秒 + RS16 プレミアム 40 秒 | `sumeragi_rbc_da_large_payload_*` | 通常スモーク実行が計算済み予算に近づいたら警告、コレクタ飽和を調査 |
+| コミットレイテンシ | RBC 配送予算 + 40 秒 | 同上 | コミット遅延が計算済み予算に近づいたら警告、ペースメーカー期限・ビュー変更を確認 |
+| 実効スループット | min(payload/配送予算, 0.1 MiB/s) 以上 | 同上 | 2 回連続で計算済み下限を下回ったら警告 |
 | Sumeragi バックグラウンド POST キュー深さ | ≤ 32 タスク | 同上 | 24 以上で警告、バックログ増大を監視 |
 | P2P キューのドロップ | = 0 | 同上 | 非ゼロを検出したら即時警告、容量設定を確認 |
 
