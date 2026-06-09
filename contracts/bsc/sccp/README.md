@@ -104,6 +104,15 @@ cryptographic material behind redundant field names. App-side BSC preflight
 also rejects ambiguous route identity aliases and duplicate object containers
 such as `postDeployLiveEvidence` / `post_deploy_live_evidence`; those checks
 are required by sidecar, smoke-readiness, and production-gate tooling.
+The `native-prover-bundle` command also treats the route manifest or deployment
+evidence JSON, proof artifact, proving key, verifier key, parity/self-test
+fixtures, SDK implementation artifacts, and audit files as regular-file-only
+inputs. Symlinks and other non-regular files are rejected before bytes are read,
+and artifact paths are realpath-checked against the declared artifact root
+before their hashes are allowed into a production bundle. Bundle artifact paths
+that contain raw, percent-encoded, or recursively over-encoded
+parent-directory segments are also rejected, so locally harmless filenames
+cannot become traversal-like URLs when consumed by browser runtime tooling.
 
 Quick verification:
 

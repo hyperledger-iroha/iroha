@@ -2,6 +2,25 @@
 
 Last updated: 2026-06-09
 
+## 2026-06-09 SCCP BSC native prover artifact path hardening
+
+- Hardened `scripts/sccp_bsc_taira_xor_deploy.mjs` so BSC native-prover bundle
+  generation rejects symlinked or non-regular route/deployment JSON inputs and
+  proof artifact, proving key, verifier key, SDK implementation, parity,
+  self-test, and audit artifact files before hashing cryptographic material.
+  Artifact paths are now also realpath-checked against the declared artifact
+  root before their hashes can be attached to a production route manifest, and
+  raw, percent-encoded, or recursively over-encoded parent-directory segments
+  are rejected before bundle artifact paths can be published for browser
+  runtime use.
+- Added adversarial deploy-helper regressions for symlinked route manifests and
+  proof artifacts, symlinked artifact-root escapes, and URL-encoded /
+  over-encoded parent-directory artifact names. Documented the
+  regular-file-only and URL-safe operator requirements in the BSC contracts
+  README.
+- Validation:
+  - `node --test scripts/sccp_bsc_taira_xor_deploy.test.mjs`
+
 ## 2026-06-09 Sumeragi RBC delivered-pending stable-artifact finality proof
 
 - Added `RbcDeliveredPendingSpecStepStableCommitArtifactsFinalityFootprintStep`

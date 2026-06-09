@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
   SCCP_BSC_TESTNET_NATIVE_EVM_PROVER_PARITY_FIXTURE_SCHEMA_V1,
@@ -1298,8 +1298,67 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
       buildBscNativeEvmProverBundleFromArtifacts({
         ...fixture.options,
         "proof-artifact": "../proof-artifact.bin",
-      }),
+    }),
     /proof artifact must stay under artifact-root/u,
+  );
+  for (const encodedPath of [
+    "%2e%2e/proof-artifact.r1cs",
+    "%252e%252e/proof-artifact.r1cs",
+    "%252525252e%252525252e/proof-artifact.r1cs",
+  ]) {
+    const encodedDir = dirname(join(fixture.artifactRoot, encodedPath));
+    await mkdir(encodedDir, { recursive: true });
+    await writeFile(
+      join(fixture.artifactRoot, encodedPath),
+      await readFile(join(fixture.artifactRoot, "proof-artifact.r1cs")),
+    );
+    await assert.rejects(
+      () =>
+        buildBscNativeEvmProverBundleFromArtifacts({
+          ...fixture.options,
+          "proof-artifact": encodedPath,
+        }),
+      /proof artifact must not use URL-encoded parent-directory segments/u,
+    );
+  }
+  const routeManifestLink = join(fixture.workDir, "route-link.json");
+  await symlink(fixture.routeManifestPath, routeManifestLink);
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "route-manifest": routeManifestLink,
+      }),
+    /BSC route manifest could not be read: path must not be a symbolic link/u,
+  );
+  const proofArtifactLink = join(fixture.artifactRoot, "proof-link.r1cs");
+  await symlink(
+    join(fixture.artifactRoot, "proof-artifact.r1cs"),
+    proofArtifactLink,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "proof-artifact": "proof-link.r1cs",
+      }),
+    /proof artifact could not be read: path must not be a symbolic link/u,
+  );
+  const outsideArtifactDir = await mkdtemp(
+    join(tmpdir(), "bsc-native-proof-outside-"),
+  );
+  await writeFile(
+    join(outsideArtifactDir, "proof-artifact.r1cs"),
+    await readFile(join(fixture.artifactRoot, "proof-artifact.r1cs")),
+  );
+  await symlink(outsideArtifactDir, join(fixture.artifactRoot, "linked-dir"));
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...fixture.options,
+        "proof-artifact": "linked-dir/proof-artifact.r1cs",
+      }),
+    /proof artifact could not be read: proof artifact must stay under artifact-root/u,
   );
   const aliasFixture = await writeNativeProverFixtureFiles();
   const aliasSmuggledRoute = JSON.parse(

@@ -132,6 +132,12 @@ and completed history lives in [`status.md`](./status.md).
   Native EVM prover SDK artifact ids must follow the same canonical text policy:
   whitespace-padded SDK ids are rejected as malformed rows instead of being
   treated as unknown SDK names or hidden missing-SDK evidence.
+  Native EVM prover bundle generators must also keep route/deployment JSON and
+  every cryptographic or SDK artifact input regular-file-only, with symlinks and
+  out-of-root realpaths rejected before hashing or attaching production route
+  manifest material. Generated bundle artifact paths must reject raw,
+  percent-encoded, and recursively over-encoded parent-directory segments before
+  any path is published for browser runtime consumption.
   Portal/mobile runtime SDK selectors for direct byte verification,
   resolver-backed bundle loading, and native prover self-test preflights must
   follow the same canonical text policy before SDK artifact lookup or callbacks
