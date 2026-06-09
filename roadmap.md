@@ -7597,7 +7597,11 @@ operator-provided rollout bundles.
   required source-adapter gate hashes and expected audit hash roles, rejects
   duplicate or governed-hash-replayed source-gate audit roles, and rejects
   forged source-gate material on lanes whose policy does not require a
-  source-adapter gate.
+  source-adapter gate. The active-launch governed-deployment and
+  route-allowlist checklist items now reject source verifier material hashes
+  that reuse the same canonical bytes32 value as the source-adapter deployment
+  hash, keeping public readiness evidence role-separated before release-bundle
+  construction.
 - Keep live-network signing inputs runtime-only and continue using generated
   per-validator deployment bundles rather than hand-edited production configs.
 
