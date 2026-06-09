@@ -5099,6 +5099,11 @@ mod tests {
         });
     }
 
+    fn py_err_message(err: pyo3::PyErr) -> String {
+        ensure_python();
+        Python::attach(|py| err.value(py).to_string())
+    }
+
     fn canonical_i105_from_seed(seed: u8) -> String {
         AccountId::new(PublicKey::from(parse_private_key(&[seed; 32]).unwrap()))
             .canonical_i105()
@@ -5108,6 +5113,101 @@ mod tests {
     fn sample_account(seed: u8) -> AccountId {
         let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         AccountId::new(keypair.public_key().clone())
+    }
+
+    fn sample_kagemusha_transfer_instruction() -> iroha_data_model::isi::offline::KagemushaTransfer
+    {
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain id"),
+            "kgmpy".parse().expect("asset definition name"),
+        );
+        iroha_data_model::isi::offline::KagemushaTransfer::new(
+            asset,
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".into(),
+                ProofBox::new("halo2/ipa".into(), vec![0xCA, 0xFE]),
+                VerifyingKeyId::new("halo2/ipa", "python-kagemusha-transfer"),
+            ),
+            Some([0x33; 32]),
+        )
+    }
+
+    #[test]
+    fn kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives() {
+        let transfer = sample_kagemusha_transfer_instruction();
+        let transfer_archive = to_bytes(&transfer).expect("encode KagemushaTransfer");
+        let transfer_box =
+            kagemusha_instruction_archive_box("KagemushaTransfer", &transfer_archive)
+                .expect("transfer archive accepted");
+        let decoded_transfer = transfer_box
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::offline::KagemushaTransfer>()
+            .expect("KagemushaTransfer instruction box");
+        assert_eq!(decoded_transfer.asset, transfer.asset);
+        assert_eq!(decoded_transfer.inputs, transfer.inputs);
+        assert_eq!(decoded_transfer.outputs, transfer.outputs);
+
+        let fixture = committed_recursive_spend_abi7_fixture_value();
+        let redeem_archive = shared_recursive_spend_abi7_fixture_archive_bytes(
+            &fixture,
+            "redeem_instruction",
+            "redeem",
+            "RedeemKagemushaRecursive",
+        );
+        let redeem_instruction: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
+            norito::decode_from_bytes(&redeem_archive).expect("decode redeem instruction fixture");
+        let redeem_box =
+            kagemusha_instruction_archive_box("RedeemKagemushaRecursive", &redeem_archive)
+                .expect("redeem archive accepted");
+        let decoded_redeem = redeem_box
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursive>()
+            .expect("RedeemKagemushaRecursive instruction box");
+        assert_eq!(
+            decoded_redeem.public_amount,
+            redeem_instruction.public_amount
+        );
+        assert_eq!(decoded_redeem.recipient, redeem_instruction.recipient);
+    }
+
+    #[test]
+    fn kagemusha_instruction_archive_box_rejects_adversarial_archives() {
+        let transfer = sample_kagemusha_transfer_instruction();
+        let transfer_archive = to_bytes(&transfer).expect("encode KagemushaTransfer");
+
+        let err = kagemusha_instruction_archive_box("RedeemKagemushaRecursive", &transfer_archive)
+            .expect_err("wrong Kagemusha instruction type must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("invalid RedeemKagemushaRecursive instruction archive"),
+            "unexpected wrong-type error: {message}"
+        );
+
+        let err = kagemusha_instruction_archive_box("KagemushaTransfer", &[])
+            .expect_err("empty archive must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("Kagemusha instruction archive must not be empty"),
+            "unexpected empty-archive error: {message}"
+        );
+
+        let err = kagemusha_instruction_archive_box("KagemushaTransfer", &[0])
+            .expect_err("malformed archive must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("invalid KagemushaTransfer instruction archive"),
+            "unexpected malformed-archive error: {message}"
+        );
+
+        let err = kagemusha_instruction_archive_box("Unsupported", &transfer_archive)
+            .expect_err("unsupported type must fail");
+        let message = py_err_message(err);
+        assert!(
+            message.contains("unsupported Kagemusha instruction archive type"),
+            "unexpected unsupported-type error: {message}"
+        );
     }
 
     fn fixed_bytes(label: &[u8]) -> [u8; Hash::LENGTH] {
@@ -14901,6 +15001,39 @@ struct Instruction {
     inner: InstructionBox,
 }
 
+fn kagemusha_instruction_archive_box(
+    instruction_type: &str,
+    instruction_archive: &[u8],
+) -> PyResult<InstructionBox> {
+    ensure_kagemusha_recursive_archive_len(
+        instruction_archive.len(),
+        "Kagemusha instruction archive",
+    )?;
+    match instruction_type.trim() {
+        "KagemushaTransfer" => {
+            let instruction: iroha_data_model::isi::offline::KagemushaTransfer =
+                decode_from_bytes(instruction_archive).map_err(|err| {
+                    PyValueError::new_err(format!(
+                        "invalid KagemushaTransfer instruction archive: {err}"
+                    ))
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
+        "RedeemKagemushaRecursive" => {
+            let instruction: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
+                decode_from_bytes(instruction_archive).map_err(|err| {
+                    PyValueError::new_err(format!(
+                        "invalid RedeemKagemushaRecursive instruction archive: {err}"
+                    ))
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
+        other => Err(PyValueError::new_err(format!(
+            "unsupported Kagemusha instruction archive type `{other}`; expected KagemushaTransfer or RedeemKagemushaRecursive"
+        ))),
+    }
+}
+
 impl Instruction {
     fn new(inner: InstructionBox) -> Self {
         Self { inner }
@@ -14929,6 +15062,37 @@ impl Instruction {
         let value = loads.call1((json_str,))?;
         let dict: Py<PyDict> = value.extract()?;
         Ok(dict)
+    }
+
+    #[classmethod]
+    fn kagemusha_instruction_archive(
+        _cls: &Bound<'_, PyType>,
+        instruction_type: &str,
+        instruction_archive: &[u8],
+    ) -> PyResult<Self> {
+        Ok(Instruction::new(kagemusha_instruction_archive_box(
+            instruction_type,
+            instruction_archive,
+        )?))
+    }
+
+    #[classmethod]
+    fn kagemusha_recursive_redeem(
+        _cls: &Bound<'_, PyType>,
+        request_archive: &[u8],
+    ) -> PyResult<Self> {
+        let request: iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV1 =
+            decode_kagemusha_recursive_archive(
+                request_archive,
+                "Kagemusha recursive spend redeem",
+            )?;
+        let instruction = kagemusha_recursive_spend_redeem_instruction_from_request(request)
+            .map_err(|err| {
+                PyValueError::new_err(format!(
+                    "invalid Kagemusha recursive spend redeem request: {err}"
+                ))
+            })?;
+        Ok(Instruction::new(InstructionBox::from(instruction)))
     }
 
     #[classmethod]

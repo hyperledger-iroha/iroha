@@ -62,6 +62,17 @@ the append-boundary helper `kagemushaRecursiveSpendLineageAppendBoundary`, both
 lineage-witness helpers, `kagemushaRecursiveSpendVerify`, and
 `kagemushaRecursiveSpendRedeem`.
 
+Transaction builders expose the same Kagemusha instruction surface without
+asking wallet code to reframe native archives. Use
+`buildKagemushaInstructionArchiveInstruction({ instructionType, instructionArchive })`
+for a typed `KagemushaTransfer` or `RedeemKagemushaRecursive` instruction
+archive, `buildKagemushaInstructionTransaction(...)` to sign a single archived
+instruction, and `buildKagemushaRecursiveRedeemTransaction(...)` to derive the
+redeem instruction from a native recursive redeem request before signing. These
+helpers require valid Norito archives, reject empty, malformed, tampered, or
+wrong-type instruction archives, and keep recursive redeem derivation inside the
+native host.
+
 All helper inputs and outputs are raw Norito archives. The transition-profile
 helpers return the canonical Reserved-lineage accumulator transition profile for
 fixture generation and circuit preflight. Browser-only builds expose matching

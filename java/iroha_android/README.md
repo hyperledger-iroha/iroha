@@ -1215,7 +1215,15 @@ with native opening preflight material. The append-boundary digest uses the
 public `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_DOMAIN_V1` domain, plus
 `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_CHAIN_ASSET_BINDING_DOMAIN_V1` and
 `RECURSIVE_SPEND_LINEAGE_APPEND_BOUNDARY_FINAL_NOTE_BINDING_DOMAIN_V1` for
-chain/asset and final-root/current-note binding. Use
+chain/asset and final-root/current-note binding.
+`KagemushaInstructionArchives` wraps a typed `KagemushaTransfer` or
+`RedeemKagemushaRecursive` instruction archive, builds a single archived
+instruction transaction payload, or derives the redeem instruction from a
+native recursive redeem request before constructing that payload. These helpers
+require valid Norito archives, reject empty, malformed, tampered, or wrong-type
+instruction archives, and keep recursive redeem derivation inside the native
+bridge.
+Use
 `canRedeemWitnessless(circuitId, hopCount)` or
 `requiresLineageWitnessForRedeem(circuitId, hopCount)` before online redeem
 construction. `RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1` is `64`, and

@@ -565,13 +565,16 @@ and completed history lives in [`status.md`](./status.md).
 		  and pre-OpenSSL rejection of secret-looking key path strings while
 		  preserving key-path failures separately from private/public key mismatches
 		  and treating temporary OpenSSL staging/write/read failures as structured
-		  signer/verifier errors,
+		  signer/verifier errors after fsynced staged-byte writes and readback
+		  verification, with non-64-byte Ed25519 signature outputs rejected before
+		  evidence assembly,
 	  standalone scanner rejection of secret-looking `--root`/`--json-out`
 	  arguments before root discovery or summary writes, direct root-validator
 	  rejection of secret-looking paths and unreadable root metadata before slot
 	  discovery, direct summary-writer rejection of secret-looking output paths and
-	  unreadable output leaf metadata before JSON writes, discovered slot-name
-	  rejection/redaction before artifact traversal or summary serialization,
+	  unreadable output leaf metadata before JSON writes, scanner `--json-out`
+	  fsynced temp-file writes with atomic replace and readback verification,
+	  discovered slot-name rejection/redaction before artifact traversal or summary serialization,
 	  signer-helper rejection
 	  of secret-looking `--slot`, `--output`, and `--signer-key-id` runtime
 	  arguments before metadata reads, standard device-family coverage,
@@ -584,7 +587,9 @@ and completed history lives in [`status.md`](./status.md).
 				  failures to structured signer errors, classifies signer-controlled
 				  output parents with `lstat()` before any `Path.is_dir()` preflight,
 				  rejects unreadable output parent or leaf metadata before write or
-				  digest reads, revalidates signed-evidence output shape before
+				  digest reads, writes signed-evidence and `sha256sum.txt` outputs
+				  through fsynced same-directory temp files with atomic replace and
+				  readback verification, revalidates signed-evidence output shape before
 				  hashing the written artifact back into `slot.json`, classifies slot directory
 				  and parent metadata with `lstat()` before parsing slot metadata or rewriting
 				  manifests, preflights slot/artifact shape before parsing slot
@@ -633,12 +638,14 @@ and completed history lives in [`status.md`](./status.md).
 		  preflight before direct SHA-256 manifest rewrites are also now guarded.
 		  Signed-evidence artifact digest verification now also revalidates each
 		  required artifact path immediately before hashing the bytes claimed by
-		  `artifact_digests`. Slot-metadata digest checks now also revalidate
+		  `artifact_digests` and binds each digest read to the opened file
+		  identity. Slot-metadata digest checks now also revalidate
 			  `slot.json`-referenced attestation-chain, offline-wallet APK, and
-			  signed-evidence artifact paths immediately before SHA-256 reads. D2D
-			  handoff, wallet-integrity, and `queue/pending_queue.json` transcript
-			  digest checks now use the same pre-read path revalidation. Required
-			  status/runtime marker text reads now also revalidate the slot-relative
+			  signed-evidence artifact paths immediately before SHA-256 reads, then
+			  bind bytes to the opened regular-file identity. D2D handoff,
+			  wallet-integrity, and `queue/pending_queue.json` transcript
+			  digest checks now use the same pre-read path revalidation and
+			  opened-file binding. Required status/runtime marker text reads now also revalidate the slot-relative
 			  artifacts immediately before decoding and marker checks.
 			  Direct slot-file discovery reports unreadable slot-root and
 		  artifact-directory metadata through caller error lists, returns no
@@ -647,11 +654,13 @@ and completed history lives in [`status.md`](./status.md).
 		  artifact directories before traversal, and
 		  direct manifest verification rejects entries under symlinked artifact
 		  directories before hashing. The manifest verifier now also revalidates each
-		  `sha256sum.txt` artifact path immediately before digesting, so direct
-		  verifier calls cannot reuse stale parse-time checks after a path mutation.
+		  `sha256sum.txt` artifact path immediately before digesting and binds the
+		  read to the opened file identity, so direct verifier calls cannot reuse
+		  stale parse-time checks after a path mutation.
 			  The shared Android device-lab JSON loader rejects secret-looking direct file paths and
 		  symlinked ancestor directories before parsing direct metadata, attestation,
-		  handoff, wallet-integrity, or signed-evidence JSON, and fails closed with a
+		  handoff, wallet-integrity, or signed-evidence JSON, decodes bytes from one
+		  opened regular file after path-identity revalidation, and fails closed with a
 		  structured read error for unreadable or non-UTF-8 JSON bytes. The D2D transcript is
   closed-schema and has to
   prove an offline payer/payee handoff, matching sent/received payload hashes,
@@ -671,33 +680,57 @@ and completed history lives in [`status.md`](./status.md).
   freshness, future-date clock-skew rejection, and standard family coverage into
 		  a ready/blocked JSON summary; the checked-in ABI-6 manifest must be a regular
 		  non-symlink, non-hardlinked file with symlink-free ancestors before its
-		  release contract is trusted, and
+		  release contract is trusted, with manifest JSON decoded from the same
+		  opened regular file after path-identity revalidation, and
 	  the checked-in ABI-7 fail-closed and Reserved-lineage release-tooling marker
 	  source files must also be ordinary non-symlink, non-hardlinked files before
-	  their marker text can satisfy readiness, with the same source-marker
-	  validator rerun immediately before marker text is loaded, and unreadable or
-	  non-UTF-8 marker bytes fail closed as structured blockers. The proof evidence has to hash-bind adjacent
+	  their marker text can satisfy readiness, with marker bytes decoded from the
+	  same opened regular file after path-identity revalidation, and unreadable
+	  or non-UTF-8 marker bytes fail closed as structured blockers. The proof evidence has to hash-bind adjacent
 	  `.norito`, `.record.norito`, `.vk`, `.pk`, and production proof-log artifact
-  bytes plus artifact sizes while rejecting empty, symlinked, hardlinked, or
+	  bytes plus artifact sizes from the same opened regular files, with the
+  final readiness rollup revalidating artifact path identity around the opened
+  file before trusting digest or size, while rejecting empty, symlinked, hardlinked, or
   metadata-unreadable proof artifacts/logs, classifies artifact/log missing-vs-unreadable state from the
   lstat-backed local-file validators instead of `Path.is_file()`, re-check
-  that the proof log contains only the exact single expected proof test line
-  and one-test cargo result with canonical LF line endings, strict UTF-8 bytes, a final LF terminator, and no trailing whitespace or forged suffixes after rerunning the lineage local-file validator immediately
-  before reading proof-log text, satisfy release-cutoff and future-date skew bounds, keep the
+  that the proof log is hashed and parsed from the same opened regular file and
+  contains only the exact single expected proof test line and one-test cargo result
+  with canonical LF line endings, strict UTF-8 bytes, a final LF
+  terminator, and no trailing whitespace or forged suffixes, satisfy
+  release-cutoff and future-date skew bounds, keep the
 	  canonical `lineage-proof-evidence.json` filename while rejecting symlinked
 	  evidence files or symlinked evidence ancestors, and remain
 	  closed-schema with duplicate JSON object keys rejected at every nested
 	  evidence object and non-standard `NaN`/`Infinity` JSON constants rejected
-	  before schema checks. The compact key evidence hash-binds the ABI-7 LEN=4
-	  `recursive-compact-len4.record.norito`, `.vk`, and `.pk` artifacts,
-	  validates compact key artifact byte sizes against local bytes, rejects empty
-	  compact key artifacts, all-zero lineage artifacts, and plain-text or all-zero placeholder compact key artifacts,
-	  hash-binds `recursive-compact-key-artifacts.log`, requires exactly the
-	  canonical CLI summary line with canonical LF line endings, strict UTF-8 bytes, a final LF terminator, and no trailing whitespace, and checks the reported `.vk`, `.pk`, and
-	  `.record.norito` sizes against local bytes,
-	  preserves the canonical
-	  `recursive-compact-key-evidence.json` filename, and validates the canonical
-	  release command instead of runtime key generation. The Kagemusha release
+	  before schema checks after proof-evidence JSON is parsed from the same
+	  opened regular file with path-identity revalidation. The compact key evidence hash-binds the ABI-7 LEN=4
+	  `recursive-compact-len4.record.norito`, `.vk`, `.pk`,
+	  `recursive-compact-key-artifacts.norito`, and
+	  `recursive-compact-verifier-keys.norito` artifacts, validates compact key artifact byte sizes
+	  against the same opened local bytes with the same readiness-side
+	  path-identity revalidation, rejects empty compact key artifacts, all-zero lineage
+	  artifacts, and plain-text or all-zero placeholder compact key artifacts,
+	  hashes and parses `recursive-compact-key-artifacts.log` from the same
+	  opened regular file, requires exactly the canonical CLI summary line with
+	  canonical LF line endings, strict UTF-8
+	  bytes, a final LF terminator, and no trailing whitespace, and checks the reported `.vk`,
+	  `.pk`, `.record.norito`, key-artifacts package, and verifier-keys package
+	  sizes and SHA-256 digests against local bytes. The canonical command must provide
+	  `--key-artifacts-out` and `--verifier-keys-out` together, and the CLI now
+	  rejects missing or one-sided package-output flags before starting expensive
+	  key generation; old-shape commands remain release evidence blockers until
+	  a fresh canonical artifact run replaces the currently
+	  running old-shape generator. The evidence file preserves the canonical
+	  `recursive-compact-key-evidence.json` filename and validates the canonical
+	  release command instead of runtime key generation, while release
+	  key-artifact writers, evidence JSON helper outputs, and readiness
+	  summary output now use same-directory temporary files, byte fsync, atomic
+	  rename, readback verification pinned by helper-level, readiness-summary,
+	  and Android scanner/signer mismatch/read-failure regressions, post-rename output
+	  revalidation pinned by symlink-swap regressions, and parent-directory sync
+	  to avoid trusting partial lineage, compact package, evidence, or summary
+	  artifacts after interrupted generator runs.
+	  The Kagemusha release
 	  bundle manifest now uses
 	  `iroha.kagemusha.production_release_bundle.v1` to recompute the checked-in
 	  ABI-6, ABI-7, and lineage release-tooling trust roots, hash-bind the ready
@@ -708,20 +741,28 @@ and completed history lives in [`status.md`](./status.md).
 	  compact key artifacts, the compact key generator log, production proof logs,
 	  release APKs, D2D handoff transcripts, wallet-integrity transcripts, and
 	  attestation certificate-chain files with
-	  bundle-relative paths, SHA-256 digests, and byte sizes after revalidating each slot name while rejecting summary drift
+	  bundle-relative paths, SHA-256 digests, and byte sizes computed from the
+	  same open regular file after path-identity revalidation, then revalidating each slot name while rejecting summary drift
 	  across repo-trust and external-evidence sections, duplicate JSON keys,
 	  unexpected top-level, section-level, or per-slot Android signed-evidence
 	  summary fields, missing Android signed-evidence summary fields, malformed
 	  summary digests or timestamps, per-section blockers
-	  in a ready summary, secret-looking paths, secret-looking
+	  in a ready summary, non-string, unsafe, or noncanonical nested evidence
+	  inventory paths, malformed nested evidence digests, or missing/boolean/non-integer/non-positive
+	  nested evidence sizes in existing release manifests, secret-looking paths, secret-looking
 	  strings anywhere inside the readiness summary, plain-text or all-zero placeholder
 	  compact key artifacts in the compact-key artifact inventory, evidence outside `--bundle-root`, symlinked
 	  bundle roots, symlinked or hardlinked bundle outputs, and secret-looking
 	  trusted signer key paths before loading signer keys, with newly-created
 	  bundle-output parents revalidated before fsynced temporary-file writes,
-	  atomic replacement, and readback verification. The same helper can verify existing manifests
-	  by preflighting the manifest path before local evidence scanners run and
-	  then using a stable manifest comparison that ignores only the verifier run
+	  atomic replacement, final output-path revalidation, parent-directory sync,
+	  and readback verification pinned by read-failure and post-replace
+	  symlink-swap regressions. The same helper can verify existing manifests
+	  by parsing readiness summaries and existing manifests from the same opened
+	  regular JSON file after path-identity revalidation, preflighting the
+	  manifest path before local evidence scanners run, and
+	  then validating nested evidence inventory path, digest, and required-size shape before using a
+	  stable manifest comparison that ignores only the verifier run
 	  timestamp. Any release input
 	  path that escapes the bundle root stops all readiness/evidence/device-lab
 	  loading for that bundle run, and `--out` cannot overwrite any
@@ -2176,11 +2217,13 @@ and completed history lives in [`status.md`](./status.md).
   corridor, which now covers `pacs.002`, `pacs.004`, `camt.056`, `sese.023`,
   `sese.024`, `sese.025`, and `colr.012` payment, securities, and collateral
   lifecycle XML. An offline XSD/XML fixture-manifest preflight now pins checked-in
-  schema target namespaces, `Document` payload roots, fixture namespaces, and
-  reviewed missing-schema exceptions, while rejecting copied XML fixtures with
-  duplicate fixture SHA-256 values, non-canonical schema/fixture path segments,
-  and optionally validating schema-backed XML fixtures against their checked-in
-  XSDs with `xmllint --nonet`; it also
+	  schema target namespaces, `Document` payload roots, fixture namespaces, and
+	  reviewed missing-schema exceptions, while requiring schema/fixture identifier
+	  material and schema attribute names to remain printable ASCII before mismatch
+	  diagnostics can quote them, rejecting copied XML fixtures with duplicate
+	  fixture SHA-256 values, non-canonical schema/fixture path segments, and
+	  optionally validating schema-backed XML fixtures against their checked-in XSDs
+	  with `xmllint --nonet`; it also
   requires canonical repository/commit/path/license/source-SHA provenance for
   every checked-in XSD with source repository URLs capped at 2048 characters,
   placeholder repository owners or names rejected during preflight and
@@ -2260,7 +2303,33 @@ and completed history lives in [`status.md`](./status.md).
 			  available, and live rail/notary adapter timeout and byte-cap CLI
 				  values now fail closed on non-positive or non-finite inputs before
 				  local reads or network delivery, every ISO operator CLI rejects
-				  the unsupported `--` argument terminator before trailing values can
+				  control-bearing unknown raw arguments before argparse diagnostics,
+				  requires unknown raw arguments to remain printable ASCII,
+				  preflights required notary/rail URL values for control,
+				  non-ASCII, whitespace-padded, and non-URL-shaped secret-looking
+				  material before unrelated local path checks,
+					  keeps URL host labels printable ASCII before host/IP
+					  numeric-label checks can accept Unicode digit confusables,
+					  rejects archived canary command flags with secret-looking or
+					  non-ASCII spellings before echoing unsupported flag names,
+					  reports non-ASCII unknown JSON keys with label-only diagnostics,
+					  rejects non-ASCII receipt-kind spellings before unsupported-kind
+					  diagnostics can echo them,
+					  rejects non-ASCII trust embedded-signature policies before
+					  unsupported-policy blockers can preserve them,
+					  keeps trust source authority/version provenance printable ASCII
+					  before direct or archived summaries can preserve it,
+					  keeps direct and archived trust DER labels printable ASCII
+					  before summaries can preserve them,
+					  keeps provider/environment context labels printable ASCII from
+					  canary/trust generation through evidence verification and release
+					  readiness and reports context mismatches without printing observed
+					  or expected values, rejects archived canary stage names with non-ASCII
+					  confusables before unsupported-stage diagnostics can echo them,
+					  keeps canary runbook paths, archived child-command paths, and
+					  readiness compact summary/config/receipt paths printable ASCII
+					  before release evidence can preserve path confusables,
+					  the unsupported `--` argument terminator before trailing values can
 				  bypass raw secret, boolean, path, context, or numeric preflights
 				  or be echoed by argparse, disable argparse long-option abbreviation
 				  so partial flag spellings cannot bypass exact preflight matching,
@@ -2287,11 +2356,16 @@ and completed history lives in [`status.md`](./status.md).
 				  timestamp, canonical notary/rail source paths, including `store_dir`,
 				  that are not flag-shaped, `.xml` rail payload leaves,
 			  and whitespace-free rail
-			  metadata identifiers, with live rail sidecars rejecting explicit `null`
-			  `profile`/`rail_message_id` values, non-canonical profile IDs, and
-			  overlong or non-canonical ASCII rail-message identifiers before
-			  submission, with oversized or unknown-field sidecars rejected as
-			  malformed,
+				  metadata identifiers, with live rail sidecars rejecting non-ASCII
+				  `message_type` values, explicit `null` `profile`/`rail_message_id`
+				  values, non-canonical profile IDs, and overlong or non-canonical
+				  ASCII rail-message identifiers before submission, with oversized or
+				  unknown-field sidecars rejected as malformed,
+	  ASCII-only rail `message_type` digit validation across direct receipt
+	  verification, evidence replay, readiness replay, and XSD profile catalogs,
+	  ASCII-only XSD profile-catalog `message_def_id` and version validation,
+	  plus generic evidence/readiness archive/canary kind, filename, or metadata
+	  mismatch blockers that do not print receipt kind values, receipt leaf names, or invalid metadata tuples,
 	  rail receipt metadata recording for nullable raw receipt fields and retained
 	  archived receipt-summary identifiers, rail sidecar source bindings that reject
 	  explicit-null optional metadata instead of treating it as omission,
@@ -2305,7 +2379,7 @@ and completed history lives in [`status.md`](./status.md).
 		  status-history timestamp binding for persisted record sources, and
 		  symlink-free receipt archive directories,
 	  and a strict JSON-runbook canary runner rejects
-  whitespace-padded or control-bearing runbook strings, present-null optional
+  whitespace-padded or control-bearing runbook strings, non-ASCII runbook path strings, present-null optional
 	  path/numeric limit fields, embedded-whitespace/leading-dash-segment/backslash/semicolon/dot-segment
 	  path smuggling including raw URI/drive prefixes, encoded control/space
 	  bytes, encoded dot/separator bytes, encoded semicolon parameters, encoded
@@ -2326,7 +2400,10 @@ and completed history lives in [`status.md`](./status.md).
 	  manifests/profile catalogs, evidence summaries, readiness summaries,
 	  embedded receipt-verifier stdout, and direct archive receipt-verifier stdout
 	  before semantic validation, so shadowed keys, non-finite numbers, and invalid
-	  Unicode strings cannot rewrite release evidence. Those gates also reject symlinked or
+	  Unicode strings cannot rewrite release evidence. Direct numeric CLI
+	  preflights also reject Unicode digit confusables before Python parsers can
+	  accept them as timeouts, byte limits, or evidence age budgets. Those gates
+	  also reject symlinked or
   non-regular canary runbooks, trust bundles, evidence/readiness summaries, XSD
   manifests, profile catalogs, schema files, and XML fixtures before digest,
   provenance, or policy checks run, opening those inputs through no-follow file
@@ -2361,8 +2438,8 @@ and completed history lives in [`status.md`](./status.md).
 	  4 MiB before parsing, optional `xmllint` stdout/stderr is capped at 64 KiB
 	  and runtime is bounded by positive finite `--xmllint-timeout-secs` during
   XSD fixture validation, with successful validator output limited to empty
-  output or the normal `<fixture> validates` line and secret-looking or
-  control-bearing validator diagnostics redacted, operator trust-bundle JSON is capped at
+	  output or the normal `<fixture> validates` line and secret-looking,
+	  control-bearing, or non-ASCII validator diagnostics redacted, operator trust-bundle JSON is capped at
   64 MiB before trust-preflight parsing, and trust DER base64 is capped before
   decoding to the 1 MiB DER material limit while requiring each DER object to
   declare a matching SHA-256 digest. Trust-bundle preflight now requires an
@@ -2379,8 +2456,8 @@ and completed history lives in [`status.md`](./status.md).
   digests across trust summaries, and rejects
   plan-only, dry-run, control-bearing or whitespace-padded child-command entries,
   child-command arrays that do not start with the runner-emitted Python
-  interpreter plus expected stage script path or that carry extra positional
-  arguments after that prefix,
+  interpreter with ASCII-only numeric version suffixes plus expected stage
+  script path or that carry extra positional arguments after that prefix,
   non-canonical or command-mismatched rail/notary receipt directories,
   verify commands that omit generated rail/notary receipt directories,
 	  insecure-HTTP, default-profile, secret-leaking,
@@ -2414,8 +2491,9 @@ and completed history lives in [`status.md`](./status.md).
 		  every executed child stage without unsafe control characters or
 		  identifier-style secret-looking material, and avoided duplicate singleton child-command
 		  flags, boolean child-command flags spelled with `=value`, and non-positive
-		  or non-finite numeric child-command values plus non-canonical child-command
-		  path values, unsupported positional command entries, wrong stage script
+		  or non-finite numeric child-command values plus Unicode digit confusables
+		  in floating timeout flags, non-ASCII or non-canonical child-command path values,
+		  unsupported positional command entries, wrong stage script
 		  prefixes, or missing required child-command inputs. Trust-bundle preflight
 		  now treats profile override emission as production-only: complete
 			  source authority/version provenance is required, and `--emit-profile-json`
@@ -2481,13 +2559,13 @@ and completed history lives in [`status.md`](./status.md).
 	  and the aggregate readiness gate rechecks that proof plus the evidence policy
 		  context, requires explicit freshness budgets for
 		  XSD/evidence/canary/trust/trust-source timestamps, blocks stale
-	  digest-correct summaries and archive freshness policies weaker than the final
+		  digest-correct summaries and archive freshness policies weaker than the final
 			  release budgets, rejects stale, placeholder, or smuggled compact trust
 			  source provenance including `dummy`, `fake`, `placeholder`,
 			  `replace-before-production`, `sample`, `template`, reserved hosts
 			  such as `.example`, `example.com`, `example.net`, `example.org`, and
 			  `example.invalid`, overlong URLs, invalid or overlong host labels,
-			  numeric-host/legacy-IPv4 spoofing, IPv6 transition embedded-IPv4
+			  non-ASCII host labels, numeric-host/legacy-IPv4 spoofing, IPv6 transition embedded-IPv4
 			  smuggling, percent-escape smuggling, and omitted,
 			  malformed, or release-weaker trust source freshness budgets, rejects
 			  omitted trust-bundle source provenance separately from explicit null
@@ -2506,8 +2584,10 @@ and completed history lives in [`status.md`](./status.md).
 		  or canary-stage-only receipt evidence is actually present, and
 	  rechecks compact trust profile JSON emission and digest, CRL/OCSP revocation
 	  posture, direct archive/canary receipt digest/kind/status/response-body digest/endpoint-policy/metadata binding,
-	  empty successful direct-verifier stderr, and trust
-	  profile-count binding, while rejecting repeated or copied
+	  empty successful direct-verifier stderr, trust
+	  profile-count binding, and label-only missing-trust coverage blockers that
+	  do not print compact receipt profile IDs or canary environment labels,
+	  while rejecting repeated or copied
   XSD/evidence and compact canary/trust summaries, rejecting nested
   canary/trust/receipt/profile replay across evidence summaries, requiring compact
 	  canary/trust source paths to be control-free, trim-free, not flag-shaped, and
@@ -2548,9 +2628,10 @@ and completed history lives in [`status.md`](./status.md).
   requiring XML schema-validation proof for every
   schema-backed fixture, rejecting unknown XSD summary fields, recomputing
 	  schema-only flags/reasons and reviewed gap lists from the schema/fixture
-	  relationship while rejecting padded or control-bearing reviewed reason
-	  strings plus present empty/non-string archived reviewed reasons in both the
-	  XSD preflight and readiness rollup, rejecting stale missing-schema reasons
+	  relationship while rejecting padded, control-bearing, non-ASCII,
+	  secret-looking, or overlong reviewed reason strings plus present
+	  empty/non-string archived reviewed reasons in both the XSD preflight and readiness rollup,
+	  rejecting stale missing-schema reasons
 		  on schema-backed archived fixtures, rejecting embedded
 		  whitespace, leading-dash path segments, or semicolon path parameters in checked-in XSD source provenance,
 		  rejects omitted checked-in and blocked-source `source` keys separately
@@ -2561,10 +2642,12 @@ and completed history lives in [`status.md`](./status.md).
 	  path and explicit profile-catalog object/null state, requiring
 	  profile-catalog source and embedded JSON
   digest provenance from exactly one active Rust `DEFAULT_PROFILES_JSON`
-  raw-string declaration plus duplicate-free profile/message/direction/version shape
-  with unknown source catalog keys rejected by the XSD preflight and
-  runtime catalog-field shapes checked before summary emission, rechecking
-  canonical profile ids, ISO family message types, allowed directions, and
+	  raw-string declaration plus duplicate-free profile/message/direction/version shape
+	  with unknown source catalog keys rejected by the XSD preflight and
+	  runtime catalog-field shapes checked before summary emission, requiring
+	  profile-catalog enum and list values to remain printable ASCII before
+	  unknown-value diagnostics or summary recording, rechecking
+	  canonical profile ids, ISO family message types, allowed directions, and
   message-definition family binding in consumed summaries, and schema-backed
   proof for advertised concrete message versions, recomputing
   profile-catalog missing-version lists, and
@@ -2582,9 +2665,9 @@ and completed history lives in [`status.md`](./status.md).
   aggregate production-readiness gate.
 	  ISO rail ingress now has
 	  an operator file-drop adapter that verifies sidecar-pinned message
-	  type/profile/payload digests, rejects unsupported rail message types,
-	  non-canonical sidecar profile IDs, and non-canonical rail-message IDs, and
-	  closes the live sidecar schema while bounding sidecar JSON before
+		  type/profile/payload digests, rejects unsupported or non-ASCII rail
+		  message types, non-canonical sidecar profile IDs, and non-canonical
+		  rail-message IDs, and closes the live sidecar schema while bounding sidecar JSON before
 	  submitting to clean Torii base URLs and writing receipts, plus the same
 	  receipt verifier and runbook runner for canary evidence.
   Remaining rail-connectivity work is provider-specific live gateway canaries

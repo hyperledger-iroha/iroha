@@ -22,7 +22,12 @@ public final class OfflineJsonParser {
         asBoolean(object.get("offline_recursive_note_proof"), "offline_recursive_note_proof"),
         asBoolean(object.get("offline_fountain_qr"), "offline_fountain_qr"),
         asBoolean(object.get("offline_sync_optional"), "offline_sync_optional"),
-        asBoolean(object.get("offline_telemetry"), "offline_telemetry"));
+        asBoolean(object.get("offline_telemetry"), "offline_telemetry"),
+        asOptionalBoolean(object.get("offline_kagemusha_abi7"), false),
+        asNullableString(object.get("offline_kagemusha_abi7_mode")),
+        asOptionalInteger(object.get("offline_kagemusha_abi7_bridge_abi_version")),
+        asNullableString(object.get("offline_kagemusha_abi7_circuit_id")),
+        asOptionalBoolean(object.get("offline_kagemusha_abi7_artifacts"), false));
   }
 
   public static OfflineV2Readiness parseOfflineV2Readiness(final byte[] payload) {
@@ -74,6 +79,37 @@ public final class OfflineJsonParser {
       throw new IllegalStateException(path + " must be a boolean");
     }
     return bool.booleanValue();
+  }
+
+  private static boolean asOptionalBoolean(final Object value, final boolean defaultValue) {
+    return value instanceof Boolean bool ? bool.booleanValue() : defaultValue;
+  }
+
+  private static Integer asOptionalInteger(final Object value) {
+    if (value == null) {
+      return null;
+    }
+    if (value instanceof Number number) {
+      return Integer.valueOf(number.intValue());
+    }
+    if (value instanceof String string) {
+      final String trimmed = string.trim();
+      return trimmed.isEmpty() ? null : Integer.valueOf(Integer.parseInt(trimmed));
+    }
+    return null;
+  }
+
+  private static String asNullableString(final Object value) {
+    if (value == null) {
+      return null;
+    }
+    if (value instanceof String string) {
+      return string;
+    }
+    if (value instanceof Number || value instanceof Boolean) {
+      return value.toString();
+    }
+    return null;
   }
 
   private static OfflineTransferList.OfflineTransferItem parseTransferItem(

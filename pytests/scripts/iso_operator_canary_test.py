@@ -47,6 +47,7 @@ class IsoOperatorCanaryTest(unittest.TestCase):
             ("%70assword_canary_unknown_leak", "canary_unknown_leak"),
             ("private-key_canary_unknown_leak", "canary_unknown_leak"),
             ("unexpected\x1bcanary_key", "\x1b"),
+            ("unexpected_canary_\uff4bey", "\uff4b"),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -113,6 +114,27 @@ class IsoOperatorCanaryTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--summary-ou", stderr.getvalue())
+
+    def test_raw_cli_control_characters_are_rejected_without_echo(self):
+        hidden = "--unknown-canary\x1bflag"
+        with self.assertRaises(CANARY.CanaryError) as caught:
+            CANARY._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must not contain control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("unknown-canary", message)
+
+    def test_raw_cli_non_ascii_is_rejected_without_echo(self):
+        hidden = "\uff0d\uff0dsummary-out"
+        with self.assertRaises(CANARY.CanaryError) as caught:
+            CANARY._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must use printable ASCII", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("summary-out", message)
 
     def test_output_cli_path_flags_reject_flag_like_values(self):
         cases = (
@@ -235,8 +257,12 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertIn("path must not contain URL delimiter characters", message)
                 self.assertNotIn(url, message)
 
-    def test_url_paths_reject_non_ascii_smuggling(self):
+    def test_urls_reject_non_ascii_smuggling(self):
         cases = (
+            (
+                "https://torii\u0661.local-bank.bank/base/v1",
+                "host must use printable ASCII",
+            ),
             (
                 "https://torii.local-bank.bank/base∕debug/v1",
                 "path must use printable ASCII",
@@ -336,6 +362,21 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                 self.assertIn("numeric value", stderr)
                 self.assertNotIn("token=", stderr)
                 self.assertNotIn("canary-secret", stderr)
+
+    def test_numeric_cli_flags_reject_unicode_digits_without_echo(self):
+        hidden = "\u0661"
+        cases = (
+            ["--output-limit-bytes", hidden],
+            [f"--output-limit-bytes={hidden}"],
+            ["--stage-timeout-secs", f"{hidden}.5"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_canary(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("must use printable ASCII", stderr)
+                self.assertNotIn(hidden, stderr)
 
     def test_raw_cli_secret_like_values_rejected_without_echo(self):
         cases = (
@@ -2687,6 +2728,26 @@ class IsoOperatorCanaryTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_runbook_paths_reject_non_ascii_without_echo(self):
+        hidden = "inb\u043ex"
+        body = {
+            "provider": "local-bank",
+            "environment": "ci",
+            "rail": {
+                "inbox_dir": hidden,
+                "torii_base_url": "https://torii.local-bank.bank",
+            },
+        }
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = write_config(root, body)
+
+            rc, _stdout, stderr = run_canary(["--config", str(config), "--plan-only"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("rail.inbox_dir must use printable ASCII", stderr)
+            self.assertNotIn(hidden, stderr)
+
     def test_control_characters_in_runbook_strings_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -2706,6 +2767,38 @@ class IsoOperatorCanaryTest(unittest.TestCase):
 
             self.assertEqual(rc, 2)
             self.assertIn("control characters", stderr)
+
+    def test_runbook_context_strings_must_be_printable_ascii_without_echo(self):
+        cases = (
+            ("provider", "local-b\u00e1nk", "config.provider must use printable ASCII"),
+            (
+                "environment",
+                "prepr\u043ed",
+                "config.environment must use printable ASCII",
+            ),
+        )
+        for field, hidden, message in cases:
+            with self.subTest(field=field):
+                with tempfile.TemporaryDirectory() as raw_root:
+                    root = Path(raw_root)
+                    body = {
+                        "provider": "local-bank",
+                        "environment": "ci",
+                        "rail": {
+                            "inbox_dir": "inbox",
+                            "torii_base_url": "https://torii.local-bank.bank",
+                        },
+                    }
+                    body[field] = hidden
+                    config = write_config(root, body)
+
+                    rc, _stdout, stderr = run_canary(
+                        ["--config", str(config), "--plan-only"]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
 
     def test_runbook_strings_must_not_require_trimming(self):
         base = {

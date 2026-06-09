@@ -52,9 +52,9 @@ UNSUPPORTED_SCHEMA_COMPOSITION_CHILDREN = {
     "redefine",
     "override",
 }
-MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.\d{3}\.\d{3}\.\d{2}$")
+MESSAGE_DEF_ID_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}\.[0-9]{3}\.[0-9]{2}$")
 PROFILE_ID_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$")
-MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.\d{3}$")
+MESSAGE_TYPE_RE = re.compile(r"^[a-z]{4}\.[0-9]{3}$")
 PROFILE_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
 SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 SOURCE_REPOSITORY_RE = re.compile(
@@ -99,6 +99,7 @@ MAX_SCHEMA_BYTES = 8 * 1024 * 1024
 MAX_FIXTURE_XML_BYTES = 8 * 1024 * 1024
 MAX_XMLLINT_OUTPUT_BYTES = 64 * 1024
 MAX_SOURCE_REPOSITORY_CHARS = 2048
+MAX_REVIEWED_GAP_REASON_CHARS = 1024
 DEFAULT_XMLLINT_TIMEOUT_SECS = 30.0
 ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
 DEFAULT_MANIFEST = (
@@ -411,6 +412,10 @@ def _preflight_raw_cli_secrets(argv: list[str] | None, value_flags: set[str]) ->
         if any(arg.startswith(f"{flag}=") for flag in value_flags):
             index += 1
             continue
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in arg):
+            raise FixtureManifestError("CLI argument must not contain control characters")
+        if any(ord(ch) > 0x7E for ch in arg):
+            raise FixtureManifestError("CLI argument must use printable ASCII")
         if _contains_secret_material(arg) or _contains_secret_identifier_material(arg):
             raise FixtureManifestError("CLI argument must not contain secret-looking material")
         index += 1
@@ -470,6 +475,8 @@ def _preflight_output_cli_paths(argv: list[str] | None, flags: set[str]) -> None
 def _reject_raw_numeric_cli_value(raw: str, flag: str, *, integer: bool) -> None:
     if raw != raw.strip() or any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in raw):
         raise FixtureManifestError(f"{flag} must be a numeric value")
+    if any(ord(ch) > 0x7E for ch in raw):
+        raise FixtureManifestError(f"{flag} must use printable ASCII")
     try:
         int(raw, 10) if integer else float(raw)
     except ValueError as error:
@@ -913,7 +920,12 @@ def _require_array(value: Any, label: str) -> list[Any]:
 def _reject_unknown_keys(value: dict[str, Any], allowed: set[str], label: str) -> None:
     unknown = sorted(set(value) - allowed)
     if unknown:
-        if any(_is_secret_looking_key(key) or _is_control_bearing_key(key) for key in unknown):
+        if any(
+            _is_secret_looking_key(key)
+            or _is_control_bearing_key(key)
+            or any(ord(ch) > 0x7E for ch in str(key))
+            for key in unknown
+        ):
             raise FixtureManifestError(f"{label} contains unknown keys")
         raise FixtureManifestError(f"{label} contains unknown keys: {', '.join(unknown)}")
 
@@ -959,9 +971,25 @@ def _contains_unsafe_json_control(value: str) -> bool:
     )
 
 
+def _contains_non_ascii_material(value: str) -> bool:
+    return any(ord(ch) > 0x7E for ch in value)
+
+
 def _reject_secret_looking_identifier(value: str, label: str) -> None:
     if _contains_secret_material(value) or _is_secret_looking_key(value):
         raise FixtureManifestError(f"{label} must not contain secret-looking material")
+
+
+def _reject_non_ascii_xml_identifiers(element: ET.Element, path: Path, label: str) -> None:
+    if isinstance(element.tag, str):
+        namespace, local = _split_xml_name(element.tag)
+        if namespace is not None:
+            _reject_non_ascii_identifier(namespace, f"{path} {label} namespace")
+        _reject_non_ascii_identifier(local, f"{path} {label} element")
+    for attr_name in element.attrib:
+        _reject_non_ascii_identifier(attr_name, f"{path} {label} attribute")
+    for offset, child in enumerate(element):
+        _reject_non_ascii_xml_identifiers(child, path, f"{label}[{offset}]")
 
 
 def _reject_secret_looking_xml_content(element: ET.Element, path: Path, label: str) -> None:
@@ -1010,7 +1038,23 @@ def _required_string(value: dict[str, Any], key: str, label: str) -> str:
     return raw
 
 
+def _reject_non_ascii_identifier(value: str, label: str) -> None:
+    if _contains_non_ascii_material(value):
+        raise FixtureManifestError(f"{label} must use printable ASCII")
+
+
+def _reject_reviewed_gap_reason_material(value: str, label: str) -> None:
+    if len(value) > MAX_REVIEWED_GAP_REASON_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_REVIEWED_GAP_REASON_CHARS} characters"
+        )
+    _reject_non_ascii_identifier(value, label)
+    _reject_secret_looking_identifier(value, label)
+
+
 def _require_message_def_id(value: str, label: str) -> str:
+    _reject_non_ascii_identifier(value, label)
+    _reject_secret_looking_identifier(value, label)
     if MESSAGE_DEF_ID_RE.fullmatch(value) is None:
         raise FixtureManifestError(
             f"{label} must be lowercase ISO message id like pacs.008.001.08"
@@ -1063,6 +1107,7 @@ def _optional_string_list(value: dict[str, Any], key: str, label: str) -> list[s
             raise FixtureManifestError(f"{label}.{key}[{offset}] must not have surrounding whitespace")
         if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in item):
             raise FixtureManifestError(f"{label}.{key}[{offset}] must not contain control characters")
+        _reject_non_ascii_identifier(item, f"{label}.{key}[{offset}]")
         if item in seen:
             raise FixtureManifestError(
                 f"{label}.{key}[{offset}] duplicates {label}.{key}[{seen[item]}]"
@@ -1186,9 +1231,11 @@ def _reject_sha256_overlap(first: list[str], second: list[str], label: str) -> N
 
 def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str) -> None:
     rail = _required_string(profile, "rail", label)
+    _reject_non_ascii_identifier(rail, f"{label}.rail")
     if rail not in PROFILE_RAILS:
         raise FixtureManifestError(f"{label}.rail has unknown rail {rail!r}")
     policy = _required_string(profile, "embedded_signature_policy", label)
+    _reject_non_ascii_identifier(policy, f"{label}.embedded_signature_policy")
     if policy not in PROFILE_SIGNATURE_POLICIES:
         raise FixtureManifestError(
             f"{label}.embedded_signature_policy has unknown policy {policy!r}"
@@ -1275,6 +1322,7 @@ def _validate_profile_catalog_message_fields(message: dict[str, Any], label: str
     require_business_service = _optional_bool(message, "require_business_service", label)
     _optional_bool(message, "require_uetr", label)
     address_mode = _required_string(message, "structured_address_mode", label)
+    _reject_non_ascii_identifier(address_mode, f"{label}.structured_address_mode")
     if address_mode not in PROFILE_ADDRESS_MODES:
         raise FixtureManifestError(
             f"{label}.structured_address_mode has unknown mode {address_mode!r}"
@@ -1421,9 +1469,7 @@ def _verify_blocked_schema_source(value: Any, label: str) -> dict[str, Any]:
         f"{label}.message_def_id",
     )
     reason = _required_string(entry, "reason", label)
-    if len(reason) > 1024:
-        raise FixtureManifestError(f"{label}.reason must be no longer than 1024 characters")
-    _reject_secret_looking_material(reason, f"{label}.reason")
+    _reject_reviewed_gap_reason_material(reason, f"{label}.reason")
     if "source" not in entry:
         raise FixtureManifestError(f"{label}.source must be recorded")
     source = _require_object(entry["source"], f"{label}.source")
@@ -1504,7 +1550,10 @@ def _namespace_for(message_def_id: str) -> str:
 
 
 def _message_id_from_namespace(namespace: str | None, label: str) -> str:
-    if namespace is None or not namespace.startswith(ISO_NAMESPACE_PREFIX):
+    if namespace is None:
+        raise FixtureManifestError(f"{label} namespace must start with {ISO_NAMESPACE_PREFIX}")
+    _reject_non_ascii_identifier(namespace, f"{label} namespace")
+    if not namespace.startswith(ISO_NAMESPACE_PREFIX):
         raise FixtureManifestError(f"{label} namespace must start with {ISO_NAMESPACE_PREFIX}")
     value = namespace[len(ISO_NAMESPACE_PREFIX) :]
     if not value:
@@ -1566,7 +1615,12 @@ def _require_schema_attributes(
         if missing:
             details.append("missing " + ", ".join(missing))
         if extra:
-            if any(_contains_secret_material(name) or _is_secret_looking_key(name) for name in extra):
+            if any(
+                _contains_secret_material(name)
+                or _is_secret_looking_key(name)
+                or _contains_non_ascii_material(name)
+                for name in extra
+            ):
                 details.append("unexpected attributes")
             else:
                 details.append("unexpected " + ", ".join(extra))
@@ -1594,6 +1648,7 @@ def _schema_payload_root(root: ET.Element, path: Path) -> str:
     document_type = document_element.attrib.get("type")
     if not document_type:
         raise FixtureManifestError(f"{path} Document element does not declare a type")
+    _reject_non_ascii_identifier(document_type, f"{path} Document element type")
     _reject_secret_looking_identifier(document_type, f"{path} Document element type")
     if document_type != "Document":
         raise FixtureManifestError(
@@ -1640,10 +1695,12 @@ def _schema_payload_root(root: ET.Element, path: Path) -> str:
     payload = payload_element.attrib.get("name")
     if not payload:
         raise FixtureManifestError(f"{path} Document payload element has no name")
+    _reject_non_ascii_identifier(payload, f"{path} Document payload element name")
     _reject_secret_looking_identifier(payload, f"{path} Document payload element name")
     payload_type = payload_element.attrib.get("type")
     if not payload_type:
         raise FixtureManifestError(f"{path} Document payload element does not declare a type")
+    _reject_non_ascii_identifier(payload_type, f"{path} Document payload element type")
     _reject_secret_looking_identifier(payload_type, f"{path} Document payload element type")
     if ":" in payload_type:
         raise FixtureManifestError(
@@ -1729,10 +1786,14 @@ def verify_schema_entry(
         f"{label}.message_def_id",
     )
     expected_payload_root = _required_string(entry, "payload_root", label)
+    _reject_non_ascii_identifier(expected_payload_root, f"{label}.payload_root")
     _reject_secret_looking_identifier(expected_payload_root, f"{label}.payload_root")
     schema_only_reason = _optional_string(entry, "schema_only_reason", label)
     if schema_only_reason is not None:
-        _reject_secret_looking_material(schema_only_reason, f"{label}.schema_only_reason")
+        _reject_reviewed_gap_reason_material(
+            schema_only_reason,
+            f"{label}.schema_only_reason",
+        )
     if not rel_path.endswith(".xsd"):
         raise FixtureManifestError(f"{label}.path must point to an .xsd file")
     path = _validate_relative_path(
@@ -1767,6 +1828,7 @@ def verify_schema_entry(
     )
     target_namespace = root.attrib.get("targetNamespace")
     if isinstance(target_namespace, str):
+        _reject_non_ascii_identifier(target_namespace, f"{path} targetNamespace")
         _reject_secret_looking_identifier(target_namespace, f"{path} targetNamespace")
     expected_namespace = _namespace_for(message_def_id)
     if target_namespace != expected_namespace:
@@ -1884,6 +1946,8 @@ def _xmllint_output_detail(output: str) -> str:
         return "[xmllint output redacted: secret-looking material]"
     if _contains_unsafe_diagnostic_control(detail):
         return "[xmllint output redacted: control characters]"
+    if _contains_non_ascii_material(detail):
+        return "[xmllint output redacted: non-ASCII material]"
     return detail[:4096]
 
 
@@ -1912,11 +1976,12 @@ def verify_fixture_entry(
         f"{label}.message_def_id",
     )
     expected_payload_root = _required_string(entry, "payload_root", label)
+    _reject_non_ascii_identifier(expected_payload_root, f"{label}.payload_root")
     _reject_secret_looking_identifier(expected_payload_root, f"{label}.payload_root")
     schema_rel = _optional_string(entry, "schema", label)
     missing_schema_reason = _optional_string(entry, "missing_schema_reason", label)
     if missing_schema_reason is not None:
-        _reject_secret_looking_material(
+        _reject_reviewed_gap_reason_material(
             missing_schema_reason,
             f"{label}.missing_schema_reason",
         )
@@ -1936,6 +2001,7 @@ def verify_fixture_entry(
     )
     fixture_bytes = _read_regular_file(path, max_bytes=MAX_FIXTURE_XML_BYTES)
     root = _parse_xml_bytes(fixture_bytes, path)
+    _reject_non_ascii_xml_identifiers(root, path, "XML fixture")
     _reject_secret_looking_xml_content(root, path, "XML fixture")
     namespace, local = _split_xml_name(root.tag)
     if local != "Document":
@@ -1950,6 +2016,7 @@ def verify_fixture_entry(
     payload_namespace, payload_local = _split_xml_name(payload.tag)
     if payload_namespace != namespace:
         raise FixtureManifestError(f"{path} payload namespace must match Document namespace")
+    _reject_non_ascii_identifier(payload_local, f"{path} payload root")
     _reject_secret_looking_identifier(payload_local, f"{path} payload root")
     if payload_local != expected_payload_root:
         raise FixtureManifestError(
@@ -2044,6 +2111,7 @@ def verify_profile_catalog(
             _reject_unknown_keys(message, PROFILE_CATALOG_MESSAGE_KEYS, message_label)
             _validate_profile_catalog_message_fields(message, message_label)
             message_type = _required_string(message, "message_type", message_label)
+            _reject_non_ascii_identifier(message_type, f"{message_label}.message_type")
             if MESSAGE_TYPE_RE.fullmatch(message_type) is None:
                 raise FixtureManifestError(
                     f"{message_label}.message_type must be lowercase ISO family id"
@@ -2076,6 +2144,8 @@ def verify_profile_catalog(
                     raise FixtureManifestError(
                         f"{version_label} must not have surrounding whitespace"
                     )
+                _reject_non_ascii_identifier(raw_version, version_label)
+                _reject_secret_looking_identifier(raw_version, version_label)
                 if MESSAGE_DEF_ID_RE.fullmatch(raw_version) is None:
                     if raw_version != message_type:
                         raise FixtureManifestError(

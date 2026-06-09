@@ -75,6 +75,10 @@ server {
 }
 """
 
+invalid_block = ""
+if os.environ.get("MOCK_RENDER_INVALID_NGINX", "0") == "1":
+    invalid_block = "\nbroken_nginx_directive;\n"
+
 os.makedirs(os.path.dirname(output), exist_ok=True)
 with open(output, "w", encoding="utf-8") as handle:
     handle.write(
@@ -97,6 +101,7 @@ server {
 }
 """
         + alias_block
+        + invalid_block
     )
 PY
   chmod 755 "${root}/scripts/render_taira_edge_nginx_conf.py"
@@ -105,6 +110,54 @@ PY
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"${MOCK_STATE_DIR:?}/nginx.calls"
+
+config_path=""
+prefix_path=""
+previous_arg=""
+for arg in "$@"; do
+  case "$previous_arg" in
+    -c)
+      config_path="$arg"
+      previous_arg=""
+      continue
+      ;;
+    -p)
+      prefix_path="$arg"
+      previous_arg=""
+      continue
+      ;;
+  esac
+  case "$arg" in
+    -c|-p)
+      previous_arg="$arg"
+      ;;
+    *)
+      previous_arg=""
+      ;;
+  esac
+done
+
+if [[ -n "$config_path" ]]; then
+  include_path="$(awk '/include .*rendered\.conf;/ { print $2; exit }' "$config_path")"
+  include_path="${include_path%;}"
+  include_path="${include_path%\"}"
+  include_path="${include_path#\"}"
+  if [[ -n "$include_path" ]]; then
+    if [[ "$include_path" != /* ]]; then
+      include_path="${prefix_path}${include_path}"
+    fi
+    printf '%s\n' "$include_path" >>"${MOCK_STATE_DIR}/nginx.rendered_includes"
+    if [[ -L "$include_path" ]]; then
+      readlink "$include_path" >>"${MOCK_STATE_DIR}/nginx.rendered_targets"
+    else
+      printf '%s\n' "$include_path" >>"${MOCK_STATE_DIR}/nginx.rendered_targets"
+    fi
+    if grep -Fq "broken_nginx_directive;" "$include_path"; then
+      echo 'nginx: [emerg] unknown directive "broken_nginx_directive"' >&2
+      exit 1
+    fi
+  fi
+fi
 SH
   chmod 755 "${root}/mockbin/nginx"
 }
@@ -147,6 +200,34 @@ test_dry_run_renders_and_checks_required_alias() {
   assert_contains "${root}/state/renderer.args" "--soracloud-alias-route"
   assert_contains "${root}/state/renderer.args" "solswap-indexer.sora=127.0.0.1:8788"
   assert_contains "${root}/state/nginx.calls" "-t"
+  assert_contains "${root}/state/nginx.calls" "-c"
+  assert_contains "${root}/state/nginx.calls" "-p"
+  assert_contains "${root}/state/nginx.rendered_targets" "${root}/dist/taira-edge/taira.sora.org.conf"
+  [[ ! -e "${root}/nginx/servers/taira.sora.org.conf" ]] || {
+    echo "dry run unexpectedly installed target config" >&2
+    exit 1
+  }
+}
+
+test_dry_run_rejects_invalid_rendered_nginx() {
+  local root
+  root="$(mktemp -d)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+
+  if MOCK_RENDER_INVALID_NGINX=1 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
+    --require-alias solswap-indexer.sora \
+    --nginx-bin nginx \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "invalid rendered nginx unexpectedly passed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "broken_nginx_directive"
+  assert_contains "${root}/state/nginx.calls" "-c"
+  assert_contains "${root}/state/nginx.rendered_targets" "${root}/dist/taira-edge/taira.sora.org.conf"
   [[ ! -e "${root}/nginx/servers/taira.sora.org.conf" ]] || {
     echo "dry run unexpectedly installed target config" >&2
     exit 1
@@ -174,7 +255,9 @@ test_install_reload_copies_and_reloads() {
   assert_contains "${root}/state/stdout" "nginx reloaded"
   assert_contains "${root}/nginx/servers/taira.sora.org.conf" "solswap-indexer.sora.mon.taira.sora.net"
   assert_contains "${root}/state/nginx.calls" "-t"
+  assert_contains "${root}/state/nginx.calls" "-c"
   assert_contains "${root}/state/nginx.calls" "-s reload"
+  assert_contains "${root}/state/nginx.rendered_targets" "${root}/dist/taira-edge/taira.sora.org.conf"
 }
 
 test_missing_required_alias_fails() {
@@ -222,6 +305,7 @@ test_backup_confs_fail_before_install() {
 }
 
 test_dry_run_renders_and_checks_required_alias
+test_dry_run_rejects_invalid_rendered_nginx
 test_install_reload_copies_and_reloads
 test_missing_required_alias_fails
 test_backup_confs_fail_before_install

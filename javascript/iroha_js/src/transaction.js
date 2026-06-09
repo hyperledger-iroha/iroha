@@ -115,6 +115,70 @@ function normalizeMetadataPayload(metadata, context) {
   throw new TypeError(`${context} must be an object or JSON string when provided`);
 }
 
+const KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES = new Set([
+  "KagemushaTransfer",
+  "RedeemKagemushaRecursive",
+]);
+
+function normalizeKagemushaInstructionArchiveType(type, context) {
+  const normalized = String(type ?? "").trim();
+  if (!KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES.has(normalized)) {
+    throw new TypeError(
+      `${context}.type must be KagemushaTransfer or RedeemKagemushaRecursive`,
+    );
+  }
+  return normalized;
+}
+
+function kagemushaArchiveBuffer(source, context) {
+  const selected =
+    source.instructionArchive ??
+    source.instruction_archive ??
+    source.archive ??
+    source.bytes;
+  if (selected !== undefined && selected !== null) {
+    const buffer = toBuffer(selected, `${context}.instructionArchive`);
+    if (buffer.length === 0) {
+      throw new TypeError(`${context}.instructionArchive must not be empty`);
+    }
+    return Buffer.from(buffer);
+  }
+  const encoded = source.bytesBase64 ?? source.bytes_base64;
+  if (typeof encoded !== "string" || encoded.trim().length === 0) {
+    throw new TypeError(
+      `${context}.instructionArchive or ${context}.bytesBase64 is required`,
+    );
+  }
+  const buffer = Buffer.from(encoded, "base64");
+  if (buffer.length === 0) {
+    throw new TypeError(`${context}.bytesBase64 must decode to non-empty bytes`);
+  }
+  return buffer;
+}
+
+/**
+ * Build a typed Kagemusha instruction archive payload accepted by
+ * {@link buildTransaction}. The archive must be canonical Norito bytes for the
+ * selected Kagemusha instruction type; native translation re-decodes the bytes
+ * before signing.
+ */
+export function buildKagemushaInstructionArchiveInstruction(input) {
+  if (!input || typeof input !== "object") {
+    throw new TypeError("Kagemusha instruction archive input must be an object");
+  }
+  const type = normalizeKagemushaInstructionArchiveType(
+    input.type ?? input.instructionType ?? input.instruction_type,
+    "kagemushaInstructionArchive",
+  );
+  const archive = kagemushaArchiveBuffer(input, "kagemushaInstructionArchive");
+  return {
+    KagemushaInstructionArchive: {
+      type,
+      bytes_base64: archive.toString("base64"),
+    },
+  };
+}
+
 function normalizeJsonObjectPayload(value, context) {
   if (typeof value === "string") {
     const trimmed = value.trim();
@@ -372,6 +436,87 @@ export function buildIvmProvedTransaction(input) {
     signedTransaction: Buffer.from(signed),
     hash: Buffer.from(hashBytes),
   };
+}
+
+/**
+ * Build and sign a transaction containing one archived Kagemusha instruction.
+ */
+export function buildKagemushaInstructionTransaction({
+  chainId,
+  authority,
+  type,
+  instructionType = type,
+  instructionArchive,
+  instruction_archive,
+  archive,
+  bytes,
+  bytesBase64,
+  bytes_base64,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const instruction = buildKagemushaInstructionArchiveInstruction({
+    type: instructionType,
+    instructionArchive,
+    instruction_archive,
+    archive,
+    bytes,
+    bytesBase64,
+    bytes_base64,
+  });
+  return buildTransaction({
+    chainId,
+    authority,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
+}
+
+/**
+ * Build the native recursive-redeem instruction from a redeem request archive
+ * and sign it in a single-instruction transaction.
+ */
+export function buildKagemushaRecursiveRedeemTransaction({
+  chainId,
+  authority,
+  redeemRequestArchive,
+  redeem_request_archive,
+  requestArchive,
+  metadata = null,
+  creationTimeMs = null,
+  ttlMs = null,
+  nonce = null,
+  privateKey,
+}) {
+  const native = resolveNativeBinding();
+  if (!native || typeof native.kagemushaRecursiveSpendRedeem !== "function") {
+    throw new Error("native binding 'kagemushaRecursiveSpendRedeem' is unavailable");
+  }
+  const selectedArchive =
+    redeemRequestArchive ?? redeem_request_archive ?? requestArchive;
+  const instructionArchive = Buffer.from(
+    native.kagemushaRecursiveSpendRedeem(
+      toBuffer(selectedArchive, "kagemushaRecursiveRedeem.redeemRequestArchive"),
+    ),
+  );
+  return buildKagemushaInstructionTransaction({
+    chainId,
+    authority,
+    type: "RedeemKagemushaRecursive",
+    instructionArchive,
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+  });
 }
 
 export function buildTimeTriggerAction(options) {
@@ -2786,7 +2931,7 @@ function isTerminalStatus(status) {
   });
 }
 
-function toBuffer(value) {
+function toBuffer(value, context = "signedTransaction") {
   if (Buffer.isBuffer(value)) {
     return value;
   }
@@ -2796,7 +2941,7 @@ function toBuffer(value) {
   if (value instanceof ArrayBuffer) {
     return Buffer.from(value);
   }
-  throw new TypeError("signedTransaction must be a Buffer or ArrayBuffer view");
+  throw new TypeError(`${context} must be a Buffer or ArrayBuffer view`);
 }
 
 function delay(ms) {

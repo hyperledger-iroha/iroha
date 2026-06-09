@@ -7275,6 +7275,90 @@ fn parse_instruction_payloads(payloads: Vec<String>) -> napi::Result<Vec<Instruc
     Ok(instructions)
 }
 
+fn kagemusha_instruction_archive_from_json(value: json::Value) -> napi::Result<InstructionBox> {
+    let mut map = match value {
+        json::Value::Object(map) => map,
+        other => {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("KagemushaInstructionArchive payload must be an object (found {other:?})"),
+            ));
+        }
+    };
+    let type_value = remove_case_insensitive(&mut map, "type").ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "KagemushaInstructionArchive.type field missing",
+        )
+    })?;
+    let instruction_type = type_value.as_str().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "KagemushaInstructionArchive.type must be a string",
+        )
+    })?;
+    let bytes_value = remove_case_insensitive(&mut map, "bytes_base64")
+        .or_else(|| remove_case_insensitive(&mut map, "bytesBase64"))
+        .ok_or_else(|| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                "KagemushaInstructionArchive.bytes_base64 field missing",
+            )
+        })?;
+    let bytes_base64 = bytes_value.as_str().ok_or_else(|| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            "KagemushaInstructionArchive.bytes_base64 must be a string",
+        )
+    })?;
+    if !map.is_empty() {
+        let mut keys = map.keys().cloned().collect::<Vec<_>>();
+        keys.sort();
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "KagemushaInstructionArchive contains unexpected field(s): {}",
+                keys.join(", ")
+            ),
+        ));
+    }
+    let archive = STANDARD.decode(bytes_base64.as_bytes()).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid KagemushaInstructionArchive.bytes_base64: {err}"),
+        )
+    })?;
+    ensure_kagemusha_recursive_archive_len(archive.len(), "Kagemusha instruction archive")?;
+    match instruction_type {
+        "KagemushaTransfer" => {
+            let instruction: iroha_data_model::isi::offline::KagemushaTransfer =
+                decode_from_bytes(&archive).map_err(|err| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("invalid KagemushaTransfer instruction archive: {err}"),
+                    )
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
+        "RedeemKagemushaRecursive" => {
+            let instruction: iroha_data_model::isi::offline::RedeemKagemushaRecursive =
+                decode_from_bytes(&archive).map_err(|err| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("invalid RedeemKagemushaRecursive instruction archive: {err}"),
+                    )
+                })?;
+            Ok(InstructionBox::from(instruction))
+        }
+        other => Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "unsupported KagemushaInstructionArchive.type `{other}`; expected KagemushaTransfer or RedeemKagemushaRecursive"
+            ),
+        )),
+    }
+}
+
 fn encode_trigger_action(action: &Action) -> napi::Result<String> {
     norito::to_bytes(action)
         .map(|bytes| STANDARD.encode(bytes))
@@ -7302,6 +7386,12 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     }
     match value {
         json::Value::Object(mut map) => {
+            if let Some(kagemusha_value) =
+                remove_case_insensitive(&mut map, "KagemushaInstructionArchive")
+            {
+                return kagemusha_instruction_archive_from_json(kagemusha_value);
+            }
+
             if let Some(json::Value::Object(mut register_map)) = map.remove("Register") {
                 if let Some(domain_value) = register_map.remove("Domain") {
                     let new_domain: NewDomain =
@@ -21731,6 +21821,132 @@ mod tests {
             tx.hash().as_ref(),
             "hash must match signed transaction hash"
         );
+    }
+
+    #[test]
+    fn build_transaction_from_instructions_json_accepts_kagemusha_instruction_archive() {
+        disable_packed_struct_once();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let instruction = sample_kagemusha_transfer_instruction_for_js_host();
+        let archive = norito::to_bytes(&instruction).expect("encode Kagemusha transfer");
+        let instruction_json =
+            kagemusha_instruction_archive_json("KagemushaTransfer", &STANDARD.encode(&archive), "");
+        let (_, secret_bytes) = keypair.private_key().to_bytes();
+
+        let result = build_transaction_from_instructions_json(
+            chain_id,
+            authority,
+            vec![instruction_json],
+            None,
+            Some(1_700_000_000_000),
+            Some(5_000),
+            Some(42),
+            &secret_bytes,
+        )
+        .expect("transaction built");
+
+        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        match tx.instructions() {
+            Executable::Instructions(batch) => {
+                assert_eq!(batch.len(), 1);
+                let decoded = batch
+                    .iter()
+                    .next()
+                    .expect("instruction")
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::offline::KagemushaTransfer>()
+                    .expect("KagemushaTransfer instruction");
+                assert_eq!(decoded, &instruction);
+            }
+            other => panic!("expected instruction batch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kagemusha_instruction_archive_json_rejects_adversarial_inputs() {
+        let transfer = sample_kagemusha_transfer_instruction_for_js_host();
+        let transfer_archive = norito::to_bytes(&transfer).expect("encode Kagemusha transfer");
+        let cases = [
+            (
+                kagemusha_instruction_archive_json("KagemushaTransfer", "", ""),
+                "Kagemusha instruction archive must not be empty",
+            ),
+            (
+                kagemusha_instruction_archive_json(
+                    "KagemushaTransfer",
+                    &STANDARD.encode(&[0x01_u8, 0x02]),
+                    "",
+                ),
+                "invalid KagemushaTransfer instruction archive",
+            ),
+            (
+                kagemusha_instruction_archive_json(
+                    "RedeemOfflineNoteV2",
+                    &STANDARD.encode(&[0x01_u8, 0x02]),
+                    "",
+                ),
+                "unsupported KagemushaInstructionArchive.type",
+            ),
+            (
+                kagemusha_instruction_archive_json(
+                    "RedeemKagemushaRecursive",
+                    &STANDARD.encode(&transfer_archive),
+                    "",
+                ),
+                "invalid RedeemKagemushaRecursive instruction archive",
+            ),
+            (
+                kagemusha_instruction_archive_json(
+                    "KagemushaTransfer",
+                    &STANDARD.encode(&transfer_archive),
+                    r#","extra":true"#,
+                ),
+                "KagemushaInstructionArchive contains unexpected field",
+            ),
+        ];
+
+        for (instruction_json, expected) in cases {
+            let err = instruction_from_json(&instruction_json)
+                .expect_err("adversarial Kagemusha archive payload must fail");
+            assert!(
+                err.to_string().contains(expected),
+                "expected {expected:?} in error, got {err}",
+            );
+        }
+    }
+
+    fn kagemusha_instruction_archive_json(
+        instruction_type: &str,
+        bytes_base64: &str,
+        extra_fields: &str,
+    ) -> String {
+        format!(
+            r#"{{"KagemushaInstructionArchive":{{"type":"{instruction_type}","bytes_base64":"{bytes_base64}"{extra_fields}}}}}"#
+        )
+    }
+
+    fn sample_kagemusha_transfer_instruction_for_js_host()
+    -> iroha_data_model::isi::offline::KagemushaTransfer {
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("domain"),
+            "kgm".parse().expect("asset name"),
+        );
+        iroha_data_model::isi::offline::KagemushaTransfer::new(
+            asset_definition,
+            vec![[0x11; 32]],
+            vec![[0x22; 32]],
+            ProofAttachment::new_ref(
+                "halo2/ipa".parse().expect("backend ident"),
+                ProofBox::new(
+                    "halo2/ipa".parse().expect("proof backend ident"),
+                    vec![0xAA, 0xBB, 0xCC],
+                ),
+                VerifyingKeyId::new("halo2/ipa", "js-host-kagemusha-transfer"),
+            ),
+            Some([0x33; 32]),
+        )
     }
 
     #[test]

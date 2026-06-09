@@ -160,6 +160,7 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
             ("%70assword_rail_unknown_leak", "rail_unknown_leak"),
             ("private-key_rail_unknown_leak", "rail_unknown_leak"),
             ("unexpected\x1brail_key", "\x1b"),
+            ("unexpected_rail_\uff4bey", "\uff4b"),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -243,6 +244,27 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--receipt-di", stderr.getvalue())
+
+    def test_raw_cli_control_characters_are_rejected_without_echo(self):
+        hidden = "--unknown-rail\x1bflag"
+        with self.assertRaises(ADAPTER.AdapterError) as caught:
+            ADAPTER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must not contain control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("unknown-rail", message)
+
+    def test_raw_cli_non_ascii_is_rejected_without_echo(self):
+        hidden = "\uff0d\uff0dreceipt-dir"
+        with self.assertRaises(ADAPTER.AdapterError) as caught:
+            ADAPTER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must use printable ASCII", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("receipt-dir", message)
 
     def test_nested_control_material_in_sidecar_is_rejected_without_echo(self):
         cases = (
@@ -390,8 +412,12 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertIn("path must not contain URL delimiter characters", message)
                 self.assertNotIn(base_url, message)
 
-    def test_url_paths_reject_non_ascii_smuggling(self):
+    def test_urls_reject_non_ascii_smuggling(self):
         cases = (
+            (
+                "https://torii\u0661.local-bank.bank/base/v1",
+                "host must use printable ASCII",
+            ),
             (
                 "https://torii.local-bank.bank/base∕debug/v1",
                 "path must use printable ASCII",
@@ -470,11 +496,28 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertNotIn("token=", stderr)
                 self.assertNotIn("rail-secret", stderr)
 
+    def test_numeric_cli_flags_reject_unicode_digits_without_echo(self):
+        hidden = "\u0661"
+        cases = (
+            ["--max-payload-bytes", hidden],
+            [f"--response-limit-bytes={hidden}"],
+            ["--timeout-secs", f"{hidden}.5"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("must use printable ASCII", stderr)
+                self.assertNotIn(hidden, stderr)
+
     def test_raw_cli_secret_like_values_rejected_without_echo(self):
         cases = (
             ["--private-key=rail-secret"],
             ["token=rail-secret"],
             ["password=rail-secret"],
+            ["--torii-base-url", "token=rail-secret"],
+            ["--torii-base-url=%70assword%253Drail-secret"],
         )
         for argv in cases:
             with self.subTest(argv=argv):
@@ -485,6 +528,18 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                 self.assertNotIn("token=", stderr)
                 self.assertNotIn("password=", stderr)
                 self.assertNotIn("rail-secret", stderr)
+                self.assertNotIn("inbox_dir", stderr)
+
+    def test_url_cli_values_reject_non_ascii_without_echo(self):
+        hidden = "https://torii.local-bank.bank/base\u2215debug"
+        for argv in (["--torii-base-url", hidden], [f"--torii-base-url={hidden}"]):
+            with self.subTest(argv=argv):
+                rc, _stdout, stderr = run_main(argv)
+
+                self.assertEqual(rc, 2)
+                self.assertIn("--torii-base-url URL must use printable ASCII", stderr)
+                self.assertNotIn(hidden, stderr)
+                self.assertNotIn("inbox_dir", stderr)
 
     def test_boolean_and_non_integer_file_read_limits_are_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -671,6 +726,32 @@ class IsoRailGatewayAdapterTest(unittest.TestCase):
                     self.assertNotIn("private-key=", stderr)
                     self.assertNotIn("client_secret=", stderr)
                     self.assertNotIn("rail-sidecar-secret", stderr)
+
+    def test_non_ascii_sidecar_message_type_is_rejected_without_echo(self):
+        hidden = "\u00e9"
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            xml_path, sidecar = write_message(inbox)
+            sidecar["message_type"] = f"pacs.00{hidden}"
+            xml_path.with_suffix(".xml.json").write_text(
+                json.dumps(sidecar),
+                encoding="utf-8",
+            )
+
+            rc, stdout, stderr = run_main(
+                [
+                    "--inbox-dir",
+                    str(inbox),
+                    "--torii-base-url",
+                    "https://torii.local-bank.bank",
+                ]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("message_type must use printable ASCII", stderr)
+            self.assertNotIn(hidden, stderr)
+            self.assertNotIn("unsupported message_type", stderr)
 
     def test_malformed_bearer_token_file_is_rejected_before_network_delivery(self):
         cases = [

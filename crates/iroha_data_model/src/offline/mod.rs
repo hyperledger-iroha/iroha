@@ -16438,6 +16438,18 @@ mod offline_note_tests {
                 field: "previous_recursive_proof.folded_public_inputs_hash"
             })
         ));
+        let mut stale_previous_public_input_hash = previous_proof0.clone();
+        stale_previous_public_input_hash.public_inputs_hash =
+            Hash::new(b"recursive-spend-stale-previous-proof-public-input-hash");
+        assert!(matches!(
+            kagemusha_recursive_spend_accumulator_append_evidence(
+                &accumulator0,
+                &stale_previous_public_input_hash,
+                &append_evidence,
+                &note1,
+            ),
+            Err(KagemushaFoldError::RecursiveAggregationProofPublicInputHashMismatch { .. })
+        ));
         let mut previous_proof_byte_splice = previous_proof0.clone();
         previous_proof_byte_splice.proof.bytes[0] ^= 0x01;
         assert_ne!(

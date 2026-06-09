@@ -59,9 +59,11 @@ Production release criteria:
 	  special-file slot artifacts instead of following or hashing external aliases.
 	  Scanner and rollup missing-root decisions consume `lstat()`-classified root presence
 	  instead of calling `Path.exists()`. The shared device-lab JSON
-	  loader also rejects symlinked ancestor directories before parsing JSON, so
-	  direct validation of slot metadata, attestation, transcript, or signed
-	  evidence files cannot read through aliased directories.
+	  loader also rejects symlinked ancestor directories before parsing JSON and
+	  decodes bytes from one opened regular file after path-identity
+	  revalidation, so direct validation of slot metadata, attestation,
+	  transcript, or signed evidence files cannot read through aliased directories
+	  or post-preflight leaf aliases.
 	  Lower-level direct symlink, hardlink, and regular-file artifact validators
 	  reject secret-looking slot paths before traversing, stat-ing, or
 	  classifying slot artifacts. The symlink validator now reports unreadable
@@ -73,10 +75,13 @@ Production release criteria:
 	  validator classifies nested artifacts before any `is_symlink()` preflight.
 	  Manifest artifact digest validation classifies slot-relative ancestor
 	  directories with `lstat()` before symlink checks, so nested artifact paths
-	  do not depend on `Path.is_symlink()`.
+	  do not depend on `Path.is_symlink()`, and binds each `sha256sum.txt`
+	  digest read to the opened file identity.
 	  Required-artifact shape checks, required status/runtime text reads, the
 	  D2D queue digest binding, and the signed-evidence artifact binding also
-	  classify artifacts with `lstat()` before any `is_file()` preflight.
+	  classify artifacts with `lstat()` before any `is_file()` preflight, and
+	  signed-evidence `artifact_digests` bind each hashed artifact to the opened
+	  file identity.
 	  Direct SHA-256 manifest parser and verifier helper calls reject
 	  secret-looking slot paths, unreadable slot-root metadata, symlinked slot
 	  roots, and symlinked slot ancestors before parsing `sha256sum.txt` or
@@ -102,12 +107,14 @@ Production release criteria:
 	  hashing the bytes claimed by `artifact_digests`. Slot-metadata digest
 	  checks also revalidate `slot.json`-referenced attestation-chain,
 	  offline-wallet APK, and signed-evidence artifact paths before reading bytes
-	  for SHA-256 comparison. D2D handoff and wallet-integrity transcript
-	  bindings, including `queue/pending_queue.json`, use the same digest-time
-	  revalidation before comparing SHA-256 values. Required status NDJSON and
-	  runtime log marker checks also revalidate their slot-relative files for
-	  symlinks, hardlinks, symlinked artifact directories, non-regular files, and
-	  secret-looking names immediately before text decoding.
+	  for SHA-256 comparison, then bind the bytes to the opened file identity so
+	  post-preflight regular-file swaps fail closed. D2D handoff and
+	  wallet-integrity transcript bindings, including `queue/pending_queue.json`,
+	  use the same digest-time revalidation before comparing SHA-256 values.
+	  Required status NDJSON and runtime log marker checks also revalidate their
+	  slot-relative files for symlinks, hardlinks, symlinked artifact directories,
+	  non-regular files, and secret-looking names immediately before text
+	  decoding, with the same opened-file identity binding.
 - StrongBox/KeyMint attestation chains bind the app challenge and device
   security level expected by the offline wallet policy and must come from a
   physical device attestation, not an emulator or simulator run.
@@ -288,7 +295,9 @@ Production release criteria:
   last-key-wins parser behavior. Unreadable or non-UTF-8 ABI-6 manifest and
   proof-evidence JSON files fail closed as structured read blockers. The ABI-7
   compact key evidence JSON must live beside `recursive-compact-len4.vk`,
-  `recursive-compact-len4.pk`, and
+  `recursive-compact-len4.pk`,
+  `recursive-compact-key-artifacts.norito`,
+  `recursive-compact-verifier-keys.norito`, and
   `recursive-compact-len4.record.norito`, keep the canonical
   `recursive-compact-key-evidence.json` filename, advertise LEN=4, IPA `k = 8`,
   `halo2/ipa`, `kagemusha-recursive-compact-v1`, `offline_kagemusha`, record
@@ -297,8 +306,8 @@ Production release criteria:
   aliases or appended shell commands. The rollup recomputes the compact key
   artifact SHA-256 values and byte sizes from adjacent non-empty regular files
   and hash-binds `recursive-compact-key-artifacts.log`, requiring exactly the
-  canonical CLI summary line with `.vk`, `.pk`, and `.record.norito` sizes that
-  match the local artifact bytes,
+  canonical CLI summary line with `.vk`, `.pk`, package, verifier-key package,
+  and `.record.norito` sizes that match the local artifact bytes,
   and rejects stale, future-dated, renamed, symlinked, hardlinked,
   size-mismatched, digest-mismatched, extra-field, or obvious plain-text
   placeholder compact key evidence. The compact key evidence helper applies the

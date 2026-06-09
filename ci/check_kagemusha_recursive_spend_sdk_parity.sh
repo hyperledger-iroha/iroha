@@ -103,6 +103,12 @@ REQUIRED_LINEAGE_KEY_ARTIFACT_JS_PUBLIC_EXPORTS = (
     "validateKagemushaRecursiveSpendLineageKeyArtifacts",
 )
 
+REQUIRED_JS_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_EXPORTS = (
+    "buildKagemushaInstructionArchiveInstruction",
+    "buildKagemushaInstructionTransaction",
+    "buildKagemushaRecursiveRedeemTransaction",
+)
+
 REQUIRED_PYTHON_NATIVE_METHODS = (
     "kagemusha_recursive_spend_init",
     "kagemusha_recursive_spend_append",
@@ -139,6 +145,17 @@ REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_PUBLIC_METHODS = (
     "is_kagemusha_recursive_spend_compact_payment_token_projection_available",
     "is_kagemusha_recursive_spend_compact_payment_token_projection_verifier_available",
     *REQUIRED_RECURSIVE_SPEND_COMPACT_PROJECTION_PYTHON_METHODS,
+)
+
+REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS = (
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_TRANSFER",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+    "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
+    "KagemushaInstructionArchiveType",
+    "kagemusha_instruction_archive_instruction",
+    "kagemusha_recursive_redeem_instruction",
+    "build_kagemusha_instruction_transaction",
+    "build_kagemusha_recursive_redeem_transaction",
 )
 
 REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS = (
@@ -197,7 +214,7 @@ REQUIRED_PYTHON_PUBLIC_METHODS = REQUIRED_PYTHON_NATIVE_METHODS + (
     "can_prove_kagemusha_recursive_spend_append_output_proof_circuit_id",
     "can_select_kagemusha_recursive_spend_append_output_proof_circuit_id",
     "requires_kagemusha_recursive_spend_previous_proof_open_envelopes_for_append",
-) + REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS
+) + REQUIRED_LINEAGE_KEY_ARTIFACT_PYTHON_PUBLIC_METHODS + REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS
 
 JNI_METHODS = (
     "nativeBridgeAbiVersion",
@@ -234,24 +251,30 @@ SOURCE_PATHS = (
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendProver.swift",
     "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveCompactPaymentTokenProver.swift",
+    "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift",
     "IrohaSwift/Sources/IrohaSwift/Halo2OfflineNoteProver.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveCompactPaymentTokenProverTests.swift",
+    "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift",
     "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveAggregationProofBundleProver.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveCompactPaymentTokenProver.java",
     "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/OfflineNoteHalo2Prover.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaCompactPaymentTokenProver.kt",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineNoteTest.java",
     "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveAggregationProofBundleProver.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveCompactPaymentTokenProver.kt",
     "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/OfflineNoteHalo2Prover.java",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/OfflineNoteTest.kt",
     "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProverTest.kt",
     "javascript/iroha_js/src/crypto.js",
@@ -260,20 +283,29 @@ SOURCE_PATHS = (
     "javascript/iroha_js/dist/crypto.browser.js",
     "javascript/iroha_js/src/index.js",
     "javascript/iroha_js/dist/index.js",
+    "javascript/iroha_js/src/transaction.js",
+    "javascript/iroha_js/dist/transaction.js",
     "javascript/iroha_js/index.d.ts",
     "javascript/iroha_js/package.json",
     "javascript/iroha_js/package-lock.json",
     "javascript/iroha_js/test/crypto.browser.test.js",
+    "javascript/iroha_js/test/transactionBuilder.test.js",
     "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js",
     "javascript/iroha_js/test/package_dist.test.js",
     "python/iroha_python/src/iroha_python/__init__.py",
     "python/iroha_python/src/iroha_python/kagemusha.py",
+    "python/iroha_python/src/iroha_python/tx.py",
     "python/iroha_python/iroha_python_rs/src/lib.rs",
     "python/iroha_python/tests/kagemusha_test.py",
     "csharp/src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj",
     "csharp/src/Hyperledger.Iroha.Sdk/Offline/KagemushaRecursiveSpend.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs",
+    "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj",
     "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaRecursiveSpendNativeTests.cs",
+    "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
 )
 
 NATIVE_MANIFEST_PATHS = (
@@ -365,6 +397,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-lineage-key-package-binding",
     ),
     (
+        "JavaScript Kagemusha instruction transaction builder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-kagemusha-instruction-transaction-builder",
+    ),
+    (
         "Python lineage key package binding negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-python-lineage-key-package-binding",
     ),
@@ -443,6 +479,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "offline Kagemusha doc accumulator boundary negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-native-owned-accumulator-boundary",
+    ),
+    (
+        "offline Kagemusha doc instruction transaction surface negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-instruction-transaction-surface",
     ),
     (
         "SDK proof-chain accumulator public-input negative control",
@@ -767,6 +807,10 @@ SDK_PARITY_NEGATIVE_CONTROL_COMMANDS = (
     (
         "Swift Kagemusha native output cap negative control",
         "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-native-output-cap",
+    ),
+    (
+        "Swift Kagemusha instruction transaction builder negative control",
+        "ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-instruction-transaction-builder",
     ),
     (
         "Swift SDK version script negative control",
@@ -3146,6 +3190,13 @@ def check_javascript(texts, errors):
         require_contains(
             texts,
             relative,
+            REQUIRED_JS_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_EXPORTS,
+            f"{relative} Kagemusha instruction transaction re-exports",
+            errors,
+        )
+        require_contains(
+            texts,
+            relative,
             (
                 "KAGEMUSHA_RECURSIVE_SPEND_REQUIRED_BRIDGE_ABI_VERSION",
                 "KAGEMUSHA_RECURSIVE_SPEND_LINEAGE_WITNESSLESS_MAX_HOPS_V1",
@@ -3195,6 +3246,77 @@ def check_javascript(texts, errors):
             "readonly isAppendArtifact: boolean;",
         ),
         "JavaScript TypeScript declarations",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/index.d.ts",
+        REQUIRED_JS_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_EXPORTS
+        + (
+            "KagemushaInstructionArchiveType",
+            '"KagemushaTransfer"',
+            '"RedeemKagemushaRecursive"',
+            "KagemushaInstructionArchiveInput",
+            "KagemushaInstructionTransactionInput",
+            "KagemushaRecursiveRedeemTransactionBaseInput",
+            "KagemushaRecursiveRedeemArchiveInput",
+            "KagemushaRecursiveRedeemTransactionInput",
+            "KagemushaInstructionArchive:",
+            "bytes_base64: string;",
+            "redeemRequestArchive: BinaryLike;",
+        ),
+        "JavaScript TypeScript Kagemusha instruction transaction declarations",
+        errors,
+    )
+    for relative in ("javascript/iroha_js/src/transaction.js", "javascript/iroha_js/dist/transaction.js"):
+        require_contains(
+            texts,
+            relative,
+            REQUIRED_JS_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_EXPORTS
+            + (
+                "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPES",
+                "KagemushaInstructionArchive",
+                "KagemushaTransfer",
+                "RedeemKagemushaRecursive",
+                "kagemushaRecursiveSpendRedeem",
+                "kagemushaRecursiveRedeem.redeemRequestArchive",
+            ),
+            f"{relative} Kagemusha instruction transaction builder",
+            errors,
+        )
+        require_regex(
+            texts,
+            relative,
+            r"buildKagemushaRecursiveRedeemTransaction[\s\S]*?kagemushaRecursiveSpendRedeem[\s\S]*?buildKagemushaInstructionTransaction",
+            f"{relative} Kagemusha recursive redeem transaction flow",
+            errors,
+        )
+    require_contains(
+        texts,
+        "crates/iroha_js_host/src/lib.rs",
+        (
+            "fn kagemusha_instruction_archive_from_json",
+            "remove_case_insensitive(&mut map, \"KagemushaInstructionArchive\")",
+            "KagemushaTransfer",
+            "RedeemKagemushaRecursive",
+            "ensure_kagemusha_recursive_archive_len(archive.len(), \"Kagemusha instruction archive\")",
+            "build_transaction_from_instructions_json_accepts_kagemusha_instruction_archive",
+            "kagemusha_instruction_archive_json_rejects_adversarial_inputs",
+        ),
+        "iroha_js_host Kagemusha instruction transaction archive decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "javascript/iroha_js/test/transactionBuilder.test.js",
+        (
+            "buildKagemushaInstructionArchiveInstruction normalizes archive bytes",
+            "buildKagemushaInstructionTransaction wraps one archive instruction",
+            "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+            "redeemRequestArchive must be a Buffer or ArrayBuffer view",
+            "redeem native rejected",
+        ),
+        "JavaScript Kagemusha instruction transaction builder tests",
         errors,
     )
     require_contains(
@@ -3462,9 +3584,77 @@ def check_python(texts, errors):
     )
     init = "python/iroha_python/src/iroha_python/__init__.py"
     wrapper = "python/iroha_python/src/iroha_python/kagemusha.py"
+    tx_wrapper = "python/iroha_python/src/iroha_python/tx.py"
     host = "python/iroha_python/iroha_python_rs/src/lib.rs"
     require_contains(texts, wrapper, REQUIRED_PYTHON_PUBLIC_METHODS, "Python SDK", errors)
     require_contains(texts, init, REQUIRED_PYTHON_PUBLIC_METHODS, "Python package re-exports", errors)
+    require_contains(
+        texts,
+        wrapper,
+        REQUIRED_PYTHON_KAGEMUSHA_INSTRUCTION_TRANSACTION_PUBLIC_METHODS
+        + (
+            "def _normalize_kagemusha_instruction_archive_type(",
+            "_norito_archive_bytes_named(instruction_archive, \"instruction_archive\")",
+            "getattr(Instruction, \"kagemusha_instruction_archive\", None)",
+            "getattr(Instruction, \"kagemusha_recursive_redeem\", None)",
+            "build_signed_transaction",
+            "instructions=(instruction,)",
+            "_archive_bytes_named(private_key, \"private_key\")",
+            "_norito_archive_bytes_named(redeem_request_archive, \"redeem_request_archive\")",
+        ),
+        "Python Kagemusha instruction transaction builder",
+        errors,
+    )
+    require_contains(
+        texts,
+        tx_wrapper,
+        (
+            "def kagemusha_instruction_archive(",
+            "kagemusha_instruction_archive_instruction",
+            "def kagemusha_recursive_redeem(",
+            "kagemusha_recursive_redeem_instruction",
+            "self.add_instruction(",
+        ),
+        "Python TransactionDraft Kagemusha instruction helpers",
+        errors,
+    )
+    require_contains(
+        texts,
+        host,
+        (
+            "fn kagemusha_instruction_archive_box(",
+            "fn kagemusha_instruction_archive(",
+            "fn kagemusha_recursive_redeem(",
+            "KagemushaTransfer",
+            "RedeemKagemushaRecursive",
+            "decode_from_bytes(instruction_archive)",
+            "kagemusha_recursive_spend_redeem_instruction_from_request(request)",
+            "kagemusha_instruction_archive_box_accepts_transfer_and_redeem_archives",
+            "kagemusha_instruction_archive_box_rejects_adversarial_archives",
+        ),
+        "Python PyO3 Kagemusha instruction transaction archive decoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "python/iroha_python/tests/kagemusha_test.py",
+        (
+            "test_kagemusha_instruction_archive_transaction_helpers_wrap_redeem_archive",
+            "test_kagemusha_recursive_redeem_transaction_helper_derives_instruction_before_signing",
+            "test_kagemusha_instruction_archive_transaction_helpers_reject_adversarial_inputs",
+            "_shared_recursive_spend_abi7_archive(\"redeem_instruction\")",
+            "_shared_recursive_spend_abi7_archive(\"redeem_request\")",
+            "_instruction_archive_bytes(instruction)",
+            "committed_instruction = kagemusha.kagemusha_instruction_archive_instruction",
+            "KAGEMUSHA_INSTRUCTION_ARCHIVE_TYPE_REDEEM_RECURSIVE",
+            "instruction_archive must be a valid Norito archive",
+            "invalid RedeemKagemushaRecursive instruction archive",
+            "redeem_request_archive must be a valid Norito archive",
+            "draft.kagemusha_recursive_redeem(request_archive)",
+        ),
+        "Python Kagemusha instruction transaction tests",
+        errors,
+    )
     require_contains(
         texts,
         wrapper,
@@ -3686,9 +3876,11 @@ def check_swift(texts, errors):
     compact_prover = "IrohaSwift/Sources/IrohaSwift/KagemushaCompactPaymentTokenProver.swift"
     recursive_aggregation_prover = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveAggregationProofBundleProver.swift"
     bridge = "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
+    instruction_encoder = "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"
     test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendProverTests.swift"
     compact_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaCompactPaymentTokenProverTests.swift"
     recursive_aggregation_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveAggregationProofBundleProverTests.swift"
+    instruction_encoder_test = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
     uc4_decode_test = "IrohaSwift/Tests/IrohaSwiftTests/UC4DecodePaymentTokenTests.swift"
     require_contains(texts, prover, REQUIRED_PUBLIC_METHODS, "Swift public prover", errors)
     require_contains(
@@ -3818,6 +4010,57 @@ def check_swift(texts, errors):
             "emptyPayloadKagemushaNoritoArchive",
         ),
         "Swift recursive spend input/output Norito guard tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        instruction_encoder,
+        (
+            "public enum KagemushaInstructionTransactionError",
+            "public enum KagemushaInstructionType",
+            "case transfer = \"KagemushaTransfer\"",
+            "case redeemRecursive = \"RedeemKagemushaRecursive\"",
+            "public struct KagemushaInstructionTransactionRequest",
+            "public struct KagemushaRecursiveRedeemTransactionRequest",
+            "public enum KagemushaRecursiveRedeemRequestArchive",
+            "KagemushaRecursiveRedeemRequestArchiveError",
+            "unexpectedInstructionArchiveType(expected: KagemushaInstructionType, actual: KagemushaInstructionType)",
+            "KagemushaRecursiveSpendRedeemRequestV1",
+            "static func encodeKagemushaInstruction(",
+            "static func encodeKagemushaRecursiveRedeem(",
+            "func buildKagemushaInstruction(",
+            "func buildKagemushaRecursiveRedeem(",
+            "try KagemushaRecursiveSpendProver.redeemSpend(requestArchive: $0)",
+            "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes",
+            "frame.header.compression == .none",
+            "frame.header.schema == noritoSchemaHash(forTypeName: type.rawValue)",
+            "noritoSchemaHash(forTypeName: typeName) == frame.header.schema",
+            "Kagemusha instruction archive type is not supported by this transaction builder.",
+        ),
+        "Swift Kagemusha instruction transaction builder",
+        errors,
+    )
+    require_contains(
+        texts,
+        instruction_encoder_test,
+        (
+            "testBuildRecursiveRedeemInstructionTransactionWrapsNativeInstructionArchive",
+            "testBuildKagemushaTransferInstructionTransactionUsesTransferWireName",
+            "testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+            "testKagemushaInstructionTransactionRejectsAdversarialArchives",
+            "testKagemushaRecursiveRedeemTransactionRejectsMalformedRequestBeforeNativeRedeem",
+            "testKagemushaRecursiveRedeemTransactionRejectsAdversarialNativeInstructionArchives",
+            "testKagemushaRecursiveRedeemRequestArchiveValidationRejectsAdversarialInputs",
+            "testKagemushaInstructionRequestValidationRejectsInvalidInputsBeforeSigning",
+            ".unsupportedInstructionArchiveType",
+            ".unsupportedRequestArchiveType",
+            ".unexpectedInstructionArchiveType(expected: .redeemRecursive, actual: .transfer)",
+            "unsupportedFlagsArchive",
+            "nonZeroPaddingArchive",
+            "excessivePaddingArchive",
+            "KagemushaRecursiveCompactPaymentTokenProver.nativeArchiveMaxBytes + 1",
+        ),
+        "Swift Kagemusha instruction transaction builder tests",
         errors,
     )
     require_contains(
@@ -4294,6 +4537,102 @@ def check_java_kotlin(texts, errors):
             "nativeCall(ownedArchive)",
         ),
         "Kotlin recursive spend archive input copy",
+        errors,
+    )
+
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchives.kt",
+        (
+            "enum class KagemushaInstructionType",
+            "TRANSFER(",
+            "REDEEM_RECURSIVE(",
+            '"KagemushaTransfer"',
+            '"RedeemKagemushaRecursive"',
+            '"iroha_data_model::isi::offline::KagemushaTransfer"',
+            '"iroha_data_model::isi::offline::RedeemKagemushaRecursive"',
+            "fun instructionBox(",
+            "recursiveRedeemInstructionBox",
+            "recursiveRedeemInstructionBoxFromRequest",
+            "fun transactionPayload(",
+            "recursiveRedeemTransactionPayload",
+            "recursiveRedeemTransactionPayloadFromRequest",
+            "KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive)",
+            "KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES",
+            "NoritoHeader.decode(archive, SchemaHash.hash16(instructionType.archiveTypeName))",
+            "decoded.header.compression == NoritoHeader.COMPRESSION_NONE",
+            "decoded.header.payloadLength > 0",
+            "decoded.header.validateChecksum(decoded.payload)",
+            "InstructionBox.fromWirePayload(instructionType.wireName, archive)",
+            "Executable.instructions(listOf(instructionBox(instructionType, instructionArchive)))",
+        ),
+        "Kotlin Kagemusha instruction archive transaction helper",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaInstructionArchives.java",
+        (
+            "public enum InstructionType",
+            "TRANSFER(",
+            "REDEEM_RECURSIVE(",
+            '"KagemushaTransfer"',
+            '"RedeemKagemushaRecursive"',
+            '"iroha_data_model::isi::offline::KagemushaTransfer"',
+            '"iroha_data_model::isi::offline::RedeemKagemushaRecursive"',
+            "public static InstructionBox instructionBox(",
+            "recursiveRedeemInstructionBox",
+            "recursiveRedeemInstructionBoxFromRequest",
+            "public static TransactionPayload transactionPayload(",
+            "recursiveRedeemTransactionPayload",
+            "recursiveRedeemTransactionPayloadFromRequest",
+            "KagemushaRecursiveSpendProver.redeemSpend(redeemRequestArchive)",
+            "KagemushaRecursiveSpendProver.NATIVE_ARCHIVE_MAX_BYTES",
+            "NoritoHeader.decode(archive, SchemaHash.hash16(instructionType.archiveTypeName()))",
+            "decoded.header().compression() != NoritoHeader.COMPRESSION_NONE",
+            "decoded.header().payloadLength() == 0",
+            "decoded.header().validateChecksum(decoded.payload())",
+            "InstructionBox.fromWirePayload(instructionType.wireName(), archive)",
+            "Executable.instructions(List.of(instructionBox(instructionType, instructionArchive)))",
+        ),
+        "Android Java Kagemusha instruction archive transaction helper",
+        errors,
+    )
+    require_contains(
+        texts,
+        "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/offline/KagemushaInstructionArchivesTest.kt",
+        (
+            "instructionBox preserves redeem archive bytes and wire name",
+            "transactionPayload wraps a single transfer archive instruction",
+            "instructionBox rejects malformed wrong schema empty and tampered archives",
+            "KagemushaInstructionType.REDEEM_RECURSIVE",
+            "KagemushaInstructionType.TRANSFER",
+            "assertContentEquals(archive, wire.payloadBytes)",
+            "recursiveRedeemInstructionBoxFromRequest(byteArrayOf())",
+            "recursiveRedeemTransactionPayloadFromRequest(",
+            '"KagemushaRecursiveSpendRedeemRequestV1"',
+            "tampered[tampered.lastIndex]",
+        ),
+        "Kotlin Kagemusha instruction archive transaction helper tests",
+        errors,
+    )
+    require_contains(
+        texts,
+        "java/iroha_android/src/test/java/org/hyperledger/iroha/android/tx/TransactionBuilderTests.java",
+        (
+            "kagemushaInstructionArchivesBuildPayloads",
+            "kagemushaInstructionArchivesRejectAdversarialInputs",
+            "KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE",
+            "KagemushaInstructionArchives.InstructionType.TRANSFER",
+            "KagemushaInstructionArchives.recursiveRedeemInstructionBox(archive)",
+            "KagemushaInstructionArchives.transactionPayload(",
+            "KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(new byte[0])",
+            "KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(",
+            "Arrays.equals(transferArchive, transferWire.payloadBytes())",
+            '"KagemushaRecursiveSpendRedeemRequestV1"',
+            "tampered[tampered.length - 1] ^= 0x01",
+        ),
+        "Android Java Kagemusha instruction archive transaction helper tests",
         errors,
     )
 
@@ -4803,6 +5142,84 @@ def check_csharp(texts, errors):
     )
     require_contains(
         texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs",
+        (
+            "public enum KagemushaInstructionType",
+            "RedeemRecursive",
+            "ArchiveTypeName",
+            "WireName",
+            '"KagemushaTransfer"',
+            '"RedeemKagemushaRecursive"',
+            '"iroha_data_model::isi::offline::KagemushaTransfer"',
+            '"iroha_data_model::isi::offline::RedeemKagemushaRecursive"',
+            "CopyAndValidateArchive",
+            "KagemushaRecursiveSpendNative.NativeArchiveMaxBytes",
+            "PrivacyNative.IsNoritoV1Archive(copy)",
+            "PrivacyNative.HasNonEmptyPrivacyNoritoPayload(copy)",
+            "NoritoCodec.SchemaHash(instructionType.ArchiveTypeName())",
+            "SequenceEqual(expectedSchema)",
+            "KagemushaRecursiveSpendRedeemInstructionArchive",
+            "EncodeFramedPayload",
+            "return InstructionArchive;",
+        ),
+        "C# Kagemusha instruction archive transaction instruction",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionInstruction.cs",
+        (
+            "internal virtual byte[] EncodeFramedPayload",
+            "NoritoCodec.Encode(TypeName, EncodePayload(context))",
+            "KagemushaInstructionArchive(",
+            "KagemushaRecursiveRedeem(",
+            "KagemushaInstructionArchiveInstruction.RedeemRecursive",
+        ),
+        "C# Kagemusha instruction transaction factories",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs",
+        (
+            "instruction.EncodeFramedPayload(this)",
+            "writer.WriteField(EncodeString(instruction.WireId))",
+            "writer.WriteField(EncodeBytesVec(framedInstruction))",
+        ),
+        "C# Kagemusha instruction archive pass-through encoder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs",
+        (
+            "KagemushaInstructionArchive(",
+            "KagemushaRecursiveRedeem(",
+            "KagemushaRecursiveSpendNative.Redeem(redeemRequestArchive)",
+            "KagemushaRecursiveSpendRedeemInstructionArchive",
+        ),
+        "C# Kagemusha recursive redeem transaction builder",
+        errors,
+    )
+    require_contains(
+        texts,
+        "csharp/tests/Hyperledger.Iroha.Sdk.Tests/TransactionBuilderTests.cs",
+        (
+            "AddInstructionAcceptsKagemushaInstructionArchiveFactories",
+            "BuildSignedEmbedsKagemushaInstructionArchiveWithoutReframing",
+            "KagemushaInstructionArchiveRejectsMalformedWrongTypeAndMismatchedType",
+            "KagemushaInstructionType.RedeemRecursive",
+            "KagemushaInstructionType.Transfer",
+            "new KagemushaRecursiveSpendRedeemInstructionArchive(redeemArchive)",
+            "Assert.Equal(archive, instruction.Payload)",
+            'Assert.Equal("iroha_data_model::isi::offline::RedeemKagemushaRecursive", instruction.WireId)',
+            'NoritoCodec.Encode("KagemushaRecursiveSpendRedeemRequestV1", new byte[] { 1, 2, 3 })',
+        ),
+        "C# Kagemusha instruction transaction builder tests",
+        errors,
+    )
+    require_contains(
+        texts,
         relative,
         (
             "RecursiveSpendLineageTransitionCircuitWiredV1",
@@ -4898,6 +5315,58 @@ def check_sdk_readme_previous_proof_boundary(texts, errors):
             f"{relative} still describes Reserved-lineage append output as future",
             errors,
         )
+
+
+def check_sdk_readme_instruction_transaction_surface(texts, errors):
+    common_required = (
+        "KagemushaTransfer",
+        "RedeemKagemushaRecursive",
+        "valid Norito archives",
+        "empty, malformed, tampered, or wrong-type instruction archives",
+        "recursive redeem derivation inside",
+    )
+    sdk_required = {
+        "IrohaSwift/README.md": (
+            "KagemushaInstructionTransactionRequest",
+            "IrohaSDK.buildKagemushaRecursiveRedeem(...)",
+        ),
+        "java/iroha_android/README.md": (
+            "KagemushaInstructionArchives",
+            "builds a single archived instruction transaction payload",
+            "derives the redeem instruction from a native recursive redeem request",
+        ),
+        "kotlin/README.md": (
+            "KagemushaInstructionArchives",
+            "builds a single archived instruction transaction payload",
+            "derives the redeem instruction from a native recursive redeem request",
+        ),
+        "csharp/README.md": (
+            "TransactionInstruction.KagemushaInstructionArchive(...)",
+            "KagemushaInstructionArchiveInstruction",
+            "TransactionBuilder.KagemushaInstructionArchive(...)",
+            "TransactionBuilder.KagemushaRecursiveRedeem(...)",
+        ),
+        "javascript/iroha_js/README.md": (
+            "buildKagemushaInstructionArchiveInstruction({ instructionType, instructionArchive })",
+            "buildKagemushaInstructionTransaction(...)",
+            "buildKagemushaRecursiveRedeemTransaction(...)",
+        ),
+        "python/iroha_python/README.md": (
+            "kagemusha_instruction_archive_instruction(instruction_type, instruction_archive)",
+            "build_kagemusha_instruction_transaction(...)",
+            "build_kagemusha_recursive_redeem_transaction(...)",
+            "TransactionDraft.kagemusha_instruction_archive(...)",
+            "TransactionDraft.kagemusha_recursive_redeem(...)",
+        ),
+    }
+    for relative in SDK_README_PATHS:
+        text = re.sub(r"\s+", " ", texts[relative])
+        for needle in (*common_required, *sdk_required[relative]):
+            require(
+                needle in text,
+                f"{relative} missing Kagemusha instruction transaction docs: {needle}",
+                errors,
+            )
 
 
 def check_sdk_accumulator_digest_is_native_owned(texts, errors):
@@ -5094,6 +5563,33 @@ def check_offline_doc_lineage_key_artifact_sdk_surface(texts, errors):
         require(
             needle in text,
             f"offline Kagemusha docs missing all-SDK lineage key artifact boundary: {needle}",
+            errors,
+        )
+
+
+def check_offline_doc_instruction_transaction_sdk_surface(texts, errors):
+    text = re.sub(r"\s+", " ", texts["docs/source/offline_kagemusha.md"])
+    required = (
+        "Swift, Kotlin/JVM, Java Android, JavaScript/Node, Python, and C#",
+        "typed archived-instruction transaction surface",
+        "KagemushaTransfer",
+        "RedeemKagemushaRecursive",
+        "valid Norito archives",
+        "preserve their canonical bytes rather than re-framing them",
+        "empty, malformed, tampered, or wrong-type instruction archives",
+        "KagemushaInstructionTransactionRequest",
+        "KagemushaInstructionArchives",
+        "buildKagemushaRecursiveRedeemTransaction(...)",
+        "TransactionDraft.kagemusha_recursive_redeem(...)",
+        "TransactionBuilder.KagemushaRecursiveRedeem(...)",
+        "Recursive redeem derivation inside the transaction helper",
+        "native recursive redeem request",
+        "signs exactly one `RedeemKagemushaRecursive` instruction",
+    )
+    for needle in required:
+        require(
+            needle in text,
+            f"offline Kagemusha docs missing all-SDK instruction transaction boundary: {needle}",
             errors,
         )
 
@@ -5323,10 +5819,12 @@ def run_checks(texts):
     check_mobile_halo2_canonical_vk_hash(texts, errors)
     check_cross_sdk_preferred_mode_fallback_policy(texts, errors)
     check_sdk_readme_previous_proof_boundary(texts, errors)
+    check_sdk_readme_instruction_transaction_surface(texts, errors)
     check_sdk_accumulator_digest_is_native_owned(texts, errors)
     check_sdk_readme_recursive_compact_unavailable_boundary(texts, errors)
     check_offline_doc_recursive_compact_projection_sdk_surface(texts, errors)
     check_offline_doc_lineage_key_artifact_sdk_surface(texts, errors)
+    check_offline_doc_instruction_transaction_sdk_surface(texts, errors)
     check_offline_doc_native_output_sdk_surface(texts, errors)
     check_offline_doc_native_owned_accumulator_boundary(texts, errors)
     if errors:
@@ -6438,6 +6936,40 @@ if mode == "--negative-control-swift-kagemusha-native-output-cap":
         raise SystemExit(0)
     raise SystemExit("negative control failed: Swift Kagemusha native output cap drift was not detected")
 
+if mode == "--negative-control-swift-kagemusha-instruction-transaction-builder":
+    mutated_texts = dict(texts)
+    source_target = "IrohaSwift/Sources/IrohaSwift/KagemushaInstructionTransactionEncoder.swift"
+    test_target = "IrohaSwift/Tests/IrohaSwiftTests/KagemushaInstructionTransactionEncoderTests.swift"
+    mutated_source = texts[source_target].replace(
+        "func buildKagemushaRecursiveRedeem(",
+        "func buildKagemushaRecursiveRedeemUnchecked(",
+        2,
+    )
+    mutated_test = texts[test_target].replace(
+        "testBuildKagemushaRecursiveRedeemTransactionDerivesInstructionBeforeSigning",
+        "testBuildKagemushaRecursiveRedeemTransactionSkipsNativeDerivationBeforeSigning",
+        1,
+    )
+    if (
+        mutated_source == texts[source_target]
+        or "func buildKagemushaRecursiveRedeem(" in mutated_source
+        or mutated_test == texts[test_target]
+    ):
+        raise SystemExit(
+            "negative control failed: unable to mutate Swift Kagemusha instruction transaction builder coverage"
+        )
+    mutated_texts[source_target] = mutated_source
+    mutated_texts[test_target] = mutated_test
+    try:
+        run_checks(mutated_texts)
+    except ParityError as error:
+        print("negative control rejected Swift Kagemusha instruction transaction builder drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: Swift Kagemusha instruction transaction builder drift was not detected"
+    )
+
 if mode == "--negative-control-swift-sdk-version-script":
     target = SWIFT_SDK_PARSE_COMMAND
     original = read(target)
@@ -7132,6 +7664,36 @@ if mode == "--negative-control-js-lineage-key-package-binding":
         raise SystemExit(0)
     raise SystemExit("negative control failed: JS lineage key package binding drift was not detected")
 
+if mode == "--negative-control-js-kagemusha-instruction-transaction-builder":
+    mutated = dict(texts)
+    source_target = "javascript/iroha_js/src/transaction.js"
+    test_target = "javascript/iroha_js/test/transactionBuilder.test.js"
+    mutated_source = texts[source_target].replace(
+        "export function buildKagemushaRecursiveRedeemTransaction",
+        "export function buildKagemushaRecursiveRedeemUncheckedTransaction",
+        1,
+    )
+    mutated_test = texts[test_target].replace(
+        "buildKagemushaRecursiveRedeemTransaction derives instruction before signing",
+        "buildKagemushaRecursiveRedeemTransaction skips instruction derivation before signing",
+        1,
+    )
+    if mutated_source == texts[source_target] or mutated_test == texts[test_target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate JS Kagemusha instruction transaction builder coverage"
+        )
+    mutated[source_target] = mutated_source
+    mutated[test_target] = mutated_test
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected JS Kagemusha instruction transaction builder drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: JS Kagemusha instruction transaction builder drift was not detected"
+    )
+
 if mode == "--negative-control-python-lineage-key-package-binding":
     mutated = dict(texts)
     target = "python/iroha_python/src/iroha_python/kagemusha.py"
@@ -7789,6 +8351,29 @@ if mode == "--negative-control-offline-doc-native-owned-accumulator-boundary":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: offline Kagemusha accumulator boundary drift was not detected")
+
+if mode == "--negative-control-offline-doc-instruction-transaction-surface":
+    mutated = dict(texts)
+    target = "docs/source/offline_kagemusha.md"
+    mutated[target] = mutated[target].replace(
+        "empty, malformed, tampered, or wrong-type\n"
+        "instruction archives before transaction payload construction",
+        "empty instruction archives before transaction payload construction",
+        1,
+    )
+    if mutated[target] == texts[target]:
+        raise SystemExit(
+            "negative control failed: unable to mutate offline Kagemusha instruction transaction surface"
+        )
+    try:
+        run_checks(mutated)
+    except ParityError as error:
+        print("negative control rejected offline Kagemusha instruction transaction surface drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit(
+        "negative control failed: offline Kagemusha instruction transaction surface drift was not detected"
+    )
 
 if mode == "--negative-control-sdk-proof-chain-accumulator-input":
     mutated = dict(texts)

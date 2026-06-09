@@ -86,6 +86,18 @@ The append-boundary digest uses the public
 `RecursiveSpendLineageAppendBoundaryFinalNoteBindingDomainV1` for chain/asset
 and final-root/current-note binding.
 
+Transaction builders expose the same Kagemusha instruction surface without
+asking wallet code to reframe native archives. Use
+`TransactionInstruction.KagemushaInstructionArchive(...)` or
+`KagemushaInstructionArchiveInstruction` for a typed `KagemushaTransfer` or
+`RedeemKagemushaRecursive` instruction archive,
+`TransactionBuilder.KagemushaInstructionArchive(...)` to add a single archived
+instruction, and `TransactionBuilder.KagemushaRecursiveRedeem(...)` to
+derive the redeem instruction from a native recursive redeem request before
+signing. These builders require valid Norito archives, reject empty, malformed,
+tampered, or wrong-type instruction archives, and keep recursive redeem
+derivation inside the native bridge.
+
 Use `PreferredMode(...)` to select `recursive_spend_v1` when the complete
 ABI-6-or-later native surface is available, otherwise fall back to
 `checked_prefold_v1`.

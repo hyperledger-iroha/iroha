@@ -4,6 +4,7 @@ import java.security.KeyPair;
 import java.security.Signature;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -24,6 +25,7 @@ import org.hyperledger.iroha.android.crypto.keystore.KeystoreKeyProvider;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoCodecAdapter;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
+import org.hyperledger.iroha.android.offline.KagemushaInstructionArchives;
 import org.hyperledger.iroha.android.testing.TestAccountIds;
 import org.hyperledger.iroha.norito.NoritoAdapters;
 import org.hyperledger.iroha.norito.NoritoCodec;
@@ -40,6 +42,8 @@ public final class TransactionBuilderTests {
     encodeAndSignWithExplicitSigner();
     encodeAndSignWithKeyManagerAlias();
     instructionsVariantRoundTrips();
+    kagemushaInstructionArchivesBuildPayloads();
+    kagemushaInstructionArchivesRejectAdversarialInputs();
     encodeAndSignEnvelopeWithAttestationBundle();
     encodeAndSignEnvelopeWithAttestationWithoutHardware();
     System.out.println("[IrohaAndroid] Transaction builder tests passed.");
@@ -140,6 +144,83 @@ public final class TransactionBuilderTests {
     assert decoded.executable().isInstructions() : "Executable variant must remain instructions";
     assert decoded.executable().instructions().equals(payload.executable().instructions())
         : "Instruction list must round-trip";
+  }
+
+  private static void kagemushaInstructionArchivesBuildPayloads() {
+    final byte[] archive =
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
+    final InstructionBox box = KagemushaInstructionArchives.recursiveRedeemInstructionBox(archive);
+    archive[0] = 0;
+
+    final InstructionBox.WirePayload wire = (InstructionBox.WirePayload) box.payload();
+    assert wire
+        .wireName()
+        .equals("iroha_data_model::isi::offline::RedeemKagemushaRecursive")
+        : "Redeem instruction wire name must be canonical";
+    assert Arrays.equals(
+            kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE),
+            wire.payloadBytes())
+        : "Archive bytes must be defensively copied";
+
+    final byte[] transferArchive =
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.TRANSFER);
+    final TransactionPayload payload =
+        KagemushaInstructionArchives.transactionPayload(
+            KagemushaInstructionArchives.InstructionType.TRANSFER,
+            transferArchive,
+            "00000042",
+            TestAccountIds.ed25519Authority(0x2C),
+            1_735_000_000_000L,
+            3_500L,
+            17,
+            Map.of("mode", "kagemusha"));
+    assert payload.executable().isInstructions() : "Payload must use instruction executable";
+    final InstructionBox.WirePayload transferWire =
+        (InstructionBox.WirePayload) payload.executable().instructions().get(0).payload();
+    assert transferWire
+        .wireName()
+        .equals("iroha_data_model::isi::offline::KagemushaTransfer")
+        : "Transfer instruction wire name must be canonical";
+    assert Arrays.equals(transferArchive, transferWire.payloadBytes())
+        : "Transfer archive bytes must be preserved";
+  }
+
+  private static void kagemushaInstructionArchivesRejectAdversarialInputs() {
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(new byte[0]),
+        "empty archive must be rejected");
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBoxFromRequest(new byte[0]),
+        "empty redeem request archive must be rejected");
+    assertThrows(
+        () ->
+            KagemushaInstructionArchives.recursiveRedeemTransactionPayloadFromRequest(
+                new byte[0],
+                "00000042",
+                TestAccountIds.ed25519Authority(0x2C),
+                1_735_000_000_000L,
+                3_500L,
+                17,
+                Map.of("mode", "kagemusha")),
+        "empty redeem request transaction archive must be rejected");
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(new byte[] {0}),
+        "malformed archive must be rejected");
+    assertThrows(
+        () ->
+            KagemushaInstructionArchives.recursiveRedeemInstructionBox(
+                NoritoCodec.encode(
+                    "request",
+                    "KagemushaRecursiveSpendRedeemRequestV1",
+                    NoritoAdapters.stringAdapter())),
+        "wrong schema archive must be rejected");
+
+    final byte[] tampered =
+        kagemushaArchive(KagemushaInstructionArchives.InstructionType.REDEEM_RECURSIVE);
+    tampered[tampered.length - 1] ^= 0x01;
+    assertThrows(
+        () -> KagemushaInstructionArchives.recursiveRedeemInstructionBox(tampered),
+        "checksum drift must be rejected");
   }
 
   private static void encodeAndSignEnvelopeWithAttestationBundle() throws Exception {
@@ -290,5 +371,18 @@ public final class TransactionBuilderTests {
     System.arraycopy(left, 0, out, 0, left.length);
     System.arraycopy(right, 0, out, left.length, right.length);
     return out;
+  }
+
+  private static byte[] kagemushaArchive(final KagemushaInstructionArchives.InstructionType type) {
+    return NoritoCodec.encode("payload", type.archiveTypeName(), NoritoAdapters.stringAdapter());
+  }
+
+  private static void assertThrows(final Runnable runnable, final String message) {
+    try {
+      runnable.run();
+    } catch (final IllegalArgumentException expected) {
+      return;
+    }
+    throw new AssertionError(message);
   }
 }

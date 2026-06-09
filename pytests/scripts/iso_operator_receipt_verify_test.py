@@ -72,6 +72,7 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
             ("%70assword_receipt_unknown_leak", "receipt_unknown_leak"),
             ("private-key_receipt_unknown_leak", "receipt_unknown_leak"),
             ("unexpected\x1breceipt_key", "\x1b"),
+            ("unexpected_receipt_\uff4bey", "\uff4b"),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -130,6 +131,27 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--receipt-di", stderr.getvalue())
+
+    def test_raw_cli_control_characters_are_rejected_without_echo(self):
+        hidden = "--unknown-receipt\x1bflag"
+        with self.assertRaises(VERIFIER.ReceiptError) as caught:
+            VERIFIER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must not contain control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("unknown-receipt", message)
+
+    def test_raw_cli_non_ascii_is_rejected_without_echo(self):
+        hidden = "\uff0d\uff0dreceipt-dir"
+        with self.assertRaises(VERIFIER.ReceiptError) as caught:
+            VERIFIER._preflight_raw_cli_secrets([hidden], {"--receipt-dir"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must use printable ASCII", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("receipt-dir", message)
 
     def test_nested_control_material_in_receipt_is_rejected_without_echo(self):
         cases = (
@@ -539,8 +561,12 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                 self.assertIn("path must not contain URL delimiter characters", message)
                 self.assertNotIn(endpoint, message)
 
-    def test_url_paths_reject_non_ascii_smuggling(self):
+    def test_urls_reject_non_ascii_smuggling(self):
         cases = (
+            (
+                "https://notary\u0661.local-bank.bank/archive/anchor",
+                "host must use printable ASCII",
+            ),
             (
                 "https://notary.local-bank.bank/archive∕debug/anchor",
                 "path must use printable ASCII",
@@ -1405,8 +1431,79 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                         ]
                     )
 
+            self.assertEqual(rc, 2)
+            self.assertIn(expected, stderr)
+
+    def test_non_ascii_rail_message_type_values_are_rejected_without_echo(self):
+        hidden = "\u0660"
+        unicode_digit_message_type = f"pacs.{hidden}{hidden}2"
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            original_receipt = receipt.read_bytes()
+            receipt_body = json.loads(original_receipt.decode("utf-8"))
+            sidecar_path = Path(receipt_body["sidecar_path"])
+            original_sidecar = sidecar_path.read_bytes()
+
+            cases = (
+                (
+                    "receipt",
+                    lambda: rewrite_receipt(
+                        receipt,
+                        lambda body: body.update(
+                            {"message_type": unicode_digit_message_type}
+                        ),
+                    ),
+                    ["--receipt", str(receipt), "--allow-insecure-http"],
+                ),
+                (
+                    "sidecar",
+                    lambda: sidecar_path.write_text(
+                        json.dumps(
+                            {
+                                **json.loads(original_sidecar.decode("utf-8")),
+                                "message_type": unicode_digit_message_type,
+                            },
+                            indent=2,
+                            sort_keys=True,
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    ),
+                    [
+                        "--receipt",
+                        str(receipt),
+                        "--allow-insecure-http",
+                        "--require-source-files",
+                    ],
+                ),
+            )
+            for name, mutate, argv in cases:
+                with self.subTest(name=name):
+                    receipt.write_bytes(original_receipt)
+                    sidecar_path.write_bytes(original_sidecar)
+                    mutate()
+
+                    rc, _stdout, stderr = run_verify(argv)
+
                     self.assertEqual(rc, 2)
-                    self.assertIn(expected, stderr)
+                    self.assertIn("message_type must use printable ASCII", stderr)
+                    self.assertNotIn(hidden, stderr)
+                    self.assertNotIn(unicode_digit_message_type, stderr)
 
     def test_status_timestamp_and_response_metadata_are_consistent(self):
         cases = [
@@ -3570,6 +3667,36 @@ class IsoOperatorReceiptVerifyTest(unittest.TestCase):
                     self.assertIn(f"{field} must not contain secret-looking material", stderr)
                     self.assertNotIn(value, stderr)
                     self.assertNotIn(hidden, stderr)
+
+    def test_non_ascii_receipt_kind_is_rejected_without_echo(self):
+        hidden = "iso-rail-gatew\u0430y"
+        with tempfile.TemporaryDirectory() as raw_inbox:
+            inbox = Path(raw_inbox)
+            rail_test.write_message(inbox)
+            with rail_test.capture_server() as (base_url, _requests):
+                self.assertEqual(
+                    rail_test.run_main(
+                        [
+                            "--inbox-dir",
+                            str(inbox),
+                            "--torii-base-url",
+                            base_url,
+                            "--allow-insecure-http",
+                            "--receipt-dir",
+                            str(inbox / "receipts"),
+                        ]
+                    )[0],
+                    0,
+                )
+            receipt = next((inbox / "receipts").glob("*.receipt.json"))
+            rewrite_receipt(receipt, lambda body: body.update({"receipt_kind": hidden}))
+
+            rc, _stdout, stderr = run_verify(["--receipt", str(receipt), "--allow-insecure-http"])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("receipt_kind must use printable ASCII", stderr)
+            self.assertNotIn(hidden, stderr)
+            self.assertNotIn("unsupported receipt_kind", stderr)
 
     def test_endpoint_urls_reject_secret_path_without_echo(self):
         cases = (

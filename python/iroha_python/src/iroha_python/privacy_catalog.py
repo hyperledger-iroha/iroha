@@ -361,9 +361,15 @@ REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID = {
         "typed sis-with-hints credential proof instruction",
     ),
     "zk-ace-pq-authorization-v0": (
-        "active identity commitment registry",
-        "replay nullifier set",
-        "authorization verifier registry",
+        "registered zk-ace identity commitment",
+        "source-account allowlist",
+        "authorization policy hash registry",
+        "active zk-ace verifier key",
+        "chain/domain binding state",
+        "transfer digest binding",
+        "replay nullifier uniqueness set",
+        "identity rotation/revocation registry",
+        "stark/fri verifier parameter floors",
         "wallet identity witness",
         "zk::submitzkaceauthorizedtransfer",
     ),
@@ -775,7 +781,7 @@ REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID = {
     "zk-x509-onchain-identity-v0": ("trusted CA root registry", "certificate policy registry", "revocation root registry", "identity proof verifier", "wallet certificate witness store", "certificate subject commitment registry", "ZK-X.509 verifier key registry"),
     "jindo-lattice-pcs-zk-v0": ("lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "benchmark fixtures"),
     "sis-hints-anoncred-pq-v0": ("lattice credential parameter registry", "issuer parameter registry", "credential showing verifier", "wallet lattice credential witness store", "lattice credential commitment registry", "lattice credential verifier key registry"),
-    "zk-ace-pq-authorization-v0": ("active identity commitment registry", "replay nullifier set", "authorization verifier registry", "wallet identity witness and replay-secret store"),
+    "zk-ace-pq-authorization-v0": ("registered ZK-ACE identity commitment", "source-account allowlist", "authorization policy hash registry", "active ZK-ACE verifier key", "chain/domain binding state", "transfer digest binding", "replay nullifier uniqueness set", "identity rotation/revocation registry", "STARK/FRI verifier parameter floors", "wallet identity witness and replay-secret store"),
     "orchard-halo2-actions-v1": ("Orchard note commitment tree", "Orchard nullifier set", "Orchard action-bundle verifier key registry", "wallet Orchard witness store"),
     "penumbra-masp-v1": ("multi-asset state commitment tree", "typed nullifier set", "Groth16 spend/output verifier key registry", "wallet asset metadata witness store"),
     "monero-fcmp-plus-plus-v1": ("full-output-set commitment accumulator", "spent link-tag set", "FCMP++ verifier key registry", "wallet output ownership scan state"),
@@ -884,8 +890,7 @@ _RAW_PRIVACY_ALGORITHM_DESCRIPTORS_JSON = (
     "e PQ before a payment flow is end-to-end post-quantum.\",\"Replay nullifiers must be chain-domain "
     "separated and irreversible after acceptance.\",\"A dev verifier must never be accepted under a pro"
     "duction verifier key id.\",\"Native AIR openings are blinded so sampled rows do not recover"
-    " identity or replay witness limbs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"active identity commitment registry\",\"replay nullif"
-    "ier set\",\"authorization verifier registry\",\"wallet identity witness and replay-secret store\"],\"f"
+    " identity or replay witness limbs.\",\"Any chain roots, nullifiers, revocation data, or replay guards for this flow must persist across node restarts before admitting ledger mutations.\",\"Wallet witness material and private inputs must stay local and must not be exposed through SDK or chain APIs.\",\"Production hardening requires deterministic vectors, negative/adversarial test cases, replay/nullifier rejection tests, parser/verifier fuzzing, performance gates, and internal cryptographic review.\"],\"requiredState\":[\"registered ZK-ACE identity commitment\",\"source-account allowlist\",\"authorization policy hash registry\",\"active ZK-ACE verifier key\",\"chain/domain binding state\",\"transfer digest binding\",\"replay nullifier uniqueness set\",\"identity rotation/revocation registry\",\"STARK/FRI verifier parameter floors\",\"wallet identity witness and replay-secret store\"],\"f"
     "ailureModes\":[\"transaction digest substitution\",\"chain-id or domain-separator mismatch\",\"replaye"
     "d nullifier\",\"revoked identity commitment\",\"policy hash mismatch\",\"malformed proof bytes\",\"wrong verifier key\",\"public input mismatch\"],\"setupSteps\":[\"Register a ZK-"
     "ACE identity commitment, source-account allowlist, and verifier key.\",\"Initialize replay-state "

@@ -673,6 +673,15 @@ legacy checked pre-fold runtimes. `transitionProfileInit(requestArchive:)` and
 `transitionProfileAppend(requestArchive:)` return the canonical
 Reserved-lineage accumulator transition profile as raw Norito archives for
 fixture generation and circuit preflight.
+Transaction builders expose the same Kagemusha instruction surface without
+asking wallet code to reframe native archives. Use
+`KagemushaInstructionTransactionRequest` for a typed `KagemushaTransfer` or
+`RedeemKagemushaRecursive` instruction archive, and use
+`IrohaSDK.buildKagemushaRecursiveRedeem(...)` to derive the redeem instruction
+from a native recursive redeem request before signing. These builders require
+valid Norito archives, reject empty, malformed, tampered, or wrong-type
+instruction archives, and keep recursive redeem derivation inside the native
+bridge.
 `lineageAppendBoundary(profileArchive:)` derives the compact append-boundary
 Norito archive from a full append transition profile with native opening
 preflight material; wallet code should treat the boundary bytes as opaque

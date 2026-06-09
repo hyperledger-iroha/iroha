@@ -109,6 +109,19 @@ the append-boundary helper
 helpers, `kagemusha_recursive_spend_verify`, and
 `kagemusha_recursive_spend_redeem`.
 
+Transaction helpers expose the same Kagemusha instruction surface without
+asking wallet code to reframe native archives. Use
+`kagemusha_instruction_archive_instruction(instruction_type, instruction_archive)`
+for a typed `KagemushaTransfer` or `RedeemKagemushaRecursive` instruction
+archive, `build_kagemusha_instruction_transaction(...)` to sign a single
+archived instruction, and `build_kagemusha_recursive_redeem_transaction(...)`
+to derive the redeem instruction from a native recursive redeem request before
+signing. `TransactionDraft.kagemusha_instruction_archive(...)` and
+`TransactionDraft.kagemusha_recursive_redeem(...)` add the same instructions to
+draft transactions. These helpers require valid Norito archives, reject empty,
+malformed, tampered, or wrong-type instruction archives, and keep recursive
+redeem derivation inside the PyO3 host.
+
 All helper inputs and outputs are raw Norito archives. The transition-profile
 helpers return the canonical Reserved-lineage accumulator transition profile for
 fixture generation and circuit preflight, so Python wallets do not duplicate

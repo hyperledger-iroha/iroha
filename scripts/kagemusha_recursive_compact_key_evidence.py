@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import stat
 import sys
@@ -41,6 +42,48 @@ def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:
     except OSError:
         return None, [f"{label} could not be read"]
     return digest.hexdigest(), []
+
+
+def _sha256_file_with_size(
+    path: Path,
+    label: str,
+    *,
+    allow_empty: bool = False,
+) -> tuple[str | None, int | None, list[str]]:
+    file_errors = readiness.validate_lineage_local_file(path, label)
+    if file_errors:
+        return None, None, file_errors
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, None, [f"{label} must be a regular file"]
+            if (path_stat.st_dev, path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, None, [f"{label} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, None, [f"{label} must not be hardlinked"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                digest.update(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, None, [f"{label} changed while being read"]
+    except OSError:
+        return None, None, [f"{label} could not be read"]
+    if size <= 0 and not allow_empty:
+        return None, None, [f"{label} must be non-empty"]
+    return digest.hexdigest(), size, []
 
 
 def _validate_generated_at_utc(value: str) -> list[str]:
@@ -113,7 +156,7 @@ def build_evidence(
     artifact_sizes: dict[str, int] = {}
     for artifact in readiness.COMPACT_KEY_REQUIRED_ARTIFACTS:
         path = artifact_dir / artifact
-        digest, file_errors = _sha256_file(
+        digest, artifact_size, file_errors = _sha256_file_with_size(
             path,
             f"recursive compact key artifact {artifact}",
         )
@@ -123,24 +166,17 @@ def build_evidence(
             else:
                 errors.extend(file_errors)
             continue
-        assert digest is not None
-        try:
-            artifact_size = path.stat().st_size
-        except OSError:
-            errors.append(f"recursive compact key artifact {artifact} size could not be read")
-            continue
-        if artifact_size <= 0:
-            errors.append(f"recursive compact key artifact {artifact} must be non-empty")
-            continue
+        assert digest is not None and artifact_size is not None
         errors.extend(readiness.validate_compact_key_artifact_content(path, artifact))
         artifact_digests[artifact] = digest
         artifact_sizes[artifact] = artifact_size
 
     generator_log_digest: str | None = None
     if generator_log_path.name == readiness.COMPACT_KEY_GENERATOR_LOG_FILENAME:
-        generator_log_digest, generator_log_errors = _sha256_file(
+        generator_log_digest, generator_log_size, generator_log_errors = _sha256_file_with_size(
             generator_log_path,
             "recursive compact key generator log",
+            allow_empty=True,
         )
         if generator_log_errors:
             if generator_log_errors == ["recursive compact key generator log is missing"]:
@@ -148,16 +184,9 @@ def build_evidence(
             else:
                 errors.extend(generator_log_errors)
         else:
-            try:
-                if (
-                    generator_log_path.stat().st_size
-                    > readiness.MAX_COMPACT_KEY_GENERATOR_LOG_BYTES
-                ):
-                    errors.append(
-                        "recursive compact key generator log exceeds maximum size"
-                    )
-            except OSError:
-                errors.append("recursive compact key generator log metadata could not be read")
+            assert generator_log_size is not None
+            if generator_log_size > readiness.MAX_COMPACT_KEY_GENERATOR_LOG_BYTES:
+                errors.append("recursive compact key generator log exceeds maximum size")
             try:
                 with generator_log_path.open(
                     "r",
@@ -168,7 +197,7 @@ def build_evidence(
             except (OSError, UnicodeDecodeError):
                 errors.append("recursive compact key generator log could not be read")
             else:
-                generator_sizes, generator_parse_errors = (
+                generator_sizes, generator_digests, generator_parse_errors = (
                     readiness.parse_compact_key_generator_log(generator_log_text)
                 )
                 errors.extend(generator_parse_errors)
@@ -177,6 +206,12 @@ def build_evidence(
                     if logged_size is not None and logged_size != local_size:
                         errors.append(
                             f"recursive compact key generator log size does not match local artifact {artifact}"
+                        )
+                for artifact, local_digest in artifact_digests.items():
+                    logged_digest = generator_digests.get(artifact)
+                    if logged_digest is not None and logged_digest != local_digest:
+                        errors.append(
+                            f"recursive compact key generator log digest does not match local artifact {artifact}"
                         )
 
     if errors:
@@ -383,13 +418,53 @@ def write_evidence(path: Path, evidence: dict[str, Any]) -> list[str]:
     errors = validate_output_path(path, "--out")
     if errors:
         return errors
+    evidence_text = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+    tmp_path: Path | None = None
     try:
-        path.write_text(
-            json.dumps(evidence, indent=2, sort_keys=True) + "\n",
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
             encoding="utf-8",
-        )
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp_path = Path(handle.name)
+            handle.write(evidence_text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        errors = validate_output_path(path, "--out")
+        if errors:
+            return errors
+        os.replace(tmp_path, path)
+        tmp_path = None
     except OSError:
         return ["--out could not be written"]
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    try:
+        parent_fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        parent_fd = None
+    if parent_fd is not None:
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(parent_fd)
+    errors = validate_output_path(path, "--out")
+    if errors:
+        return errors
+    try:
+        if path.read_text(encoding="utf-8") != evidence_text:
+            return ["--out write verification failed"]
+    except (OSError, UnicodeDecodeError):
+        return ["--out write verification failed"]
     return []
 
 

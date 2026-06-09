@@ -161,6 +161,7 @@ SUMMARY_ALLOWED_SECTION_KEYS: dict[str, frozenset[str]] = {
             "record_version",
             "command_validated",
             "generator_log_sha256",
+            "generator_log_artifact_sha256",
             "generator_log_artifact_size_bytes",
             "artifact_count",
             "ok",
@@ -238,19 +239,83 @@ def _validate_local_file(path: Path, label: str, code: str) -> list[dict[str, An
     ]
 
 
-def _load_local_json(path: Path, label: str, code_prefix: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    file_blockers = _validate_local_file(path, label, f"{code_prefix}_file_shape")
+def _read_local_json_text(
+    path: Path,
+    label: str,
+    *,
+    shape_code: str,
+    unreadable_code: str,
+) -> tuple[str | None, list[dict[str, Any]]]:
+    file_blockers = _validate_local_file(path, label, shape_code)
     if file_blockers:
         return None, file_blockers
-    payload, load_blockers = readiness._load_json_artifact(  # type: ignore[attr-defined]
+    chunks: list[bytes] = []
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [_blocker(shape_code, f"{label} must not be a symlink")]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, [_blocker(shape_code, f"{label} must be a regular file")]
+            if (path_stat.st_dev, path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, [_blocker(shape_code, f"{label} changed while being read")]
+            if open_stat.st_nlink > 1:
+                return None, [_blocker(shape_code, f"{label} must not be hardlinked")]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, [_blocker(shape_code, f"{label} changed while being read")]
+    except OSError:
+        return None, [_blocker(unreadable_code, f"{label} could not be read")]
+    try:
+        return b"".join(chunks).decode("utf-8"), []
+    except UnicodeDecodeError:
+        return None, [_blocker(unreadable_code, f"{label} could not be read")]
+
+
+def _load_local_json(path: Path, label: str, code_prefix: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    text, read_blockers = _read_local_json_text(
         path,
-        missing_code=f"{code_prefix}_missing",
-        invalid_code=f"{code_prefix}_invalid_json",
-        unreadable_code=f"{code_prefix}_unreadable",
-        not_object_code=f"{code_prefix}_not_object",
         label=label,
+        shape_code=f"{code_prefix}_file_shape",
+        unreadable_code=f"{code_prefix}_unreadable",
     )
-    return payload, load_blockers
+    if read_blockers:
+        return None, read_blockers
+    assert text is not None
+    try:
+        payload = json.loads(
+            text,
+            object_pairs_hook=readiness._reject_duplicate_json_object_pairs,  # type: ignore[attr-defined]
+            parse_constant=readiness._reject_nonfinite_json_constant,  # type: ignore[attr-defined]
+        )
+    except json.JSONDecodeError as exc:
+        return None, [_blocker(f"{code_prefix}_invalid_json", f"{label} is not valid JSON: {exc}")]
+    except readiness.DuplicateJsonKeyError as exc:  # type: ignore[attr-defined]
+        return None, [
+            _blocker(
+                f"{code_prefix}_invalid_json",
+                readiness._duplicate_json_key_message(label, exc),  # type: ignore[attr-defined]
+            )
+        ]
+    except readiness.NonFiniteJsonConstantError as exc:  # type: ignore[attr-defined]
+        return None, [
+            _blocker(
+                f"{code_prefix}_invalid_json",
+                f"{label} is not strict JSON: non-finite constant {exc.constant} is not allowed",
+            )
+        ]
+    if not isinstance(payload, dict):
+        return None, [_blocker(f"{code_prefix}_not_object", f"{label} must be a JSON object")]
+    return payload, []
 
 
 def _sha256_file(path: Path, label: str, code: str) -> tuple[str | None, list[dict[str, Any]]]:
@@ -265,6 +330,52 @@ def _sha256_file(path: Path, label: str, code: str) -> tuple[str | None, list[di
     except OSError:
         return None, [_blocker(code, f"{label} could not be read")]
     return digest.hexdigest(), []
+
+
+def _sha256_file_with_size(
+    path: Path,
+    label: str,
+    code: str,
+) -> tuple[str | None, int | None, list[dict[str, Any]]]:
+    file_blockers = _validate_local_file(path, label, code)
+    if file_blockers:
+        return None, None, file_blockers
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, None, [_blocker(code, f"{label} must not be a symlink")]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, None, [_blocker(code, f"{label} must be a regular file")]
+            if (path_stat.st_dev, path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, None, [_blocker(code, f"{label} changed while being read")]
+            if open_stat.st_nlink > 1:
+                return None, None, [_blocker(code, f"{label} must not be hardlinked")]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                digest.update(chunk)
+            final_path_stat = path.lstat()
+            if (final_path_stat.st_dev, final_path_stat.st_ino) != (
+                open_stat.st_dev,
+                open_stat.st_ino,
+            ):
+                return None, None, [_blocker(code, f"{label} changed while being read")]
+    except OSError:
+        return None, None, [_blocker(code, f"{label} could not be read")]
+    if size <= 0:
+        return None, None, [
+            _blocker(
+                code,
+                f"{label} must be non-empty",
+            )
+        ]
+    return digest.hexdigest(), size, []
 
 
 def _relative_to_bundle(path: Path, bundle_root: Path, label: str) -> tuple[str | None, list[dict[str, Any]]]:
@@ -772,6 +883,7 @@ def _compare_validated_sections(
         "artifact_sha256",
         "artifact_size_bytes",
         "generator_log_sha256",
+        "generator_log_artifact_sha256",
         "generator_log_artifact_size_bytes",
         "command_validated",
     ):
@@ -813,19 +925,13 @@ def _evidence_entry_with_size(
     label: str,
     code: str,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
-    entry, blockers = _evidence_entry(path, bundle_root, label=label, code=code)
-    if entry is None:
+    digest, size, digest_blockers = _sha256_file_with_size(path, label, code)
+    relative, relative_blockers = _relative_to_bundle(path, bundle_root, label)
+    blockers = [*digest_blockers, *relative_blockers]
+    if blockers:
         return None, blockers
-    try:
-        size = path.stat().st_size
-    except OSError:
-        return None, [
-            _blocker(
-                code,
-                f"{label} metadata could not be read",
-            )
-        ]
-    return {**entry, "size_bytes": size}, []
+    assert digest is not None and size is not None and relative is not None
+    return {"path": relative, "sha256": digest, "size_bytes": size}, []
 
 
 def _artifact_inventory_entries(
@@ -975,8 +1081,8 @@ def _android_signed_evidence_entries(
     device_lab_root: Path,
     bundle_root: Path,
     android: dict[str, Any],
-) -> tuple[dict[str, dict[str, str]], list[dict[str, Any]]]:
-    entries: dict[str, dict[str, str]] = {}
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    entries: dict[str, dict[str, Any]] = {}
     blockers: list[dict[str, Any]] = []
     signed_evidence_summary = android.get("signed_evidence", {})
     if not isinstance(signed_evidence_summary, dict):
@@ -1008,7 +1114,7 @@ def _android_signed_evidence_entries(
             / slot
             / device_lab.KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH
         )
-        entry, entry_blockers = _evidence_entry(
+        entry, entry_blockers = _evidence_entry_with_size(
             artifact_path,
             bundle_root,
             label="Android signed evidence artifact",
@@ -1238,6 +1344,31 @@ def _check_release_bundle_evidence_paths(value: Any) -> list[dict[str, Any]]:
                                     error,
                                 )
                             )
+                digest = item.get("sha256")
+                if (
+                    not isinstance(digest, str)
+                    or device_lab.SHA256_HEX_RE.fullmatch(digest) is None
+                    or digest == "0" * 64
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_evidence_sha256",
+                            "Kagemusha release bundle evidence SHA-256 must be a non-zero lowercase hex digest",
+                        )
+                    )
+                size = item.get("size_bytes")
+                if (
+                    "size_bytes" not in item
+                    or isinstance(size, bool)
+                    or not isinstance(size, int)
+                    or size <= 0
+                ):
+                    blockers.append(
+                        _blocker(
+                            "kagemusha_release_bundle_manifest_evidence_size",
+                            "Kagemusha release bundle evidence size_bytes must be a positive integer",
+                        )
+                    )
             for child in item.values():
                 visit(child)
         elif isinstance(item, list):
@@ -1450,7 +1581,7 @@ def build_release_bundle(
     ):
         if not input_paths_ok or not path_ok:
             continue
-        entry, entry_blockers = _evidence_entry(
+        entry, entry_blockers = _evidence_entry_with_size(
             path,
             bundle_root,
             label=label,
@@ -1569,6 +1700,10 @@ def build_release_bundle(
             "artifact_sha256": compact.get("artifact_sha256", {}),
             "artifact_size_bytes": compact.get("artifact_size_bytes", {}),
             "generator_log_sha256": compact.get("generator_log_sha256"),
+            "generator_log_artifact_sha256": compact.get(
+                "generator_log_artifact_sha256",
+                {},
+            ),
             "generator_log_artifact_size_bytes": compact.get(
                 "generator_log_artifact_size_bytes",
                 {},
@@ -1741,6 +1876,17 @@ def write_release_bundle(path: Path, bundle: dict[str, Any], bundle_root: Path) 
     output_blockers = _validate_output_path(path, bundle_root)
     if output_blockers:
         return output_blockers
+    try:
+        parent_fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        parent_fd = None
+    if parent_fd is not None:
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(parent_fd)
     try:
         readback = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):

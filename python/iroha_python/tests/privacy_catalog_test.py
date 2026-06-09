@@ -6474,6 +6474,18 @@ def test_privacy_catalog_enforces_execution_and_metadata_invariants() -> None:
         "buildShieldedZkAceAuthorizedTransferInstruction",
     ]
     assert "buildZkAceAuthorizationProofV0" not in zk_ace["planned_sdk_entrypoints"]
+    assert zk_ace["required_state"] == [
+        "registered ZK-ACE identity commitment",
+        "source-account allowlist",
+        "authorization policy hash registry",
+        "active ZK-ACE verifier key",
+        "chain/domain binding state",
+        "transfer digest binding",
+        "replay nullifier uniqueness set",
+        "identity rotation/revocation registry",
+        "STARK/FRI verifier parameter floors",
+        "wallet identity witness and replay-secret store",
+    ]
     assert zk_ace["verifier_key_metadata"]["pq_layers"] == {
         "proof": True,
         "authorization": True,

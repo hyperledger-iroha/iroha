@@ -6,6 +6,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 from pathlib import Path
 import stat
 import subprocess
@@ -169,27 +170,70 @@ def _output_file_sha256(path: Path, label: str) -> tuple[str | None, list[str]]:
 
 
 def _write_json(path: Path, payload: dict[str, Any], label: str) -> list[str]:
-    errors = _validate_json_output_path(path, label)
-    if errors:
-        return errors
-    try:
-        path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-    except OSError:
-        return [f"{label} could not be written"]
-    return []
+    return _write_text_atomic(
+        path,
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        label,
+    )
 
 
 def _write_text(path: Path, text: str, label: str) -> list[str]:
+    return _write_text_atomic(path, text, label)
+
+
+def _write_text_atomic(path: Path, text: str, label: str) -> list[str]:
     errors = _validate_json_output_path(path, label)
     if errors:
         return errors
+    tmp_path: Path | None = None
     try:
-        path.write_text(text, encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            "w",
+            dir=path.parent,
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp_path = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        errors = _validate_json_output_path(path, label)
+        if errors:
+            return errors
+        os.replace(tmp_path, path)
+        tmp_path = None
     except OSError:
         return [f"{label} could not be written"]
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+    errors = _validate_existing_json_output_path(path, label)
+    if errors:
+        return errors
+    try:
+        parent_fd = os.open(path.parent, os.O_RDONLY)
+    except OSError:
+        parent_fd = None
+    if parent_fd is not None:
+        try:
+            os.fsync(parent_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(parent_fd)
+    errors = _validate_existing_json_output_path(path, label)
+    if errors:
+        return errors
+    try:
+        if path.read_text(encoding="utf-8") != text:
+            return [f"{label} write verification failed"]
+    except (OSError, UnicodeDecodeError):
+        return [f"{label} write verification failed"]
     return []
 
 
@@ -371,10 +415,14 @@ def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> 
             temp_path = Path(temp)
             payload_path = temp_path / "payload.bin"
             signature_path = temp_path / "signature.bin"
-            try:
-                payload_path.write_bytes(payload)
-            except OSError:
-                errors.append("signature payload could not be staged")
+            stage_errors = device_lab._write_staged_bytes(
+                payload_path,
+                payload,
+                write_error="signature payload could not be staged",
+                verification_error="signature payload staging verification failed",
+            )
+            if stage_errors:
+                errors.extend(stage_errors)
                 return None
             try:
                 subprocess.run(
@@ -401,10 +449,14 @@ def _sign_ed25519(private_key_path: Path, payload: bytes, errors: list[str]) -> 
                 errors.append("signature command could not be run")
                 return None
             try:
-                return signature_path.read_bytes()
+                signature = signature_path.read_bytes()
             except OSError:
                 errors.append("signature output could not be read")
                 return None
+            if len(signature) != device_lab.ED25519_SIGNATURE_BYTES:
+                errors.append("signature output must be 64 bytes")
+                return None
+            return signature
     except OSError:
         errors.append("signature temporary directory could not be created")
         return None
@@ -602,13 +654,13 @@ def _validate_slot_for_manifest_rewrite(slot_path: Path) -> list[str]:
 def _validate_slot_artifact_for_digest(
     slot_path: Path,
     relative: str,
-) -> tuple[Path | None, list[str]]:
+) -> tuple[Path | None, os.stat_result | None, list[str]]:
     """Validate one slot artifact immediately before hashing it."""
 
     if device_lab.SECRET_RE.search(str(slot_path)):
-        return None, ["slot path must not contain secret-looking material"]
+        return None, None, ["slot path must not contain secret-looking material"]
     if device_lab.SECRET_RE.search(relative):
-        return None, ["slot artifacts must not contain secret-looking material"]
+        return None, None, ["slot artifacts must not contain secret-looking material"]
     normalise_errors: list[str] = []
     safe_relative = device_lab._normalise_safe_relative_path(
         relative,
@@ -616,7 +668,7 @@ def _validate_slot_artifact_for_digest(
         "slot artifact path",
     )
     if normalise_errors:
-        return None, normalise_errors
+        return None, None, normalise_errors
     assert safe_relative is not None
     display = device_lab._display_path(safe_relative)
     artifact_path = slot_path / safe_relative
@@ -625,37 +677,85 @@ def _validate_slot_artifact_for_digest(
         safe_relative,
     )
     if symlink_ancestor is not None:
-        return None, [f"slot artifact {display} ancestor directory must not be a symlink"]
+        return None, None, [
+            f"slot artifact {display} ancestor directory must not be a symlink"
+        ]
     try:
-        mode = artifact_path.lstat().st_mode
+        artifact_stat = artifact_path.lstat()
     except FileNotFoundError:
-        return None, [f"slot artifact {display} is missing"]
+        return None, None, [f"slot artifact {display} is missing"]
     except OSError:
-        return None, [f"slot artifact {display} file metadata could not be read"]
-    if stat.S_ISLNK(mode):
-        return None, [f"slot artifact {display} must not be a symlink"]
-    if not stat.S_ISREG(mode):
-        return None, [f"slot artifact {display} must be a regular file"]
+        return None, None, [f"slot artifact {display} file metadata could not be read"]
+    if stat.S_ISLNK(artifact_stat.st_mode):
+        return None, None, [f"slot artifact {display} must not be a symlink"]
+    if not stat.S_ISREG(artifact_stat.st_mode):
+        return None, None, [f"slot artifact {display} must be a regular file"]
     try:
         link_count = artifact_path.stat().st_nlink
     except OSError:
-        return None, [f"slot artifact {display} hardlink metadata could not be read"]
+        return None, None, [
+            f"slot artifact {display} hardlink metadata could not be read"
+        ]
     if link_count > 1:
-        return None, [f"slot artifact {display} must not be hardlinked"]
-    return artifact_path, []
+        return None, None, [f"slot artifact {display} must not be hardlinked"]
+    return artifact_path, artifact_stat, []
+
+
+def _read_validated_slot_artifact_bytes(
+    artifact_path: Path,
+    expected_stat: os.stat_result,
+    relative: str,
+) -> tuple[bytes | None, list[str]]:
+    """Read a signer slot artifact without trusting a stale path."""
+
+    display = device_lab._display_path(relative)
+    chunks: list[bytes] = []
+    try:
+        with artifact_path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = artifact_path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [f"slot artifact {display} must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(open_stat.st_mode):
+                return None, [f"slot artifact {display} must be a regular file"]
+            signer_expected_identity = (expected_stat.st_dev, expected_stat.st_ino)
+            signer_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if signer_open_identity != signer_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != signer_expected_identity:
+                return None, [f"slot artifact {display} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, [f"slot artifact {display} must not be hardlinked"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = artifact_path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != signer_expected_identity:
+                return None, [f"slot artifact {display} changed while being read"]
+    except OSError:
+        return None, [f"slot artifact {display} could not be read"]
+    return b"".join(chunks), []
 
 
 def _slot_artifact_sha256(slot_path: Path, relative: str) -> tuple[str | None, list[str]]:
-    artifact_path, errors = _validate_slot_artifact_for_digest(slot_path, relative)
+    artifact_path, artifact_stat, errors = _validate_slot_artifact_for_digest(
+        slot_path,
+        relative,
+    )
     if errors:
         return None, errors
-    assert artifact_path is not None
-    try:
-        payload = artifact_path.read_bytes()
-    except OSError:
-        return None, [
-            f"slot artifact {device_lab._display_path(relative)} could not be read"
-        ]
+    assert artifact_path is not None and artifact_stat is not None
+    payload, read_errors = _read_validated_slot_artifact_bytes(
+        artifact_path,
+        artifact_stat,
+        relative,
+    )
+    if read_errors:
+        return None, read_errors
+    assert payload is not None
     return hashlib.sha256(payload).hexdigest(), []
 
 

@@ -571,9 +571,15 @@ const REQUIRED_PRIVACY_PLAN_STATE_TOKENS_BY_ALGORITHM_ID = Object.freeze({
     "typed sis-with-hints credential proof instruction",
   ]),
   "zk-ace-pq-authorization-v0": Object.freeze([
-    "active identity commitment registry",
-    "replay nullifier set",
-    "authorization verifier registry",
+    "registered zk-ace identity commitment",
+    "source-account allowlist",
+    "authorization policy hash registry",
+    "active zk-ace verifier key",
+    "chain/domain binding state",
+    "transfer digest binding",
+    "replay nullifier uniqueness set",
+    "identity rotation/revocation registry",
+    "stark/fri verifier parameter floors",
     "wallet identity witness",
     "zk::submitzkaceauthorizedtransfer",
   ]),
@@ -1005,7 +1011,7 @@ const REQUIRED_PRIVACY_PLAN_REQUIRED_STATE_BY_ALGORITHM_ID = Object.freeze({
   "zk-x509-onchain-identity-v0": Object.freeze(["trusted CA root registry", "certificate policy registry", "revocation root registry", "identity proof verifier", "wallet certificate witness store", "certificate subject commitment registry", "ZK-X.509 verifier key registry"]),
   "jindo-lattice-pcs-zk-v0": Object.freeze(["lattice PCS parameter registry", "backend verifier implementation", "lattice PCS verifier key registry", "benchmark fixtures"]),
   "sis-hints-anoncred-pq-v0": Object.freeze(["lattice credential parameter registry", "issuer parameter registry", "credential showing verifier", "wallet lattice credential witness store", "lattice credential commitment registry", "lattice credential verifier key registry"]),
-  "zk-ace-pq-authorization-v0": Object.freeze(["active identity commitment registry", "replay nullifier set", "authorization verifier registry", "wallet identity witness and replay-secret store"]),
+  "zk-ace-pq-authorization-v0": Object.freeze(["registered ZK-ACE identity commitment", "source-account allowlist", "authorization policy hash registry", "active ZK-ACE verifier key", "chain/domain binding state", "transfer digest binding", "replay nullifier uniqueness set", "identity rotation/revocation registry", "STARK/FRI verifier parameter floors", "wallet identity witness and replay-secret store"]),
   "orchard-halo2-actions-v1": Object.freeze(["Orchard note commitment tree", "Orchard nullifier set", "Orchard action-bundle verifier key registry", "wallet Orchard witness store"]),
   "penumbra-masp-v1": Object.freeze(["multi-asset state commitment tree", "typed nullifier set", "Groth16 spend/output verifier key registry", "wallet asset metadata witness store"]),
   "monero-fcmp-plus-plus-v1": Object.freeze(["full-output-set commitment accumulator", "spent link-tag set", "FCMP++ verifier key registry", "wallet output ownership scan state"]),
@@ -1975,6 +1981,22 @@ function assertZkAceExecutableDescriptorShape(label, descriptor) {
     `${label} ZK-ACE descriptor must not retain stale v0 proof-builder drift`,
   );
   assert.deepEqual(
+    descriptor.requiredState,
+    [
+      "registered ZK-ACE identity commitment",
+      "source-account allowlist",
+      "authorization policy hash registry",
+      "active ZK-ACE verifier key",
+      "chain/domain binding state",
+      "transfer digest binding",
+      "replay nullifier uniqueness set",
+      "identity rotation/revocation registry",
+      "STARK/FRI verifier parameter floors",
+      "wallet identity witness and replay-secret store",
+    ],
+    `${label} ZK-ACE descriptor must pin every production admission state gate`,
+  );
+  assert.deepEqual(
     descriptor.pqLayers,
     {
       proof: true,
@@ -2035,6 +2057,7 @@ function pythonDescriptorToJsShape(descriptor) {
     implementationStage: descriptor.implementation_stage,
     backendFamily: descriptor.backend_family,
     proofFamily: descriptor.proof_family,
+    requiredState: descriptor.required_state,
     sdkEntrypoints: descriptor.sdk_entrypoints,
     plannedSdkEntrypoints: descriptor.planned_sdk_entrypoints,
     pqLayers: {

@@ -128,6 +128,21 @@ def with_read_bytes_failure(target_path: Path, callback):
         Path.read_bytes = original_read_bytes
 
 
+def with_open_failure(target_path: Path, callback):
+    original_open = Path.open
+
+    def failing_open(path: Path, *args, **kwargs):
+        if path == target_path:
+            raise OSError("simulated open failure")
+        return original_open(path, *args, **kwargs)
+
+    try:
+        Path.open = failing_open
+        return callback()
+    finally:
+        Path.open = original_open
+
+
 def with_write_text_failure(target_path: Path, callback):
     original_write_text = Path.write_text
 
@@ -991,6 +1006,40 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertIsNone(data)
         self.assertEqual(errors, ["test json ancestor directory must not be a symlink"])
+
+    def test_load_json_rejects_symlink_swap_after_preflight(self) -> None:
+        path_type = type(Path("."))
+        original_stat = path_type.stat
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                payload = root / "payload.json"
+                target = root / "aliased-payload.json"
+                write_json(payload, {"status": "ok"})
+                write_json(target, {"status": "aliased"})
+                errors: list[str] = []
+                swapped = False
+
+                def swapping_stat(path: Path, *args, **kwargs):
+                    nonlocal swapped
+                    result = original_stat(path, *args, **kwargs)
+                    if path == payload and not swapped:
+                        replace_with_symlink(self, payload, target)
+                        swapped = True
+                    return result
+
+                path_type.stat = swapping_stat
+
+                data = device_lab._load_json(payload, "test json", errors)
+                target_status = json.loads(target.read_text(encoding="utf-8"))["status"]
+        finally:
+            path_type.stat = original_stat
+
+        self.assertTrue(swapped)
+        self.assertIsNone(data)
+        self.assertEqual(errors, ["test json must not be a symlink"])
+        self.assertEqual(target_status, "aliased")
 
     def test_validate_no_symlink_ancestors_rejects_cwd_failure(self) -> None:
         with mock.patch.object(
@@ -2327,7 +2376,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             slot = create_slot(Path(temp), "slot-a")
             target = slot / "logs" / "runtime.log"
 
-            digest, errors = with_read_bytes_failure(
+            digest, errors = with_open_failure(
                 target,
                 lambda: device_lab._manifest_artifact_sha256(
                     slot,
@@ -2340,6 +2389,50 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             errors,
             [
                 "sha256sum.txt references artifact that could not be read "
+                "logs/runtime.log"
+            ],
+        )
+
+    def test_manifest_artifact_digest_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_manifest_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                artifact_path = slot / "logs" / "runtime.log"
+                swapped = False
+
+                def swapping_validate(slot_path: Path, relative: str):
+                    nonlocal swapped
+                    artifact, artifact_stat, errors = original_validate(
+                        slot_path,
+                        relative,
+                    )
+                    if artifact == artifact_path and not errors and not swapped:
+                        artifact_path.unlink()
+                        write_text(artifact_path, "replacement runtime log\n")
+                        swapped = True
+                    return artifact, artifact_stat, errors
+
+                device_lab._validate_manifest_artifact_for_digest = swapping_validate
+
+                digest, errors = device_lab._manifest_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+                replacement_bytes = artifact_path.read_bytes()
+        finally:
+            device_lab._validate_manifest_artifact_for_digest = original_validate
+
+        self.assertTrue(swapped)
+        self.assertIsNone(digest)
+        self.assertEqual(replacement_bytes, b"replacement runtime log\n")
+        self.assertEqual(
+            errors,
+            [
+                "sha256sum.txt references artifact changed while being read "
                 "logs/runtime.log"
             ],
         )
@@ -2676,6 +2769,56 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             "logs/runtime.log references hardlinked artifact logs/runtime.log",
             errors,
         )
+        self.assertNotIn(
+            "logs/runtime.log must contain Kagemusha device-lab completion marker",
+            errors,
+        )
+
+    def test_required_runtime_log_rejects_symlink_swap_after_preflight(self) -> None:
+        original_validate = device_lab._validate_metadata_artifact_for_read
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                slot = create_slot(root, "pixel8")
+                runtime_log = slot / "logs" / "runtime.log"
+                target = root / "outside-runtime.log"
+                write_text(target, "TEST FAILED\nmissing completion marker\n")
+                swapped = False
+
+                def swapping_validate(
+                    slot_path: Path,
+                    relative: str,
+                    label: str,
+                    missing_error: str,
+                ):
+                    nonlocal swapped
+                    artifact, artifact_stat, validate_errors = original_validate(
+                        slot_path,
+                        relative,
+                        label,
+                        missing_error,
+                    )
+                    if artifact == runtime_log and not validate_errors and not swapped:
+                        replace_with_symlink(self, runtime_log, target)
+                        swapped = True
+                    return artifact, artifact_stat, validate_errors
+
+                device_lab._validate_metadata_artifact_for_read = swapping_validate
+                errors: list[str] = []
+
+                device_lab.validate_required_kagemusha_slot_artifact_shapes(slot, errors)
+                target_text = target.read_text(encoding="utf-8")
+        finally:
+            device_lab._validate_metadata_artifact_for_read = original_validate
+
+        self.assertTrue(swapped)
+        self.assertEqual(target_text, "TEST FAILED\nmissing completion marker\n")
+        self.assertIn(
+            "logs/runtime.log references symlink artifact logs/runtime.log",
+            errors,
+        )
+        self.assertNotIn("logs/runtime.log contains failure marker TEST FAILED", errors)
         self.assertNotIn(
             "logs/runtime.log must contain Kagemusha device-lab completion marker",
             errors,
@@ -3672,7 +3815,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             slot = create_slot(Path(temp), "slot-a")
             target = slot / "evidence" / "offline-wallet-release.apk"
 
-            payload, digest, errors = with_read_bytes_failure(
+            payload, digest, errors = with_open_failure(
                 target,
                 lambda: device_lab._metadata_artifact_bytes_and_sha256(
                     slot,
@@ -3685,6 +3828,117 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIsNone(payload)
         self.assertIsNone(digest)
         self.assertEqual(errors, ["slot.json offline_wallet_apk_path could not be read"])
+
+    def test_metadata_artifact_digest_rejects_symlink_swap_after_preflight(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_metadata_artifact_for_read
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                slot = create_slot(root, "slot-a")
+                artifact_path = slot / "evidence" / "offline-wallet-release.apk"
+                target = root / "outside-release.apk"
+                write_text(target, "outside release apk\n")
+                swapped = False
+
+                def swapping_validate(
+                    slot_path: Path,
+                    relative: str,
+                    label: str,
+                    missing_error: str,
+                ):
+                    nonlocal swapped
+                    artifact, artifact_stat, errors = original_validate(
+                        slot_path,
+                        relative,
+                        label,
+                        missing_error,
+                    )
+                    if artifact == artifact_path and not errors and not swapped:
+                        replace_with_symlink(self, artifact_path, target)
+                        swapped = True
+                    return artifact, artifact_stat, errors
+
+                device_lab._validate_metadata_artifact_for_read = swapping_validate
+
+                payload, digest, errors = device_lab._metadata_artifact_bytes_and_sha256(
+                    slot,
+                    "evidence/offline-wallet-release.apk",
+                    "slot.json offline_wallet_apk_path",
+                    "slot.json offline_wallet_apk_path must point to an existing file",
+                )
+                target_bytes = target.read_bytes()
+        finally:
+            device_lab._validate_metadata_artifact_for_read = original_validate
+
+        self.assertTrue(swapped)
+        self.assertIsNone(payload)
+        self.assertIsNone(digest)
+        self.assertEqual(target_bytes, b"outside release apk\n")
+        self.assertEqual(
+            errors,
+            [
+                "slot.json offline_wallet_apk_path references symlink artifact "
+                "evidence/offline-wallet-release.apk"
+            ],
+        )
+
+    def test_metadata_artifact_digest_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_metadata_artifact_for_read
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                slot = create_slot(root, "slot-a")
+                artifact_path = slot / "evidence" / "offline-wallet-release.apk"
+                swapped = False
+
+                def swapping_validate(
+                    slot_path: Path,
+                    relative: str,
+                    label: str,
+                    missing_error: str,
+                ):
+                    nonlocal swapped
+                    artifact, artifact_stat, errors = original_validate(
+                        slot_path,
+                        relative,
+                        label,
+                        missing_error,
+                    )
+                    if artifact == artifact_path and not errors and not swapped:
+                        artifact_path.unlink()
+                        write_text(artifact_path, "replacement release apk\n")
+                        swapped = True
+                    return artifact, artifact_stat, errors
+
+                device_lab._validate_metadata_artifact_for_read = swapping_validate
+
+                payload, digest, errors = device_lab._metadata_artifact_bytes_and_sha256(
+                    slot,
+                    "evidence/offline-wallet-release.apk",
+                    "slot.json offline_wallet_apk_path",
+                    "slot.json offline_wallet_apk_path must point to an existing file",
+                )
+                replacement_bytes = artifact_path.read_bytes()
+        finally:
+            device_lab._validate_metadata_artifact_for_read = original_validate
+
+        self.assertTrue(swapped)
+        self.assertIsNone(payload)
+        self.assertIsNone(digest)
+        self.assertEqual(replacement_bytes, b"replacement release apk\n")
+        self.assertEqual(
+            errors,
+            [
+                "slot.json offline_wallet_apk_path references artifact changed "
+                "while being read evidence/offline-wallet-release.apk"
+            ],
+        )
 
     def test_production_metadata_rejects_symlinked_signed_evidence_digest_path(
         self,
@@ -5378,7 +5632,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             slot = create_slot(Path(temp), "slot-a")
             target = slot / "logs" / "runtime.log"
 
-            digest, errors = with_read_bytes_failure(
+            digest, errors = with_open_failure(
                 target,
                 lambda: device_lab._signed_evidence_artifact_sha256(
                     slot,
@@ -5392,6 +5646,52 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             [
                 "signed evidence artifact digest references artifact that could not be read "
                 "logs/runtime.log"
+            ],
+        )
+
+    def test_signed_evidence_artifact_digest_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        original_validate = device_lab._validate_signed_evidence_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "slot-a")
+                artifact_path = slot / "logs" / "runtime.log"
+                swapped = False
+
+                def swapping_validate(slot_path: Path, relative: str):
+                    nonlocal swapped
+                    artifact, artifact_stat, errors = original_validate(
+                        slot_path,
+                        relative,
+                    )
+                    if artifact == artifact_path and not errors and not swapped:
+                        artifact_path.unlink()
+                        write_text(artifact_path, "replacement runtime log\n")
+                        swapped = True
+                    return artifact, artifact_stat, errors
+
+                device_lab._validate_signed_evidence_artifact_for_digest = (
+                    swapping_validate
+                )
+
+                digest, errors = device_lab._signed_evidence_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+                replacement_bytes = artifact_path.read_bytes()
+        finally:
+            device_lab._validate_signed_evidence_artifact_for_digest = original_validate
+
+        self.assertTrue(swapped)
+        self.assertIsNone(digest)
+        self.assertEqual(replacement_bytes, b"replacement runtime log\n")
+        self.assertEqual(
+            errors,
+            [
+                "signed evidence artifact digest references artifact changed while "
+                "being read logs/runtime.log"
             ],
         )
 
@@ -6254,20 +6554,58 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     ) -> None:
         original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
         original_run = device_lab.subprocess.run
-        original_write_bytes = Path.write_bytes
 
         def unexpected_run(*args, **kwargs):
             raise AssertionError("OpenSSL should not run after staging write failure")
 
-        def failing_payload_write(path: Path, data: bytes) -> int:
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            device_lab.subprocess.run = unexpected_run
+            with tempfile.TemporaryDirectory() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                with mock.patch.object(
+                    device_lab.os,
+                    "fsync",
+                    side_effect=OSError("simulated payload staging fsync failure"),
+                ):
+                    device_lab._verify_ed25519_signature(  # type: ignore[attr-defined]
+                        public_key_path=public_key,
+                        payload=b"payload",
+                        signature=b"signature",
+                        errors=errors,
+                        label="signer public key",
+                    )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            device_lab.subprocess.run = original_run
+
+        self.assertEqual(
+            errors,
+            ["signature verification staging files could not be written"],
+        )
+
+    def test_verify_signature_rejects_payload_staging_readback_mismatch_before_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = device_lab.subprocess.run
+        original_read_bytes = Path.read_bytes
+
+        def unexpected_run(*args, **kwargs):
+            raise AssertionError("OpenSSL should not run after staging readback drift")
+
+        def drifting_payload_read(path: Path) -> bytes:
             if path.name == "payload.bin":
-                raise OSError("simulated payload staging failure")
-            return original_write_bytes(path, data)
+                return b"mutated payload"
+            return original_read_bytes(path)
 
         try:
             device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
             device_lab.subprocess.run = unexpected_run
-            Path.write_bytes = failing_payload_write
+            Path.read_bytes = drifting_payload_read
             with tempfile.TemporaryDirectory() as temp:
                 public_key = Path(temp) / "public.pem"
                 public_key.write_text("not used by mocked openssl\n", encoding="utf-8")
@@ -6283,11 +6621,52 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         finally:
             device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
             device_lab.subprocess.run = original_run
-            Path.write_bytes = original_write_bytes
+            Path.read_bytes = original_read_bytes
 
         self.assertEqual(
             errors,
-            ["signature verification staging files could not be written"],
+            ["signature verification staged payload did not match input"],
+        )
+
+    def test_verify_signature_rejects_signature_staging_readback_mismatch_before_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = device_lab.subprocess.run
+        original_read_bytes = Path.read_bytes
+
+        def unexpected_run(*args, **kwargs):
+            raise AssertionError("OpenSSL should not run after staging readback drift")
+
+        def drifting_signature_read(path: Path) -> bytes:
+            if path.name == "signature.bin":
+                return b"mutated signature"
+            return original_read_bytes(path)
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            device_lab.subprocess.run = unexpected_run
+            Path.read_bytes = drifting_signature_read
+            with tempfile.TemporaryDirectory() as temp:
+                public_key = Path(temp) / "public.pem"
+                public_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                device_lab._verify_ed25519_signature(  # type: ignore[attr-defined]
+                    public_key_path=public_key,
+                    payload=b"payload",
+                    signature=b"signature",
+                    errors=errors,
+                    label="signer public key",
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            device_lab.subprocess.run = original_run
+            Path.read_bytes = original_read_bytes
+
+        self.assertEqual(
+            errors,
+            ["signature verification staged signature did not match input"],
         )
 
     def test_verify_signature_rejects_tempdir_failure_before_staging(
@@ -7267,17 +7646,178 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
 
-            errors = with_write_text_failure(
-                output,
-                lambda: evidence_signer._write_json(
+            with mock.patch.object(
+                evidence_signer.os,
+                "fsync",
+                side_effect=OSError("simulated signed evidence fsync failure"),
+            ):
+                errors = evidence_signer._write_json(
                     output,
                     {"schema": "test"},
                     "signed evidence output path",
-                ),
-            )
+                )
 
         self.assertEqual(errors, ["signed evidence output path could not be written"])
         self.assertFalse(output.exists())
+
+    def test_signer_write_json_preserves_existing_output_on_replace_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+            write_text(output, "existing signed evidence\n")
+
+            with mock.patch.object(
+                evidence_signer.os,
+                "replace",
+                side_effect=OSError("simulated signed evidence replace failure"),
+            ):
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+            output_text = output.read_text(encoding="utf-8")
+            temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
+
+        self.assertEqual(errors, ["signed evidence output path could not be written"])
+        self.assertEqual(output_text, "existing signed evidence\n")
+        self.assertEqual(temp_files, [])
+
+    def test_signer_write_json_rejects_symlink_swap_before_replace(self) -> None:
+        original_validate = evidence_signer._validate_json_output_path
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                output = root / "slot" / "evidence" / "signed-evidence.json"
+                target = root / "external-signed-evidence.json"
+                output.parent.mkdir(parents=True)
+                calls = 0
+
+                def validate_then_alias(path: Path, label: str) -> list[str]:
+                    nonlocal calls
+                    calls += 1
+                    if path == output and calls == 2:
+                        write_text(target, "external\n")
+                        try:
+                            path.symlink_to(target)
+                        except (NotImplementedError, OSError) as exc:
+                            self.skipTest(
+                                "symlinks are not available in this test "
+                                f"environment: {exc}"
+                            )
+                    return original_validate(path, label)
+
+                evidence_signer._validate_json_output_path = validate_then_alias
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+                target_text = target.read_text(encoding="utf-8")
+                temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
+        finally:
+            evidence_signer._validate_json_output_path = original_validate
+
+        self.assertEqual(errors, ["signed evidence output path must not be a symlink"])
+        self.assertEqual(target_text, "external\n")
+        self.assertEqual(temp_files, [])
+
+    def test_signer_write_json_rejects_readback_mismatch(self) -> None:
+        original_read_text = Path.read_text
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+
+                def mismatching_read_text(path: Path, *args, **kwargs) -> str:
+                    if path == output:
+                        return "mismatched signed evidence\n"
+                    return original_read_text(path, *args, **kwargs)
+
+                Path.read_text = mismatching_read_text
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+                output_text = original_read_text(output, encoding="utf-8")
+        finally:
+            Path.read_text = original_read_text
+
+        self.assertEqual(
+            errors,
+            ["signed evidence output path write verification failed"],
+        )
+        self.assertEqual(output_text, '{\n  "schema": "test"\n}\n')
+
+    def test_signer_write_json_rejects_readback_failure(self) -> None:
+        original_read_text = Path.read_text
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "evidence" / "signed-evidence.json"
+
+            def failing_read_text(path: Path, *args, **kwargs) -> str:
+                if path == output:
+                    raise OSError("simulated signed evidence readback failure")
+                return original_read_text(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "read_text", failing_read_text):
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+            output_text = original_read_text(output, encoding="utf-8")
+            temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
+
+        self.assertEqual(
+            errors,
+            ["signed evidence output path write verification failed"],
+        )
+        self.assertEqual(output_text, '{\n  "schema": "test"\n}\n')
+        self.assertEqual(temp_files, [])
+
+    def test_signer_write_json_rejects_symlink_swap_after_replace(self) -> None:
+        original_validate = evidence_signer._validate_existing_json_output_path
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                output = root / "slot" / "evidence" / "signed-evidence.json"
+                target = root / "external-signed-evidence.json"
+                write_text(target, "external\n")
+                calls = 0
+
+                def validate_then_alias(path: Path, label: str) -> list[str]:
+                    nonlocal calls
+                    calls += 1
+                    if path == output and calls == 1:
+                        path.unlink(missing_ok=True)
+                        try:
+                            path.symlink_to(target)
+                        except (NotImplementedError, OSError) as exc:
+                            self.skipTest(
+                                "symlinks are not available in this test "
+                                f"environment: {exc}"
+                            )
+                    return original_validate(path, label)
+
+                evidence_signer._validate_existing_json_output_path = validate_then_alias
+                errors = evidence_signer._write_json(
+                    output,
+                    {"schema": "test"},
+                    "signed evidence output path",
+                )
+                target_text = target.read_text(encoding="utf-8")
+                output_is_symlink = output.is_symlink()
+                temp_files = list(output.parent.glob(".signed-evidence.json.*.tmp"))
+        finally:
+            evidence_signer._validate_existing_json_output_path = original_validate
+
+        self.assertEqual(errors, ["signed evidence output path must not be a symlink"])
+        self.assertEqual(target_text, "external\n")
+        self.assertTrue(output_is_symlink)
+        self.assertEqual(temp_files, [])
 
     def test_signer_write_json_rejects_parent_create_failure_before_write(self) -> None:
         path_type = type(Path("."))
@@ -7711,17 +8251,172 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "slot" / "sha256sum.txt"
 
-            errors = with_write_text_failure(
-                output,
-                lambda: evidence_signer._write_text(
+            with mock.patch.object(
+                evidence_signer.os,
+                "fsync",
+                side_effect=OSError("simulated sha256sum fsync failure"),
+            ):
+                errors = evidence_signer._write_text(
                     output,
                     "replacement\n",
                     "sha256sum.txt",
-                ),
-            )
+                )
 
         self.assertEqual(errors, ["sha256sum.txt could not be written"])
         self.assertFalse(output.exists())
+
+    def test_signer_write_text_preserves_existing_output_on_replace_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "sha256sum.txt"
+            write_text(output, "existing manifest\n")
+
+            with mock.patch.object(
+                evidence_signer.os,
+                "replace",
+                side_effect=OSError("simulated sha256sum replace failure"),
+            ):
+                errors = evidence_signer._write_text(
+                    output,
+                    "replacement\n",
+                    "sha256sum.txt",
+                )
+            output_text = output.read_text(encoding="utf-8")
+            temp_files = list(output.parent.glob(".sha256sum.txt.*.tmp"))
+
+        self.assertEqual(errors, ["sha256sum.txt could not be written"])
+        self.assertEqual(output_text, "existing manifest\n")
+        self.assertEqual(temp_files, [])
+
+    def test_signer_write_text_rejects_symlink_swap_before_replace(self) -> None:
+        original_validate = evidence_signer._validate_json_output_path
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                output = root / "slot" / "sha256sum.txt"
+                target = root / "external-sha256sum.txt"
+                output.parent.mkdir(parents=True)
+                calls = 0
+
+                def validate_then_alias(path: Path, label: str) -> list[str]:
+                    nonlocal calls
+                    calls += 1
+                    if path == output and calls == 2:
+                        write_text(target, "external\n")
+                        try:
+                            path.symlink_to(target)
+                        except (NotImplementedError, OSError) as exc:
+                            self.skipTest(
+                                "symlinks are not available in this test "
+                                f"environment: {exc}"
+                            )
+                    return original_validate(path, label)
+
+                evidence_signer._validate_json_output_path = validate_then_alias
+                errors = evidence_signer._write_text(
+                    output,
+                    "replacement\n",
+                    "sha256sum.txt",
+                )
+                target_text = target.read_text(encoding="utf-8")
+                temp_files = list(output.parent.glob(".sha256sum.txt.*.tmp"))
+        finally:
+            evidence_signer._validate_json_output_path = original_validate
+
+        self.assertEqual(errors, ["sha256sum.txt must not be a symlink"])
+        self.assertEqual(target_text, "external\n")
+        self.assertEqual(temp_files, [])
+
+    def test_signer_write_text_rejects_readback_mismatch(self) -> None:
+        original_read_text = Path.read_text
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                output = Path(temp) / "slot" / "sha256sum.txt"
+
+                def mismatching_read_text(path: Path, *args, **kwargs) -> str:
+                    if path == output:
+                        return "mismatched manifest\n"
+                    return original_read_text(path, *args, **kwargs)
+
+                Path.read_text = mismatching_read_text
+                errors = evidence_signer._write_text(
+                    output,
+                    "replacement\n",
+                    "sha256sum.txt",
+                )
+                output_text = original_read_text(output, encoding="utf-8")
+        finally:
+            Path.read_text = original_read_text
+
+        self.assertEqual(errors, ["sha256sum.txt write verification failed"])
+        self.assertEqual(output_text, "replacement\n")
+
+    def test_signer_write_text_rejects_readback_failure(self) -> None:
+        original_read_text = Path.read_text
+
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "slot" / "sha256sum.txt"
+
+            def failing_read_text(path: Path, *args, **kwargs) -> str:
+                if path == output:
+                    raise OSError("simulated sha256sum readback failure")
+                return original_read_text(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "read_text", failing_read_text):
+                errors = evidence_signer._write_text(
+                    output,
+                    "replacement\n",
+                    "sha256sum.txt",
+                )
+            output_text = original_read_text(output, encoding="utf-8")
+            temp_files = list(output.parent.glob(".sha256sum.txt.*.tmp"))
+
+        self.assertEqual(errors, ["sha256sum.txt write verification failed"])
+        self.assertEqual(output_text, "replacement\n")
+        self.assertEqual(temp_files, [])
+
+    def test_signer_write_text_rejects_symlink_swap_after_replace(self) -> None:
+        original_validate = evidence_signer._validate_existing_json_output_path
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                output = root / "slot" / "sha256sum.txt"
+                target = root / "external-sha256sum.txt"
+                write_text(target, "external\n")
+                calls = 0
+
+                def validate_then_alias(path: Path, label: str) -> list[str]:
+                    nonlocal calls
+                    calls += 1
+                    if path == output and calls == 1:
+                        path.unlink(missing_ok=True)
+                        try:
+                            path.symlink_to(target)
+                        except (NotImplementedError, OSError) as exc:
+                            self.skipTest(
+                                "symlinks are not available in this test "
+                                f"environment: {exc}"
+                            )
+                    return original_validate(path, label)
+
+                evidence_signer._validate_existing_json_output_path = validate_then_alias
+                errors = evidence_signer._write_text(
+                    output,
+                    "replacement\n",
+                    "sha256sum.txt",
+                )
+                target_text = target.read_text(encoding="utf-8")
+                output_is_symlink = output.is_symlink()
+                temp_files = list(output.parent.glob(".sha256sum.txt.*.tmp"))
+        finally:
+            evidence_signer._validate_existing_json_output_path = original_validate
+
+        self.assertEqual(errors, ["sha256sum.txt must not be a symlink"])
+        self.assertEqual(target_text, "external\n")
+        self.assertTrue(output_is_symlink)
+        self.assertEqual(temp_files, [])
 
     def test_rewrite_sha256_manifest_rejects_symlinked_artifact_when_called_directly(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -7956,7 +8651,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             slot = create_slot(Path(temp), "pixel8")
             target = slot / "logs" / "runtime.log"
 
-            digest, errors = with_read_bytes_failure(
+            digest, errors = with_open_failure(
                 target,
                 lambda: evidence_signer._slot_artifact_sha256(
                     slot,
@@ -7966,6 +8661,47 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertIsNone(digest)
         self.assertEqual(errors, ["slot artifact logs/runtime.log could not be read"])
+
+    def test_signer_slot_artifact_digest_rejects_regular_file_swap_after_preflight(
+        self,
+    ) -> None:
+        original_validate = evidence_signer._validate_slot_artifact_for_digest
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                slot = create_slot(Path(temp), "pixel8")
+                artifact_path = slot / "logs" / "runtime.log"
+                swapped = False
+
+                def swapping_validate(slot_path: Path, relative: str):
+                    nonlocal swapped
+                    artifact, artifact_stat, errors = original_validate(
+                        slot_path,
+                        relative,
+                    )
+                    if artifact == artifact_path and not errors and not swapped:
+                        artifact_path.unlink()
+                        write_text(artifact_path, "replacement runtime log\n")
+                        swapped = True
+                    return artifact, artifact_stat, errors
+
+                evidence_signer._validate_slot_artifact_for_digest = swapping_validate
+
+                digest, errors = evidence_signer._slot_artifact_sha256(
+                    slot,
+                    "logs/runtime.log",
+                )
+                replacement_bytes = artifact_path.read_bytes()
+        finally:
+            evidence_signer._validate_slot_artifact_for_digest = original_validate
+
+        self.assertTrue(swapped)
+        self.assertIsNone(digest)
+        self.assertEqual(replacement_bytes, b"replacement runtime log\n")
+        self.assertEqual(
+            errors,
+            ["slot artifact logs/runtime.log changed while being read"],
+        )
 
     def test_rewrite_sha256_manifest_revalidates_artifact_before_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -9289,6 +10025,37 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertIsNone(signature)
         self.assertEqual(errors, ["signature output could not be read"])
 
+    def test_sign_ed25519_rejects_short_signature_output_after_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+
+        def fake_run(command, *args, **kwargs):
+            out_path = Path(command[command.index("-out") + 1])
+            out_path.write_bytes(b"short signature")
+            return subprocess.CompletedProcess(args=command, returncode=0)
+
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = fake_run
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                    private_key,
+                    b"payload",
+                    errors,
+                )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["signature output must be 64 bytes"])
+
     def test_sign_ed25519_rejects_tempdir_failure_before_payload_staging(
         self,
     ) -> None:
@@ -9390,20 +10157,54 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     ) -> None:
         original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
         original_run = evidence_signer.subprocess.run
-        original_write_bytes = Path.write_bytes
 
         def unexpected_run(*args, **kwargs):
             raise AssertionError("OpenSSL should not run after staging write failure")
 
-        def failing_payload_write(path: Path, data: bytes) -> int:
+        try:
+            device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = unexpected_run
+            with tempfile.TemporaryDirectory() as temp:
+                private_key = Path(temp) / "signing.pem"
+                private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
+                errors: list[str] = []
+
+                with mock.patch.object(
+                    device_lab.os,
+                    "fsync",
+                    side_effect=OSError("simulated payload staging fsync failure"),
+                ):
+                    signature = evidence_signer._sign_ed25519(  # type: ignore[attr-defined]
+                        private_key,
+                        b"payload",
+                        errors,
+                    )
+        finally:
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
+            evidence_signer.subprocess.run = original_run
+
+        self.assertIsNone(signature)
+        self.assertEqual(errors, ["signature payload could not be staged"])
+
+    def test_sign_ed25519_rejects_payload_staging_readback_mismatch_before_openssl(
+        self,
+    ) -> None:
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+        original_run = evidence_signer.subprocess.run
+        original_read_bytes = Path.read_bytes
+
+        def unexpected_run(*args, **kwargs):
+            raise AssertionError("OpenSSL should not run after staging readback drift")
+
+        def drifting_payload_read(path: Path) -> bytes:
             if path.name == "payload.bin":
-                raise OSError("simulated payload staging failure")
-            return original_write_bytes(path, data)
+                return b"mutated payload"
+            return original_read_bytes(path)
 
         try:
             device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
             evidence_signer.subprocess.run = unexpected_run
-            Path.write_bytes = failing_payload_write
+            Path.read_bytes = drifting_payload_read
             with tempfile.TemporaryDirectory() as temp:
                 private_key = Path(temp) / "signing.pem"
                 private_key.write_text("not used by mocked openssl\n", encoding="utf-8")
@@ -9417,10 +10218,10 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         finally:
             device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
             evidence_signer.subprocess.run = original_run
-            Path.write_bytes = original_write_bytes
+            Path.read_bytes = original_read_bytes
 
         self.assertIsNone(signature)
-        self.assertEqual(errors, ["signature payload could not be staged"])
+        self.assertEqual(errors, ["signature payload staging verification failed"])
 
     def test_standard_matrix_accepts_all_kagemusha_device_families(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -9798,13 +10599,147 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             summary_path = Path(temp) / "summary.json"
 
-            errors = with_write_text_failure(
-                summary_path,
-                lambda: device_lab.write_summary(summary_path, {"ok": False}),
-            )
+            with mock.patch.object(
+                device_lab.os,
+                "fsync",
+                side_effect=OSError("simulated summary fsync failure"),
+            ):
+                errors = device_lab.write_summary(summary_path, {"ok": False})
 
         self.assertEqual(errors, ["--json-out could not be written"])
         self.assertFalse(summary_path.exists())
+
+    def test_write_summary_preserves_existing_output_on_replace_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+            summary_path.write_text("existing summary\n", encoding="utf-8")
+
+            with mock.patch.object(
+                device_lab.os,
+                "replace",
+                side_effect=OSError("simulated summary replace failure"),
+            ):
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+            summary_text = summary_path.read_text(encoding="utf-8")
+            temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
+
+        self.assertEqual(errors, ["--json-out could not be written"])
+        self.assertEqual(summary_text, "existing summary\n")
+        self.assertEqual(temp_files, [])
+
+    def test_write_summary_rejects_symlink_swap_before_replace(self) -> None:
+        original_validate = device_lab.validate_summary_output_path
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                summary_path = root / "summary.json"
+                alias_target = root / "external-summary.json"
+                calls = 0
+
+                def validate_then_alias(path: Path, label: str) -> list[str]:
+                    nonlocal calls
+                    calls += 1
+                    if path == summary_path and calls == 2:
+                        alias_target.write_text("external\n", encoding="utf-8")
+                        try:
+                            path.symlink_to(alias_target)
+                        except (NotImplementedError, OSError) as exc:
+                            self.skipTest(
+                                "symlinks are not available in this test "
+                                f"environment: {exc}"
+                            )
+                    return original_validate(path, label)
+
+                device_lab.validate_summary_output_path = validate_then_alias
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+                target_text = alias_target.read_text(encoding="utf-8")
+                temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
+        finally:
+            device_lab.validate_summary_output_path = original_validate
+
+        self.assertEqual(errors, ["--json-out must not be a symlink"])
+        self.assertEqual(target_text, "external\n")
+        self.assertEqual(temp_files, [])
+
+    def test_write_summary_rejects_readback_mismatch(self) -> None:
+        original_read_text = Path.read_text
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                summary_path = Path(temp) / "summary.json"
+
+                def mismatching_read_text(path: Path, *args, **kwargs) -> str:
+                    if path == summary_path:
+                        return '{"ok": true}\n'
+                    return original_read_text(path, *args, **kwargs)
+
+                Path.read_text = mismatching_read_text
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+                summary_text = original_read_text(summary_path, encoding="utf-8")
+        finally:
+            Path.read_text = original_read_text
+
+        self.assertEqual(errors, ["--json-out write verification failed"])
+        self.assertEqual(summary_text, '{\n  "ok": false\n}\n')
+
+    def test_write_summary_rejects_readback_failure(self) -> None:
+        original_read_text = Path.read_text
+
+        with tempfile.TemporaryDirectory() as temp:
+            summary_path = Path(temp) / "summary.json"
+
+            def failing_read_text(path: Path, *args, **kwargs) -> str:
+                if path == summary_path:
+                    raise OSError("simulated summary readback failure")
+                return original_read_text(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "read_text", failing_read_text):
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+            summary_text = original_read_text(summary_path, encoding="utf-8")
+            temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
+
+        self.assertEqual(errors, ["--json-out write verification failed"])
+        self.assertEqual(summary_text, '{\n  "ok": false\n}\n')
+        self.assertEqual(temp_files, [])
+
+    def test_write_summary_rejects_symlink_swap_after_replace(self) -> None:
+        original_validate = device_lab.validate_summary_output_path
+
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                summary_path = root / "summary.json"
+                alias_target = root / "external-summary.json"
+                alias_target.write_text("external\n", encoding="utf-8")
+                calls = 0
+
+                def validate_then_alias(path: Path, label: str) -> list[str]:
+                    nonlocal calls
+                    calls += 1
+                    if path == summary_path and calls == 3:
+                        path.unlink(missing_ok=True)
+                        try:
+                            path.symlink_to(alias_target)
+                        except (NotImplementedError, OSError) as exc:
+                            self.skipTest(
+                                "symlinks are not available in this test "
+                                f"environment: {exc}"
+                            )
+                    return original_validate(path, label)
+
+                device_lab.validate_summary_output_path = validate_then_alias
+                errors = device_lab.write_summary(summary_path, {"ok": False})
+                target_text = alias_target.read_text(encoding="utf-8")
+                output_is_symlink = summary_path.is_symlink()
+                temp_files = list(summary_path.parent.glob(".summary.json.*.tmp"))
+        finally:
+            device_lab.validate_summary_output_path = original_validate
+
+        self.assertEqual(errors, ["--json-out must not be a symlink"])
+        self.assertEqual(target_text, "external\n")
+        self.assertTrue(output_is_symlink)
+        self.assertEqual(temp_files, [])
 
     def test_write_summary_rechecks_parent_after_create_before_write(self) -> None:
         path_type = type(Path("."))

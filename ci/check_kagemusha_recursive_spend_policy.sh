@@ -250,6 +250,7 @@ ADVERSARIAL_COVERAGE = {
                 "kagemusha_recursive_spend_bundle_rejects_public_input_tampering",
                 "spliced previous proof folded public-input hash",
                 'field: "previous_recursive_proof.folded_public_inputs_hash"',
+                "recursive-spend-stale-previous-proof-public-input-hash",
                 "forged proof-chain public-input hash",
                 "recursive spend transition-profile binding must be initialized at the first hop",
                 "recursive-spend-forged-transition-binding-public-input",
@@ -1931,6 +1932,10 @@ POLICY_NEGATIVE_CONTROL_COMMANDS = (
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-field-binding",
     ),
     (
+        "data-model recursive spend previous-proof stale hash fixture negative control",
+        "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-data-model-previous-proof-stale-hash-fixture",
+    ),
+    (
         "core append cap direct-prover negative control",
         "ci/check_kagemusha_recursive_spend_policy.sh --negative-control-core-append-cap-boundary",
     ),
@@ -3366,6 +3371,53 @@ def check_recursive_spend_previous_proof_field_binding():
             )
 
 
+def check_recursive_compact_record_envelope_preflight_order():
+    core = read("crates/iroha_core/src/zk.rs")
+    decode_body = extract_rust_function_body(
+        core,
+        "fn decode_kagemusha_recursive_compact_pallas_open_envelopes(",
+        "recursive compact Pallas envelope decoder",
+    )
+    for forbidden in (
+        "kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes",
+        "kagemusha_pallas_ipa_batch_verifier_preflight(",
+        "kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs",
+    ):
+        if forbidden in decode_body:
+            fail(
+                "recursive compact Pallas decoder must stay decode/shape-only "
+                f"before record-backed preflight: {forbidden}"
+            )
+    for needle in (
+        "norito::decode_from_bytes(pallas_open_envelopes_archive)",
+        "envelopes.is_empty()",
+        "KAGEMUSHA_COMPACT_TOKEN_MAX_HOPS",
+        "validate_kagemusha_pallas_open_envelope_preflight_shape",
+    ):
+        if needle not in decode_body:
+            fail(f"recursive compact Pallas decoder lost shape preflight: {needle}")
+
+    prover_body = extract_rust_function_body(
+        core,
+        "fn prove_kagemusha_recursive_compact_payment_token_from_record_bundle_and_pallas_open_envelopes(",
+        "recursive compact record-backed prover",
+    )
+    require_ordered_needles(
+        prover_body,
+        "recursive compact record-backed prover preflight ordering",
+        (
+            "let hop_count = record_bundle.bundle.steps.len();",
+            "if envelopes.len() != hop_count",
+            "validate_kagemusha_recursive_compact_record_envelope_preflight(",
+            'format!("invalid Kagemusha recursive compact record-backed Pallas preflight: {err}")',
+            "if hop_count == 1",
+            "kagemusha_derive_pallas_ipa_witnesses_from_open_envelopes(envelopes)",
+            "return prove_kagemusha_recursive_compact_payment_token_one_hop_from_record_bundle_and_pallas_open_envelopes",
+            "let first_record_bundle",
+        ),
+    )
+
+
 def check_docs_reserved_lineage_policy():
     forbidden = [
         re.compile(
@@ -3733,6 +3785,7 @@ def run_checks():
     check_recursive_append_semantic_non_zero_groups()
     check_recursive_spend_proof_public_input_circuit_binding()
     check_recursive_spend_previous_proof_field_binding()
+    check_recursive_compact_record_envelope_preflight_order()
     check_docs_reserved_lineage_policy()
     check_shared_fixture_manifest()
     check_shared_archive_fixture_manifest()
@@ -4033,6 +4086,24 @@ if mode == "--negative-control-data-model-previous-proof-field-binding":
         print(str(error).splitlines()[0])
         raise SystemExit(0)
     raise SystemExit("negative control failed: previous-proof field binding drift was not detected")
+
+if mode == "--negative-control-data-model-previous-proof-stale-hash-fixture":
+    target = "crates/iroha_data_model/src/offline/mod.rs"
+    source = read(target)
+    mutated = source.replace(
+        '            Hash::new(b"recursive-spend-stale-previous-proof-public-input-hash");',
+        '            Hash::new(b"recursive-spend-previous-proof-public-input-hash");',
+    )
+    if mutated == source:
+        raise SystemExit("negative control failed: unable to mutate stale previous-proof hash fixture")
+    text_overrides[target] = mutated
+    try:
+        run_checks()
+    except PolicyError as error:
+        print("negative control rejected stale previous-proof hash fixture drift")
+        print(str(error).splitlines()[0])
+        raise SystemExit(0)
+    raise SystemExit("negative control failed: stale previous-proof hash fixture drift was not detected")
 
 if mode == "--negative-control-core-append-cap-boundary":
     target = "crates/iroha_core/src/zk.rs"

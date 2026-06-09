@@ -160,6 +160,7 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
             ("%70assword_trust_unknown_leak", "trust_unknown_leak"),
             ("private-key_trust_unknown_leak", "trust_unknown_leak"),
             ("unexpected\x1btrust_key", "\x1b"),
+            ("unexpected_trust_\uff4bey", "\uff4b"),
         )
         for unknown_key, hidden in cases:
             with self.subTest(unknown_key=unknown_key):
@@ -227,6 +228,27 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 2)
         self.assertIn("unrecognized arguments", stderr.getvalue())
         self.assertIn("--summary-ou", stderr.getvalue())
+
+    def test_raw_cli_control_characters_are_rejected_without_echo(self):
+        hidden = "--unknown-trust\x1bflag"
+        with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+            VERIFIER._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must not contain control characters", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("\x1b", message)
+        self.assertNotIn("unknown-trust", message)
+
+    def test_raw_cli_non_ascii_is_rejected_without_echo(self):
+        hidden = "\uff0d\uff0dsummary-out"
+        with self.assertRaises(VERIFIER.TrustBundleError) as caught:
+            VERIFIER._preflight_raw_cli_secrets([hidden], {"--summary-out"})
+
+        message = str(caught.exception)
+        self.assertIn("CLI argument must use printable ASCII", message)
+        self.assertNotIn(hidden, message)
+        self.assertNotIn("summary-out", message)
 
     def test_nested_control_material_in_bundle_is_rejected_without_echo(self):
         cases = (
@@ -372,8 +394,12 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 self.assertIn("path must not contain URL delimiter characters", message)
                 self.assertNotIn(url, message)
 
-    def test_url_paths_reject_non_ascii_smuggling(self):
+    def test_urls_reject_non_ascii_smuggling(self):
         cases = (
+            (
+                "https://pki\u0661.local-bank.bank/source",
+                "host must use printable ASCII",
+            ),
             ("https://pki.local-bank.bank/source∕debug", "path must use printable ASCII"),
             (
                 "https://pki.local-bank.bank/source%c3%a9",
@@ -1064,6 +1090,21 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_non_ascii_der_label_is_rejected_without_echo(self):
+        hidden = "\u2011"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            bundle["x509_crls"][0]["label"] = f"rail{hidden}crl"
+            path = write_bundle(root, bundle)
+
+            rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("x509_crls[0].label must use printable ASCII", stderr)
+            self.assertNotIn(hidden, stderr)
+
     def test_trust_profile_identity_fields_are_canonical(self):
         cases = (
             (
@@ -1276,6 +1317,13 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 "token-trust-policy-secret",
             ),
             (
+                lambda bundle: bundle.update(
+                    {"embedded_signature_policy": "require-verif\u0456ed"}
+                ),
+                "must use printable ASCII",
+                "require-verif\u0456ed",
+            ),
+            (
                 lambda bundle: bundle["source"].update(
                     {"authority": "token-trust-authority-secret"}
                 ),
@@ -1283,11 +1331,21 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                 "token-trust-authority-secret",
             ),
             (
+                lambda bundle: bundle["source"].update({"authority": "ISO\u2011MDR"}),
+                "must use printable ASCII",
+                "ISO\u2011MDR",
+            ),
+            (
                 lambda bundle: bundle["source"].update(
                     {"version": "session-key-trust-version-secret"}
                 ),
                 "secret-looking material",
                 "session-key-trust-version-secret",
+            ),
+            (
+                lambda bundle: bundle["source"].update({"version": "2026\u2011Q2"}),
+                "must use printable ASCII",
+                "2026\u2011Q2",
             ),
             (
                 lambda bundle: bundle["x509_trust_anchors"][0].update(
@@ -1382,6 +1440,20 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertNotIn("password=", stderr)
                     self.assertNotIn("source-secret", stderr)
                     self.assertNotIn("top-level-secret", stderr)
+
+    def test_environment_context_must_be_printable_ascii_without_echo(self):
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            hidden = "prepr\u043ed"
+            bundle = valid_bundle()
+            bundle["environment"] = hidden
+            path = write_bundle(root, bundle)
+
+            rc, _stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("environment must use printable ASCII", stderr)
+            self.assertNotIn(hidden, stderr)
 
     def test_insecure_source_url_requires_explicit_local_override(self):
         with tempfile.TemporaryDirectory() as raw_root:
@@ -1661,6 +1733,20 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertIn("--max-source-age-days must be a positive integer", stderr)
                     self.assertNotIn("token=", stderr)
                     self.assertNotIn("trust-secret", stderr)
+
+    def test_source_freshness_budget_rejects_unicode_digits_without_echo(self):
+        hidden = "\u0661"
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            path = write_bundle(root, valid_bundle())
+
+            rc, _stdout, stderr = run_verify(
+                ["--bundle", str(path), "--max-source-age-days", hidden]
+            )
+
+            self.assertEqual(rc, 2)
+            self.assertIn("--max-source-age-days must use printable ASCII", stderr)
+            self.assertNotIn(hidden, stderr)
 
     def test_stale_source_prevents_profile_override_emission(self):
         with tempfile.TemporaryDirectory() as raw_root:
