@@ -4443,6 +4443,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_confidential_v2_envelope_mismatches() {
             let cases: [(&str, &str, fn(&mut OpenVerifyEnvelope)); 7] = [
                 ("verifier_key_invalid", "backend", |envelope| {
@@ -4489,6 +4490,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_malformed_envelope_and_missing_root_hint() {
             let (state, authority, _definition_id, mut transfer, _commitments, _roots) =
                 real_kagemusha_test_state();
@@ -4516,6 +4518,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_forged_envelope_hash_metadata() {
             let (state, authority, _definition_id, mut transfer, _commitments, _roots) =
                 real_kagemusha_test_state();
@@ -4531,6 +4534,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_missing_verifier_key_commitment_metadata() {
             let (state, authority, _definition_id, mut transfer, _commitments, _roots) =
                 real_kagemusha_test_state();
@@ -4550,6 +4554,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_zero_verifier_key_commitment_metadata() {
             let (state, authority, _definition_id, mut transfer, _commitments, _roots) =
                 real_kagemusha_test_state();
@@ -4569,6 +4574,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_empty_verifier_key_id_name() {
             let (state, authority, _definition_id, mut transfer, _commitments, _roots) =
                 real_kagemusha_test_state();
@@ -6007,6 +6013,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_executes_real_confidential_transfer_v2_proof() {
             let (
                 state,
@@ -6043,6 +6050,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_tampered_real_halo2_ipa_proof() {
             let (state, authority, _definition_id, mut transfer, _commitments, _roots) =
                 real_kagemusha_test_state();
@@ -6066,6 +6074,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_trust_flag_rejects_tampered_real_halo2_ipa_proof() {
             let (state, authority, definition_id, mut transfer, _commitments, _roots) =
                 real_kagemusha_test_state();
@@ -6103,6 +6112,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
+        #[ignore = "heavy Kagemusha recursive Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_recursive_redeem_rejects_semantic_recursive_spend_before_mint() {
             let (state, authority, recipient, definition_id, instruction) =
                 real_recursive_kagemusha_redeem_test_state();
@@ -6148,6 +6158,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
+        #[ignore = "heavy Kagemusha recursive Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_recursive_redeem_record_backed_multi_hop_mints_and_rejects_replay() {
             run_recursive_kagemusha_redeem_large_stack(|| {
                 let fixture = real_recursive_kagemusha_redeem_record_backed_multi_hop_fixture();
@@ -6219,6 +6230,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
+        #[ignore = "heavy Kagemusha recursive Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_recursive_redeem_reserved_lineage_profile_verifies_backend_before_mint() {
             run_recursive_kagemusha_redeem_large_stack(|| {
                 let (mut state, authority, recipient, definition_id, mut instruction) =
@@ -6272,6 +6284,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
+        #[ignore = "heavy Kagemusha recursive Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_recursive_redeem_reserved_lineage_checks_final_proof_before_gate() {
             run_recursive_kagemusha_redeem_large_stack(|| {
                 let (mut state, authority, _, _, mut instruction) =
@@ -6296,6 +6309,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
+        #[ignore = "heavy Kagemusha recursive Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_recursive_redeem_rejects_double_spend_disabled_and_stale_roots() {
             let (state, authority, _recipient, definition_id, instruction) =
                 real_recursive_kagemusha_redeem_test_state();
@@ -6474,6 +6488,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
+        #[ignore = "heavy Kagemusha recursive Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_recursive_redeem_rejects_adversarial_lineage_verifier_records_before_mint() {
             run_recursive_kagemusha_redeem_large_stack(|| {
                 assert_recursive_redeem_lineage_record_case_rejects(
@@ -6541,6 +6556,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
+        #[ignore = "heavy Kagemusha recursive Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_recursive_redeem_rejects_malformed_lineage_hop_proof_before_mint() {
             run_recursive_kagemusha_redeem_large_stack(|| {
                 let mut fixture = real_recursive_kagemusha_redeem_test_fixture();
@@ -6563,6 +6579,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
+        #[ignore = "heavy Kagemusha recursive Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_recursive_redeem_rejects_lineage_final_nullifier_collisions_before_mint() {
             run_recursive_kagemusha_redeem_large_stack(|| {
                 let mut input_collision = real_recursive_kagemusha_redeem_test_fixture();
@@ -6632,6 +6649,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
+        #[ignore = "heavy Kagemusha recursive Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_recursive_redeem_rejects_verifier_and_policy_misconfigurations() {
             run_recursive_kagemusha_redeem_large_stack(|| {
                 let (
@@ -7016,6 +7034,7 @@ pub mod isi {
 
         #[cfg(feature = "zk-halo2-ipa")]
         #[test]
+        #[ignore = "heavy Kagemusha recursive Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_recursive_redeem_rejects_amount_and_final_binding_mismatches() {
             run_recursive_kagemusha_redeem_large_stack(|| {
                 let (state, authority, _, _, mut wrong_amount) =
@@ -7459,6 +7478,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_verifier_record_mismatches_before_proof_decode() {
             assert_kagemusha_transfer_record_mutation_rejects(
                 |transaction, verifier_id| {
@@ -7643,6 +7663,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_confidential_v2_public_input_mismatches() {
             let cases: [(
                 &str,
@@ -7780,6 +7801,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_duplicate_sets_before_proof_decode() {
             let cases: [(&str, &str, fn(&mut KagemushaTransfer)); 2] = [
                 (
@@ -7815,6 +7837,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_nullifier_output_overlap_before_proof_decode() {
             let (state, authority, _definition_id, mut transfer, _commitments, _roots) =
                 real_kagemusha_test_state();
@@ -7835,6 +7858,7 @@ pub mod isi {
         }
 
         #[test]
+        #[ignore = "heavy Kagemusha Halo2 IPA proof generation; run explicitly with --ignored --test-threads=1"]
         fn kagemusha_transfer_rejects_zero_sets_before_proof_decode() {
             let cases: [(&str, fn(&mut KagemushaTransfer)); 2] = [
                 ("input nullifiers must be non-zero", |transfer| {

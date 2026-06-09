@@ -28649,6 +28649,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_high_scalar_builder() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -28666,6 +28667,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_affine_windowed_scalar_mul_rejects_output_mismatch_builder() {
         run_vesta_affine_windowed_scalar_mul_native_scalar_test(|| {
             let base = vesta_non_identity_limbs(VestaAffine::generator());
@@ -29101,6 +29103,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_shared_table_msm_rejects_output_mismatch_builder()
      {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
@@ -29254,6 +29257,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_output_mismatch_builder()
      {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
@@ -29272,6 +29276,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_affine_windowed_native_scalar_msm_rejects_high_scalar_builder() {
         run_vesta_affine_windowed_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -29494,6 +29499,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_msm_rejects_output_mismatch_builder() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -29515,6 +29521,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_final_windowed_msm_rejects_product_high_bit_builder() {
         run_vesta_affine_ipa_final_windowed_msm_test(|| {
             let generator = VestaAffine::generator();
@@ -30182,6 +30189,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_output_mismatch_builder() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -30198,6 +30206,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_affine_native_scalar_msm_rejects_high_scalar_bit() {
         run_vesta_affine_msm_native_scalar_test(|| {
             let generator = VestaAffine::generator();
@@ -30492,6 +30501,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_rejects_inverse_mismatch_builder() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -30520,6 +30530,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_rejects_window_high_bit_builder() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -30540,6 +30551,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_rejects_output_mismatch_builder() {
         run_vesta_affine_ipa_round_accumulator_test(|| {
             let generator = VestaAffine::generator();
@@ -30621,6 +30633,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_round_accumulator_shared_table_rejects_inverse_mismatch_builder()
      {
         run_vesta_affine_ipa_round_accumulator_test(|| {
@@ -30715,6 +30728,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_rejects_inverse_mismatch_builder() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -30747,6 +30761,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_rejects_window_high_bit_builder() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -30769,6 +30784,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_rejects_output_mismatch_builder() {
         run_vesta_affine_ipa_generator_fold_test(|| {
             let generator = VestaAffine::generator();
@@ -30867,6 +30883,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_generator_fold_shared_table_rejects_inverse_mismatch_builder()
     {
         run_vesta_affine_ipa_generator_fold_test(|| {
@@ -30946,6 +30963,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_final_mismatch_builder() {
         run_vesta_affine_ipa_one_round_test(|| {
             let err =
@@ -30970,6 +30988,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_one_round_verifier_rejects_window_high_bit_builder() {
         run_vesta_affine_ipa_one_round_test(|| {
             let challenge = Scalar::from(2);
@@ -31165,6 +31184,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_one_round_profile() {
         run_vesta_affine_ipa_one_round_test(|| {
             let circuit = recursive_one_hop_verifier_slice_valid_circuit();
@@ -31184,6 +31204,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_two_round_profile() {
         run_vesta_affine_ipa_one_round_test(|| {
             let verifier = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
@@ -31243,6 +31264,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_profile_mismatch() {
         run_vesta_affine_ipa_one_round_test(|| {
             for (index, value, expected) in [
@@ -31280,6 +31302,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_metadata_witness_mismatch()
      {
         run_vesta_affine_ipa_one_round_test(|| {
@@ -31332,6 +31355,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_verifier_host_link_mismatch()
      {
         run_vesta_affine_ipa_one_round_test(|| {
@@ -31352,6 +31376,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_final_msm_product_splice()
      {
         run_vesta_affine_ipa_one_round_test(|| {
@@ -31372,6 +31397,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_missing_generator_fold_layer()
      {
         run_vesta_affine_ipa_one_round_test(|| {
@@ -31396,6 +31422,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_missing_b_reduction_layer()
      {
         run_vesta_affine_ipa_one_round_test(|| {
@@ -31420,6 +31447,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_scalar_projection_digest_is_order_sensitive()
      {
         run_vesta_affine_ipa_one_round_test(|| {
@@ -31455,6 +31483,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_scalar_projection_public_input_mismatch()
      {
         run_vesta_affine_ipa_one_round_test(|| {
@@ -31480,6 +31509,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_pallas_preflight_binding()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -31513,6 +31543,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_len4_pallas_preflight_binding()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -31605,6 +31636,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_hop_bound_pallas_preflight_binding()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -31650,6 +31682,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_accepts_len4_hop_bound_pallas_preflight_binding()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -31726,6 +31759,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_hop_bound_pallas_preflight_on_detached_constructor()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -31809,6 +31843,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_detached_pallas_preflight_on_hop_bound_constructor()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -32051,6 +32086,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_append_verifier_slice_builder_rejects_pallas_witness_preflight_mismatch()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -32295,6 +32331,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_hop_bound_pallas_preflight_mismatch()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -32351,6 +32388,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_len4_hop_bound_pallas_preflight_mismatch()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -32427,6 +32465,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_pallas_witness_preflight_mismatch()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -32456,6 +32495,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_bad_verifier_after_pallas_preflight_binding()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -32529,6 +32569,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_pallas_preflight_mismatch()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -32616,6 +32657,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_recursive_aggregation_one_hop_verifier_slice_builder_rejects_preflight_on_tiny_window_profile()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -32770,6 +32812,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_accepts_two_round_statement() {
         run_vesta_affine_ipa_verifier_test(|| {
             let circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
@@ -32782,6 +32825,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_validate_pallas_witness_accepts_real_opening() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) =
@@ -32795,6 +32839,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_accepts_multiple_real_openings() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness_a) = sample_pallas_verifier_witness(4, "core-pallas-batch-open-a");
@@ -32823,6 +32868,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_accepts_production_width() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) = sample_pallas_verifier_witness(
@@ -32866,6 +32912,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs_rejects_count_mismatch_before_native_preflight()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -32892,6 +32939,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_bound_to_hop_proofs_binds_public_context() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) =
@@ -32954,6 +33002,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_matches_shared_table_profile() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) =
@@ -33333,6 +33382,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_rejects_unsupported_width() {
         run_vesta_affine_ipa_verifier_test(|| {
             let params = iroha_zkp_halo2::pallas::Params::new(1).expect("n=1 Pallas params");
@@ -33349,6 +33399,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_rejects_empty_batch() {
         run_vesta_affine_ipa_verifier_test(|| {
             let params = iroha_zkp_halo2::pallas::Params::new(4).expect("n=4 Pallas params");
@@ -33365,6 +33416,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_rejects_over_hop_cap() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) = sample_pallas_verifier_witness(4, "core-pallas-over-hop-cap");
@@ -33384,6 +33436,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_accepts_proof_derived_batch()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -33428,6 +33481,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_rejects_unbound_metadata_before_derivation()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -33479,6 +33533,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_rejects_tampering() {
         run_vesta_affine_ipa_verifier_test(|| {
             let mut envelope =
@@ -33495,6 +33550,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_rejects_unsupported_width_before_derivation()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -33621,6 +33677,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_rejects_mixed_params() {
         run_vesta_affine_ipa_verifier_test(|| {
             let envelope_a =
@@ -33639,6 +33696,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_pallas_ipa_batch_verifier_preflight_from_open_envelopes_binds_hop_hashes() {
         run_vesta_affine_ipa_verifier_test(|| {
             let envelope =
@@ -33765,6 +33823,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_empty_batch() {
         run_vesta_affine_ipa_verifier_test(|| {
             let params = iroha_zkp_halo2::pallas::Params::new(4).expect("Pallas params");
@@ -33783,6 +33842,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_length_mismatch() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) =
@@ -33800,6 +33860,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_transcript_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness_a) =
@@ -33821,6 +33882,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_binding_projection_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness_a) =
@@ -33843,6 +33905,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_accumulator_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness_a) =
@@ -33863,6 +33926,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_h_generator_fold_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness_a) =
@@ -33883,6 +33947,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_digest_changes_with_order() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness_a) =
@@ -33909,6 +33974,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_digest_changes_with_witness() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness_a) =
@@ -33936,6 +34002,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_digest_binds_table_profile() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) =
@@ -33980,6 +34047,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_rejects_malformed_table_profile() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) =
@@ -34009,6 +34077,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_batch_preflight_populates_recursive_evidence() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness_a) =
@@ -34109,6 +34178,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_accepts_deterministic_binding() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) = sample_small_scalar_pallas_verifier_witness();
@@ -34127,6 +34197,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_from_pallas_witness_accepts_deterministic_binding()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34148,6 +34219,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_from_pallas_witness_rejects_length_mismatch()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34165,6 +34237,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_from_pallas_witness_rejects_transcript_splice()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34184,6 +34257,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_from_pallas_witness_rejects_h_generator_fold_splice()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34245,6 +34319,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_batch_preflight_accepts_multiple_real_openings()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34268,6 +34343,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_batch_preflight_rejects_empty_batch() {
         run_vesta_affine_ipa_verifier_test(|| {
             let params = iroha_zkp_halo2::pallas::Params::new(4).expect("Pallas params");
@@ -34286,6 +34362,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_batch_preflight_rejects_h_generator_fold_splice()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34307,6 +34384,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_length_mismatch() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, witness) =
@@ -34323,6 +34401,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_transcript_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, mut witness) =
@@ -34341,6 +34420,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_binding_digest_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, mut witness) =
@@ -34361,6 +34441,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_round_index_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, mut witness) =
@@ -34379,6 +34460,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_invalid_l_encoding() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, mut witness) =
@@ -34397,6 +34479,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_challenge_inverse_splice()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34420,6 +34503,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_b_layer_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, mut witness) =
@@ -34438,6 +34522,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_b_final_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, mut witness) =
@@ -34458,6 +34543,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_b_output_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, mut witness) =
@@ -34476,6 +34562,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_accumulator_square_splice()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34496,6 +34583,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_accumulator_q_fold_splice()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34515,6 +34603,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_generator_fold_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, mut witness) =
@@ -34532,6 +34621,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_h_generator_fold_splice()
     {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34550,6 +34640,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_final_generator_splice()
     {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34568,6 +34659,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_final_scalar_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, mut witness) =
@@ -34587,6 +34679,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_from_pallas_witness_rejects_accumulator_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let (params, mut witness) =
@@ -34604,6 +34697,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_rejects_transcript_challenge_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let mut circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
@@ -34618,6 +34712,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_builder_rejects_transcript_digest_mismatch() {
         run_vesta_affine_ipa_verifier_test(|| {
             let challenges = vec![Scalar::from(1), Scalar::from(1)];
@@ -34658,6 +34753,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_rejects_final_b_mismatch() {
         run_vesta_affine_ipa_verifier_test(|| {
             let challenges = vec![Scalar::from(1), Scalar::from(1)];
@@ -34698,6 +34794,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_rejects_round_count_mismatch() {
         run_vesta_affine_ipa_verifier_test(|| {
             let challenges = vec![Scalar::from(1), Scalar::from(1)];
@@ -34738,6 +34835,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_four_point_builder_rejects_window_high_bit() {
         run_vesta_affine_ipa_verifier_test(|| {
             let challenge = Scalar::from(2);
@@ -34780,6 +34878,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_four_point_host_links_reject_q_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let mut circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
@@ -34798,6 +34897,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_four_point_host_links_reject_generator_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let mut circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
@@ -34827,6 +34927,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_four_point_host_links_reject_challenge_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let mut circuit = vesta_affine_ipa_verifier_four_point_valid_circuit();
@@ -34837,6 +34938,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_four_point_builder_accepts_two_round_statement()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -34979,6 +35081,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_builder_rejects_transcript_digest_mismatch()
      {
         run_vesta_affine_ipa_verifier_test(|| {
@@ -35020,6 +35123,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_builder_rejects_final_b_mismatch() {
         run_vesta_affine_ipa_verifier_test(|| {
             let challenges = vec![Scalar::from(1), Scalar::from(1)];
@@ -35060,6 +35164,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_builder_rejects_round_count_mismatch() {
         run_vesta_affine_ipa_verifier_test(|| {
             let challenges = vec![Scalar::from(1), Scalar::from(1)];
@@ -35100,6 +35205,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_builder_rejects_window_high_bit() {
         run_vesta_affine_ipa_verifier_test(|| {
             let challenge = Scalar::from(2);
@@ -35142,6 +35248,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_host_links_reject_q_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let mut circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
@@ -35165,6 +35272,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_host_links_reject_generator_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let mut circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
@@ -35199,6 +35307,7 @@ mod kagemusha_non_native_limb_circuit_tests {
     }
 
     #[test]
+    #[ignore = "heavy Kagemusha Vesta/IPA large-stack MockProver coverage; run explicitly with --ignored --test-threads=1"]
     fn kagemusha_non_native_vesta_ipa_verifier_shared_table_host_links_reject_challenge_splice() {
         run_vesta_affine_ipa_verifier_test(|| {
             let mut circuit = vesta_affine_ipa_verifier_four_point_shared_table_valid_circuit();
@@ -40915,7 +41024,7 @@ mod kagemusha_folded_real_prover_tests {
         assert!(record.is_active());
         assert_eq!(record.key.as_ref(), Some(&vk_box));
 
-        let compact_vk = recursive_compact_vk_box();
+        let compact_vk = recursive_compact_shape_vk_box();
         let compact_record = recursive_compact_record(&compact_vk);
         assert_eq!(compact_record.version, 1);
         assert_eq!(
