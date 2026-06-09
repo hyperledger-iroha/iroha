@@ -6956,28 +6956,18 @@ impl SoraServiceDeploymentStateV1 {
             self.current_container_manifest_hash,
         )?;
 
-        if self.revision_count == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service deployment state",
-                field: "revision_count",
-                reason: "must be greater than zero".to_string(),
-            });
-        }
-
-        if self.process_generation == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service deployment state",
-                field: "process_generation",
-                reason: "must be greater than zero".to_string(),
-            });
-        }
-
-        if self.process_started_sequence == 0 {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora service deployment state",
-                field: "process_started_sequence",
-                reason: "must be greater than zero".to_string(),
-            });
+        for (field, value) in [
+            ("revision_count", u64::from(self.revision_count)),
+            ("process_generation", self.process_generation),
+            ("process_started_sequence", self.process_started_sequence),
+        ] {
+            if value == 0 {
+                return Err(SoracloudManifestError::InvalidField {
+                    manifest: "sora service deployment state",
+                    field,
+                    reason: "must be greater than zero".to_string(),
+                });
+            }
         }
 
         for (config_name, entry) in &self.service_configs {
@@ -8523,6 +8513,43 @@ pub struct SoraUploadedModelBundleV1 {
     pub decryption_policy_ref: String,
 }
 
+fn validate_uploaded_model_wrapped_key_matches_recipient(
+    recipient: &SoraUploadedModelEncryptionRecipientV1,
+    wrapped_key: &SoraUploadedModelWrappedKeyV1,
+) -> Result<(), SoracloudManifestError> {
+    for (field, matches, reason) in [
+        (
+            "wrapped_bundle_key.recipient_key_id",
+            recipient.key_id == wrapped_key.recipient_key_id,
+            "must match upload_recipient.key_id",
+        ),
+        (
+            "wrapped_bundle_key.recipient_key_version",
+            recipient.key_version == wrapped_key.recipient_key_version,
+            "must match upload_recipient.key_version",
+        ),
+        (
+            "wrapped_bundle_key.kem",
+            recipient.kem == wrapped_key.kem,
+            "must match upload_recipient.kem",
+        ),
+        (
+            "wrapped_bundle_key.aead",
+            recipient.aead == wrapped_key.aead,
+            "must match upload_recipient.aead",
+        ),
+    ] {
+        if !matches {
+            return Err(SoracloudManifestError::InvalidField {
+                manifest: "sora uploaded model bundle",
+                field,
+                reason: reason.to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
 impl SoraUploadedModelBundleV1 {
     /// Validate uploaded-model bundle metadata.
     ///
@@ -8588,49 +8615,17 @@ impl SoraUploadedModelBundleV1 {
         }
         self.upload_recipient.validate()?;
         self.wrapped_bundle_key.validate()?;
-        if self.upload_recipient.key_id != self.wrapped_bundle_key.recipient_key_id {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model bundle",
-                field: "wrapped_bundle_key.recipient_key_id",
-                reason: "must match upload_recipient.key_id".to_string(),
-            });
-        }
-        if self.upload_recipient.key_version != self.wrapped_bundle_key.recipient_key_version {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model bundle",
-                field: "wrapped_bundle_key.recipient_key_version",
-                reason: "must match upload_recipient.key_version".to_string(),
-            });
-        }
-        if self.upload_recipient.kem != self.wrapped_bundle_key.kem {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model bundle",
-                field: "wrapped_bundle_key.kem",
-                reason: "must match upload_recipient.kem".to_string(),
-            });
-        }
-        if self.upload_recipient.aead != self.wrapped_bundle_key.aead {
-            return Err(SoracloudManifestError::InvalidField {
-                manifest: "sora uploaded model bundle",
-                field: "wrapped_bundle_key.aead",
-                reason: "must match upload_recipient.aead".to_string(),
-            });
-        }
-        validate_soracloud_digest_hash(
-            "sora uploaded model bundle",
-            "plaintext_root",
-            self.plaintext_root,
+        validate_uploaded_model_wrapped_key_matches_recipient(
+            &self.upload_recipient,
+            &self.wrapped_bundle_key,
         )?;
-        validate_soracloud_digest_hash(
-            "sora uploaded model bundle",
-            "bundle_root",
-            self.bundle_root,
-        )?;
-        validate_soracloud_digest_hash(
-            "sora uploaded model bundle",
-            "chunk_manifest_root",
-            self.chunk_manifest_root,
-        )?;
+        for (field, hash) in [
+            ("plaintext_root", self.plaintext_root),
+            ("bundle_root", self.bundle_root),
+            ("chunk_manifest_root", self.chunk_manifest_root),
+        ] {
+            validate_soracloud_digest_hash("sora uploaded model bundle", field, hash)?;
+        }
         if self.chunk_count == 0 || self.plaintext_bytes == 0 || self.ciphertext_bytes == 0 {
             return Err(SoracloudManifestError::InvalidField {
                 manifest: "sora uploaded model bundle",

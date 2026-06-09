@@ -411,12 +411,20 @@ async function writeNativeProverFixtureFiles({
     }
     return bytes;
   };
+  const snarkjsBytes = (magic, sectionCount, bytes) => {
+    const out = Buffer.from(bytes);
+    out.set(Buffer.from(magic, "ascii"), 0);
+    out.writeUInt32LE(1, 4);
+    out.writeUInt32LE(sectionCount, 8);
+    return out;
+  };
   const proofBytes =
     artifactByteOverrides.proofArtifact ??
     artifactByteOverrides.proof ??
-    bytesFor("proof-artifact", 96 * 1024);
+    snarkjsBytes("r1cs", 3, bytesFor("proof-artifact", 96 * 1024));
   const provingKeyBytes =
-    artifactByteOverrides.provingKey ?? bytesFor("proving-key", 96 * 1024);
+    artifactByteOverrides.provingKey ??
+    snarkjsBytes("zkey", 10, bytesFor("proving-key", 96 * 1024));
   const verifierKeyBytes =
     artifactByteOverrides.verifierKey ?? bytesFor("verifier-key", 2048);
   const proofArtifactHash = sha256Hex(proofBytes);
@@ -446,8 +454,8 @@ async function writeNativeProverFixtureFiles({
   const selfTestBytes = Buffer.from(
     `${JSON.stringify(nativeProverSelfTestFixture(bundleBinding), null, 2)}\n`,
   );
-  await writeArtifact("proof-artifact.bin", proofBytes);
-  await writeArtifact("proving-key.bin", provingKeyBytes);
+  await writeArtifact("proof-artifact.r1cs", proofBytes);
+  await writeArtifact("proving-key.zkey", provingKeyBytes);
   await writeArtifact("verifier-key.json", verifierKeyBytes);
   await writeArtifact("cross-sdk-fixture-parity.json", parityBytes);
   await writeArtifact("native-prover-self-test.json", selfTestBytes);
@@ -507,8 +515,8 @@ async function writeNativeProverFixtureFiles({
     options: {
       "route-manifest": routeManifestPath,
       "artifact-root": artifactRoot,
-      "proof-artifact": "proof-artifact.bin",
-      "proving-key": "proving-key.bin",
+      "proof-artifact": "proof-artifact.r1cs",
+      "proving-key": "proving-key.zkey",
       "verifier-key": "verifier-key.json",
       "cross-sdk-fixture-parity": "cross-sdk-fixture-parity.json",
       "native-prover-self-test": "native-prover-self-test.json",
@@ -1407,6 +1415,42 @@ test("BSC native-prover-bundle rejects forged or incomplete artifact inputs", as
         sparsePaddedProofFixture.options,
       ),
     /proof artifact looks like placeholder proof material: byte 0x00 dominates/u,
+  );
+
+  const badR1csHeader = await writeNativeProverFixtureFiles();
+  const badR1csBytes = Buffer.from(
+    await readFile(join(badR1csHeader.artifactRoot, "proof-artifact.r1cs")),
+  );
+  badR1csBytes[0] = 0x78;
+  await writeFile(
+    join(badR1csHeader.artifactRoot, "bad-proof.r1cs"),
+    badR1csBytes,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...badR1csHeader.options,
+        "proof-artifact": "bad-proof.r1cs",
+      }),
+    /proof artifact must start with \.r1cs magic bytes/u,
+  );
+
+  const badZkeyHeader = await writeNativeProverFixtureFiles();
+  const badZkeyBytes = Buffer.from(
+    await readFile(join(badZkeyHeader.artifactRoot, "proving-key.zkey")),
+  );
+  badZkeyBytes[0] = 0x78;
+  await writeFile(
+    join(badZkeyHeader.artifactRoot, "bad-proving-key.zkey"),
+    badZkeyBytes,
+  );
+  await assert.rejects(
+    () =>
+      buildBscNativeEvmProverBundleFromArtifacts({
+        ...badZkeyHeader.options,
+        "proving-key": "bad-proving-key.zkey",
+      }),
+    /proving key must start with \.zkey magic bytes/u,
   );
 
   const tinyImplementation = await writeNativeProverFixtureFiles({

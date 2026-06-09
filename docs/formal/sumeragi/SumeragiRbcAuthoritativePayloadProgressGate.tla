@@ -9,10 +9,10 @@ and its complete-chunk helper. A session must first have valid metadata for the
 progress slot: it cannot be invalid, it must advertise a payload hash, it must
 carry a block header and leader signature, and that header must match the
 session key hash, height, and view. Once metadata matches, complete RBC chunks
-are authoritative when their observed chunk root is accepted by the helper. If
-chunks are not complete or fail the root check, the predicate falls back to the
-actor-local authoritative payload lookup and accepts only matching height, view,
-and payload hash.
+are authoritative when positive chunk bytes verify and their observed chunk
+root is accepted by the helper. If chunks are absent, incomplete, or fail the
+root check, the predicate falls back to the actor-local authoritative payload
+lookup and accepts only matching height, view, and payload hash.
 ***************************************************************************)
 
 CONSTANT
@@ -82,12 +82,12 @@ MetadataOk(c) ==
   c \notin MetadataInvalidCases
 
 CompletePayloadCases == {
-  CompleteZeroExpectedRoot,
   CompleteAllExpectedRootMatch,
   CompleteAllNoExpectedObservedRoot
 }
 
 ChunkRejectedCases == {
+  CompleteZeroExpectedRoot,
   ZeroMissingExpectedRoot,
   IncompleteChunks,
   RootMismatch,
@@ -118,7 +118,7 @@ RejectHeaderHashMismatch == 8
 RejectHeaderHeightMismatch == 9
 RejectHeaderViewMismatch == 10
 CheckCompleteChunks == 11
-AcceptZeroChunkExpectedRoot == 12
+RejectZeroChunkExpectedRoot == 12
 AcceptExpectedRootMatch == 13
 AcceptNoExpectedObservedRoot == 14
 RejectZeroMissingExpectedRoot == 15
@@ -146,7 +146,7 @@ MetadataRejectAction(c) ==
     [] OTHER -> {}
 
 CompleteChunkAction(c) ==
-  CASE c = CompleteZeroExpectedRoot -> {AcceptZeroChunkExpectedRoot}
+  CASE c = CompleteZeroExpectedRoot -> {RejectZeroChunkExpectedRoot}
     [] c = CompleteAllExpectedRootMatch -> {AcceptExpectedRootMatch}
     [] c = CompleteAllNoExpectedObservedRoot -> {AcceptNoExpectedObservedRoot}
     [] c = ZeroMissingExpectedRoot -> {RejectZeroMissingExpectedRoot}
@@ -164,8 +164,9 @@ LocalPayloadAction(c) ==
     [] c = LocalPayloadWrongView -> {RejectLocalPayloadView}
     [] c = LocalPayloadWrongHash -> {RejectLocalPayloadHash}
     [] c = LocalPayloadAbsent -> {RejectLocalPayloadAbsent}
-    [] c \in {ZeroMissingExpectedRoot, IncompleteChunks, RootMismatch,
-              MissingObservedRoot} -> {RejectLocalPayloadAbsent}
+    [] c \in {CompleteZeroExpectedRoot, ZeroMissingExpectedRoot,
+              IncompleteChunks, RootMismatch, MissingObservedRoot} ->
+      {RejectLocalPayloadAbsent}
     [] OTHER -> {}
 
 SpecActions(c) ==
@@ -200,9 +201,9 @@ ImplementationResult(c) ==
     [] Bug = "accept_header_view_mismatch"
        /\ c = HeaderViewMismatch ->
       TRUE
-    [] Bug = "reject_zero_chunk_expected_root"
+    [] Bug = "accept_zero_chunk_expected_root"
        /\ c = CompleteZeroExpectedRoot ->
-      FALSE
+      TRUE
     [] Bug = "reject_expected_root_match"
        /\ c = CompleteAllExpectedRootMatch ->
       FALSE
@@ -254,7 +255,7 @@ Bugs == {
   "accept_header_hash_mismatch",
   "accept_header_height_mismatch",
   "accept_header_view_mismatch",
-  "reject_zero_chunk_expected_root",
+  "accept_zero_chunk_expected_root",
   "reject_expected_root_match",
   "reject_no_expected_observed_root",
   "accept_zero_missing_expected_root",
@@ -299,10 +300,6 @@ MetadataGateRejectsIncompleteSessions ==
        /\ ~(CheckLocalPayload \in ImplementationActions(c))
 
 CompleteChunkPayloadsAreAuthoritative ==
-  /\ ImplementationResult(CompleteZeroExpectedRoot) = TRUE
-  /\ AcceptZeroChunkExpectedRoot
-       \in ImplementationActions(CompleteZeroExpectedRoot)
-  /\ ~(CheckLocalPayload \in ImplementationActions(CompleteZeroExpectedRoot))
   /\ ImplementationResult(CompleteAllExpectedRootMatch) = TRUE
   /\ AcceptExpectedRootMatch
        \in ImplementationActions(CompleteAllExpectedRootMatch)
@@ -314,6 +311,10 @@ CompleteChunkPayloadsAreAuthoritative ==
        \in ImplementationActions(CompleteAllNoExpectedObservedRoot))
 
 ChunkFailuresNeedLocalFallback ==
+  /\ ImplementationResult(CompleteZeroExpectedRoot) = FALSE
+  /\ RejectZeroChunkExpectedRoot
+       \in ImplementationActions(CompleteZeroExpectedRoot)
+  /\ CheckLocalPayload \in ImplementationActions(CompleteZeroExpectedRoot)
   /\ ImplementationResult(ZeroMissingExpectedRoot) = FALSE
   /\ RejectZeroMissingExpectedRoot
        \in ImplementationActions(ZeroMissingExpectedRoot)

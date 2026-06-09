@@ -14,6 +14,10 @@ SKIP_NGINX_TEST=0
 ALIAS_ROUTES=()
 REQUIRED_ALIASES=()
 NGINX_TEST_DIRS=()
+INSTALL_BACKUP_DIR=""
+INSTALL_BACKUP_CONF=""
+TARGET_CONF_EXISTED=0
+INSTALL_ROLLBACK_NEEDED=0
 
 cleanup_nginx_test_dirs() {
   local path
@@ -22,7 +26,21 @@ cleanup_nginx_test_dirs() {
   done
 }
 
-trap cleanup_nginx_test_dirs EXIT
+cleanup_runtime_state() {
+  local exit_code=$?
+
+  if [[ ${INSTALL_ROLLBACK_NEEDED:-0} -eq 1 ]]; then
+    rollback_installed_conf || true
+  fi
+  cleanup_nginx_test_dirs
+  if [[ -n "${INSTALL_BACKUP_DIR:-}" && -e "$INSTALL_BACKUP_DIR" ]]; then
+    rm -rf "$INSTALL_BACKUP_DIR" || true
+  fi
+
+  exit "$exit_code"
+}
+
+trap cleanup_runtime_state EXIT
 
 usage() {
   cat <<'EOF'
@@ -238,6 +256,80 @@ EOF
   "$NGINX_BIN" -t -c "$test_conf" -p "${test_dir}/"
 }
 
+target_needs_sudo_write() {
+  local path="$1"
+  local dir
+  dir="$(dirname -- "$path")"
+
+  if [[ -e "$path" ]]; then
+    [[ ! -w "$path" ]]
+  else
+    [[ ! -w "$dir" ]]
+  fi
+}
+
+copy_to_target_conf() {
+  local source_path="$1"
+
+  if target_needs_sudo_write "$TARGET_CONF"; then
+    sudo cp "$source_path" "$TARGET_CONF"
+  else
+    cp "$source_path" "$TARGET_CONF"
+  fi
+}
+
+remove_target_conf() {
+  if [[ ! -w "$target_dir" ]]; then
+    sudo rm -f "$TARGET_CONF"
+  else
+    rm -f "$TARGET_CONF"
+  fi
+}
+
+backup_target_conf() {
+  TARGET_CONF_EXISTED=0
+  INSTALL_BACKUP_CONF=""
+
+  if [[ ! -e "$TARGET_CONF" ]]; then
+    return 0
+  fi
+
+  TARGET_CONF_EXISTED=1
+  INSTALL_BACKUP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/taira-edge-nginx-install.XXXXXX")"
+  INSTALL_BACKUP_CONF="${INSTALL_BACKUP_DIR}/previous.conf"
+  if [[ ! -r "$TARGET_CONF" ]]; then
+    sudo cp -p "$TARGET_CONF" "$INSTALL_BACKUP_CONF"
+  else
+    cp -p "$TARGET_CONF" "$INSTALL_BACKUP_CONF"
+  fi
+}
+
+restore_target_conf() {
+  if [[ ! -r "$INSTALL_BACKUP_CONF" ]] || target_needs_sudo_write "$TARGET_CONF"; then
+    sudo cp -p "$INSTALL_BACKUP_CONF" "$TARGET_CONF"
+  else
+    cp -p "$INSTALL_BACKUP_CONF" "$TARGET_CONF"
+  fi
+}
+
+rollback_installed_conf() {
+  if [[ $TARGET_CONF_EXISTED -eq 1 ]]; then
+    if restore_target_conf; then
+      echo "restored previous nginx config: $TARGET_CONF" >&2
+    else
+      echo "failed to restore previous nginx config: $TARGET_CONF" >&2
+      return 1
+    fi
+  else
+    if remove_target_conf; then
+      echo "removed failed nginx config: $TARGET_CONF" >&2
+    else
+      echo "failed to remove failed nginx config: $TARGET_CONF" >&2
+      return 1
+    fi
+  fi
+}
+
 require_in_rendered_conf 'server_name[[:space:]]+mon\.taira\.sora\.net;' 'Mon apex server block'
 require_in_rendered_conf 'server_name[[:space:]]+\*\.mon\.taira\.sora\.net[[:space:]]+~\^\.\+\\\.mon\\\.taira\\\.sora\\\.net\$;' 'Mon wildcard/regex fallback'
 require_in_rendered_conf 'proxy_next_upstream[[:space:]].*non_idempotent' 'shared-edge retry policy'
@@ -289,20 +381,24 @@ if [[ $SKIP_NGINX_TEST -ne 1 ]]; then
 fi
 
 if [[ $INSTALL -eq 1 ]]; then
-  if [[ ! -w "$target_dir" ]]; then
-    sudo cp "$OUTPUT" "$TARGET_CONF"
-  else
-    cp "$OUTPUT" "$TARGET_CONF"
+  backup_target_conf
+  INSTALL_ROLLBACK_NEEDED=1
+  if ! copy_to_target_conf "$OUTPUT"; then
+    echo "failed to install nginx config candidate: $TARGET_CONF" >&2
+    exit 1
   fi
+  if [[ $SKIP_NGINX_TEST -ne 1 ]]; then
+    if ! "$NGINX_BIN" -t; then
+      echo "live nginx validation failed after installing candidate; rolling back: $TARGET_CONF" >&2
+      exit 1
+    fi
+  fi
+  INSTALL_ROLLBACK_NEEDED=0
   echo "installed nginx config: $TARGET_CONF"
 else
   echo "rendered nginx config: $OUTPUT"
   echo "target nginx config: $TARGET_CONF"
   echo "dry run only; rerun with --install to copy and --reload to reload nginx"
-fi
-
-if [[ $INSTALL -eq 1 && $SKIP_NGINX_TEST -ne 1 ]]; then
-  "$NGINX_BIN" -t
 fi
 
 if [[ $RELOAD -eq 1 ]]; then

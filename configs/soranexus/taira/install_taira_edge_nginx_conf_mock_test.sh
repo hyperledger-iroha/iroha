@@ -114,7 +114,11 @@ printf '%s\n' "$*" >>"${MOCK_STATE_DIR:?}/nginx.calls"
 config_path=""
 prefix_path=""
 previous_arg=""
+live_test=0
 for arg in "$@"; do
+  if [[ "$arg" == "-t" ]]; then
+    live_test=1
+  fi
   case "$previous_arg" in
     -c)
       config_path="$arg"
@@ -136,6 +140,11 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+if [[ -z "$config_path" && $live_test -eq 1 && "${MOCK_LIVE_NGINX_TEST_FAIL:-0}" == "1" ]]; then
+  echo "nginx: configuration file test failed" >&2
+  exit 1
+fi
 
 if [[ -n "$config_path" ]]; then
   include_path="$(awk '/include .*rendered\.conf;/ { print $2; exit }' "$config_path")"
@@ -260,6 +269,58 @@ test_install_reload_copies_and_reloads() {
   assert_contains "${root}/state/nginx.rendered_targets" "${root}/dist/taira-edge/taira.sora.org.conf"
 }
 
+test_install_validation_failure_restores_existing_target() {
+  local root
+  root="$(mktemp -d)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+  printf '# previous live config\n' >"${root}/nginx/servers/taira.sora.org.conf"
+
+  if MOCK_LIVE_NGINX_TEST_FAIL=1 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
+    --require-alias solswap-indexer.sora \
+    --nginx-bin nginx \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "install unexpectedly passed after live nginx validation failed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "rolling back"
+  assert_contains "${root}/state/stderr" "restored previous nginx config"
+  assert_contains "${root}/nginx/servers/taira.sora.org.conf" "# previous live config"
+  assert_contains "${root}/state/nginx.calls" "-c"
+}
+
+test_install_validation_failure_removes_new_target() {
+  local root
+  root="$(mktemp -d)"
+  cleanup_paths+=("$root")
+  make_fake_repo "$root"
+  mkdir -p "${root}/nginx/servers"
+
+  if MOCK_LIVE_NGINX_TEST_FAIL=1 run_fake_script "$root" \
+    --output "${root}/dist/taira-edge/taira.sora.org.conf" \
+    --target-conf "${root}/nginx/servers/taira.sora.org.conf" \
+    --soracloud-alias-route solswap-indexer.sora=127.0.0.1:8788 \
+    --require-alias solswap-indexer.sora \
+    --nginx-bin nginx \
+    --install \
+    >"${root}/state/stdout" 2>"${root}/state/stderr"; then
+    echo "install unexpectedly passed after live nginx validation failed" >&2
+    exit 1
+  fi
+  assert_contains "${root}/state/stderr" "rolling back"
+  assert_contains "${root}/state/stderr" "removed failed nginx config"
+  [[ ! -e "${root}/nginx/servers/taira.sora.org.conf" ]] || {
+    echo "failed live nginx validation left a new target config behind" >&2
+    exit 1
+  }
+  assert_contains "${root}/state/nginx.calls" "-c"
+}
+
 test_missing_required_alias_fails() {
   local root
   root="$(mktemp -d)"
@@ -307,6 +368,8 @@ test_backup_confs_fail_before_install() {
 test_dry_run_renders_and_checks_required_alias
 test_dry_run_rejects_invalid_rendered_nginx
 test_install_reload_copies_and_reloads
+test_install_validation_failure_restores_existing_target
+test_install_validation_failure_removes_new_target
 test_missing_required_alias_fails
 test_backup_confs_fail_before_install
 

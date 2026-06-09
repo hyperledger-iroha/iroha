@@ -115,40 +115,12 @@ SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES = {
     Path("status.md"),
 }
 
-SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES = (
-    SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE_FILES
-)
-
 SCCP_GENERIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
     r"retired\s+runtime-network families\b.{0,96}\b("
     r"outside|not supported|unsupported"
     r")",
     re.IGNORECASE | re.DOTALL,
 )
-
-_FAMILY_ONE = "Sub" "strate"
-_FAMILY_TWO = "Pol" "kadot"
-SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT = (
-    f"{_FAMILY_ONE}/{_FAMILY_TWO} networks are explicitly outside SCCP launch "
-    "support for now."
-)
-SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE = re.compile(
-    re.escape(SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT),
-)
-
-
-def _is_allowed_family_specific_scope_note_match(
-    relative: Path,
-    text: str,
-    match: re.Match[str],
-) -> bool:
-    if relative not in SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES:
-        return False
-    return any(
-        note_match.start() <= match.start() and match.end() <= note_match.end()
-        for note_match in SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE.finditer(text)
-    )
-
 
 def _is_scanned_file(path: Path) -> bool:
     if not path.is_file() or path.is_symlink():
@@ -263,39 +235,6 @@ def test_generic_no_support_note_stays_in_launch_scope_files() -> None:
         )
 
 
-def test_family_specific_no_support_note_stays_in_launch_scope_files() -> None:
-    for relative in SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_FILES:
-        text = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        assert SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE.search(text), (
-            f"missing exact family-specific unsupported scope note in {relative}"
-        )
-
-
-def test_retired_network_surface_scan_flags_family_specific_notes() -> None:
-    allowed_text = SCCP_FAMILY_SPECIFIC_UNSUPPORTED_SCOPE_NOTE_TEXT
-    allowed_match = BANNED_PATTERNS[0].search(allowed_text)
-    assert allowed_match is not None
-    assert _is_allowed_family_specific_scope_note_match(
-        Path("docs/source/bridge_proofs.md"),
-        allowed_text,
-        allowed_match,
-    )
-
-    forbidden_text = f"{_FAMILY_ONE} networks will be supported later."
-    forbidden_match = BANNED_PATTERNS[0].search(forbidden_text)
-    assert forbidden_match is not None
-    assert not _is_allowed_family_specific_scope_note_match(
-        Path("docs/source/bridge_proofs.md"),
-        forbidden_text,
-        forbidden_match,
-    )
-    assert not _is_allowed_family_specific_scope_note_match(
-        Path("docs/source/new_pipeline.md"),
-        allowed_text,
-        allowed_match,
-    )
-
-
 def test_active_tree_excludes_retired_network_surface_tokens() -> None:
     violations: list[str] = []
 
@@ -305,14 +244,7 @@ def test_active_tree_excludes_retired_network_surface_tokens() -> None:
         for pattern in BANNED_PATTERNS:
             match = pattern.search(text)
             while match is not None:
-                if not _is_allowed_family_specific_scope_note_match(
-                    relative,
-                    text,
-                    match,
-                ):
-                    violations.append(
-                        f"{relative}:{match.start()}: {match.group(0)!r}"
-                    )
+                violations.append(f"{relative}:{match.start()}: {match.group(0)!r}")
                 match = pattern.search(text, match.end())
 
     assert violations == []

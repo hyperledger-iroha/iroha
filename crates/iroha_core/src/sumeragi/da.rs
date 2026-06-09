@@ -1,13 +1,13 @@
 //! Data-availability tracking helpers.
 //!
 //! When `sumeragi.da_enabled = true`, the node tracks availability and manifest
-//! signals for DA commitments. These signals are advisory and must not block
-//! commit/finalize paths in v1.
+//! signals for DA commitments and keeps commit/finalize work pending until the
+//! required local payload or strict manifest evidence is available.
 //!
-//! Consensus only waits when the local node lacks required data to validate,
-//! in which case it requests the missing data from peers and retries once it
-//! arrives. Reliable broadcast remains a transport and recovery mechanism for
-//! payload distribution (e.g., when a peer misses `BlockCreated`).
+//! When the local node lacks required payload data it requests the missing data
+//! from peers and retries once it arrives. Reliable broadcast remains a transport
+//! and recovery mechanism for payload distribution (e.g., when a peer misses
+//! `BlockCreated`).
 
 use iroha_data_model::nexus::LaneId;
 
@@ -65,7 +65,7 @@ pub enum GateSatisfaction {
 }
 
 /// Evaluate whether availability evidence is still missing for a block.
-/// This result is advisory and must not block consensus.
+/// A returned reason keeps DA-enabled commit/finalize work pending until cleared.
 #[must_use]
 pub fn evaluate(da_enabled: bool, missing_local_data: bool) -> Option<GateReason> {
     if !da_enabled {
@@ -86,14 +86,10 @@ pub fn gate_satisfaction(
     current: Option<GateReason>,
 ) -> Option<GateSatisfaction> {
     match (previous, current) {
-        (Some(GateReason::MissingLocalData), current)
-            if !matches!(current, Some(GateReason::MissingLocalData)) =>
-        {
+        (previous @ Some(GateReason::MissingLocalData), current) if current != previous => {
             Some(GateSatisfaction::MissingDataRecovered)
         }
-        (Some(GateReason::ManifestGuard { .. }), current)
-            if !matches!(current, Some(GateReason::ManifestGuard { .. })) =>
-        {
+        (previous @ Some(GateReason::ManifestGuard { .. }), current) if current != previous => {
             Some(GateSatisfaction::ManifestGuardRecovered)
         }
         _ => None,
@@ -102,7 +98,16 @@ pub fn gate_satisfaction(
 
 #[cfg(test)]
 mod tests {
-    use super::{GateReason, GateSatisfaction, evaluate, gate_satisfaction};
+    use super::{GateReason, GateSatisfaction, ManifestGateKind, evaluate, gate_satisfaction};
+
+    fn manifest_gate(lane: u32, sequence: u64, kind: ManifestGateKind) -> GateReason {
+        GateReason::ManifestGuard {
+            lane: iroha_data_model::nexus::LaneId::new(lane),
+            epoch: 2,
+            sequence,
+            kind,
+        }
+    }
 
     #[test]
     fn da_disabled_skips_gating() {
@@ -128,38 +133,36 @@ mod tests {
         assert_eq!(
             gate_satisfaction(
                 Some(GateReason::MissingLocalData),
-                Some(GateReason::ManifestGuard {
-                    lane: iroha_data_model::nexus::LaneId::new(1),
-                    epoch: 2,
-                    sequence: 3,
-                    kind: super::ManifestGateKind::Missing,
-                })
+                Some(manifest_gate(1, 3, ManifestGateKind::Missing))
             ),
             Some(GateSatisfaction::MissingDataRecovered)
         );
         assert_eq!(
+            gate_satisfaction(Some(manifest_gate(1, 3, ManifestGateKind::Missing)), None),
+            Some(GateSatisfaction::ManifestGuardRecovered)
+        );
+        assert_eq!(
             gate_satisfaction(
-                Some(GateReason::ManifestGuard {
-                    lane: iroha_data_model::nexus::LaneId::new(1),
-                    epoch: 2,
-                    sequence: 3,
-                    kind: super::ManifestGateKind::Missing,
-                }),
-                None
+                Some(manifest_gate(1, 3, ManifestGateKind::Missing)),
+                Some(GateReason::MissingLocalData)
             ),
             Some(GateSatisfaction::ManifestGuardRecovered)
         );
         assert_eq!(
             gate_satisfaction(
-                Some(GateReason::ManifestGuard {
-                    lane: iroha_data_model::nexus::LaneId::new(1),
-                    epoch: 2,
-                    sequence: 3,
-                    kind: super::ManifestGateKind::Missing,
-                }),
-                Some(GateReason::MissingLocalData)
+                Some(manifest_gate(1, 3, ManifestGateKind::Missing)),
+                Some(manifest_gate(1, 4, ManifestGateKind::Missing))
             ),
-            Some(GateSatisfaction::ManifestGuardRecovered)
+            Some(GateSatisfaction::ManifestGuardRecovered),
+            "a different exact manifest gate means the previous guard recovered even though another manifest still gates commit"
+        );
+        assert_eq!(
+            gate_satisfaction(
+                Some(manifest_gate(1, 3, ManifestGateKind::Missing)),
+                Some(manifest_gate(1, 3, ManifestGateKind::HashMismatch))
+            ),
+            Some(GateSatisfaction::ManifestGuardRecovered),
+            "a kind change for the same manifest still means the previous manifest condition changed"
         );
         assert_eq!(gate_satisfaction(None, None), None);
         assert_eq!(
@@ -168,6 +171,14 @@ mod tests {
                 Some(GateReason::MissingLocalData)
             ),
             None
+        );
+        assert_eq!(
+            gate_satisfaction(
+                Some(manifest_gate(1, 3, ManifestGateKind::Missing)),
+                Some(manifest_gate(1, 3, ManifestGateKind::Missing))
+            ),
+            None,
+            "unchanged manifest gate should not synthesize recovery progress"
         );
     }
 }

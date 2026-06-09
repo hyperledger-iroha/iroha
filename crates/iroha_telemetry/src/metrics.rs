@@ -7068,7 +7068,7 @@ pub struct Metrics {
     pub sumeragi_rbc_store_evictions_total: IntCounter,
     /// Sumeragi RBC: persist requests dropped due to a full async queue (cumulative)
     pub sumeragi_rbc_persist_drops_total: IntCounter,
-    /// Sumeragi RBC status snapshot persistence disabled due to fatal disk faults (0/1)
+    /// Sumeragi RBC status snapshot persistence unavailable due to init or fatal disk faults (0/1)
     pub sumeragi_rbc_status_persistence_disabled: GenericGauge<AtomicU64>,
     /// Sumeragi RBC status snapshot fatal persist failures (cumulative)
     pub sumeragi_rbc_status_persist_failures_total: IntCounter,
@@ -10566,7 +10566,7 @@ impl Default for Metrics {
         .expect("Infallible");
         let sumeragi_rbc_status_persistence_disabled = GenericGauge::new(
             "sumeragi_rbc_status_persistence_disabled",
-            "Sumeragi RBC status snapshot persistence disabled due to fatal disk faults (0/1)",
+            "Sumeragi RBC status snapshot persistence unavailable due to init or fatal disk faults (0/1)",
         )
         .expect("Infallible");
         let sumeragi_rbc_status_persist_failures_total = IntCounter::new(

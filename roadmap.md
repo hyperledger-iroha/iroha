@@ -36,7 +36,6 @@ and completed history lives in [`status.md`](./status.md).
   helpers, and production readiness surfaces must stay limited to those lanes.
   Retired runtime-network families outside that launch scope are explicitly
   unsupported for now.
-  Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
   The retired-network surface guard must require explicit no-support
   launch-scope wording in each launch-scope file.
   Reintroducing any such family requires a new design pass, fresh fixtures, and
@@ -719,8 +718,9 @@ and completed history lives in [`status.md`](./status.md).
 				  rejects unreadable output parent or leaf metadata before write or
 				  digest reads, writes signed-evidence and `sha256sum.txt` outputs
 				  through fsynced same-directory temp files with atomic replace and
-				  readback verification, revalidates signed-evidence output shape before
-				  hashing the written artifact back into `slot.json`, classifies slot directory
+				  opened-file identity-bound readback verification, revalidates signed-evidence output shape before
+				  hashing the written artifact back into `slot.json` and binds that
+				  digest read to the opened file identity, classifies slot directory
 				  and parent metadata with `lstat()` before parsing slot metadata or rewriting
 				  manifests, preflights slot/artifact shape before parsing slot
 		  metadata, makes lower-level direct symlink/hardlink/regular-file artifact
@@ -748,7 +748,8 @@ and completed history lives in [`status.md`](./status.md).
 		  plus symlinked slot roots and ancestors before direct SHA-256
 		  manifest parser/verifier reads, rejects unreadable-metadata
 		  and hardlinked `sha256sum.txt` manifests before direct manifest parsing
-		  or discovery,
+		  or discovery, binds `sha256sum.txt` parser bytes to the opened file
+		  identity so post-preflight swaps fail closed,
 		  makes scanner and rollup missing-root decisions consume
 		  `lstat()`-classified root presence instead of `Path.exists()`,
 		  makes scanner slot inventory classify expected top-level directories,
@@ -919,7 +920,11 @@ and completed history lives in [`status.md`](./status.md).
 	  returning artifact digests, with the readiness, lineage-helper, and
 	  compact-key helper readers binding each digest/text read to the first
 	  validated `lstat()` identity so post-preflight regular-file replacements
-	  fail closed, and with read-time byte failures reported as
+	  fail closed, and the Reserved-lineage all-zero plus compact-key
+	  placeholder checks consume the prefix captured by the same artifact hash
+	  read instead of reopening the artifact path. The compact key evidence helper
+	  also hashes, sizes, decodes, and parses the generator log from one opened
+	  regular file, with read-time byte failures reported as
 	  structured blockers instead of tracebacks. Ready rollup summaries also publish
 		  sanitized SHA-256 maps for the
 		  accepted Reserved-lineage artifacts and proof log without preserving local
@@ -2504,6 +2509,9 @@ and completed history lives in [`status.md`](./status.md).
 	  ASCII-only rail `message_type` digit validation across direct receipt
 	  verification, evidence replay, readiness replay, and XSD profile catalogs,
 	  ASCII-only XSD profile-catalog `message_def_id` and version validation,
+	  overlong XSD profile-catalog profile IDs and enum values rejected before
+	  duplicate-ID, missing-schema-version, or unknown-value echo,
+	  overlong XSD/XML schema and fixture identifiers rejected before mismatch echo,
 	  plus generic evidence/readiness archive/canary kind, filename, or metadata
 	  mismatch blockers that do not print receipt kind values, receipt leaf names, or invalid metadata tuples,
 	  rail receipt metadata recording for nullable raw receipt fields and retained
@@ -7556,9 +7564,10 @@ operator-provided rollout bundles.
   the same readiness-level source gate, pinning supported-lane and verifier
   target wording before Torii discovery evidence can be published as
   production-ready. The direct all-lanes release checklist now also validates
-  required source-adapter gate hashes and expected audit hash roles, while
-  rejecting forged source-gate material on lanes whose policy does not require
-  a source-adapter gate.
+  required source-adapter gate hashes and expected audit hash roles, rejects
+  duplicate or governed-hash-replayed source-gate audit roles, and rejects
+  forged source-gate material on lanes whose policy does not require a
+  source-adapter gate.
 - Keep live-network signing inputs runtime-only and continue using generated
   per-validator deployment bundles rather than hand-edited production configs.
 
@@ -9187,8 +9196,9 @@ or ABI behavior.
 									  Full-mode bootstrap keys now carry a domain-separated BFV public-key
 									  digest, and material/execution statement derivation rejects governed
 									  public-key drift before hashing or proof-helper execution.
-									  BFV-shaped native AIR envelopes now preflight canonical STARK/FRI
-									  metadata, public digest binding, opened row/path shape, and the
+									  BFV-shaped native AIR envelopes now preflight the canonical
+									  transcript label, statement-bound domain tag, STARK/FRI metadata,
+									  public digest binding, opened row/path shape, and the
 									  no-unmasked-private-row-opening policy before the current dedicated
 									  verifier boundary is reported.
 								  Refresh-only proof and execution paths still reject `FullBootstrapV1`.
@@ -9963,16 +9973,196 @@ fixture corridor into broader release validation.
 - Use measured matrix runs, not speculative settings, before accepting higher
   throughput targets.
 - Treat the explicit DA/RBC integration soft fallbacks as closed:
-  `sumeragi_adversarial_chunk_drop_recovery` now requires post-drop progress
-  and bounded peer skew, while the NPoS restart/large-payload tests require
-  restarted-peer catch-up, recovered-session evidence, primary-cluster height,
-  and quorum-visible commit height before accepting RBC persistence proofs.
+  the chunk-drop, chunk-drop-recovery, chunk-reorder, duplicate-init,
+  selective-drop, chunk-equivocation, all-chunks-corrupted, conflicting-READY,
+  and partial-erasure adversarial recovery paths now require
+  commit-quorum-visible height progress before accepting recovery. The NPoS
+  restart/large-payload tests require pre-restart RBC persistence or in-flight
+  session evidence before restart, restarted-peer catch-up, recovered-session
+  evidence, primary-cluster height, and quorum-visible commit height before
+  accepting RBC persistence proofs; cold restart also requires the exact
+  recovered session to persist a recovered-from-disk summary before accepting
+  terminal delivery and resumed progress. The payload-loss DA-gate scenario
+  now requires expected-height RBC session evidence on commit quorum, at least
+  one nonterminal/incomplete session, and committed-quorum Sumeragi snapshots
+  before accepting commit progress. Required-observation large-payload DA/RBC
+  tests, including the tight block queue case, fail closed if neither the session
+  endpoint nor quorum-visible persisted RBC snapshots expose same-block-hash
+  delivery evidence; conflicting persisted delivered hashes cannot be merged
+  into one fallback quorum or selected from ambiguous quorum groups. Terminal
+  RBC-state waits use the same quorum-visible persisted fallback instead of a
+  single persisted peer when the live endpoint is unavailable. Delivered live
+  and persisted fallback observations now reject invalid, zero-chunk, and
+  impossible over-counted chunk records before accepting delivery evidence; the
+  lower-level session-height and best-persisted-summary helpers also reject
+  impossible chunk-count evidence while preserving valid in-flight zero-received
+  sessions as nonterminal evidence, and payload-loss session-height waits now
+  require the quorum on valid non-invalid session records instead of counting
+  invalid-only sessions toward the quorum. The generic runner no longer
+  synthesizes commit-timing-only observations. The
+  runtime finalize path also retains commit-certified pending blocks instead of
+  starting commit work while DA payload availability or strict manifest evidence
+  is still missing. Operator-facing RBC status snapshot persistence now keeps
+  memory snapshots active but raises the persistence-disabled gauge for setup
+  failures as well as fatal write faults, so memory-only status mode is visible
+  until explicit reconfiguration. Receiver-side RBC DELIVER acceptance is pinned
+  by live-handler and helper regression coverage to require the receiver's
+  protocol READY quorum even when local authoritative payload can supply missing
+  bytes or adversarial tests enable sender-side debug emission shortcuts. The
+  DA/RBC integration corridor no longer enables the test-only
+  `force_deliver_quorum_one` shortcut, and the resulting Kura block-body
+  rehydration coverage now also guards proposal-cache height cleanup so stale
+  observation metadata cannot poison debug-build consensus workers. The
+  real-quorum corridor has also been rerun across commit-certificate history,
+  tight block-queue commit-QC recovery, synchronous background-worker fallback,
+  and six-peer plain/RS16 large-payload coverage, all with zero P2P drops and
+  empty peer stderr. Targeted adversarial live-network coverage now also
+  revalidates conflicting READY evidence, chunk equivocation, full
+  corrupted-shard abort, and partial erasure withholding against bounded
+  progress/divergence expectations. The rest of the adversarial sweep has also
+  been rerun with exact filters for chunk loss, chunk reorder, witness
+  corruption, duplicate INIT pressure, selective validator chunk drop,
+  locked-QC conflict gating, and drop-then-clean recovery. The pure engine now
+  keeps commit-QC pending finality in `PendingFinality` across timeout/new-view
+  noise and refuses competing proposal or prepare-QC ingress until the exact
+  DA/RBC payload arrives; while pinned there, new-view highest-QC references
+  cannot replace the pending commit QC with a conflicting same-height QC or a
+  same-block non-commit QC, while later same-block commit QCs can refresh the
+  pinned highest QC without emitting duplicate fetch/finality outputs.
+  Finalized current heights are now inert in the pure engine: late proposals and
+  pacemaker ticks for that height no longer emit prepare or new-view votes, and
+  late payload availability for an already-finalized current height no longer
+  populates the availability cache. Cached payload availability now also requires
+  the exact `BlockSubject` parent/block/payload tuple before a commit QC can skip
+  the DA/RBC fetch path, so mismatched-parent payload signals cannot satisfy
+  later finality for the same block/payload hashes. Conflicting proposals now
+  require a QC from a strictly newer height/view than the local prepare lock;
+  same-round phase promotion alone cannot unlock a different block. The pure
+  engine now also mirrors the live QC validation boundary by accepting only
+  Prepare/Commit refs as proposal-carried or new-view-carried `highest_qc`
+  evidence; NewView-phase refs are ignored for deterministic highest-QC
+  selection and rejected at adapter input. NewView certificates carrying a
+  `highest_qc` must now name the same subject block as that carried QC, matching
+  the live QC validator and preventing mismatched NewView subject/highest-QC
+  evidence from advancing the pure engine. NewView certificates without carried
+  highest-QC evidence are now rejected by the pure engine instead of advancing
+  view state. Prepare and Commit certificates now also reject unexpected
+  carried highest-QC evidence before locks, highest-QC state, pending finality,
+  or commit outputs can change. The live NewView QC state processor now reuses
+  the canonical highest-QC validator before recording tracker support, so
+  direct processor calls also reject mismatched subject and future-epoch
+  highest-QC evidence. The standalone `ConsensusEngine` module now documents
+  its reference-engine scope explicitly instead of carrying a live code
+  unfinished-work marker: production network, validation-worker, RBC,
+  telemetry, and storage adapters remain owned by the Actor/vNext path and must
+  stay mirrored by the pure model when consensus behavior changes.
+  Pure-engine committed-block adapter input now also rejects current-height
+  wrong epoch/validator-set notifications and ignores future-height
+  finality/reconfiguration notifications before the current DA/RBC finality
+  boundary is resolved.
+  Cached INIT RBC rosters are now pinned by negative coverage to refresh to an
+  authoritative derived roster before stale READY or DELIVER evidence can be
+  recorded. Durable RBC session recovery now selects the newest valid temp/main
+  snapshot by persisted update timestamp, preserving crash-before-rename temp promotion
+  without letting stale temp files shadow newer main snapshots; future-dated
+  persisted snapshots are rejected before direct restart recovery can select
+  them, and non-destructive metadata inspection used by probes reports only the
+  newest valid temp/main metadata while preserving peer-owned files. Persisted
+  timestamp conversion is checked before recovery or probe evidence is accepted,
+  including adversarial max-timestamp snapshots. Operator-facing RBC status
+  snapshot recovery now applies the same newest temp/main selection shape and
+  rejects future-dated or unrepresentable persisted status timestamps before
+  reporting disk snapshots; it also drops impossible chunk-counter rows, and
+  both handle-side and in-memory RBC delivery/payload predicates now require
+  positive complete non-invalid chunk sets. Durable RBC session recovery now
+  rejects zero-chunk persisted records before they can re-enter startup as
+  delivered/progressed sessions. Positive-chunk delivered snapshots without
+  retained payload bytes now reload as repairable nonterminal sessions instead
+  of re-entering the live state as `Delivered`, and lane/dataspace backlog
+  accounting keeps their missing chunk pressure visible until complete verified
+  payload bytes are present again. Positive-chunk incomplete records are still
+  retained for repair continuity. Committed-block cleanup now keeps retained RBC
+  summaries observable without synthesizing delivered status unless a matching
+  local payload and positive chunk shape back the summary. Live RBC complete
+  payload matches now also hash the reconstructed chunk bytes before satisfying
+  DA availability or suppressing payload hydration, and summary-only RBC status
+  rows no longer count as DA payload proof without byte-carrying live/recovered
+  session evidence. Delivered payload-byte telemetry also refuses complete chunk
+  sets whose reconstructed bytes do not match the advertised payload hash, so
+  mismatched payload material cannot consume or report delivered-byte metrics;
+  complete chunk sets without an advertised payload hash now follow the same
+  nonterminal/unreported path, including restart recovery of `delivered=true`
+  persisted sessions.
+  RS16 layout payload-size metadata alone is no longer accepted as
+  authoritative delivered-byte fallback evidence; incomplete delivered sessions
+  must have local block payload bytes tied to the same height, view, and payload
+  hash before they can report payload-byte telemetry.
+  Retained summaries without live sessions now follow the same exact-evidence
+  rule: no payload hash, wrong height, wrong view, or wrong payload hash means
+  no delivered-byte metric and no once-only marker consumption.
+  Retained summary delivered-state promotion now follows that same rule, so
+  missing-hash or wrong-height/wrong-view summaries remain non-delivered during
+  committed cleanup.
+  Retained recovery snapshot refresh and RBC INIT rebuilds now also require the
+  exact block key, block height/view, canonical payload bytes, and matching
+  payload hash before rebuilding transport metadata; incomplete retained
+  summaries with mismatched advertised hashes remain incomplete.
+  Existing-session RBC INIT merge now also preserves already-bound sessions
+  against conflicting duplicate INIT payload hashes, while missing-hash sessions
+  with complete cached chunks must reconstruct to the INIT payload hash before
+  that hash is installed.
+  Frontier `BlockCreated` metadata construction applies the same canonical
+  payload rule to the roster-hint fallback path, so non-canonical carried bytes
+  cannot mint RBC transport metadata.
+  RBC payload hydration now applies the same bytes/hash rule before filling a
+  missing session payload hash, so carried mismatched evidence marks the session
+  invalid without ingesting chunks or stamping false metadata.
+  Generic `BlockCreated` metadata refresh now follows that same rule for
+  complete cached RBC chunks: reconstructed chunk bytes must match the local
+  block payload hash before a missing session hash is installed, while the
+  pending block remains bound to canonical local `BlockCreated` bytes.
+  Zero-chunk RBC sessions with only chunk-root metadata no
+  longer count as authoritative payload progress without separate local payload
+  bytes, and complete RBC chunk sets must reconstruct to the advertised payload
+  hash before they unlock authoritative validation/recovery progress or advance
+  the internal `AuthoritativePayload` stage.
+  The DA/RBC availability reschedule gate now follows the same zero-chunk
+  invariant: a non-invalid zero-chunk session with READY quorum remains
+  unresolved before the availability timeout unless local block payload bytes
+  are already available; the timeout boundary still releases the reschedule
+  gate.
+  Exact-frontier slot tracking no longer carries a
+  compatibility mirror layer: callers now observe canonical nested candidate,
+  body, timer, and repair state directly. The live vNext
+  proposal/availability adapter now treats reordered or duplicate DA signals
+  monotonically, so availability-before-proposal remains ready for validation,
+  late availability cannot regress prepared slots, and duplicate proposal or
+  availability evidence cannot revive validation-aborted slots. The pure
+  Sumeragi V1 engine's pending-finality path now also rejects conflicting
+  same-block payload availability without caching it while a commit QC waits
+  for a different exact payload hash. DA gate recovery telemetry now tracks
+  exact manifest guard changes, so a recovered lane/sequence/kind is surfaced
+  even when another DA gate remains active, while unchanged gates still do not
+  synthesize progress. Certified-block roster sidecar synthesis now revalidates
+  cached commit-QC history and precommit-signer fallback records through the
+  block-sync QC validator before persisting sidecars, so under-quorum cached
+  evidence or bad aggregate signatures cannot mint recovery roster metadata.
+  Pre-INIT pending-RBC chunk cap eviction now releases dedup keys for evicted
+  chunks while preserving the accepted survivor's dedup registration, and
+  explicit pending-RBC stash clears release discarded CHUNK/READY/DELIVER dedup
+  registrations as well. Runtime session clears, chunk-store eviction handling,
+  stale-session pruning, committed-block cleanup, roster-change consensus
+  resets, and mode-flip resets now route through the same dedup-aware cleanup,
+  closing stale-cache pressure paths under adversarial chunk and quorum-message
+  floods before INIT arrives.
 - Keep hardware acceleration paths feature-gated with deterministic scalar
   fallbacks.
 
 **Next checkpoints:** Sumeragi V1 adapter integration, certified-block
-recovery soak coverage, peer-gap and DA/RBC tail-latency reductions under the
-broadened rotating-fault evidence, broader formal coverage beyond the current
+recovery soak coverage, longer-running live adversarial DA/RBC soak and mixed
+restart/fault combinations built on the fail-closed session-summary and
+status-counter assertions, peer-gap and DA/RBC tail-latency reductions under
+the broadened rotating-fault evidence, broader formal coverage beyond the current
 commit-path, frontier, TLC-cross-checked fork-safety, TLC-cross-checked
 quorum-policy, TLC-cross-checked RBC deliver-quorum,
 TLC-cross-checked direct RBC causality component gate, TLC-cross-checked direct RBC DELIVER acceptance gate,

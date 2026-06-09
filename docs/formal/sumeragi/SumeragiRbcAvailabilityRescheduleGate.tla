@@ -8,7 +8,8 @@ The helper gates quorum rescheduling on DA/RBC availability. It is intentionally
 fail-open outside DA mode, after the availability timeout, when the block
 payload is already local, when no usable session exists, and for invalid or
 delivered sessions. Before the timeout it blocks rescheduling when the session
-is still pending, still missing chunks, or lacks enough READY signatures.
+is still pending, has an impossible zero-chunk shape, is still missing chunks,
+or lacks enough READY signatures.
 ***************************************************************************)
 
 CONSTANT
@@ -64,8 +65,7 @@ TerminalSessionCases == {
   NoSession,
   InvalidSession,
   DeliveredSession,
-  CompleteReady,
-  ZeroTotalReady
+  CompleteReady
 }
 
 PendingSessionCases == {
@@ -76,6 +76,7 @@ PendingSessionCases == {
 
 AvailabilityDeficitCases == {
   MissingChunks,
+  ZeroTotalReady,
   NotReady,
   CompleteButNotReady
 }
@@ -128,6 +129,9 @@ TimedOut(c) ==
 SessionMissingChunks(c) ==
   TotalChunks(c) # 0 /\ ReceivedChunks(c) < TotalChunks(c)
 
+SessionZeroTotal(c) ==
+  TotalChunks(c) = 0
+
 ReadyQuorum(c) ==
   ReadySignatures(c) >= RequiredReady(c)
 
@@ -139,7 +143,7 @@ SpecUnresolved(c) ==
   ELSE IF ~SessionPresent(c) THEN FALSE
   ELSE IF SessionInvalid(c) THEN FALSE
   ELSE IF SessionDelivered(c) THEN FALSE
-  ELSE SessionMissingChunks(c) \/ ~ReadyQuorum(c)
+  ELSE SessionZeroTotal(c) \/ SessionMissingChunks(c) \/ ~ReadyQuorum(c)
 
 ActualUnresolved(c) ==
   CASE Bug = "da_disabled_blocks"
@@ -163,7 +167,7 @@ ActualUnresolved(c) ==
     [] Bug = "missing_chunks_ignored"
        /\ c = MissingChunks -> FALSE
     [] Bug = "zero_total_counts_missing"
-       /\ c = ZeroTotalReady -> TRUE
+       /\ c = ZeroTotalReady -> FALSE
     [] Bug = "not_ready_ignored"
        /\ c = NotReady -> FALSE
     [] Bug = "complete_not_ready_allowed"
@@ -210,13 +214,13 @@ FailOpenStable ==
   /\ ~ActualUnresolved(InvalidSession)
   /\ ~ActualUnresolved(DeliveredSession)
   /\ ~ActualUnresolved(CompleteReady)
-  /\ ~ActualUnresolved(ZeroTotalReady)
 
 UnresolvedBlocksStable ==
   /\ ActualUnresolved(TimeoutBelowPending)
   /\ ActualUnresolved(TimeoutZeroPending)
   /\ ActualUnresolved(PendingEntry)
   /\ ActualUnresolved(MissingChunks)
+  /\ ActualUnresolved(ZeroTotalReady)
   /\ ActualUnresolved(NotReady)
   /\ ActualUnresolved(CompleteButNotReady)
 
@@ -246,8 +250,6 @@ RbcAvailabilityTerminalSessionExact ==
     /\ IF c = DeliveredSession THEN SessionDelivered(c) ELSE TRUE
     /\ IF c = CompleteReady THEN ~SessionMissingChunks(c) /\ ReadyQuorum(c)
        ELSE TRUE
-    /\ IF c = ZeroTotalReady THEN ~SessionMissingChunks(c) /\ ReadyQuorum(c)
-       ELSE TRUE
 
 RbcAvailabilityPendingBlocksExact ==
   \A c \in PendingSessionCases:
@@ -264,6 +266,7 @@ RbcAvailabilityDeficitBlocksExact ==
     /\ SessionPresent(c)
     /\ ~SessionInvalid(c)
     /\ ~SessionDelivered(c)
+    /\ IF c = ZeroTotalReady THEN SessionZeroTotal(c) ELSE TRUE
     /\ IF c = MissingChunks THEN SessionMissingChunks(c) ELSE TRUE
     /\ IF c \in {NotReady, CompleteButNotReady} THEN ~ReadyQuorum(c)
        ELSE TRUE

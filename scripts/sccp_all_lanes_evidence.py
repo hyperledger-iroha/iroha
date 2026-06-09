@@ -6086,6 +6086,64 @@ def _source_adapter_gate_release_metadata_blockers(
         blockers.append(
             f"{lane_label}: source adapter gate hash must match audit_hashes.{gate_field}"
         )
+    source_record_hashes = lane.get("source_record_hashes")
+    if not isinstance(source_record_hashes, dict):
+        source_record_hashes = {}
+    destination_binding = lane.get("destination_binding")
+    if not isinstance(destination_binding, dict):
+        destination_binding = {}
+    route_summary = lane.get("route_allowlist")
+    if not isinstance(route_summary, dict):
+        route_summary = {}
+    route_canary = route_summary.get("route_canary")
+    if not isinstance(route_canary, dict):
+        route_canary = {}
+    role_fields: list[tuple[str, bytes | None]] = [
+        (
+            "source_verifier_material_hash",
+            _hex_bytes(
+                source_record_hashes.get("source_verifier_material_hash"),
+                byte_length=32,
+            ),
+        ),
+        (
+            "source_adapter_engine_deployment_hash",
+            _hex_bytes(
+                source_record_hashes.get("source_adapter_engine_deployment_hash"),
+                byte_length=32,
+            ),
+        ),
+        (
+            "destination_binding_hash",
+            _hex_bytes(
+                destination_binding.get("destination_binding_hash"),
+                byte_length=32,
+            ),
+        ),
+        (
+            "route_allowlist_hash",
+            _hex_bytes(
+                route_summary.get("route_allowlist_hash"),
+                byte_length=32,
+            ),
+        ),
+        (
+            "route_canary_evidence_hash",
+            _hex_bytes(
+                route_canary.get("evidence_hash"),
+                byte_length=32,
+            ),
+        ),
+    ]
+    role_fields.extend(
+        (f"audit_hashes.{field}", _hex_bytes(value, byte_length=32))
+        for field, value in sorted(audit_hashes.items())
+    )
+    _expect_distinct_byte_values(
+        blockers,
+        tuple(role_fields),
+        label=f"{lane_label}: source adapter gate hash role",
+    )
     return blockers
 
 

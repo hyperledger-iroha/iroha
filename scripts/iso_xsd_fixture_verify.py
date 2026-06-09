@@ -100,6 +100,8 @@ MAX_FIXTURE_XML_BYTES = 8 * 1024 * 1024
 MAX_XMLLINT_OUTPUT_BYTES = 64 * 1024
 MAX_SOURCE_REPOSITORY_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
+MAX_XML_IDENTIFIER_CHARS = 256
+MAX_PROFILE_CATALOG_IDENTIFIER_CHARS = 128
 DEFAULT_XMLLINT_TIMEOUT_SECS = 30.0
 ALLOWED_SCHEMA_SOURCE_LICENSES = {"Apache-2.0"}
 DEFAULT_MANIFEST = (
@@ -981,13 +983,27 @@ def _reject_secret_looking_identifier(value: str, label: str) -> None:
         raise FixtureManifestError(f"{label} must not contain secret-looking material")
 
 
+def _contains_overlong_xml_identifier(value: str) -> bool:
+    return len(value) > MAX_XML_IDENTIFIER_CHARS
+
+
+def _reject_overlong_xml_identifier(value: str, label: str) -> None:
+    if _contains_overlong_xml_identifier(value):
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_XML_IDENTIFIER_CHARS} characters"
+        )
+
+
 def _reject_non_ascii_xml_identifiers(element: ET.Element, path: Path, label: str) -> None:
     if isinstance(element.tag, str):
         namespace, local = _split_xml_name(element.tag)
         if namespace is not None:
+            _reject_overlong_xml_identifier(namespace, f"{path} {label} namespace")
             _reject_non_ascii_identifier(namespace, f"{path} {label} namespace")
+        _reject_overlong_xml_identifier(local, f"{path} {label} element")
         _reject_non_ascii_identifier(local, f"{path} {label} element")
     for attr_name in element.attrib:
+        _reject_overlong_xml_identifier(attr_name, f"{path} {label} attribute")
         _reject_non_ascii_identifier(attr_name, f"{path} {label} attribute")
     for offset, child in enumerate(element):
         _reject_non_ascii_xml_identifiers(child, path, f"{label}[{offset}]")
@@ -1051,6 +1067,20 @@ def _reject_reviewed_gap_reason_material(value: str, label: str) -> None:
         )
     _reject_non_ascii_identifier(value, label)
     _reject_secret_looking_identifier(value, label)
+
+
+def _reject_overlong_profile_catalog_enum(value: str, label: str) -> None:
+    if len(value) > MAX_PROFILE_CATALOG_IDENTIFIER_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_PROFILE_CATALOG_IDENTIFIER_CHARS} characters"
+        )
+
+
+def _reject_overlong_profile_catalog_identifier(value: str, label: str) -> None:
+    if len(value) > MAX_PROFILE_CATALOG_IDENTIFIER_CHARS:
+        raise FixtureManifestError(
+            f"{label} must be no longer than {MAX_PROFILE_CATALOG_IDENTIFIER_CHARS} characters"
+        )
 
 
 def _require_message_def_id(value: str, label: str) -> str:
@@ -1233,10 +1263,15 @@ def _reject_sha256_overlap(first: list[str], second: list[str], label: str) -> N
 def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str) -> None:
     rail = _required_string(profile, "rail", label)
     _reject_non_ascii_identifier(rail, f"{label}.rail")
+    _reject_overlong_profile_catalog_enum(rail, f"{label}.rail")
     if rail not in PROFILE_RAILS:
         raise FixtureManifestError(f"{label}.rail has unknown rail {rail!r}")
     policy = _required_string(profile, "embedded_signature_policy", label)
     _reject_non_ascii_identifier(policy, f"{label}.embedded_signature_policy")
+    _reject_overlong_profile_catalog_enum(
+        policy,
+        f"{label}.embedded_signature_policy",
+    )
     if policy not in PROFILE_SIGNATURE_POLICIES:
         raise FixtureManifestError(
             f"{label}.embedded_signature_policy has unknown policy {policy!r}"
@@ -1285,6 +1320,10 @@ def _validate_profile_catalog_profile_fields(profile: dict[str, Any], label: str
     for offset, dataset in enumerate(
         _optional_string_list(profile, "required_reference_datasets", label)
     ):
+        _reject_overlong_profile_catalog_enum(
+            dataset,
+            f"{label}.required_reference_datasets[{offset}]",
+        )
         if dataset not in PROFILE_REFERENCE_DATASETS:
             raise FixtureManifestError(
                 f"{label}.required_reference_datasets[{offset}] has unknown dataset {dataset!r}"
@@ -1324,6 +1363,10 @@ def _validate_profile_catalog_message_fields(message: dict[str, Any], label: str
     _optional_bool(message, "require_uetr", label)
     address_mode = _required_string(message, "structured_address_mode", label)
     _reject_non_ascii_identifier(address_mode, f"{label}.structured_address_mode")
+    _reject_overlong_profile_catalog_enum(
+        address_mode,
+        f"{label}.structured_address_mode",
+    )
     if address_mode not in PROFILE_ADDRESS_MODES:
         raise FixtureManifestError(
             f"{label}.structured_address_mode has unknown mode {address_mode!r}"
@@ -1553,6 +1596,7 @@ def _namespace_for(message_def_id: str) -> str:
 def _message_id_from_namespace(namespace: str | None, label: str) -> str:
     if namespace is None:
         raise FixtureManifestError(f"{label} namespace must start with {ISO_NAMESPACE_PREFIX}")
+    _reject_overlong_xml_identifier(namespace, f"{label} namespace")
     _reject_non_ascii_identifier(namespace, f"{label} namespace")
     if not namespace.startswith(ISO_NAMESPACE_PREFIX):
         raise FixtureManifestError(f"{label} namespace must start with {ISO_NAMESPACE_PREFIX}")
@@ -1620,6 +1664,7 @@ def _require_schema_attributes(
                 _contains_secret_material(name)
                 or _is_secret_looking_key(name)
                 or _contains_non_ascii_material(name)
+                or _contains_overlong_xml_identifier(name)
                 for name in extra
             ):
                 details.append("unexpected attributes")
@@ -1649,6 +1694,7 @@ def _schema_payload_root(root: ET.Element, path: Path) -> str:
     document_type = document_element.attrib.get("type")
     if not document_type:
         raise FixtureManifestError(f"{path} Document element does not declare a type")
+    _reject_overlong_xml_identifier(document_type, f"{path} Document element type")
     _reject_non_ascii_identifier(document_type, f"{path} Document element type")
     _reject_secret_looking_identifier(document_type, f"{path} Document element type")
     if document_type != "Document":
@@ -1696,11 +1742,13 @@ def _schema_payload_root(root: ET.Element, path: Path) -> str:
     payload = payload_element.attrib.get("name")
     if not payload:
         raise FixtureManifestError(f"{path} Document payload element has no name")
+    _reject_overlong_xml_identifier(payload, f"{path} Document payload element name")
     _reject_non_ascii_identifier(payload, f"{path} Document payload element name")
     _reject_secret_looking_identifier(payload, f"{path} Document payload element name")
     payload_type = payload_element.attrib.get("type")
     if not payload_type:
         raise FixtureManifestError(f"{path} Document payload element does not declare a type")
+    _reject_overlong_xml_identifier(payload_type, f"{path} Document payload element type")
     _reject_non_ascii_identifier(payload_type, f"{path} Document payload element type")
     _reject_secret_looking_identifier(payload_type, f"{path} Document payload element type")
     if ":" in payload_type:
@@ -1787,6 +1835,7 @@ def verify_schema_entry(
         f"{label}.message_def_id",
     )
     expected_payload_root = _required_string(entry, "payload_root", label)
+    _reject_overlong_xml_identifier(expected_payload_root, f"{label}.payload_root")
     _reject_non_ascii_identifier(expected_payload_root, f"{label}.payload_root")
     _reject_secret_looking_identifier(expected_payload_root, f"{label}.payload_root")
     schema_only_reason = _optional_string(entry, "schema_only_reason", label)
@@ -1829,6 +1878,7 @@ def verify_schema_entry(
     )
     target_namespace = root.attrib.get("targetNamespace")
     if isinstance(target_namespace, str):
+        _reject_overlong_xml_identifier(target_namespace, f"{path} targetNamespace")
         _reject_non_ascii_identifier(target_namespace, f"{path} targetNamespace")
         _reject_secret_looking_identifier(target_namespace, f"{path} targetNamespace")
     expected_namespace = _namespace_for(message_def_id)
@@ -1977,6 +2027,7 @@ def verify_fixture_entry(
         f"{label}.message_def_id",
     )
     expected_payload_root = _required_string(entry, "payload_root", label)
+    _reject_overlong_xml_identifier(expected_payload_root, f"{label}.payload_root")
     _reject_non_ascii_identifier(expected_payload_root, f"{label}.payload_root")
     _reject_secret_looking_identifier(expected_payload_root, f"{label}.payload_root")
     schema_rel = _optional_string(entry, "schema", label)
@@ -2017,6 +2068,7 @@ def verify_fixture_entry(
     payload_namespace, payload_local = _split_xml_name(payload.tag)
     if payload_namespace != namespace:
         raise FixtureManifestError(f"{path} payload namespace must match Document namespace")
+    _reject_overlong_xml_identifier(payload_local, f"{path} payload root")
     _reject_non_ascii_identifier(payload_local, f"{path} payload root")
     _reject_secret_looking_identifier(payload_local, f"{path} payload root")
     if payload_local != expected_payload_root:
@@ -2093,6 +2145,7 @@ def verify_profile_catalog(
         _check_no_secret_material(profile, profile_label)
         _validate_profile_catalog_profile_fields(profile, profile_label)
         profile_id = _required_string(profile, "id", profile_label)
+        _reject_overlong_profile_catalog_identifier(profile_id, f"{profile_label}.id")
         if PROFILE_ID_RE.fullmatch(profile_id) is None:
             raise FixtureManifestError(
                 f"{profile_label}.id must be a canonical lowercase profile id"

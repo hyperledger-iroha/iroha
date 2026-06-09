@@ -537,11 +537,17 @@ TEXT_REQUIREMENTS = {
         "ancestor_mode = ancestor.lstat().st_mode",
         "except FileNotFoundError:\n            continue",
         "if stat.S_ISLNK(ancestor_mode):",
-        '    try:\n        manifest_mode = manifest_path.lstat().st_mode\n    except FileNotFoundError:\n        return entries, ["missing sha256sum.txt"]\n    except OSError:\n        return entries, ["sha256sum.txt file metadata could not be read"]\n',
-        "if stat.S_ISLNK(manifest_mode):",
-        "if not stat.S_ISREG(manifest_mode):",
+        '    try:\n        manifest_stat = manifest_path.lstat()\n    except FileNotFoundError:\n        return entries, ["missing sha256sum.txt"]\n    except OSError:\n        return entries, ["sha256sum.txt file metadata could not be read"]\n',
+        "if stat.S_ISLNK(manifest_stat.st_mode):",
+        "if not stat.S_ISREG(manifest_stat.st_mode):",
         'if manifest_path.stat().st_nlink > 1:\n            return entries, ["sha256sum.txt must not be hardlinked"]\n',
-        '    try:\n        lines = manifest_path.read_text(encoding="utf-8").splitlines()\n    except (OSError, UnicodeDecodeError):\n        return entries, ["sha256sum.txt could not be read"]\n',
+        'with manifest_path.open("rb") as handle:',
+        "open_stat = os.fstat(handle.fileno())",
+        "expected_identity = (manifest_stat.st_dev, manifest_stat.st_ino)",
+        "open_identity = (open_stat.st_dev, open_stat.st_ino)",
+        "sha256sum.txt changed while being read",
+        'lines = payload.decode("utf-8").splitlines()',
+        '    except (OSError, UnicodeDecodeError):\n        return entries, ["sha256sum.txt could not be read"]\n',
         "sha256sum.txt could not be read",
         "def _has_manifest_file_shape_error(errors: list[str]) -> bool:",
         "if _has_manifest_file_shape_error(errors):",
@@ -807,6 +813,12 @@ TEXT_REQUIREMENTS = {
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return [f"{label} must not be hardlinked"]\n',
         "_output_file_sha256",
         'errors = _validate_existing_json_output_path(path, label)\n    if errors:\n        return None, errors\n',
+        "_read_existing_output_bytes",
+        "payload, read_errors = _read_existing_output_bytes(path, expected_stat, label)",
+        'with path.open("rb") as handle:',
+        "signer_output_expected_identity = (",
+        "signer_output_open_identity = (open_stat.st_dev, open_stat.st_ino)",
+        'return None, [f"{label} changed while being read"]',
         'except OSError:\n        return None, [f"{label} could not be read"]',
         'artifact_digest, digest_errors = _output_file_sha256(\n        output_path,\n        "signed evidence output path",\n    )',
         "_write_json(output_path, evidence, \"signed evidence output path\")",
@@ -817,10 +829,12 @@ TEXT_REQUIREMENTS = {
         "handle.flush()",
         "os.fsync(handle.fileno())",
         "os.replace(tmp_path, path)",
-        'path.read_text(encoding="utf-8") != text',
+        "_read_existing_output_text",
+        '        if read_errors == [f"{label} could not be read"]:\n            return None, [f"{label} write verification failed"]\n',
+        "readback_text != text",
         "write verification failed",
-        '    errors = _validate_existing_json_output_path(path, label)\n    if errors:\n        return errors\n    try:\n        if path.read_text(encoding="utf-8") != text:',
-        '    except (OSError, UnicodeDecodeError):\n        return [f"{label} write verification failed"]',
+        '    errors = _validate_existing_json_output_path(path, label)\n    if errors:\n        return errors\n    try:\n        expected_stat = path.lstat()\n',
+        '    readback_text, readback_errors = _read_existing_output_text(\n        path,\n        expected_stat,\n        label,\n    )\n    if readback_errors:\n        return readback_errors\n    if readback_text != text:',
         "_preflight_slot_metadata_reads",
         "_validate_slot_path_boundary",
         "Validate slot paths before any signer-controlled metadata is parsed",
@@ -975,7 +989,7 @@ TEXT_REQUIREMENTS = {
         "validate_lineage_proof_log",
         "validate_lineage_proof_command",
         "validate_lineage_artifact_content",
-        "content_errors = validate_lineage_artifact_content(artifact_path, artifact)",
+        "content_errors = validate_lineage_artifact_prefix(artifact_prefix, artifact)",
         "validate_compact_key_command",
         "validate_compact_key_artifact_content",
         "parse_compact_key_generator_log",
@@ -996,7 +1010,11 @@ TEXT_REQUIREMENTS = {
         "must be generated key material, not all-zero placeholder bytes",
         'def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:\n    expected_stat, file_errors = _validate_lineage_local_file_for_read(path, label)\n    if file_errors:\n        return None, file_errors\n    digest = hashlib.sha256()\n',
         "def _sha256_file_with_size(",
+        "def _sha256_file_with_size_and_prefix(",
         "_validate_lineage_local_file_for_read",
+        "prefix_parts: list[bytes] = []",
+        "prefix_remaining = prefix_len",
+        "prefix_parts.append(chunk[:prefix_remaining])",
         "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "open_stat = os.fstat(handle.fileno())",
@@ -1004,7 +1022,11 @@ TEXT_REQUIREMENTS = {
         "final_path_stat = path.lstat()",
         'f"{label} changed while being read"',
         "size += len(chunk)",
-        'return None, None, [f"{label} must be non-empty"]',
+        'return None, None, None, [f"{label} must be non-empty"]',
+        "validate_compact_key_artifact_prefix",
+        "validate_lineage_artifact_prefix",
+        "content_errors = validate_lineage_artifact_prefix(artifact_prefix, artifact)",
+        "content_errors = validate_compact_key_artifact_prefix(artifact_prefix, artifact)",
         'def _validate_lineage_local_file_for_read(\n    path: Path,\n    label: str,\n) -> tuple[os.stat_result | None, list[str]]:\n    """Reject local lineage evidence files that could alias external bytes."""\n\n    if device_lab.SECRET_RE.search(str(path)):\n        return None, [f"{label} path must not contain secret-looking material"]\n    ancestor_errors = device_lab.validate_no_symlink_ancestors(\n        path,\n        f"{label} ancestor directory",\n    )\n    if ancestor_errors:\n        return None, ancestor_errors\n    try:\n        file_stat = path.lstat()\n    except FileNotFoundError:\n        return None, [f"{label} is missing"]\n    except OSError:\n        return None, [f"{label} file metadata could not be read"]\n',
         '    try:\n        link_count = path.stat().st_nlink\n    except OSError:\n        return None, [f"{label} hardlink metadata could not be read"]\n    if link_count > 1:\n        return None, [f"{label} must not be hardlinked"]\n    return file_stat, []\n\n\ndef validate_lineage_local_file(path: Path, label: str) -> list[str]:\n',
         'except OSError:\n        return None, [f"{label} could not be read"]',
@@ -1079,8 +1101,8 @@ TEXT_REQUIREMENTS = {
         'def validate_lineage_local_file(path: Path, label: str) -> list[str]:\n    """Reject local lineage evidence files that could alias external bytes."""\n\n    _file_stat, errors = _validate_lineage_local_file_for_read(path, label)\n    return errors\n',
         'f"{label} ancestor directory"',
         '            artifact_file_errors = validate_lineage_local_file(\n                artifact_path,\n                "Reserved-lineage proof evidence artifact file",\n            )\n            if artifact_file_errors:\n                if artifact_file_errors == [\n                    "Reserved-lineage proof evidence artifact file is missing"\n                ]:\n                    blockers.append(\n                        blocker(\n                            "lineage_proof_evidence_artifact_missing",\n                            "Reserved-lineage proof evidence artifact file is missing",\n                            artifact=artifact,\n                        )\n                    )\n                else:\n                    for error in artifact_file_errors:\n                        blockers.append(\n                            blocker(\n                                "lineage_proof_evidence_artifact_file_shape",\n                                error,\n                                artifact=artifact,\n                            )\n                        )\n                continue\n',
-        '            actual_digest, artifact_size, digest_errors = _sha256_file_with_size(\n                artifact_path,\n                "Reserved-lineage proof evidence artifact file",\n                allow_empty=True,\n            )',
-        '            actual_digest, artifact_size, digest_errors = _sha256_file_with_size(\n                artifact_path,\n                "ABI-7 recursive compact key evidence artifact file",\n                allow_empty=True,\n            )',
+        '            (\n                actual_digest,\n                artifact_size,\n                artifact_prefix,\n                digest_errors,\n            ) = _sha256_file_with_size_and_prefix(\n                artifact_path,\n                "Reserved-lineage proof evidence artifact file",\n                allow_empty=True,\n            )',
+        '            (\n                actual_digest,\n                artifact_size,\n                artifact_prefix,\n                digest_errors,\n            ) = _sha256_file_with_size_and_prefix(\n                artifact_path,\n                "ABI-7 recursive compact key evidence artifact file",\n                allow_empty=True,\n            )',
         '            actual_log_digest, log_errors = validate_lineage_proof_log(\n                log_artifact_path, expected_name\n            )\n            log_file_missing = log_errors == ["missing production proof log"]\n',
         "lineage_proof_evidence_artifact_file_digest",
         "compact_key_evidence_artifact_file_digest",
@@ -1230,6 +1252,9 @@ TEXT_REQUIREMENTS = {
         "def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:",
         "def _sha256_file_with_size(",
         "expected_stat, file_errors = readiness._validate_lineage_local_file_for_read(",
+        "prefix_parts: list[bytes] = []",
+        "prefix_remaining = 4096",
+        "prefix_parts.append(chunk[:prefix_remaining])",
         "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "return None, file_errors",
@@ -1239,10 +1264,10 @@ TEXT_REQUIREMENTS = {
         'f"{label} changed while being read"',
         "size += len(chunk)",
         'except OSError:\n        return None, [f"{label} could not be read"]',
-        "digest, artifact_size, file_errors = _sha256_file_with_size(",
+        "digest, artifact_size, artifact_prefix, file_errors = _sha256_file_with_size(",
         "artifact_size_bytes",
-        'return None, None, [f"{label} must be non-empty"]',
-        "content_errors = readiness.validate_lineage_artifact_content(path, artifact)",
+        'return None, None, None, [f"{label} must be non-empty"]',
+        "content_errors = readiness.validate_lineage_artifact_prefix(artifact_prefix, artifact)",
         "validate_evidence_document",
         "check_lineage_proof_evidence",
         "require_canonical_filename=False",
@@ -1314,6 +1339,9 @@ TEXT_REQUIREMENTS = {
         "def _sha256_file(path: Path, label: str) -> tuple[str | None, list[str]]:",
         "def _sha256_file_with_size(",
         "expected_stat, file_errors = readiness._validate_lineage_local_file_for_read(",
+        "prefix_parts: list[bytes] = []",
+        "prefix_remaining = 4096",
+        "prefix_parts.append(chunk[:prefix_remaining])",
         "expected_identity = (expected_stat.st_dev, expected_stat.st_ino)",
         "open_identity = (open_stat.st_dev, open_stat.st_ino)",
         "return None, file_errors",
@@ -1328,11 +1356,13 @@ TEXT_REQUIREMENTS = {
         "recursive compact key generator log size does not match local artifact",
         "--generator-log must live directly under --artifact-dir",
         "artifact_size_bytes",
-        'return None, None, [f"{label} must be non-empty"]',
-        "readiness.validate_compact_key_artifact_content(path, artifact)",
-        "generator_log_text = handle.read()",
-        'except (OSError, UnicodeDecodeError):\n                errors.append("recursive compact key generator log could not be read")',
-        'newline="",',
+        'return None, None, None, [f"{label} must be non-empty"]',
+        "readiness.validate_compact_key_artifact_prefix(artifact_prefix, artifact)",
+        "def _sha256_text_file_with_size(",
+        "chunks: list[bytes] = []",
+        'except UnicodeDecodeError:\n        return None, None, None, [f"{label} could not be read"]',
+        'text = b"".join(chunks).decode("utf-8")',
+        ") = _sha256_text_file_with_size(",
         "readiness.parse_compact_key_generator_log(generator_log_text)",
         "generator_log_sha256",
         "not a placeholder fixture",
@@ -1545,6 +1575,7 @@ TEXT_REQUIREMENTS = {
         "test_parse_sha256_manifest_rejects_file_metadata_failure_before_read",
         "test_parse_sha256_manifest_rejects_hardlink_metadata_failure_before_read",
         "test_parse_sha256_manifest_rejects_non_utf8_bytes_without_traceback",
+        "test_parse_sha256_manifest_rejects_regular_file_swap_after_preflight",
         "test_verify_sha256_manifest_rejects_secret_slot_path_directly_before_traversal",
         "test_verify_sha256_manifest_rejects_symlinked_slot_root_directly_before_parse",
         "test_verify_sha256_manifest_rejects_slot_metadata_failure_before_parse",
@@ -1789,6 +1820,7 @@ TEXT_REQUIREMENTS = {
         "test_signer_write_json_rejects_symlink_swap_before_replace",
         "test_signer_write_json_rejects_readback_mismatch",
         "test_signer_write_json_rejects_readback_failure",
+        "test_signer_write_json_rejects_regular_file_swap_before_readback",
         "test_signer_write_json_rejects_symlink_swap_after_replace",
         "test_signer_write_json_rejects_parent_create_failure_before_write",
         "test_signer_write_json_rechecks_parent_after_create_before_write",
@@ -1802,6 +1834,7 @@ TEXT_REQUIREMENTS = {
         "test_signer_output_digest_rejects_hardlink_metadata_failure_after_write",
         "test_signer_output_digest_rejects_file_metadata_failure_after_write",
         "test_signer_output_digest_rejects_read_failure_after_preflight",
+        "test_signer_output_digest_rejects_regular_file_swap_after_preflight",
         "test_signer_helper_revalidates_output_digest_before_slot_json_update",
         "test_signer_write_text_rejects_symlinked_manifest_leaf_before_write",
         "test_signer_write_text_rejects_dangling_symlinked_manifest_leaf_before_write",
@@ -1959,6 +1992,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_evidence_rejects_local_artifact_digest_mismatch",
         "test_compact_key_evidence_rejects_empty_local_artifact_file",
         "test_compact_key_evidence_rejects_placeholder_local_artifact_file",
+        "test_compact_key_evidence_placeholder_check_uses_hashed_prefix",
         "test_compact_key_evidence_rejects_all_placeholder_prefixes",
         "test_compact_key_evidence_rejects_all_zero_local_artifact_file",
         "test_compact_key_evidence_helper_generates_validator_accepted_json",
@@ -1967,6 +2001,7 @@ TEXT_REQUIREMENTS = {
         "test_compact_key_evidence_helper_rejects_artifact_symlink_swap_after_preflight",
         "test_compact_key_evidence_helper_rejects_artifact_regular_file_swap_after_preflight",
         "test_compact_key_evidence_helper_rejects_placeholder_artifact",
+        "test_compact_key_evidence_helper_placeholder_check_uses_hashed_prefix",
         "test_compact_key_evidence_helper_rejects_all_placeholder_prefixes",
         "test_compact_key_evidence_helper_rejects_all_zero_artifact",
         "test_compact_key_evidence_helper_rejects_missing_generator_log",
@@ -2029,6 +2064,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_evidence_rejects_local_artifact_digest_mismatch",
         "test_lineage_proof_evidence_rejects_empty_local_artifact_file",
         "test_lineage_proof_evidence_rejects_all_zero_local_artifact_file",
+        "test_lineage_proof_evidence_placeholder_check_uses_hashed_prefix",
         "test_lineage_proof_evidence_uses_local_file_validation_before_artifact_is_file_preflight",
         "summary[\"lineage_proof_evidence\"][\"artifact_sha256\"]",
         "summary[\"lineage_proof_evidence\"][\"artifact_size_bytes\"]",
@@ -2183,6 +2219,7 @@ TEXT_REQUIREMENTS = {
         "test_lineage_proof_evidence_helper_rejects_missing_artifact",
         "test_lineage_proof_evidence_helper_rejects_empty_artifact",
         "test_lineage_proof_evidence_helper_rejects_all_zero_artifact",
+        "test_lineage_proof_evidence_helper_placeholder_check_uses_hashed_prefix",
         "test_lineage_proof_evidence_helper_rejects_symlinked_artifact",
         "test_lineage_proof_evidence_helper_rejects_hardlinked_artifact",
         "test_lineage_proof_evidence_helper_rejects_noncanonical_generated_at_utc",
@@ -2545,6 +2582,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-read-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-relative-ancestor-is-symlink-preflight",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-file-shape-terminal",
@@ -2632,6 +2670,7 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-hardlink-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-file-metadata-failure",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-read-failure",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-direct-output-secret-paths",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-manifest-write",
     "ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-text-write-failure",
@@ -2773,9 +2812,11 @@ WORKFLOW_REQUIREMENTS = (
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-size-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-readiness-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-helper-artifact-open-path-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-prefix-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-size-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-readiness-artifact-open-path-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-artifact-open-path-binding",
+    "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-prefix-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-placeholder-artifacts",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-binding",
     "ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-generator-log-digest-binding",
@@ -3869,8 +3910,19 @@ if mode == "--negative-control-android-device-lab-manifest-read-failure":
         "Android device-lab manifest read/decode failure gate",
         lambda: override_text(
             "scripts/check_android_device_lab_slot.py",
-            '    try:\n        lines = manifest_path.read_text(encoding="utf-8").splitlines()\n    except (OSError, UnicodeDecodeError):\n        return entries, ["sha256sum.txt could not be read"]\n',
-            '    lines = manifest_path.read_text(encoding="utf-8").splitlines()\n',
+            '    except (OSError, UnicodeDecodeError):\n        return entries, ["sha256sum.txt could not be read"]\n',
+            '    except UnicodeDecodeError:\n        return entries, ["sha256sum.txt could not be read"]\n',
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-manifest-open-path-binding":
+    run_negative_control(
+        "Android device-lab manifest open-path binding gate",
+        lambda: override_text(
+            "scripts/check_android_device_lab_slot.py",
+            "expected_identity = (manifest_stat.st_dev, manifest_stat.st_ino)",
+            "expected_identity = (open_stat.st_dev, open_stat.st_ino)",
         ),
     )
     raise SystemExit(0)
@@ -4848,8 +4900,19 @@ if mode == "--negative-control-android-device-lab-signing-helper-output-digest-r
         "Android device-lab signed evidence helper output digest read-failure gate",
         lambda: override_text(
             "scripts/sign_android_device_lab_evidence.py",
-            '    try:\n        payload = path.read_bytes()\n    except OSError:\n        return None, [f"{label} could not be read"]\n    return hashlib.sha256(payload).hexdigest(), []\n',
-            "    return hashlib.sha256(path.read_bytes()).hexdigest(), []\n",
+            '    except OSError:\n        return None, [f"{label} could not be read"]\n',
+            "    except OSError:\n        return None, []\n",
+        ),
+    )
+    raise SystemExit(0)
+
+if mode == "--negative-control-android-device-lab-signing-helper-output-digest-open-path-binding":
+    run_negative_control(
+        "Android device-lab signed evidence helper output digest open-path binding gate",
+        lambda: override_text(
+            "scripts/sign_android_device_lab_evidence.py",
+            "signer_output_expected_identity = (\n                expected_stat.st_dev,\n                expected_stat.st_ino,\n            )",
+            "signer_output_expected_identity = (\n                open_stat.st_dev,\n                open_stat.st_ino,\n            )",
         ),
     )
     raise SystemExit(0)
@@ -4892,7 +4955,7 @@ if mode == "--negative-control-android-device-lab-signing-helper-readback-verifi
         "Android device-lab signed evidence helper readback gate",
         lambda: override_text(
             "scripts/sign_android_device_lab_evidence.py",
-            'path.read_text(encoding="utf-8") != text',
+            "readback_text != text",
             "False",
         ),
     )
@@ -4903,8 +4966,8 @@ if mode == "--negative-control-android-device-lab-signing-helper-readback-failur
         "Android device-lab signed evidence helper readback failure gate",
         lambda: override_text(
             "scripts/sign_android_device_lab_evidence.py",
-            '    except (OSError, UnicodeDecodeError):\n        return [f"{label} write verification failed"]',
-            '    except UnicodeDecodeError:\n        return [f"{label} write verification failed"]',
+            '        if read_errors == [f"{label} could not be read"]:\n            return None, [f"{label} write verification failed"]\n',
+            '        if False:\n            return None, [f"{label} write verification failed"]\n',
         ),
     )
     raise SystemExit(0)
@@ -4914,8 +4977,8 @@ if mode == "--negative-control-android-device-lab-signing-helper-post-write-pref
         "Android device-lab signed evidence helper post-write preflight gate",
         lambda: override_text(
             "scripts/sign_android_device_lab_evidence.py",
-            '    errors = _validate_existing_json_output_path(path, label)\n    if errors:\n        return errors\n    try:\n        if path.read_text(encoding="utf-8") != text:',
-            '    try:\n        if path.read_text(encoding="utf-8") != text:',
+            '    errors = _validate_existing_json_output_path(path, label)\n    if errors:\n        return errors\n    try:\n        expected_stat = path.lstat()\n',
+            '    try:\n        expected_stat = path.lstat()\n',
         ),
     )
     raise SystemExit(0)
@@ -5981,8 +6044,8 @@ if mode == "--negative-control-lineage-proof-artifact-is-file-preflight":
         "Reserved-lineage proof evidence artifact is_file preflight gate",
         lambda: override_text(
             "scripts/kagemusha_production_readiness.py",
-            '                continue\n            actual_digest, artifact_size, digest_errors = _sha256_file_with_size(\n                artifact_path,\n                "Reserved-lineage proof evidence artifact file",\n                allow_empty=True,\n            )\n',
-            '                continue\n            if not artifact_path.is_file():\n                blockers.append(\n                    blocker(\n                        "lineage_proof_evidence_artifact_missing",\n                        "Reserved-lineage proof evidence artifact file is missing",\n                        artifact=artifact,\n                    )\n                )\n                continue\n            actual_digest, artifact_size, digest_errors = _sha256_file_with_size(\n                artifact_path,\n                "Reserved-lineage proof evidence artifact file",\n                allow_empty=True,\n            )\n',
+            '                continue\n            (\n                actual_digest,\n                artifact_size,\n                artifact_prefix,\n                digest_errors,\n            ) = _sha256_file_with_size_and_prefix(\n                artifact_path,\n                "Reserved-lineage proof evidence artifact file",\n                allow_empty=True,\n            )\n',
+            '                continue\n            if not artifact_path.is_file():\n                blockers.append(\n                    blocker(\n                        "lineage_proof_evidence_artifact_missing",\n                        "Reserved-lineage proof evidence artifact file is missing",\n                        artifact=artifact,\n                    )\n                )\n                continue\n            (\n                actual_digest,\n                artifact_size,\n                artifact_prefix,\n                digest_errors,\n            ) = _sha256_file_with_size_and_prefix(\n                artifact_path,\n                "Reserved-lineage proof evidence artifact file",\n                allow_empty=True,\n            )\n',
         ),
     )
     raise SystemExit(0)
@@ -6185,6 +6248,24 @@ if mode == "--negative-control-lineage-proof-helper-artifact-open-path-binding":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-lineage-proof-artifact-prefix-binding":
+    run_negative_control(
+        "Reserved-lineage proof evidence artifact prefix binding",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_production_readiness.py",
+                "content_errors = validate_lineage_artifact_prefix(artifact_prefix, artifact)",
+                "content_errors = validate_lineage_artifact_content(artifact_path, artifact)",
+            ),
+            override_text(
+                "scripts/kagemusha_lineage_proof_evidence.py",
+                "content_errors = readiness.validate_lineage_artifact_prefix(artifact_prefix, artifact)",
+                "content_errors = readiness.validate_lineage_artifact_content(path, artifact)",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-key-helper-output-early-preflight":
     run_negative_control(
         "ABI-7 recursive compact key evidence helper early output preflight gate",
@@ -6289,6 +6370,24 @@ if mode == "--negative-control-compact-key-helper-artifact-open-path-binding":
     )
     raise SystemExit(0)
 
+if mode == "--negative-control-compact-key-artifact-prefix-binding":
+    run_negative_control(
+        "ABI-7 recursive compact key evidence artifact prefix binding",
+        lambda: (
+            override_text(
+                "scripts/kagemusha_production_readiness.py",
+                "content_errors = validate_compact_key_artifact_prefix(artifact_prefix, artifact)",
+                "content_errors = validate_compact_key_artifact_content(artifact_path, artifact)",
+            ),
+            override_text(
+                "scripts/kagemusha_recursive_compact_key_evidence.py",
+                "readiness.validate_compact_key_artifact_prefix(artifact_prefix, artifact)",
+                "readiness.validate_compact_key_artifact_content(path, artifact)",
+            ),
+        ),
+    )
+    raise SystemExit(0)
+
 if mode == "--negative-control-compact-key-helper-validation-dir-create-failure":
     run_negative_control(
         "ABI-7 recursive compact key evidence helper validation dir create-failure gate",
@@ -6371,8 +6470,8 @@ if mode == "--negative-control-compact-key-helper-generator-log-strict-read":
         "ABI-7 recursive compact key evidence helper generator-log strict-read gate",
         lambda: override_text(
             "scripts/kagemusha_recursive_compact_key_evidence.py",
-            'except (OSError, UnicodeDecodeError):\n                errors.append("recursive compact key generator log could not be read")',
-            'except OSError:\n                errors.append("recursive compact key generator log could not be read")',
+            'except UnicodeDecodeError:\n        return None, None, None, [f"{label} could not be read"]',
+            'except UnicodeDecodeError:\n        raise',
         ),
     )
     raise SystemExit(0)

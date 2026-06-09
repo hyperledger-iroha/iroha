@@ -9654,9 +9654,15 @@ impl Actor {
 
     fn rbc_session_has_complete_chunk_payload_for_progress(&self, session: &RbcSession) -> bool {
         if session.total_chunks() == 0 {
-            return session.expected_chunk_root.is_some();
+            return false;
         }
         if session.received_chunks() != session.total_chunks() {
+            return false;
+        }
+        if !session
+            .payload_hash()
+            .is_some_and(|payload_hash| session.complete_payload_matches(&payload_hash))
+        {
             return false;
         }
         match (session.expected_chunk_root, session.chunk_root()) {
@@ -9675,13 +9681,6 @@ impl Actor {
             return None;
         }
         if let Some(bytes) = session.delivered_payload_bytes() {
-            return Some(bytes);
-        }
-        if let Some(bytes) = session
-            .layout()
-            .payload_size()
-            .and_then(|bytes| u64::try_from(bytes).ok())
-        {
             return Some(bytes);
         }
         let expected_payload_hash = session.payload_hash()?;
@@ -15072,6 +15071,17 @@ fn topology_update_for_local_removal(_last_advertised: &BTreeSet<PeerId>) -> BTr
     BTreeSet::new()
 }
 
+fn topology_refresh_local_status(
+    current: &BTreeSet<PeerId>,
+    local_peer: &PeerId,
+    local_peer_seen_before: bool,
+) -> (bool, bool) {
+    let local_in_world = current.contains(local_peer);
+    let local_peer_seen_after = local_peer_seen_before || local_in_world;
+    let local_removed = local_peer_seen_after && !local_in_world && !current.is_empty();
+    (local_peer_seen_after, local_removed)
+}
+
 fn topology_refresh_decision(
     current: &BTreeSet<PeerId>,
     last_advertised: &BTreeSet<PeerId>,
@@ -15169,6 +15179,8 @@ impl Actor {
         mode_tag: &str,
         epoch: u64,
         consensus_mode: ConsensusMode,
+        fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
+        fallback_epoch_length: u64,
     ) -> Option<(Qc, Option<CommitStakeSnapshot>)> {
         if roster.is_empty() {
             return None;
@@ -15178,12 +15190,34 @@ impl Actor {
         }
         let height = block.header().height().get();
         let view = block.header().view_change_index();
+        let world = state.world_view();
+        let roster_cache =
+            RosterValidationCache::from_world(&world, fallback_epoch_length, fallback_pops);
+        let inputs = roster_cache.inputs_for_roster(roster, consensus_mode, None);
+        let topology = super::network_topology::Topology::new(roster.to_vec());
+        let block_signers = BTreeSet::new();
+
         let cert = status::commit_qc_history()
             .into_iter()
             .find(|candidate| {
                 candidate.height == height
                     && candidate.subject_block_hash == block.hash()
                     && matches!(candidate.phase, crate::sumeragi::consensus::Phase::Commit)
+                    && validate_block_sync_qc(
+                        candidate,
+                        &topology,
+                        &world,
+                        &block_signers,
+                        view,
+                        &inputs.pops,
+                        &state.chain_id,
+                        consensus_mode,
+                        inputs.stake_snapshot.as_ref(),
+                        mode_tag,
+                        None,
+                        None,
+                    )
+                    .is_ok()
             })
             .or_else(|| {
                 let record =
@@ -15223,12 +15257,27 @@ impl Actor {
         if cert.validator_set.as_slice() != roster {
             return None;
         }
+        if validate_block_sync_qc(
+            &cert,
+            &topology,
+            &world,
+            &block_signers,
+            view,
+            &inputs.pops,
+            &state.chain_id,
+            consensus_mode,
+            inputs.stake_snapshot.as_ref(),
+            mode_tag,
+            None,
+            None,
+        )
+        .is_err()
+        {
+            return None;
+        }
         let stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
-            ConsensusMode::Npos => {
-                let world = state.world_view();
-                Some(CommitStakeSnapshot::from_roster(&world, roster)?)
-            }
+            ConsensusMode::Npos => Some(CommitStakeSnapshot::from_roster(&world, roster)?),
         };
         Some((cert, stake_snapshot))
     }
@@ -15243,6 +15292,8 @@ impl Actor {
             mode_tag,
             self.epoch_for_height(height),
             consensus_mode,
+            Some(&self.common_config.trusted_peers.value().pops),
+            self.config.npos.epoch_length_blocks,
         ) {
             let checkpoint = ValidatorSetCheckpoint::new_with_chain_order(
                 cert.height,
@@ -17586,7 +17637,6 @@ impl Actor {
             slot.candidate.leader = Some(leader);
         }
         slot.candidate.voters.extend(voters);
-        slot.sync_compat_fields();
         slot.leader.is_some() || !slot.voters.is_empty()
     }
 
@@ -22358,7 +22408,10 @@ impl Actor {
         let slot_state = round.slot_mut(slot);
         if matches!(
             slot_state.slot_state,
-            super::vnext::SlotState::Committed { .. }
+            super::vnext::SlotState::AwaitingValidation { .. }
+                | super::vnext::SlotState::Prepared { .. }
+                | super::vnext::SlotState::Committed { .. }
+                | super::vnext::SlotState::Aborted { .. }
         ) {
             return;
         }
@@ -22387,9 +22440,18 @@ impl Actor {
         let slot_state = round.slot_mut(slot);
         if matches!(
             slot_state.slot_state,
-            super::vnext::SlotState::Committed { .. }
+            super::vnext::SlotState::AwaitingValidation { .. }
+                | super::vnext::SlotState::Prepared { .. }
+                | super::vnext::SlotState::Committed { .. }
+                | super::vnext::SlotState::Aborted { .. }
         ) {
             return;
+        }
+        if matches!(
+            slot_state.slot_state,
+            super::vnext::SlotState::Recovering { .. }
+        ) {
+            slot_state.validation = super::vnext::ValidationState::Unqueued;
         }
         slot_state.slot_state = super::vnext::SlotState::AwaitingValidation {
             block_hash: slot.block_hash,
@@ -25009,6 +25071,19 @@ impl Actor {
         payload_bytes: &[u8],
         payload_hash: Hash,
     ) -> Option<RbcInit> {
+        let block_header = block.header();
+        if block.hash() != key.0 || block_header.height().get() != key.1 {
+            return None;
+        }
+        if block_header.view_change_index() != key.2 {
+            return None;
+        }
+        if Hash::new(payload_bytes) != payload_hash {
+            return None;
+        }
+        if self::proposals::block_payload_bytes(block) != payload_bytes {
+            return None;
+        }
         let mut roster = self.rbc_roster_for_session(key);
         if roster.is_empty()
             && self
@@ -25059,7 +25134,6 @@ impl Actor {
             .signatures()
             .find(|signature| signature.index() == leader_index)?
             .clone();
-        let block_header = block.header();
         Some(RbcInit {
             block_hash: key.0,
             height: key.1,
@@ -31706,16 +31780,16 @@ impl Actor {
         let Some(budget) = self.missing_block_height_recovery.get(&key) else {
             return false;
         };
-        if budget.last_hash != block_hash || budget.last_view != view {
-            return false;
-        }
-        if !budget.range_pull.inflight {
-            return false;
-        }
         let ttl = self
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
-        now.saturating_duration_since(budget.range_pull.last_progress) < ttl
+        reschedule::near_quorum_inflight_recovery_suppresses(
+            budget.last_hash == block_hash,
+            budget.last_view == view,
+            budget.range_pull.inflight,
+            now.saturating_duration_since(budget.range_pull.last_progress),
+            ttl,
+        )
     }
 
     fn maybe_escalate_missing_block_height_recovery(
@@ -32354,23 +32428,8 @@ impl Actor {
             }
         }
 
-        let hints_before = self.subsystems.propose.proposal_cache.hints.len();
-        self.subsystems
-            .propose
-            .proposal_cache
-            .hints
-            .retain(|(entry_height, _), _| *entry_height != height);
-        let hints_removed =
-            hints_before.saturating_sub(self.subsystems.propose.proposal_cache.hints.len());
-
-        let proposals_before = self.subsystems.propose.proposal_cache.proposals.len();
-        self.subsystems
-            .propose
-            .proposal_cache
-            .proposals
-            .retain(|(entry_height, _), _| *entry_height != height);
-        let proposals_removed =
-            proposals_before.saturating_sub(self.subsystems.propose.proposal_cache.proposals.len());
+        let (hints_removed, proposals_removed) =
+            self.subsystems.propose.proposal_cache.remove_height(height);
 
         let seen_before = self.slot_tracker.proposals_seen.len();
         self.slot_tracker.remove_height(height);
@@ -32697,14 +32756,6 @@ impl Actor {
             .filter(|(entry_height, _)| *entry_height > keep_through_height)
             .map(|(entry_height, _)| *entry_height)
             .collect();
-        let hints_before = self.subsystems.propose.proposal_cache.hints.len();
-        self.subsystems
-            .propose
-            .proposal_cache
-            .hints
-            .retain(|(entry_height, _), _| *entry_height <= keep_through_height);
-        let hints_removed =
-            hints_before.saturating_sub(self.subsystems.propose.proposal_cache.hints.len());
 
         let stale_proposal_heights: BTreeSet<_> = self
             .subsystems
@@ -32715,14 +32766,11 @@ impl Actor {
             .filter(|(entry_height, _)| *entry_height > keep_through_height)
             .map(|(entry_height, _)| *entry_height)
             .collect();
-        let proposals_before = self.subsystems.propose.proposal_cache.proposals.len();
-        self.subsystems
+        let (hints_removed, proposals_removed) = self
+            .subsystems
             .propose
             .proposal_cache
-            .proposals
-            .retain(|(entry_height, _), _| *entry_height <= keep_through_height);
-        let proposals_removed =
-            proposals_before.saturating_sub(self.subsystems.propose.proposal_cache.proposals.len());
+            .retain_height_leq(keep_through_height);
 
         let stale_seen_heights: BTreeSet<_> = self
             .slot_tracker
@@ -40420,7 +40468,7 @@ impl Actor {
         if clear_status_summary {
             self.subsystems.da_rbc.rbc.status_handle.remove(&key);
         }
-        self.subsystems.da_rbc.rbc.pending.remove(&key);
+        self.clear_pending_rbc(&key);
         self.subsystems
             .da_rbc
             .rbc
@@ -42948,13 +42996,312 @@ mod proposal_defer_warning_throttle_tests {
     use iroha_data_model::block::BlockHeader;
     use std::time::{Duration, Instant};
 
+    fn sample_hash(byte: u8) -> HashOf<BlockHeader> {
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([byte; Hash::LENGTH]))
+    }
+
+    #[test]
+    fn proposal_defer_warning_throttle_formal_gate_matrix() {
+        let now = Instant::now();
+        let cooldown = Duration::from_millis(40);
+        let hash = sample_hash(30);
+
+        let mut throttle = ProposalDeferWarningThrottle::default();
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now,
+                cooldown,
+            ),
+            Some(0),
+            "first warning should emit"
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now + Duration::from_millis(10),
+                cooldown,
+            ),
+            None,
+            "within-cooldown repeat should suppress"
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now + cooldown,
+                cooldown,
+            ),
+            Some(1),
+            "cooldown boundary should emit accumulated suppressions"
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now + cooldown + Duration::from_millis(1),
+                cooldown,
+            ),
+            None,
+            "first replay repeat should suppress"
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now + cooldown + Duration::from_millis(2),
+                cooldown,
+            ),
+            None,
+            "second replay repeat should suppress"
+        );
+        assert_eq!(
+            throttle.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now + cooldown.saturating_mul(2),
+                cooldown,
+            ),
+            Some(2),
+            "suppressed count should replay after cooldown"
+        );
+
+        for (name, kind, height, view, candidate_hash) in [
+            (
+                "different kind",
+                ProposalDeferWarningKind::ParentMissing,
+                9,
+                0,
+                hash,
+            ),
+            (
+                "different hash",
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                sample_hash(31),
+            ),
+            (
+                "different height",
+                ProposalDeferWarningKind::HighestQcMissing,
+                10,
+                0,
+                hash,
+            ),
+            (
+                "regular view",
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                1,
+                hash,
+            ),
+        ] {
+            assert_eq!(
+                throttle.allow(
+                    kind,
+                    height,
+                    view,
+                    candidate_hash,
+                    now + Duration::from_millis(90),
+                    cooldown,
+                ),
+                Some(0),
+                "{name} should use a separate throttle key"
+            );
+        }
+
+        let mut empty_topology = ProposalDeferWarningThrottle::default();
+        assert_eq!(
+            empty_topology.allow(
+                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                12,
+                1,
+                hash,
+                now,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            empty_topology.allow(
+                ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                12,
+                2,
+                hash,
+                now + Duration::from_millis(10),
+                cooldown,
+            ),
+            None,
+            "empty proposal topology should normalize view"
+        );
+        assert_eq!(
+            empty_topology.allow(
+                ProposalDeferWarningKind::EmptyCommitTopologyFinalize,
+                12,
+                1,
+                hash,
+                now + Duration::from_millis(10),
+                cooldown,
+            ),
+            Some(0),
+            "empty proposal/finalize topology kinds should stay separate"
+        );
+        assert_eq!(
+            empty_topology.allow(
+                ProposalDeferWarningKind::EmptyCommitTopologyFinalize,
+                12,
+                2,
+                hash,
+                now + Duration::from_millis(20),
+                cooldown,
+            ),
+            None,
+            "empty finalize topology should normalize view"
+        );
+
+        let mut zero_cooldown = ProposalDeferWarningThrottle::default();
+        assert_eq!(
+            zero_cooldown.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now,
+                Duration::ZERO,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            zero_cooldown.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                9,
+                0,
+                hash,
+                now,
+                Duration::ZERO,
+            ),
+            Some(0),
+            "zero cooldown should never suppress repeats"
+        );
+
+        let expiry = cooldown.saturating_mul(8);
+        let mut gc_boundary = ProposalDeferWarningThrottle::default();
+        assert_eq!(
+            gc_boundary.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                1,
+                0,
+                hash,
+                now,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            gc_boundary.allow(
+                ProposalDeferWarningKind::ParentMissing,
+                1,
+                0,
+                sample_hash(32),
+                now + expiry,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert!(
+            gc_boundary.entries.contains_key(&(
+                ProposalDeferWarningKind::HighestQcMissing,
+                1,
+                0,
+                hash
+            )),
+            "GC should retain entries at the expiry boundary"
+        );
+
+        let mut gc_expired = ProposalDeferWarningThrottle::default();
+        assert_eq!(
+            gc_expired.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                1,
+                0,
+                hash,
+                now,
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            gc_expired.allow(
+                ProposalDeferWarningKind::ParentMissing,
+                1,
+                0,
+                sample_hash(33),
+                now + expiry + Duration::from_millis(1),
+                cooldown,
+            ),
+            Some(0)
+        );
+        assert!(
+            !gc_expired.entries.contains_key(&(
+                ProposalDeferWarningKind::HighestQcMissing,
+                1,
+                0,
+                hash
+            )),
+            "GC should prune entries after the expiry boundary"
+        );
+
+        let mut zero_gc = ProposalDeferWarningThrottle::default();
+        assert_eq!(
+            zero_gc.allow(
+                ProposalDeferWarningKind::HighestQcMissing,
+                1,
+                0,
+                hash,
+                now,
+                Duration::ZERO,
+            ),
+            Some(0)
+        );
+        assert_eq!(
+            zero_gc.allow(
+                ProposalDeferWarningKind::ParentMissing,
+                1,
+                0,
+                sample_hash(34),
+                now + Duration::from_secs(1),
+                Duration::ZERO,
+            ),
+            Some(0)
+        );
+        assert!(
+            zero_gc
+                .entries
+                .contains_key(&(ProposalDeferWarningKind::HighestQcMissing, 1, 0, hash)),
+            "zero-cooldown GC should use a one-second retention window"
+        );
+    }
+
     #[test]
     fn proposal_defer_warning_throttle_aggregates_suppressed_events() {
         let mut throttle = ProposalDeferWarningThrottle::default();
         let now = Instant::now();
         let cooldown = Duration::from_millis(40);
-        let hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([31; Hash::LENGTH]));
+        let hash = sample_hash(31);
 
         assert_eq!(
             throttle.allow(
@@ -42996,8 +43343,7 @@ mod proposal_defer_warning_throttle_tests {
         let mut throttle = ProposalDeferWarningThrottle::default();
         let now = Instant::now();
         let cooldown = Duration::from_millis(40);
-        let hash =
-            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([32; Hash::LENGTH]));
+        let hash = sample_hash(32);
 
         assert_eq!(
             throttle.allow(
@@ -43512,33 +43858,30 @@ impl PhaseTracker {
     }
 }
 
-/// Return `true` when we have observed a delivered RBC payload with a complete
-/// chunk set that matches the given block hash, height, and payload digest without
-/// being marked invalid.
+/// Return `true` when RBC state exposes a positive complete chunk set matching
+/// the given block hash, height, view, and payload digest without being marked
+/// invalid.
 fn rbc_payload_matches(
     sessions: &BTreeMap<super::rbc_store::SessionKey, RbcSession>,
-    handle: &rbc_status::Handle,
+    _handle: &rbc_status::Handle,
     block_hash: &HashOf<BlockHeader>,
     height: u64,
     view: u64,
     payload_hash: &Hash,
 ) -> bool {
+    // Status summaries do not carry payload bytes, so they cannot prove byte-level
+    // availability for DA gating. Restart recovery must use a live/recovered RBC
+    // session with chunks or a local block payload.
     sessions
         .get(&(*block_hash, height, view))
         .is_some_and(|session| session.complete_payload_matches(payload_hash))
-        || handle.complete_payload_matches(block_hash, height, view, payload_hash)
 }
 
 fn rbc_session_needs_payload(session: &RbcSession, payload_hash: Hash) -> bool {
     if session.is_invalid() {
         return false;
     }
-    if session.delivered_payload_matches(&payload_hash) {
-        return false;
-    }
-    if session.payload_hash() == Some(payload_hash)
-        && session.received_chunks() == session.total_chunks()
-    {
+    if session.complete_payload_matches(&payload_hash) {
         return false;
     }
     true
@@ -43994,6 +44337,16 @@ impl RbcSession {
         if self.total_chunks == 0 || self.received_chunks != self.total_chunks {
             return false;
         }
+        let Some(payload_hash) = self.payload_hash else {
+            return false;
+        };
+        let Some(payload) = self.payload_bytes() else {
+            return false;
+        };
+        if Hash::new(&payload) != payload_hash {
+            self.invalid = true;
+            return false;
+        }
         match (self.expected_chunk_root, self.chunk_root()) {
             (Some(expected), Some(computed)) if expected != computed => {
                 self.invalid = true;
@@ -44035,6 +44388,20 @@ impl RbcSession {
             && !self.is_invalid()
     }
 
+    fn has_complete_payload_bytes(&self) -> bool {
+        if self.is_invalid() || self.total_chunks == 0 || self.received_chunks != self.total_chunks
+        {
+            return false;
+        }
+        let Some(payload_hash) = self.payload_hash else {
+            return false;
+        };
+        let Some(payload) = self.payload_bytes() else {
+            return false;
+        };
+        Hash::new(&payload) == payload_hash
+    }
+
     fn set_allocations(
         &mut self,
         lane_allocations: Vec<LaneAllocation>,
@@ -44045,7 +44412,7 @@ impl RbcSession {
     }
 
     fn approx_pending_chunks(&self, allocated: u32) -> u32 {
-        if self.delivered {
+        if self.delivered && self.has_complete_payload_bytes() {
             return 0;
         }
         if self.total_chunks == 0 {
@@ -44137,8 +44504,12 @@ impl RbcSession {
 
     pub(crate) fn complete_payload_matches(&self, payload_hash: &Hash) -> bool {
         !self.is_invalid()
+            && self.total_chunks != 0
             && self.received_chunks == self.total_chunks
             && matches!(self.payload_hash(), Some(hash) if &hash == payload_hash)
+            && self
+                .payload_bytes()
+                .is_some_and(|payload| Hash::new(&payload) == *payload_hash)
     }
 
     pub(crate) fn delivered_payload_matches(&self, payload_hash: &Hash) -> bool {
@@ -44433,6 +44804,9 @@ impl RbcSession {
                 max_chunks: RBC_MAX_TOTAL_CHUNKS,
             });
         }
+        if total_chunks == 0 {
+            return Err(PersistedLoadError::InvalidLayout("zero total chunks"));
+        }
 
         let capacity = usize::try_from(total_chunks)
             .unwrap_or_else(|_| usize::try_from(RBC_MAX_TOTAL_CHUNKS).unwrap());
@@ -44564,6 +44938,11 @@ impl RbcSession {
                 .is_some_and(|payload| Hash::new(&payload) != hash)
         {
             return Err(PersistedLoadError::PayloadHashMismatch);
+        }
+        if session.delivered && !session.has_complete_payload_bytes() {
+            session.delivered = false;
+            session.deliver_sender = None;
+            session.deliver_signature = None;
         }
         session.recovered_from_disk = true;
         session.delivered_payload_bytes_recorded = false;
@@ -44746,7 +45125,7 @@ impl RbcSession {
     }
 
     pub(crate) fn delivered_payload_bytes(&self) -> Option<u64> {
-        if !self.delivered || self.received_chunks != self.total_chunks {
+        if !self.delivered || !self.has_complete_payload_bytes() {
             return None;
         }
         if let Some(payload_size) = self.layout.payload_size() {
@@ -44763,16 +45142,40 @@ impl RbcSession {
         &mut self,
         fallback_bytes: Option<u64>,
     ) -> Option<u64> {
-        if self.delivered_payload_bytes_recorded || !self.delivered {
+        if self.delivered_payload_bytes_recorded
+            || !self.delivered
+            || self.is_invalid()
+            || self.payload_hash.is_none()
+        {
             return None;
         }
-        let bytes = self.delivered_payload_bytes().or(fallback_bytes)?;
+        if let Some(bytes) = self.delivered_payload_bytes() {
+            self.delivered_payload_bytes_recorded = true;
+            return Some(bytes);
+        }
+        if self.complete_payload_unverified_or_mismatched() {
+            return None;
+        }
+        let bytes = fallback_bytes?;
         self.delivered_payload_bytes_recorded = true;
         Some(bytes)
     }
 
     pub(crate) fn take_delivered_payload_bytes_for_telemetry(&mut self) -> Option<u64> {
         self.take_delivered_payload_bytes_for_telemetry_with_fallback(None)
+    }
+
+    fn complete_payload_unverified_or_mismatched(&self) -> bool {
+        if self.total_chunks == 0 || self.received_chunks != self.total_chunks {
+            return false;
+        }
+        let Some(payload_hash) = self.payload_hash else {
+            return true;
+        };
+        let Some(payload) = self.payload_bytes() else {
+            return true;
+        };
+        Hash::new(&payload) != payload_hash
     }
 }
 

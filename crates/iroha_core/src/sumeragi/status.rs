@@ -3088,7 +3088,7 @@ pub struct ViewChangeCauseSnapshot {
     pub stake_quorum_timeout_total: u64,
     /// Total view changes triggered after roster-unavailability recovery.
     pub roster_unavailable_total: u64,
-    /// Total view changes triggered after DA availability aborts (unused when DA is advisory).
+    /// Total view changes triggered after DA availability aborts.
     pub da_gate_total: u64,
     /// Total view changes triggered after censorship evidence reaches quorum.
     pub censorship_evidence_total: u64,

@@ -90,16 +90,17 @@ scheduled workflow `.github/workflows/sumeragi-da-nightly.yml` uploads the
 entire run directory (summaries, metrics, Markdown report) so operators can
 inspect results directly from GitHub Actions.
 
-These scenarios enable `sumeragi.debug.rbc.force_deliver_quorum_one = true` so
-RBC DELIVER is emitted after the first READY, keeping the throughput checks
-focused on payload transport. Leave the knob disabled in production to preserve
-the full 2f+1 READY quorum.
+These scenarios leave `sumeragi.debug.rbc.force_deliver_quorum_one = false` and
+exercise the protocol READY quorum. The debug knob is reserved for targeted
+diagnostics; routine DA/RBC validation must keep it disabled so delivery and
+throughput budgets measure production quorum behavior.
 
 ## Expected baselines
 
-With the default `sumeragi.advanced.rbc.chunk_max_bytes = 256&nbsp;KiB`, the 10.5&nbsp;MiB
-instruction (11 010 048 bytes), and `force_deliver_quorum_one` enabled, the
-following invariants hold:
+With `LARGE_PAYLOAD_BYTES = 1024` in the integration harness and the
+protocol READY quorum enabled, the default developer smoke runs use these
+invariants. Larger payloads are tracked as soak/performance work rather than
+this default check:
 
 Note: `sumeragi.advanced.rbc.chunk_max_bytes` is clamped at startup so serialized RBC
 chunks fit within the consensus frame plaintext cap derived from
@@ -107,14 +108,13 @@ chunks fit within the consensus frame plaintext cap derived from
 
 | Scenario | Chunk count | READY threshold | Per-peer counters | Timing budgets |
 | --- | --- | --- | --- | --- |
-| Four peers | 42 chunks (all required) | READY votes ≥1 (debug override; normal ≥3 for *f* = 1) | `payload_bytes_delivered_total ≥ 11 010 048`, `deliver_broadcasts_total = 1`, `ready_broadcasts_total = 1` | `commit_ms` and `rbc_deliver_ms` should stay within `commit_time_ms` (default `4000`) |
-| Six peers | 42 chunks | READY votes ≥1 (debug override; normal ≥4 for *f* = 2) | Same counters as above | Same budgets as above |
+| Four peers | 1 chunk in plain mode, 4 chunks in RS16 mode | READY votes ≥3 (2f+1 for *f* = 1) | `payload_bytes_delivered_total ≥ 1024`, `deliver_broadcasts_total ≥ 1`, and `ready_broadcasts_total ≥ 1` or equivalent persisted READY evidence | Harness delivery/commit budgets |
+| Six peers | 1 chunk in plain mode, 6 chunks in RS16 mode | READY votes ≥4 (2f+1 for *f* = 2) | Same counters as above | Same budgets as above |
 
-Staying within the 4&nbsp;s commit window implies an average throughput of at
-least ≈2.7&nbsp;MiB/s for the payload. Operators should alert if delivery latency
-approaches the configured `commit_time_ms`, if throughput dips below that
-floor, or if per-peer counters diverge (indicating throttled collectors or
-missing chunks).
+These smoke runs are primarily quorum, transport, and queue-regression checks.
+Operators should alert if delivery latency approaches the harness budget, if
+throughput dips below the computed floor for the configured payload, or if
+per-peer counters diverge (indicating throttled collectors or missing chunks).
 
 The helper `cargo run -p build-support --bin sumeragi_da_report [ARTIFACT_DIR]`
 now ingests the `.summary.json` artifacts emitted by these scenarios and
@@ -145,9 +145,9 @@ alert when real runs drift beyond these ceilings:
 
 | Metric | Budget | Enforcement | Alert guidance |
 | --- | --- | --- | --- |
-| RBC delivery latency (10.5 MiB payload) | ≤ 3.6 s | `sumeragi_rbc_da_large_payload_*` | Alert at ≥ 3.2 s; investigate collector saturation. |
-| Commit latency | ≤ 4.0 s | Same as above | Alert at ≥ 3.6 s; check pacemaker deadlines and view changes. |
-| Effective throughput | ≥ 2.7 MiB/s | Same as above | Alert when throughput < 3 MiB/s for two consecutive runs. |
+| RBC delivery latency | 35 s base budget, plus 60 s per peer beyond four and a 40 s RS16 premium | `sumeragi_rbc_da_large_payload_*` | Alert when routine smoke runs approach the computed budget; investigate collector saturation. |
+| Commit latency | RBC delivery budget + 40 s headroom | Same as above | Alert when commit latency approaches the computed budget; check pacemaker deadlines and view changes. |
+| Effective throughput | At least min(payload/delivery-budget, 0.1 MiB/s) | Same as above | Alert when throughput falls below the computed floor for two consecutive runs. |
 | Sumeragi background-post queue depth | ≤ 32 inflight tasks | Same as above | Alert when depth ≥ 24 to catch growing backlog early. |
 | P2P queue drops (any priority/kind) | = 0 | Same as above | Alert immediately when non-zero; inspect bounded queue caps. |
 

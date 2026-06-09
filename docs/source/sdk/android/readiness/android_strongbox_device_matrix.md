@@ -87,7 +87,8 @@ Production release criteria:
 	  roots, and symlinked slot ancestors before parsing `sha256sum.txt` or
 	  traversing slot artifacts, and reject unreadable-metadata and hardlinked
 	  `sha256sum.txt` manifests before reading manifest bytes or discovering slot
-	  files.
+	  files. The manifest parser binds `sha256sum.txt` bytes to the opened file
+	  identity so post-preflight regular-file swaps fail closed.
 	  Direct slot-file discovery reports unreadable slot-root and
 	  artifact-directory metadata through caller error lists, returns no artifacts
 	  for secret-looking slot paths, symlinked slot ancestors, missing roots,
@@ -202,10 +203,12 @@ Production release criteria:
 		  `signed evidence output path could not be resolved` error, reject unreadable
 		  output parent or leaf metadata before write or digest reads, classify
 		  output parents with `lstat()` before any `Path.is_dir()` preflight, reject
-		  dangling symlink output leaves before following them, rerun parent and
+		  dangling symlink output leaves before following them, bind post-write
+		  readback verification to the opened output file identity, rerun parent and
 		  ancestor checks after creating missing output parents, and the signing helper revalidates the
 		  signed-evidence output as a regular non-symlink, non-hardlinked file before
-		  hashing it back into `slot.json`.
+		  hashing it back into `slot.json`, then bind that digest read to the
+		  opened file identity.
 	  Direct SHA-256 manifest rewrites run the same slot/artifact shape preflight
 	  before hashing or replacing `sha256sum.txt`, so secret-looking artifact
 	  names cannot be serialized into the manifest. Scanner and signing-helper

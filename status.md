@@ -9,16 +9,19 @@ Last updated: 2026-06-09
   lane-policy expected audit hash roles, and a `gate_hash` value matching the
   named final gate transcript. Lanes whose policy does not require a
   source-adapter gate now fail the governed-deployment checklist if forged gate
-  hashes or audit maps are present.
+  hashes or audit maps are present. Source-gate audit hashes must also stay
+  distinct from governed source/deployment, destination-binding, route-allowlist,
+  route-canary, and sibling source-gate audit roles.
 - Added adversarial checklist coverage for omitted required Solana gate
   material, operator-override audit-role smuggling, missing named final gate
-  hashes, gate/audit drift, and non-required Ethereum gate material.
+  hashes, gate/audit drift, duplicate audit-role hashes, route-canary hash
+  replay, and non-required Ethereum gate material.
 - Validation:
   - `python3 -m py_compile scripts/sccp_all_lanes_evidence.py pytests/scripts/sccp_all_lanes_evidence_test.py`
   - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py -k "source_gate or release_checklist"`
-    (`15` passed)
+    (`16` passed)
   - `python3 -m pytest -q pytests/scripts/sccp_all_lanes_evidence_test.py`
-    (`138` passed)
+    (`139` passed)
   - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "source_gate or release_checklist"`
     (`15` passed)
   - `python3 -m pytest -q pytests/scripts/sccp_release_readiness_report_test.py -k "source_gate or release_checklist"`
@@ -54,25 +57,156 @@ Last updated: 2026-06-09
     (`8` passed)
   - `git diff --check -- scripts/sccp_bsc_taira_xor_deploy.mjs scripts/sccp_bsc_taira_xor_deploy.test.mjs scripts/sccp_tron_taira_xor_deploy.mjs scripts/sccp_tron_taira_xor_deploy.test.mjs scripts/sccp_verify_release_bundle.py scripts/sccp_release_readiness_report.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py docs/source/bridge_proofs.md docs/source/engineering_backlog.md roadmap.md status.md`
 
+## 2026-06-09 Kagemusha signer output readback open-file binding
+
+- Hardened signer output write verification so `signed-evidence.json` and
+  `sha256sum.txt` readback verification uses the same opened-file identity
+  binding as output digest reads. Plain read or UTF-8 decode failures still
+  return `<label> write verification failed`, while post-preflight output swaps
+  fail closed as `<label> changed while being read`.
+- Added a post-write regular-file-swap regression for signed-evidence output
+  readback and retargeted the readback verification, readback failure, and
+  post-write preflight negative controls to the new helper.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_write_json_rejects_readback_mismatch scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_write_json_rejects_readback_failure scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_write_json_rejects_regular_file_swap_before_readback scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_write_text_rejects_readback_mismatch scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_write_text_rejects_readback_failure`
+    (`5` tests passed, latest run 0.009s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-verification`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-readback-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-post-write-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`360` tests passed, latest run 10.281s)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 34.628s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha signer output digest open-file binding
+
+- Hardened `scripts/sign_android_device_lab_evidence.py` so
+  `_output_file_sha256(...)` revalidates signer-controlled output metadata, then
+  hashes bytes from one opened regular file bound to the immediate `lstat()`
+  identity. Post-preflight signed-evidence output swaps now fail as
+  `signed evidence output path changed while being read` before `slot.json` can
+  be updated with a digest of replaced bytes.
+- Added the signer output regular-file-swap regression and promoted the signer
+  output digest open-path binding into the production-readiness guard and
+  workflow. Retargeted the signer output digest read-failure negative control to
+  the opened-byte read path.
+- Validation:
+  - `python3 -m py_compile scripts/sign_android_device_lab_evidence.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_output_digest_rejects_read_failure_after_preflight scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_output_digest_rejects_regular_file_swap_after_preflight scripts.tests.check_android_device_lab_slot_test.AndroidDeviceLabSlotTest.test_signer_helper_revalidates_output_digest_before_slot_json_update`
+    (`3` tests passed, latest run 0.012s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-signing-helper-output-digest-open-path-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`359` tests passed, latest run 8.405s)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 32.178s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha Android manifest parser open-file binding
+
+- Hardened `parse_sha256_manifest(...)` so `sha256sum.txt` is opened once as a
+  regular non-symlink, non-hardlinked file, then the parser compares the opened
+  descriptor identity and post-read path identity against the validation-time
+  `lstat()` identity before decoding manifest bytes. Post-preflight regular-file
+  swaps now fail as `sha256sum.txt changed while being read`.
+- Added the parser regular-file-swap regression and promoted the manifest
+  open-path binding into the production-readiness guard and workflow. Retargeted
+  the read/decode failure guard to the current opened-byte read path.
+- Validation:
+  - `python3 -m py_compile scripts/check_android_device_lab_slot.py scripts/tests/check_android_device_lab_slot_test.py`
+  - `python3 -m unittest discover -s scripts/tests -p check_android_device_lab_slot_test.py`
+    (`358` tests passed, latest run 8.971s)
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 36.993s)
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-read-failure`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-android-device-lab-manifest-open-path-binding`
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha compact helper generator-log bound text read
+
+- Hardened `scripts/kagemusha_recursive_compact_key_evidence.py` so the helper
+  hashes, sizes, decodes, and parses `recursive-compact-key-artifacts.log` from
+  one opened regular file bound to the validated path identity. The helper no
+  longer reopens the generator log after hashing it.
+- Retargeted the generator-log strict-read guard to the new text-bound helper
+  and kept strict UTF-8 decode failures as structured helper errors.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_generates_validator_accepted_json scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_size_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_digest_drift scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_trailing_whitespace scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_crlf_line_endings scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_without_final_lf scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_generator_log_invalid_utf8_bytes`
+    (`7` tests passed, latest run 0.020s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-helper-generator-log-strict-read`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 37.659s)
+  - `git diff --check -- scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md status.md roadmap.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md status.md roadmap.md`
+    (no matches)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
+## 2026-06-09 Kagemusha artifact content prefix binding
+
+- Bound Reserved-lineage all-zero checks and ABI-7 compact-key placeholder/all-zero
+  checks to the prefix captured during the same opened artifact read that
+  computes SHA-256 and byte size. A path replacement between hashing and content
+  validation can no longer make placeholder bytes look production-generated.
+- Added readiness and helper regressions that replace placeholder/all-zero
+  artifacts after the hash read and still require the captured prefix to block,
+  plus guard/workflow negative controls for lineage and compact prefix binding.
+- Validation:
+  - `python3 -m py_compile scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_rejects_placeholder_local_artifact_file scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_placeholder_check_uses_hashed_prefix scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_rejects_all_zero_local_artifact_file scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_placeholder_check_uses_hashed_prefix scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_rejects_placeholder_artifact scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_compact_key_evidence_helper_placeholder_check_uses_hashed_prefix scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_helper_rejects_all_zero_artifact scripts.tests.kagemusha_production_readiness_test.KagemushaProductionReadinessTest.test_lineage_proof_evidence_helper_placeholder_check_uses_hashed_prefix`
+    (`8` tests passed, latest run 0.032s)
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-prefix-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-artifact-prefix-binding`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-is-file-preflight`
+  - `bash ci/check_kagemusha_production_readiness.sh --negative-control-compact-key-placeholder-artifacts`
+  - `bash ci/check_kagemusha_production_readiness.sh`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`384` tests passed, latest run 29.708s)
+  - `git diff --check -- scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md status.md roadmap.md`
+  - `rg -n "^(<<<<<<<|=======|>>>>>>>)" scripts/kagemusha_production_readiness.py scripts/kagemusha_lineage_proof_evidence.py scripts/kagemusha_recursive_compact_key_evidence.py scripts/tests/kagemusha_production_readiness_test.py ci/check_kagemusha_production_readiness.sh .github/workflows/pr_kagemusha_payload_bench.yml docs/source/offline_kagemusha.md status.md roadmap.md`
+    (no matches)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
+
 ## 2026-06-09 BFV native AIR opening-shape boundary
 
 - Tightened Core's BFV-shaped native full-bootstrap AIR preflight so opened
   rows must match the canonical trace width, row/composition field elements must
   stay inside the Goldilocks field, and row/next-row/composition Merkle paths
   must have the canonical depth, direction-byte shape, zero padding bits, and
-  direction bits matching the sampled row index.
+  direction bits matching the sampled row index. The same boundary now also
+  requires the canonical BFV transcript label and a statement-bound native AIR
+  domain tag before accepting BFV-shaped AIR metadata.
 - Added adversarial coverage for short/wide opened rows, non-field row and
   composition values, truncated paths, missing path direction bytes, non-zero
   direction padding bits, row-path index drift, unmasked private rows,
   wraparound private next-row exposure, query-count drift, and public-digest
-  drift before the current dedicated verifier boundary.
+  drift, plus stale transcript-label and stale domain-tag rejection before the
+  current dedicated verifier boundary.
 - Validation:
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-shape cargo test -j 1 -p iroha_crypto full_bootstrap_native_stark_air_domain_tag --lib -- --nocapture`
+    (`1` passed, `688` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-shape cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_bfv_native_air_boundary --lib -- --nocapture`
-    (`3` passed, `7364` filtered out)
+    (`3` passed, `7365` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-shape cargo test -j 1 -p iroha_core --features zk-stark generic_air_drift --lib -- --nocapture`
-    (`2` passed, `7365` filtered out)
+    (`2` passed, `7366` filtered out)
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-fhe-native-air-shape cargo test -j 1 -p iroha_core --features zk-stark full_bootstrap_execution_proof_rejects_unverified_fake_proof --lib -- --nocapture`
-    (`1` passed, `7366` filtered out)
+    (`1` passed, `7367` filtered out)
 
 ## 2026-06-09 BFV execution public-input schema trace/prover package binding
 
@@ -125,7 +259,8 @@ Last updated: 2026-06-09
   public bundle readiness.
 - Required Release Evidence now names the corridor phase-transcript source
   inventory, and the bridge-proof docs/roadmap record the gate.
-- Kept the launch-scope note explicit: Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+- Kept the launch-scope note explicit for retired runtime-network families
+  outside the current SCCP launch support scope.
 - Validation:
   - `python3 -m py_compile scripts/sccp_release_readiness_report.py scripts/sccp_verify_release_bundle.py pytests/scripts/sccp_release_readiness_report_test.py pytests/scripts/sccp_release_bundle_test.py pytests/scripts/sccp_retired_network_surface_test.py`
   - direct verifier/readiness helper import checks for the corridor
@@ -2962,7 +3097,6 @@ Last updated: 2026-06-09
     (`7` passed, `222` deselected)
   - `python3 -m pytest -q pytests/scripts/sccp_release_bundle_test.py -k "source_adapter_gate or source_gate or active_checklist or recomputes_active_checklist"`
     (`9` passed, `352` deselected)
-
 ## 2026-06-09 Kagemusha lineage/compact local read validation-time binding
 
 - Strengthened the Reserved-lineage and ABI-7 compact-key local file readers so
@@ -3327,19 +3461,24 @@ Last updated: 2026-06-09
 - Started a smaller diagnostic
   `lineage-key-artifacts --profile init --opening-len 2` run under
   `target/kagemusha-diagnostic/`; as of the latest check it was still CPU-bound
-  after more than 100 minutes, had emitted no output after startup, and had not
+  after more than 135 minutes, had emitted no output after startup, and had not
   created partial artifact files.
 - Fixed the production-readiness guard after the source moved evidence artifact
   hashing to `_sha256_file_with_size(...)`: the stale direct `_sha256_file(...)`
   requirement was removed, and the Reserved-lineage artifact negative control now
   rejects inserted `artifact_path.is_file()` preflights explicitly.
+- Corrected the SDK parity guard's archived-instruction schema assertions to
+  match the implemented Norito wire-name validation in Swift, Kotlin/JVM,
+  Android Java, and C# instead of the shorter archive display names.
 - Validation:
   - `CARGO_BUILD_JOBS=1 cargo build -p iroha_cli --bin iroha`
   - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh`
   - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-offline-doc-instruction-transaction-surface`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-js-kagemusha-instruction-transaction-builder`
+  - `bash ci/check_kagemusha_recursive_spend_sdk_parity.sh --negative-control-swift-kagemusha-instruction-transaction-builder`
   - `bash ci/check_kagemusha_production_readiness.sh --negative-control-lineage-proof-artifact-is-file-preflight`
   - `node --test javascript/iroha_js/test/kagemushaFfiContractParity.test.js`
-    (`38` tests passed, latest run 2217.9745ms)
+    (`38` tests passed, latest run 2820.359875ms)
   - `bash ci/check_kagemusha_production_readiness.sh`
   - `python3 scripts/kagemusha_production_readiness.py --repo-root . --summary-out target/kagemusha-readiness-summary.json`
     (blocked only by the known missing external evidence listed above)
@@ -3933,13 +4072,16 @@ Last updated: 2026-06-09
 - XSD profile-catalog enum and list values, including rails, embedded signature
   policies, required reference datasets, structured-address modes, and business
   services, must now remain printable ASCII before unknown-value diagnostics or
-  summary recording can preserve Unicode-confusable spellings.
+  summary recording can preserve Unicode-confusable spellings. Core
+  profile-catalog IDs and enum values also reject overlong ASCII spellings before
+  duplicate-ID, missing-schema-version, or unknown-value diagnostics can print
+  them.
 - XSD manifest `payload_root` values, checked-in schema `targetNamespace`
   attributes, schema payload element names/types, XML fixture namespace/name
   identifiers, and schema-root attribute names must now remain printable ASCII
-  before mismatch diagnostics can quote schema or fixture material. Optional
-  `xmllint` diagnostics now redact non-ASCII output as well as secret-looking and
-  control-bearing output.
+  and no longer than 256 characters before mismatch diagnostics can quote schema
+  or fixture material. Optional `xmllint` diagnostics now redact non-ASCII output
+  as well as secret-looking and control-bearing output.
 - Reviewed XSD gap reasons and blocked-source review reasons must now remain
   printable ASCII, secret-looking-free, and capped at 1024 characters in direct
   XSD verification and production-readiness replay, so Unicode-confusable,
@@ -4025,12 +4167,14 @@ Last updated: 2026-06-09
     (`2` tests passed, latest focused runs 0.002s and 0.018s)
   - `python3 -m unittest pytests.scripts.iso_trust_bundle_verify_test`
     (`72` tests passed, latest run 0.395s)
-  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_shape_is_fail_closed`
-    (`2` tests passed, latest focused runs 0.007s and 0.319s)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_id_is_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_overlong_enum_values_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_shape_is_fail_closed`
+    (`4` tests passed, latest run 0.348s)
+  - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_overlong_schema_and_fixture_identifiers_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_non_ascii_schema_and_fixture_identifiers_are_rejected_without_echo pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_secret_looking_schema_and_fixture_payload_roots_are_rejected_without_echo`
+    (`3` tests passed, latest run 0.030s)
   - `python3 -m unittest pytests.scripts.iso_xsd_fixture_verify_test`
-    (`75` tests passed, latest run 1.775s)
-  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_non_ascii_sidecar_message_type_is_rejected_without_echo`
-    (`1` test passed, latest run 0.002s)
+    (`81` tests passed, latest run 1.817s)
+  - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_non_ascii_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_malformed_sidecar_message_type_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_secret_material_in_sidecar_fields_is_rejected_without_echo pytests.scripts.iso_rail_gateway_adapter_test.IsoRailGatewayAdapterTest.test_unknown_sidecar_fields_are_rejected_before_network_delivery`
+    (`4` tests passed, latest run 0.520s)
   - `python3 -m unittest pytests.scripts.iso_rail_gateway_adapter_test`
     (`70` tests passed, latest run 45.558s)
   - `python3 -m unittest pytests.scripts.iso_operator_receipt_verify_test.IsoOperatorReceiptVerifyTest.test_non_ascii_rail_message_type_values_are_rejected_without_echo pytests.scripts.iso_operator_evidence_verify_test.IsoOperatorEvidenceVerifyTest.test_receipt_verifier_stdout_requires_kind_specific_metadata pytests.scripts.iso_production_readiness_test.IsoProductionReadinessTest.test_receipt_entries_must_preserve_kind_metadata pytests.scripts.iso_xsd_fixture_verify_test.IsoXsdFixtureVerifyTest.test_profile_catalog_non_ascii_enum_values_are_rejected_without_echo`
@@ -4054,7 +4198,7 @@ Last updated: 2026-06-09
     (`3` tests passed, latest run 2.321s)
   - `python3 -m py_compile scripts/iso_*.py pytests/scripts/iso_*_test.py`
   - `python3 -m unittest discover -s pytests/scripts -p 'iso_*_test.py'`
-    (`740` tests passed, latest run 299.282s)
+    (`743` tests passed, latest run 299.131s)
 
 ## 2026-06-09 Kagemusha Reserved-lineage proof-log exactness guard
 
@@ -10990,6 +11134,1935 @@ Last updated: 2026-06-09
     `9966992 KiB` during final compile)
   - `cargo test -p iroha_core kagemusha_recursive_compact_record_bound_pallas_preflights_before_unavailable --lib -- --test-threads=1`
     (`1` matching test ignored by default)
+
+## 2026-06-09 DA/RBC positive-chunk payload and retained-summary hardening
+
+- Tightened `rbc_status::Handle` delivery and payload-match predicates so
+  zero-chunk, incomplete, or invalid summaries cannot satisfy delivered or
+  complete-payload checks. This keeps handle-side restart/observability
+  predicates aligned with the live RBC session model, where even empty payloads
+  are represented by one real chunk.
+- Tightened live `RbcSession` payload-match and delivered-bytes predicates so a
+  zero-chunk metadata shell cannot satisfy DA payload availability, suppress
+  payload hydration, or report delivered payload bytes as a complete RBC payload.
+- Tightened live `RbcSession` complete-payload matching so complete counters and
+  matching metadata are not enough by themselves; the reconstructed chunk bytes
+  must hash to the advertised payload hash before DA availability or hydration
+  suppression can use the session as payload evidence.
+- Tightened delivered-payload byte telemetry so delivered complete chunk sets
+  with an advertised payload hash must reconstruct to that hash before they can
+  report delivered payload bytes or consume the once-only telemetry marker.
+- Removed the remaining delivered-byte telemetry shortcut that treated RS16
+  layout payload-size metadata as authoritative fallback evidence. Incomplete
+  delivered sessions now need either verified complete chunks or local block
+  payload bytes tied to the same block height, view, and payload hash.
+- Tightened retained-summary delivered-byte telemetry so retained summaries
+  without live sessions must carry a payload hash and match local block payload
+  evidence for the same height, view, and hash before reporting bytes or
+  consuming the once-only marker.
+- Tightened retained-summary delivered-state promotion so cleanup cannot mark a
+  retained summary delivered unless it carries a payload hash that matches local
+  payload evidence for the same block height and view. Missing hashes and
+  wrong-height/wrong-view retained summaries now remain non-delivered.
+- Tightened retained-summary recovery refresh and RBC INIT rebuilds so recovery
+  snapshots cannot be rebuilt from mismatched block keys, block height/view,
+  non-canonical payload bytes, or payload hashes that do not match the bytes.
+  Incomplete retained summaries with a mismatched advertised payload hash now
+  stay incomplete instead of being overwritten by local payload recovery.
+- Tightened existing-session RBC INIT merge so a conflicting duplicate INIT
+  payload hash is dropped without poisoning an already-bound session, while a
+  missing-hash session with a complete cached chunk set must reconstruct to the
+  INIT payload hash before the hash is stamped. Mismatched complete cached
+  chunks now invalidate the session instead of silently accepting false INIT
+  metadata.
+- Tightened frontier `BlockCreated` RBC metadata construction so the
+  roster-hint fallback path cannot rebuild transport metadata from
+  non-canonical carried payload bytes or from payload hashes that do not match
+  those bytes.
+- Tightened RBC payload hydration so caller-carried payload hashes must match
+  the carried bytes before filling a missing session payload hash or ingesting
+  chunk evidence. Mismatched hydration evidence now marks the session invalid
+  and records the payload-hash mismatch without stamping false metadata.
+- Tightened generic `BlockCreated` RBC metadata refresh so a missing-hash
+  session with complete cached chunks must reconstruct to the local block
+  payload hash before the hash is installed. Mismatched cached chunks are
+  recorded invalid while the pending block remains bound to the canonical local
+  `BlockCreated` payload bytes.
+- Removed summary-only RBC status rows from DA payload proof. Status summaries
+  remain restart/observability diagnostics, but DA availability now requires
+  byte-carrying evidence from a live/recovered RBC session or a local block
+  payload.
+- Removed the remaining zero-chunk authoritative-payload shortcut: an RBC
+  session with `total_chunks == 0` and a chunk root can no longer unlock
+  authoritative payload progress unless separate local block payload bytes are
+  available.
+- Tightened the DA/RBC availability reschedule gate so a zero-chunk
+  non-invalid session with READY quorum remains unresolved before the
+  availability timeout unless local block payload bytes are already available.
+  The timeout release valve is preserved, but zero-chunk READY metadata can no
+  longer make the pre-timeout reschedule path treat DA as complete.
+- Tightened authoritative RBC progress so complete chunks must reconstruct to
+  bytes whose hash matches the session's advertised payload hash before they can
+  unlock validation, roster promotion, or recovery as authoritative payload
+  evidence.
+- Tightened the internal RBC progress stage transition as well: complete
+  chunk/root evidence no longer advances `RbcProgressStage::AuthoritativePayload`
+  unless the reconstructed bytes also match the advertised payload hash;
+  complete-but-wrong payload bytes are marked invalid instead.
+- Tightened durable `RbcSession` recovery so persisted disk records with
+  `total_chunks == 0` are rejected before they can re-enter startup recovery as
+  delivered or progress-stage-advanced sessions. Positive-chunk incomplete and
+  delivered-without-bytes records still reload for repair/diagnostic continuity.
+- Tightened recovered delivered-state handling so a persisted `delivered=true`
+  session that no longer carries complete local payload bytes is demoted back to
+  repairable nonterminal state on restart. The persisted metadata remains
+  visible for diagnostics, but the live session no longer advances to
+  `Delivered`, suppresses repair, or consumes delivered-byte telemetry from a
+  delivery bit alone.
+- Tightened RBC backlog accounting so delivered sessions only report zero
+  pending lane/dataspace chunks when complete verified payload bytes are still
+  present locally. Delivered-but-incomplete recovered sessions now keep missing
+  chunk pressure visible to operators and repair logic.
+- Tightened delivered payload-byte accounting so complete chunk sets without an
+  advertised payload hash are not treated as verified DA evidence. Restart
+  recovery now demotes `delivered=true` snapshots that retain chunks but lack
+  `payload_hash`, and the telemetry fallback path requires the same advertised
+  hash that production local-payload fallback uses for height/view/hash binding.
+- Hardened persisted RBC status recovery to drop structurally impossible rows
+  (`total_chunks == 0`, over-counted chunks, or non-invalid delivered rows
+  without a complete chunk set) while preserving valid in-progress rows and
+  invalid diagnostic rows for operator visibility.
+- Tightened committed-block RBC cleanup for retained summaries: cleanup still
+  preserves exact-frontier/recovered summaries for observability and restart
+  continuity, but it no longer promotes a summary to `delivered` from counters
+  alone. Promotion now requires local payload evidence, a matching payload hash
+  when the summary advertises one, and a positive complete chunk shape.
+- Tightened pending-RBC cleanup so explicit stash clears release the
+  block-payload dedup registrations for discarded pre-INIT CHUNK, READY, and
+  DELIVER frames. TTL/session-limit eviction already released those keys; the
+  direct clear path now follows the same rule instead of leaving stale
+  dedup-cache pressure behind.
+- Extended the same pending-RBC dedup cleanup across runtime session clears,
+  chunk-store eviction handling, stale-session TTL pruning, committed-block RBC
+  cleanup, roster-change consensus resets, and mode-flip resets. These paths no
+  longer discard pending pre-INIT stashes while leaving stale CHUNK/READY/DELIVER
+  dedup registrations behind.
+- Removed the ignored external-file RBC store debug helper from the automated
+  test module. Persisted-session validation is now covered by deterministic
+  unit tests instead of an ignored test that depended on `RBC_SESSION_PATH`.
+- Tightened the adversarial DA/RBC integration harness so RBC session summaries
+  used as evidence must carry typed `delivered`, `invalid`, `total_chunks`, and
+  `received_chunks` fields. Missing, malformed, or over-counted chunk telemetry
+  now fails closed instead of being interpreted as false, zero, or a benign
+  incomplete session.
+- Tightened the DA integration harness status parsers so the
+  `/v1/sumeragi/status` counters consumed by DA recovery assertions and the
+  `pending_rbc` stash counters must be present and typed as unsigned integers.
+  Missing or malformed telemetry now fails the recovery evidence path instead
+  of silently defaulting to zero, while unrelated diagnostics that are not
+  emitted by the JSON status endpoint are no longer treated as required.
+- Reran the live four-peer unverified-roster/missing-block recovery scenario
+  against the stricter status-counter parser. The restart path completed with
+  empty peer stderr and recovered by catching up or advertising the expected
+  recovery evidence.
+- Reran live four-peer adversarial DA/RBC scenarios against the stricter
+  session-summary evidence path. Partial chunk withholding recovered to commit
+  quorum progress while retaining non-delivered session telemetry, and
+  conflicting READY evidence stayed stalled with retained non-delivered sessions
+  instead of producing a false delivery.
+- Extended the current-tree exact adversarial rerun with chunk drop, chunk
+  reorder, and witness-corruption cases. Chunk loss and shuffled chunks reached
+  commit-quorum-visible recovery with complete typed session telemetry, while
+  witness corruption kept height pinned and retained non-delivered RBC evidence.
+- Completed the remaining current-tree exact adversarial reruns that had not
+  yet been repeated after the stricter evidence parsing: duplicate INITs,
+  selective validator drop, locked-QC conflict gating, and drop-then-clean
+  recovery. The recovery cases reached commit-quorum-visible progress, while
+  the gated case preserved lock safety with empty peer stderr.
+- Reran the focused four-peer restart recovery scenarios after the stricter
+  status-counter and session-summary parsing: live peer restart completed with
+  restarted-peer recovery and empty peer stderr, and cold restart preserved
+  recoverable in-flight RBC state through shutdown/startup before terminal
+  delivery and resumed progress. The roster-change restart path was also rerun
+  on the current tree and recovered with empty peer stderr.
+- Reran the all-corrupted-chunks adversarial path on the current tree. The
+  scenario remained fail-closed with no delivered sessions, no progress quorum,
+  and retained stalled RBC sessions instead of accepting corrupted shard
+  material.
+- Reran the four-peer synchronous background-queue DA/RBC path. The scenario
+  delivered all RBC chunks and committed with zero observed background queue
+  depth and zero P2P drops, keeping the synchronous fallback path covered after
+  the RBC store cleanup.
+- Cleared the strict clippy `ignored_unit_patterns` warning in the client
+  confirmation timeout branch that was exposed by the grouped consensus/DA
+  integration-target lint run.
+- Updated the DA availability unit fixture that had used a zero-chunk delivered
+  summary to use a realistic one-chunk complete summary.
+- Validation:
+  - `cargo test -p iroha_core rbc_status --lib --features telemetry -- --nocapture`
+    (`19` tests passed)
+  - `cargo test -p iroha_core rbc_availability_reschedule_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_availability_gate --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p iroha_core reschedule_defers_quorum_timeout_while_rbc_incomplete --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core reschedule --lib --features telemetry -- --nocapture`
+    (`85` tests passed)
+  - `bash scripts/formal/sumeragi_tlc.sh rbc-availability-reschedule-fast`
+    (not run: this environment has no Java runtime; `java -version` fails)
+  - `cargo test -p iroha_core payload_available_for_da --lib --features telemetry -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core rbc_payload_matches --lib --features telemetry -- --nocapture`
+    (`6` tests passed)
+  - `cargo test -p iroha_core rbc_session_needs_payload --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core rbc_session_delivered_payload_matches_requires_complete_chunks --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core delivered_payload_metrics --lib --features telemetry -- --nocapture`
+    (`8` tests passed)
+  - `cargo test -p iroha_core rbc_delivered_payload_bytes_reports_verified_complete_payload_size --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core authoritative_payload_bytes_for_telemetry --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core update_rbc_status_entry_records_rs16_payload_bytes_once_before_cleanup --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core maybe_emit_rbc_deliver_records_rs16_payload_bytes_with_local_authoritative_payload --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core clear_rbc_runtime_state_records_payload_bytes_from_kura_rs16 --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core committed_rbc_cleanup_records_payload_bytes_for_retained_summary_without_live_session --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core handle_rbc_deliver_records_payload_bytes_from_authoritative_local_payload --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p iroha_core handle_rbc_deliver_records_payload_bytes_from_complete_rs16_chunks --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core retained_summary_payload_bytes --lib --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p iroha_core fetch_pending_block_keeps_rbc_transport_rebuildable_when_da_enabled --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core frontier_block_created_from_proposal_rejects_noncanonical_payload_hint_even_with_roster_hint --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core frontier_block_created_for_wire --lib --features telemetry -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core local_proposal_wire --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core hydrated_payload --lib --features telemetry -- --nocapture`
+    (`8` tests passed)
+  - `cargo test -p iroha_core hydrate_rbc_session_from_block --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core handle_rbc_init --lib --features telemetry -- --nocapture`
+    (`22` tests passed)
+  - `cargo test -p iroha_core block_created --lib --features telemetry -- --nocapture`
+    (`122` tests passed)
+  - `cargo test -p iroha_core rbc --lib --features telemetry -- --nocapture`
+    (`578` tests passed, `3` ignored)
+  - `cargo test -p iroha_core rbc_store --lib --features telemetry -- --nocapture`
+    (`47` tests passed; `0` ignored)
+  - `cargo clippy -p iroha_core --lib --features telemetry -- -D warnings`
+    (passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_da_large_payload_four_peers_rs16 -- --nocapture`
+    (`1` test passed; `4` peers, `6/6` RBC chunks received, zero P2P drops,
+    empty peer stderr; latest current-tree rerun reported `rbc_deliver_ms=2717`
+    and `commit_ms=11694`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_background_queue_synchronous -- --nocapture`
+    (`1` test passed; `4` peers, `4/4` RBC chunks received,
+    `queue_bg_post_depth_max=0`, `queue_p2p_dropped_total_max=0`, empty peer
+    stderr; latest current-tree rerun reported `rbc_deliver_ms=7088` and
+    `commit_ms=7716`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+    (`1` test passed; `4` peers, restarted-peer recovery path exercised,
+    peer stderr empty; latest current-tree rerun finished in `74.43s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_recovers_after_restart_with_roster_change -- --nocapture`
+    (`1` test passed; `4` peers, roster-change restart recovery path exercised,
+    peer stderr empty; latest current-tree rerun finished in `78.79s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_session_recovers_after_cold_restart -- --nocapture`
+    (`1` test passed; `4` peers, in-flight RBC session persisted before
+    shutdown, recovered session observed after full restart, terminal RBC
+    delivery reached, peer stderr empty; latest current-tree rerun finished in
+    `129.54s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_equivocation_marks_invalid -- --nocapture`
+    (`1` test passed; empty peer stderr)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_all_chunks_corrupted_abort -- --nocapture`
+    (`1` test passed; observed no delivered sessions, no height-2 progress,
+    and `4` stalled sessions; latest current-tree rerun finished in `35.86s`)
+  - `cargo test -p iroha_core zero_chunk_rbc_session_with_root_is_not_authoritative_without_local_payload --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core complete_rbc_session_with_wrong_payload_bytes_is_not_authoritative --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core complete_rbc_session_with_wrong_payload_bytes_stays_non_authoritative_on_sync --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core authoritative_rbc --lib --features telemetry -- --nocapture`
+    (`5` tests passed)
+  - `cargo test -p iroha_core known_local_kura_rbc_session_stays_collecting_until_chunks_hydrate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core known_near_tip_rbc_session_stays_collecting_until_chunks_hydrate --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core from_persisted --lib --features telemetry -- --nocapture`
+    (`8` tests passed)
+  - `cargo test -p iroha_core delivered_incomplete_rbc_session_keeps_backlog_pending_chunks --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core persisted_session --lib --features telemetry -- --nocapture`
+    (`6` tests passed)
+  - `cargo test -p iroha_core rbc_store --lib --features telemetry -- --nocapture`
+    (`47` tests passed, `1` ignored debug helper)
+  - `cargo test -p iroha_core rbc_persist_worker_refreshes_partial_session_progress --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core committed_rbc_cleanup --lib --features telemetry -- --nocapture`
+    (`10` tests passed)
+  - `cargo test -p iroha_core clear_pending_rbc_releases_block_payload_dedup --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core pending_rbc --lib --features telemetry -- --nocapture`
+    (`39` tests passed)
+  - `cargo test -p iroha_core rbc_drop_releases_block_payload_dedup_on_session_limit --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core handle_rbc_store_evictions_clears_session_caches --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core rbc_session_ttl_prunes_stale_sessions --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core clean_rbc_sessions_for_block_clears_seed_inflight --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::chunk_telemetry_checks_fail_closed_on_malformed_counts -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::required_session_reads_reject_missing_or_malformed_evidence_fields -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_snapshot_parser_rejects_missing_or_malformed_fields -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::parse_pending_rbc_stash_counters_rejects_missing_or_malformed_fields -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::parse_pending_rbc_stash_counters_reads_fields -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture`
+    (`1` test passed; `4` peers, restart recovery path exercised, peer stderr
+    empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_da_payload_loss_does_not_block_commit -- --nocapture`
+    (`1` test passed; `4` peers, payload-loss commit path validated against
+    typed Sumeragi status snapshots, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_partial_chunk_withholding_stalls_delivery -- --nocapture`
+    (`1` test passed; `4` peers, `progress_quorum_blocks=3`,
+    `retained_nondelivered_sessions=4`, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_conflicting_ready_marks_invalid -- --nocapture`
+    (`1` test passed; `4` peers, `delivered_sessions=0`,
+    `retained_nondelivered_sessions=4`, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_drop -- --exact --nocapture`
+    (`1` test passed; `4` peers, `progress_quorum_blocks=3`, `33/33`
+    chunks observed in typed session telemetry, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_reorder -- --exact --nocapture`
+    (`1` test passed; `4` peers, `progress_quorum_blocks=3`, `33/33`
+    chunks observed in typed session telemetry, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_witness_corruption -- --exact --nocapture`
+    (`1` test passed; `4` peers, height stayed pinned at `1`, typed
+    non-delivered RBC session retained, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_duplicate_inits -- --exact --nocapture`
+    (`1` test passed; `4` peers, `progress_quorum_blocks=3`, typed
+    non-delivered RBC session retained, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_validator_selective_drop -- --exact --nocapture`
+    (`1` test passed; `4` peers, typed per-peer chunk telemetry accepted, peer
+    stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_locked_qc_gate_rejects_conflicting_proposal -- --exact --nocapture`
+    (`1` test passed; `4` peers, lock-gate counter/session evidence accepted,
+    peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_drop_recovery -- --exact --nocapture`
+    (`1` test passed; `4` peers in each phase, drop phase pinned height at `1`,
+    recovery phase reached `recovery_quorum_blocks=3`, peer stderr empty)
+  - `cargo clippy -p integration_tests --test consensus_and_da -- -D warnings`
+  - `cargo clippy -p iroha_core --lib --features telemetry -- -D warnings`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff -- Cargo.lock` (no diff)
+
+## 2026-06-09 DA/RBC pure-engine adapter scope documentation
+
+- Removed the remaining live unfinished-work marker from `sumeragi::engine` and
+  replaced it with explicit module-level scope documentation: the standalone
+  `ConsensusEngine` is the deterministic reference engine used by the safety
+  model and unit tests, while production network, validation-worker, RBC,
+  telemetry, and storage adapters remain owned by the live
+  `sumeragi::main_loop` Actor/vNext path.
+- Runtime behavior is unchanged; the change prevents the audited DA/RBC
+  unfinished-work sweep from carrying an architectural scope note as a safety
+  softener.
+- Validation:
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`56` tests passed)
+  - `cargo clippy -p iroha_core --lib --features telemetry -- -D warnings`
+  - `rg -n "TODO|FIXME|DevBypassDaAndRbcForZeroChain" crates/iroha_core/src/sumeragi crates/iroha_data_model/src crates/iroha_sccp/src integration_tests/tests/sumeragi_da.rs integration_tests/tests/sumeragi_adversarial.rs`
+    (no matches)
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff -- Cargo.lock` (no diff)
+
+## 2026-06-09 DA/RBC live NewView QC highest-QC boundary
+
+- Routed live `process_new_view_qc(...)` state mutation through the canonical
+  `validate_new_view_qc_highest(...)` check before recording NewView tracker
+  support. Direct/internal processor calls now reject the same malformed highest
+  references as the normal incoming QC validation path, including mismatched
+  subject hashes and future highest-QC epochs.
+- Added focused adversarial coverage that bypasses `handle_qc(...)` and confirms
+  invalid NewView highest-QC evidence cannot seed `new_view_tracker`.
+- Validation:
+  - `cargo test -p iroha_core process_new_view_qc_rejects_invalid_highest_reference --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core validate_qc_against_votes_rejects_new_view --lib --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core handle_qc_accepts_new_view_prepare_highest_next_height --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo clippy -p iroha_core --lib --features telemetry -- -D warnings`
+  - `cargo fmt --all -- --check`
+  - `git diff --check`
+  - `git diff -- Cargo.lock` (no diff)
+
+## 2026-06-09 DA/RBC pure-engine non-NewView highest-QC rejection
+
+- Mirrored the live QC validator in the pure engine so Prepare and Commit
+  certificates carrying unexpected `highest_qc` evidence are rejected before
+  they can update locks, highest-QC state, pending finality, or commit output.
+- Added focused adversarial coverage for Prepare/Commit certificates with
+  carried highest-QC evidence while keeping the local phase, lock, highest-QC,
+  pending-finality, and committed-height state unchanged.
+- Validation:
+  - `cargo test -p iroha_core --lib prepare_and_commit_certificates_reject_carried_highest_qc --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`56` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine NewView highest-QC requirement
+
+- Hardened pure-engine NewView certificate admission so certificates without a
+  carried `highest_qc` no longer advance the local view, matching the live QC
+  aggregation/validation path that rejects missing highest-QC evidence.
+- Added focused negative coverage for a missing-highest NewView certificate while
+  keeping the local round, phase, and highest-QC state unchanged.
+- Validation:
+  - `cargo test -p iroha_core --lib new_view_certificate --features telemetry -- --nocapture`
+    (`7` tests passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`55` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine NewView subject/highest-QC admission
+
+- Hardened pure-engine NewView certificate admission so a carried `highest_qc`
+  must name the same subject block as the NewView certificate. Deterministic
+  highest-QC selection now ignores NewView certificates whose carried QC subject
+  does not match the certificate subject.
+- Added adversarial coverage for a mismatched NewView subject/highest-QC pair
+  and converted accepted NewView fixtures to use canonical subjects derived from
+  their carried highest QC.
+- Validation:
+  - `cargo test -p iroha_core --lib new_view_certificate --features telemetry -- --nocapture`
+    (`6` tests passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`54` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine highest-QC phase admission
+
+- Mirrored the live QC validation boundary in the pure engine: proposal-carried
+  and new-view-carried `highest_qc` references must now be Prepare or Commit
+  refs. `NewView`-phase references can no longer become proposal unlock evidence
+  or be recorded as the local highest QC.
+- Updated deterministic highest-QC selection to ignore non-locking carried refs
+  while preserving deterministic ordering among valid Prepare/Commit refs.
+- Validation:
+  - `cargo test -p iroha_core --lib incompatible_highest_qc --features telemetry -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p iroha_core --lib new_view_certificate_selects_highest_qc_deterministically --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`53` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine lock-unlock round hardening
+
+- Tightened the pure engine's conflicting-proposal unlock rule so a proposal for
+  a different block must carry a QC from a strictly newer height/view than the
+  local prepare lock. A same-height/same-view QC no longer unlocks solely because
+  its phase ranks higher.
+- Added adversarial coverage for a same-round commit-QC reference that attempts
+  to unlock a conflicting proposal; highest-QC phase ordering is still preserved
+  for selection, but lock safety now uses round freshness.
+- Validation:
+  - `cargo test -p iroha_core --lib same_round_higher_phase_qc_cannot_unlock_conflicting_proposal --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`53` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine exact-subject payload cache hardening
+
+- Hardened the pure engine's payload-availability cache to require the full
+  `BlockSubject` tuple (`parent_block`, `block_hash`, and `payload_hash`) before
+  a commit QC can skip the DA/RBC fetch path.
+- Added adversarial coverage where a mismatched-parent `PayloadAvailable`
+  notification uses the same block hash and payload hash as a later commit QC;
+  the commit QC now still requests the exact subject and only finalizes after the
+  matching subject arrives.
+- Validation:
+  - `cargo test -p iroha_core --lib payload_availability_requires_exact_subject_parent --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`52` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine late-payload cache hardening
+
+- Hardened `PayloadAvailable` handling so late payload notifications for a
+  finalized current height are ignored before they can populate the pure
+  engine's availability cache.
+- Extended storage-finality supersession coverage for both matching and
+  conflicting committed-block notifications so late DA/RBC payload fetch
+  completions do not commit and do not remain cached after finality is already
+  recorded.
+- Validation:
+  - `cargo test -p iroha_core --lib committed_block_notification_clears_matching_pending_finality --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib conflicting_committed_block_notification_clears_pending_finality --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`51` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine committed-height inertness
+
+- Hardened the pure engine so once the current height has recorded finality,
+  late proposals and pacemaker ticks for that same height no longer emit prepare
+  or new-view votes.
+- Added coverage for both local commit-QC finality and storage/application
+  committed-block notifications to ensure the current round stays inert until an
+  adapter moves the engine to the next height.
+- Validation:
+  - `cargo test -p iroha_core --lib committed_current_height_rejects_late_proposals_and_ticks --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`51` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine pending-finality commit-QC refresh
+
+- Allowed same-subject commit QCs that arrive in later accepted views to refresh
+  the pending finality `highest_qc` while exact DA/RBC payload availability is
+  still missing.
+- Conflicting commit QCs remain ignored, and the refresh path does not emit
+  duplicate fetch or finality outputs; it only keeps later new-view votes bound
+  to the freshest valid commit QC for the same block.
+- Validation:
+  - `cargo test -p iroha_core --lib same_subject_commit_qc_refreshes_pending_finality_highest_qc --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`50` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine pending-finality highest-QC pinning
+
+- Hardened new-view handling while commit-QC finality is waiting for exact
+  DA/RBC payload availability. Same-height highest-QC references carried by
+  new-view certificates can no longer replace the pending commit QC unless they
+  are commit QCs for the same block.
+- This prevents conflicting same-height QCs or same-block non-commit QCs from
+  changing the highest-QC reference used in later new-view votes while finality
+  remains pinned to the commit-certified block.
+- Validation:
+  - `cargo test -p iroha_core --lib pending_finality_pins_highest_qc_across_new_view_noise --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`49` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine commit-notification gates
+
+- Hardened pure-engine `CommittedBlock` adapter input handling so
+  current-height storage/application notifications must match the engine's
+  epoch and validator-set context before they can record finality or clear
+  pending DA/RBC finality.
+- Future-height committed-block notifications are now no-ops for the current
+  pure-engine instance: they no longer cache future finality or emit
+  `ActivateValidatorSet`, preventing a misrouted storage notification from
+  poisoning later certificate admission or activating a new validator set before
+  the current DA/RBC finality boundary is resolved.
+- Added negative pure-engine coverage for wrong-epoch/wrong-validator-set
+  current-height notifications and future-height reconfiguration notifications
+  while commit-QC finality is waiting for exact payload availability.
+- Validation:
+  - `cargo test -p iroha_core --lib current_height_committed_block_notification_requires_round_context --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib future_committed_block_notification_cannot_activate_reconfiguration --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib committed_block_notification_for_other_height_does_not_clear_pending_finality --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`48` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine pending-finality safety
+
+- Hardened the pure Sumeragi engine so a commit QC waiting for exact DA/RBC
+  payload availability remains in `PendingFinality` across timeout and
+  new-view noise. While that pending finality exists, the engine now rejects
+  competing proposals and prepare QCs instead of returning to proposal phase
+  and risking a prepare vote for another block at the same height.
+- Extended the pending-finality regression to assert the retained phase after
+  timeout/new-view input and to cover both competing proposal and prepare-QC
+  ingress before the exact payload arrives.
+- Validation:
+  - `cargo test -p iroha_core --lib pending_finality_survives_timeout_and_view_change_noise --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine::tests --features telemetry -- --nocapture`
+    (`46` tests passed)
+  - `cargo test -p iroha_core --lib pending_finality --features telemetry -- --nocapture`
+    (`8` tests passed)
+
+## 2026-06-09 DA/RBC integration quorum hardening
+
+- Removed the remaining `force_deliver_quorum_one` debug override from the
+  DA/RBC integration scenarios, so large-payload and Kura rehydration coverage
+  now exercises protocol delivery quorum behavior instead of a test-only
+  shortcut.
+- Reran the broader real-quorum corridor after the removal: commit-certificate
+  history, tight block-queue commit-QC recovery, synchronous background-worker
+  fallback, and six-peer plain/RS16 large-payload scenarios all delivered,
+  committed, recorded zero P2P drops, and exited with empty peer stderr.
+- Reran targeted four-peer adversarial DA/RBC cases for conflicting READY
+  evidence, chunk equivocation, full corrupted-shard abort, and partial erasure
+  withholding. The negative cases either stayed pinned below the target height
+  with retained non-delivered/stalled evidence or progressed only on
+  commit-quorum-visible recovery, with bounded height divergence and empty peer
+  stderr.
+- Completed the rest of the adversarial DA/RBC integration sweep with exact
+  test filters: chunk loss, chunk reorder, witness corruption, duplicate INITs,
+  selective validator chunk drop, locked-QC conflict gating, and drop-then-clean
+  recovery. These scenarios passed with empty peer stderr and either safe
+  stalls or commit-quorum-visible recovery under the configured adversarial
+  injection.
+- The harder block-body rehydration run exposed a debug-build peer panic in the
+  proposal cache: height-based cleanup retained stale `observed_at` metadata
+  after dropping hints/proposals directly. Replaced those direct map mutations
+  with cache methods that keep observation metadata synchronized, and extended
+  the proposal-cache formal matrix for exact-height removal and
+  keep-through-height pruning.
+- Validation:
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_rbc_da_large_payload_four_peers -- --nocapture`
+    (`2` tests passed in `519.00s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da_kura_eviction_rehydrates_from_da_store -- --nocapture`
+    (`1` test passed in `663.94s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da_eviction_rehydrates_block_bodies -- --nocapture`
+    (`1` test passed in `599.89s`; peer stderr empty after the cache fix)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da_commit_certificate_history_four_peers -- --nocapture`
+    (`1` test passed in `158.66s`; real-quorum commit-certificate history,
+    peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_commit_qc_with_tight_block_queue_four_peers -- --nocapture`
+    (`1` test passed in `51.95s`; tight block queue, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_rbc_background_queue_synchronous -- --nocapture`
+    (`1` test passed in `59.28s`; background worker disabled, zero drops or
+    overflows, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_rbc_da_large_payload_six_peers -- --nocapture`
+    (`2` tests passed in `124.10s`; plain and RS16 six-peer scenarios, peer
+    stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial_conflicting_ready_marks_invalid -- --nocapture`
+    (`1` test passed in `93.87s`; height pinned, retained non-delivered
+    sessions, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial_chunk_equivocation_marks_invalid -- --nocapture`
+    (`1` test passed in `56.74s`; peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial_all_chunks_corrupted_abort -- --nocapture`
+    (`1` test passed in `33.72s`; height pinned, stalled sessions retained,
+    peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial_partial_chunk_withholding_stalls_delivery -- --nocapture`
+    (`1` test passed in `74.26s`; commit-quorum-visible recovery with bounded
+    divergence, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_drop -- --exact --nocapture`
+    (`1` test passed in `37.58s`; chunk loss recovered on commit quorum,
+    peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_reorder -- --exact --nocapture`
+    (`1` test passed in `61.50s`; shuffled chunks recovered on commit quorum,
+    peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_witness_corruption -- --exact --nocapture`
+    (`1` test passed in `54.24s`; commit height remained pinned, peer stderr
+    empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_duplicate_inits -- --exact --nocapture`
+    (`1` test passed in `58.56s`; duplicate INIT pressure recovered on commit
+    quorum, peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_validator_selective_drop -- --exact --nocapture`
+    (`1` test passed in `64.06s`; peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_locked_qc_gate_rejects_conflicting_proposal -- --exact --nocapture`
+    (`1` test passed in `26.00s`; peer stderr empty)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_drop_recovery -- --exact --nocapture`
+    (`1` test passed in `116.74s`; lossy phase stalled safely and clean
+    recovery progressed on commit quorum, peer stderr empty)
+  - `cargo test -p iroha_core --lib proposal_cache_formal_gate_matrix --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib proposal_cache --features telemetry -- --nocapture`
+    (`5` tests passed)
+  - `cargo clippy -p iroha_core --lib --features telemetry -- -D warnings`
+    (passed)
+  - `cargo fmt --all`
+    (passed)
+  - `cargo fmt --all -- --check`
+    (passed)
+  - `git diff --check`
+    (passed)
+
+## 2026-06-09 DA/RBC receiver DELIVER quorum hardening
+
+- Hardened inbound RBC DELIVER handling so receiver-side acceptance always uses
+  the protocol READY quorum. Local authoritative payload can still satisfy
+  missing RBC bytes, but it no longer lowers the receiver's READY threshold.
+- Updated DELIVER regressions so under-quorum external DELIVER evidence with a
+  local authoritative payload defers instead of being receiver-accepted, debug
+  `force_deliver_quorum_one` coverage cannot mask the protocol quorum, and the
+  positive local-payload paths seed signed remote READY quorum evidence before
+  accepting missing chunks.
+- Validation:
+  - `cargo test -p iroha_core --lib handle_rbc_deliver_with_authoritative_payload_still_defers_without_ready_quorum --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib handle_rbc_deliver_accepts_missing_chunks_when_da_enabled --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib handle_rbc_deliver_records_payload_bytes_from_authoritative_local_payload --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p iroha_core --lib evaluate_deliver_acceptance --features telemetry -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core --lib handle_rbc_deliver --features telemetry -- --nocapture`
+    (`20` tests passed)
+  - `cargo test -p iroha_core --lib rbc_deliver --features telemetry -- --nocapture`
+    (`53` tests passed)
+  - `cargo clippy -p iroha_core --lib --features telemetry -- -D warnings`
+    (passed)
+  - `cargo fmt --all`
+    (passed)
+  - `cargo fmt --all -- --check`
+    (passed)
+  - `git diff --check`
+    (passed)
+
+## 2026-06-09 DA/RBC pending-stash dedup hardening
+
+- Hardened pre-INIT pending-RBC chunk stash eviction so per-session cap
+  evictions return the evicted chunk records to the live handler, which now
+  releases their block-payload dedup keys. This prevents adversarial chunk
+  floods that arrive before INIT from leaving stale dedup entries after the
+  bounded stash drops older chunks, while preserving the accepted newer chunk's
+  dedup registration.
+- Added regressions for the live handler cap-eviction path and the lower-level
+  stash outcome's evicted-record reporting on drop.
+- Validation:
+  - `cargo test -p iroha_core --lib pending_rbc_chunk_cap_eviction_releases_evicted_dedup --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib pending_rbc --features telemetry -- --nocapture`
+    (`34` tests passed)
+  - `cargo test -p iroha_core --lib block_payload_dedup --features telemetry -- --nocapture`
+    (`4` tests passed)
+
+## 2026-06-09 Strict clippy blocker cleanup
+
+- Cleared strict clippy blockers encountered while validating the DA/RBC
+  consensus changes. Soracloud service-deployment and uploaded-model validators
+  now fold repeated checks through compact loops/helpers without changing error
+  semantics; `OpenVerifyEnvelopeBounds` documents its intentionally independent
+  policy switches; and the SCCP Norito `u64` string serializer documents why the
+  serializer callback takes values by reference.
+- Validation:
+  - `cargo clippy -p iroha_data_model --lib -- -D warnings`
+    (passed in `4m 17s`)
+  - `cargo clippy -p iroha_core --lib --features telemetry -- -D warnings`
+    (passed)
+  - `cargo test -p iroha_data_model --lib uploaded_model_bundle_validation -- --nocapture`
+    (`4` tests passed; filtered run emitted existing unused-helper warnings)
+  - `cargo test -p iroha_data_model --lib open_verify_envelope -- --nocapture`
+    (`12` tests passed; filtered run emitted existing unused-helper warnings)
+  - `cargo test -p iroha_data_model --lib service_deployment_state_validate -- --nocapture`
+    (`1` test passed; filtered run emitted existing unused-helper warnings)
+
+## 2026-06-09 DA/RBC commit-QC sidecar synthesis hardening
+
+- Hardened certified-block roster sidecar synthesis so cached commit-QC
+  history and precommit-signer fallback records must pass the same block-sync
+  QC validation used for inbound recovery evidence before a sidecar can be
+  persisted. This fails closed on malformed cached quorum evidence, including
+  under-quorum signer bitmaps and bad aggregate BLS signatures.
+- Added signed positive fixtures plus adversarial cache-poisoning coverage for
+  under-quorum cached commit history, cached commit history with a bad
+  aggregate, and precommit-signer history with a bad aggregate.
+- Validation:
+  - `cargo test -p iroha_core --lib synthesize_commit_qc --features telemetry -- --nocapture`
+    (`5` tests passed)
+  - `cargo test -p iroha_core --lib derive_block_sync_qc --features telemetry -- --nocapture`
+    (`5` tests passed)
+  - `cargo test -p iroha_core --lib validate_block_sync_qc --features telemetry -- --nocapture`
+    (`14` tests passed)
+  - `cargo test -p iroha_core --lib commit_qc_history --features telemetry -- --nocapture`
+    (`11` tests passed)
+  - `cargo clippy -p iroha_core --lib --features telemetry --no-deps -- -D warnings`
+    (passed in `6m 06s`)
+
+## 2026-06-09 DA gate exact-condition recovery telemetry
+
+- Tightened DA gate satisfaction tracking so recovery is reported when an exact
+  manifest guard changes to a different manifest lane/sequence/kind, even if
+  another DA gate remains active. This preserves fail-closed commit behavior
+  while making partial DA/manifest recovery visible instead of hiding progress
+  behind broad manifest-guard class matching.
+- Added negative/transition coverage proving unchanged manifest gates do not
+  synthesize recovery progress, while changed manifest failures and
+  missing-data-to-manifest transitions surface the recovered prior condition.
+- Validation:
+  - `cargo test -p iroha_core --lib sumeragi::da --features telemetry -- --nocapture`
+    (`4` tests passed)
+  - `cargo test -p iroha_core --lib manifest_gate --features telemetry -- --nocapture`
+    (`7` tests passed)
+
+## 2026-06-09 DA/RBC pure-engine pending-finality hardening
+
+- Hardened the pure Sumeragi V1 engine's DA pending-finality path so a
+  `PayloadAvailable` signal for the same block hash but the wrong payload hash
+  cannot be cached while a commit QC is waiting for the exact payload. This
+  keeps the model engine fail-closed around conflicting same-block DA evidence
+  before the remaining live adapters are routed through it.
+- Added negative coverage proving wrong same-block payload availability neither
+  finalizes nor seeds the payload cache while pending finality is active, and
+  the exact payload still commits afterward.
+- Validation:
+  - `cargo test -p iroha_core --lib conflicting_payload_availability_during_pending_finality_is_ignored --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib sumeragi::engine --features telemetry -- --nocapture`
+    (`46` tests passed)
+
+## 2026-06-09 DA/RBC vNext adapter monotonicity
+
+- Hardened the live vNext proposal/availability adapter so reordered or
+  duplicate DA signals cannot regress a slot that already reached
+  `AwaitingValidation`, `Prepared`, `Committed`, or `Aborted`. Late RBC
+  availability now preserves validated slots, and duplicate proposal or
+  availability evidence cannot revive a block that validation rejected.
+- Added regressions for availability-before-proposal ordering, late
+  availability after successful validation, and duplicate proposal/availability
+  after validation rejection.
+- Validation:
+  - `cargo test -p iroha_core --lib vnext_availability --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p iroha_core --lib vnext_late_availability --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib vnext_duplicate_proposal --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib vnext --features telemetry -- --nocapture`
+    (`39` tests passed; runtime `46.20s`)
+
+## 2026-06-08 DA/RBC workspace build validation
+
+- Reran the full Cargo workspace build after the DA/RBC hardening and focused
+  regression sweep. The workspace compiled successfully through the node,
+  Torii, CLI, integration-test, accelerator fallback, tool, sample data-model,
+  and derive crates. CUDA accelerator crates emitted the expected local warning
+  that `nvcc` was unavailable and built their deterministic fallback paths.
+- Validation:
+  - `cargo build --workspace`
+    (`dev` profile finished successfully in `39m 12s`)
+
+## 2026-06-08 Sumeragi vNext adapter validation
+
+- Audited the pure-engine adapter boundary. The standalone
+  `ConsensusEngine` remains model/test-only, while the live adapter work is
+  currently routed through the `vnext` state in `main_loop.rs`. Reran the
+  vNext filter covering validation ownership, DA availability handoff, commit
+  persistence, rechain/view-change certificates, and quorum checks.
+- Validation:
+  - `cargo test -p iroha_core --lib vnext --features telemetry -- --nocapture`
+    (`36` tests passed; runtime `41.61s`)
+
+## 2026-06-08 DA/RBC tail-latency queue validation
+
+- Reran the four-peer tight block-queue DA/RBC scenario. The scenario stayed
+  inside its RBC delivery and commit budgets, kept background post queue depth
+  bounded, and recorded zero P2P queue drops.
+- Validation:
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_commit_qc_with_tight_block_queue_four_peers -- --nocapture`
+    (`1` test passed; test runtime `56.62s`; RBC delivery `854ms`, commit
+    `2502ms`, max background queue depth `1`, P2P drops `0`)
+
+## 2026-06-08 DA/RBC certified-block recovery validation
+
+- Reran the focused finalize and commit-certified sidecar recovery tests that
+  protect certified blocks from advancing without DA payload availability while
+  still allowing quorum-certified sidecar evidence to retarget missing-payload
+  recovery at the contiguous frontier.
+- Validation:
+  - `cargo test -p iroha_core --lib finalize_pending_block_defers_until_da_payload_available --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib certified_frontier_sidecar --features telemetry -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p iroha_core --lib commit_pipeline_sidecar_hint_retargets_quorum_backed_frontier_hash --features telemetry -- --nocapture`
+    (`1` test passed)
+
+## 2026-06-08 DA/RBC focused validation sweep
+
+- Reran the DA/RBC-adjacent pure engine and RBC unit groups, then exercised
+  live four-peer recovery and adversarial paths around unverified roster
+  recovery, conflicting READY evidence, and chunk equivocation. The live runs
+  kept corrupt or stale evidence from committing and preserved the expected
+  recovery/stall signals.
+- Validation:
+  - `cargo test -p iroha_core --lib sumeragi::engine --features telemetry -- --nocapture`
+    (`45` tests passed)
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::rbc --features telemetry -- --nocapture`
+    (`12` tests passed)
+  - `cargo test -p iroha_core --lib sumeragi::rbc_status --features telemetry -- --nocapture`
+    (`15` tests passed)
+  - `cargo test -p iroha_core --lib sumeragi::rbc_store --features telemetry -- --nocapture`
+    (`37` tests passed, `1` ignored debug helper)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture`
+    (`1` test passed; test runtime `73.82s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_conflicting_ready_marks_invalid -- --nocapture`
+    (`1` test passed; test runtime `91.96s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_equivocation_marks_invalid -- --nocapture`
+    (`1` test passed; test runtime `54.57s`)
+
+## 2026-06-08 DA/RBC unverified roster refresh regressions
+
+- Added negative coverage for cached INIT RBC rosters after an authoritative
+  derived roster becomes available. READY and DELIVER messages signed for the
+  stale INIT roster now have regressions proving the handler upgrades the
+  session roster to `Derived`, drops the stale message, and neither records the
+  READY nor marks the session delivered.
+- Validation:
+  - `cargo test -p iroha_core --lib handle_rbc_ready_drops_stale_init_roster_after_derived_refresh --features telemetry -- --nocapture`
+    (`1` test passed; build `2m 23s`)
+  - `cargo test -p iroha_core --lib handle_rbc_deliver_drops_stale_init_roster_after_derived_refresh --features telemetry -- --nocapture`
+    (`1` test passed; build `2m 23s`)
+
+## 2026-06-08 DA/RBC DELIVER acceptance policy guard
+
+- Audited the authoritative local READY DELIVER emission path and pinned the
+  receiver-side acceptance invariant for the permissive policy path. Even when
+  missing chunks are allowed by policy, incoming DELIVER handling still defers
+  until the receiver observes its protocol READY quorum.
+- Validation:
+  - `cargo test -p iroha_core --lib evaluate_deliver_acceptance --features telemetry -- --nocapture`
+    (`4` tests passed; build `1m 22s`)
+
+## 2026-06-08 DA/RBC real-network validation refresh
+
+- Reran focused four-peer DA/RBC integration scenarios after the stricter
+  evidence and slot-tracker cleanup work. The payload-loss scenario still
+  reaches commit only after quorum-visible RBC/session evidence, and both
+  large-payload required-observation paths report same-block RBC delivery
+  evidence without P2P drops.
+- Validation:
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_da_payload_loss_does_not_block_commit -- --nocapture`
+    (`1` test passed; test runtime `309.17s`, build `3m 25s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_da_large_payload_four_peers -- --nocapture`
+    (`2` tests passed: base and RS16 variants; test runtime `95.24s`)
+
+## 2026-06-08 Sumeragi slot tracker mirror removal follow-up
+
+- Removed the remaining exact-frontier `FrontierSlot` compatibility mirrors
+  and the `sync_compat_fields` hook from the current production slot tracker.
+  Slot identity and advisory metadata now read through the canonical nested
+  `FrontierCandidate`, while body state, timers, and repair requesters stay in
+  `FrontierBodyState`, `FrontierTimers`, and `FrontierRepairState`.
+- Updated the main-loop/test scaffolding that still touched the old mirrors so
+  it mutates nested slot FSM state directly. Added a regression proving direct
+  nested candidate updates are the state that callers observe, with no sync
+  step required.
+- Validation:
+  - `cargo test -p iroha_core --lib completed_quorum_view_advance_slot_formal_gate_matrix --features telemetry -- --nocapture`
+    (`1` test passed; build `2m 57s`)
+  - `cargo test -p iroha_core --lib slot_tracker::tests --features telemetry -- --nocapture`
+    (`2` tests passed; build `1m 49s`)
+
+## 2026-06-08 DA/RBC durable store temp selection
+
+- Hardened durable RBC session recovery so validated temp and main snapshots
+  are compared by persisted update timestamp before selection. Newer temp
+  snapshots still promote after a crash-before-rename, but stale valid temp
+  files can no longer shadow newer main snapshots during direct restart loads
+  or startup scans.
+- Aligned direct single-session restart loading with startup scans by rejecting
+  and removing future-dated persisted RBC snapshots before they can win
+  timestamp-based selection.
+- Tightened non-destructive RBC metadata inspection used by observability probes
+  and integration evidence checks: it now ignores future-dated snapshots and
+  reports the newest valid temp/main metadata without promoting or deleting
+  peer-owned files.
+- Made persisted timestamp conversion checked before recovery/inspection
+  evidence is accepted. Adversarial `u64::MAX` timestamps are rejected and
+  removed by strict direct recovery, and ignored but left untouched by
+  non-destructive inspection.
+- Added regressions for newer-main/stale-temp direct load, newer-temp promotion,
+  startup scan selection, and direct future-timestamp rejection; reran the
+  existing corrupt-temp, temp-only, and scan future-timestamp recovery tests
+  touched by the selection and validation changes.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib load_session_from_dir_prefers_newer_main_over_stale_temp --features telemetry -- --nocapture`
+    (`1` test passed; build `3m 21s`)
+  - `cargo test -p iroha_core --lib load_session_from_dir_promotes_newer_temp_over_main --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib scan_entries_prefers_newer_main_over_stale_temp --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib load_session_from_dir_promotes_temp --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib load_session_from_dir_falls_back_to_main_when_temp_invalid --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib scan_entries_falls_back_to_main_when_temp_invalid --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib load_session_from_dir_rejects_future_timestamp_session --features telemetry -- --nocapture`
+    (`1` test passed; build `1m 48s`)
+  - `cargo test -p iroha_core --lib ttl_evicts_future_timestamp_sessions --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib inspect_session_metadata_from_dir_ignores_future_timestamp_without_deleting --features telemetry -- --nocapture`
+    (`1` test passed; build `2m 47s`)
+  - `cargo test -p iroha_core --lib inspect_session_metadata_from_dir_prefers_newer_temp_without_promoting --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib load_session_from_dir_rejects_max_timestamp_session --features telemetry -- --nocapture`
+    (`1` test passed; build `2m 22s`)
+  - `cargo test -p iroha_core --lib inspect_session_metadata_from_dir_ignores_max_timestamp_without_deleting --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib rbc_store::tests --features telemetry -- --nocapture`
+    (`37` tests passed; `1` ignored debug helper)
+
+## 2026-06-08 DA/RBC persisted fallback hash quorum
+
+- Tightened the required-observation DA/RBC persisted snapshot fallback used
+  when the live RBC sessions endpoint times out. Persisted delivered summaries
+  now count toward fallback evidence only within the same delivered block hash;
+  summaries for different hashes at the expected height can no longer combine
+  into one quorum.
+- If multiple different delivered block hashes each appear to satisfy the
+  required persisted-peer quorum, the selector now fails closed instead of
+  choosing a highest-priority conflicting summary. A single high-priority
+  conflicting peer also can no longer override a lower-priority same-hash
+  quorum.
+- Removed the remaining single-peer persisted delivered snapshot fallback from
+  terminal RBC-state waits; if the live endpoint is unavailable, exact-hash
+  terminal evidence must now also be visible on the commit quorum.
+- Added exact-hash regressions proving one peer cannot satisfy terminal
+  fallback evidence and same-hash quorum filtering ignores unrelated conflicts.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da persisted_rbc_quorum_selector -- --nocapture`
+    (`8` tests passed)
+
+## 2026-06-08 DA/RBC delivered observation shape guard
+
+- Hardened DA/RBC delivery observation helpers so live endpoint summaries with
+  `invalid: true`, zero total chunks, zero received chunks, or received chunks
+  greater than total chunks no longer satisfy delivered evidence.
+- Applied the same nonzero bounded chunk-shape check to persisted delivered
+  summaries before they can count toward quorum-visible fallback evidence.
+  This keeps RS16 delivery flexible about not requiring every shard, but rejects
+  malformed impossible status records.
+- Added negative regressions for invalid delivered endpoint records, zero/over
+  counted endpoint chunk records, and malformed persisted delivered summaries.
+- Extended the same malformed-chunk filtering to lower-level session-height
+  evidence and best persisted summary selection: over-counted sessions and
+  zero-received delivered sessions no longer count as DA/RBC evidence, while
+  valid in-flight zero-received sessions still count as nonterminal session
+  evidence.
+- Split session-height quorum evidence into "any session observed" and "valid
+  session observed" counts, and require the commit quorum on valid
+  non-invalid session evidence before accepting the payload-loss DA/RBC gate.
+  Invalid-only session quorums can no longer satisfy the wait path, while a
+  valid quorum with one nonterminal witness remains accepted.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da parse_rbc_summary -- --nocapture`
+    (`2` tests passed; build `11.94s`)
+  - `cargo test -p integration_tests --test consensus_and_da rbc_session_height_evidence -- --nocapture`
+    (`6` tests passed; build `9.43s`)
+  - `cargo test -p integration_tests --test consensus_and_da rbc_session_quorum_evidence -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p integration_tests --test consensus_and_da best_persisted_rbc_summary -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p integration_tests --test consensus_and_da persisted_rbc_quorum_selector -- --nocapture`
+    (`8` tests passed)
+
+## 2026-06-08 DA/RBC status snapshot recovery hardening
+
+- Hardened the operator-facing RBC status snapshot recovery path so temp and
+  main `sessions.norito` files are both decoded and validated before selection.
+  The reader now promotes a newer completed temp snapshot, removes stale temp
+  snapshots once a newer main file wins, and continues to use main on equal
+  timestamps.
+- Checked persisted status timestamp conversion before disk snapshots are
+  reported or loaded. Future-dated and unrepresentable persisted status entries
+  are dropped, and all-invalid snapshot files are removed, while live in-memory
+  status updates preserve the prior TTL behavior for caller-supplied future
+  timestamps.
+- Added regressions for newer-temp promotion over main, stale-temp removal,
+  future-dated status-store rejection, and adversarial `u64::MAX` timestamp
+  rejection.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib persisted_snapshot --features telemetry -- --nocapture`
+    (`5` tests passed)
+  - `cargo test -p iroha_core --lib rbc_status::tests --features telemetry -- --nocapture`
+    (`15` tests passed)
+
+## 2026-06-08 DA/RBC DELIVER quorum regression
+
+- Added a pure receiver-side RBC DELIVER acceptance regression proving a
+  one-READY session remains deferred when the receiver requires a three-vote
+  protocol quorum. This pins the production validation path separately from the
+  sender-side debug shortcut used by adversarial tests.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib evaluate_deliver_acceptance_requires_receiver_ready_quorum --features telemetry -- --nocapture`
+    (`1` test passed; build `1m 25s`)
+
+## 2026-06-08 DA/RBC status persistence observability
+
+- Hardened the operator-facing RBC status snapshot store so disk persistence
+  setup failures keep in-memory snapshots active but remain visible as a
+  persistence-unavailable state until explicit reconfiguration.
+- Updated the `sumeragi_rbc_status_persistence_disabled` metric help text to
+  cover both initialization failures and fatal write faults; successful
+  reconfiguration still clears the gauge.
+- Added a regression for a configured status-store path that is a regular file,
+  proving the memory snapshot remains usable and the persistence failure is not
+  hidden by subsequent updates.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core configure_failure_marks_persistence_unavailable_but_keeps_memory_snapshot --features telemetry -- --nocapture`
+    (`1` test passed; build `9m 05s`)
+  - `cargo test -p iroha_core --lib fatal_persist_error_disables_disk_but_keeps_memory_snapshot --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core --lib disabled_persistence_stops_future_disk_writes_until_reconfigure --features telemetry -- --nocapture`
+    (`1` test passed)
+
+## 2026-06-08 DA/RBC finalize gate hardening
+
+- Hardened DA-enabled finalization so a commit-certified pending block is
+  retained and retried instead of starting commit work while the DA gate reports
+  missing local payload data or a strict manifest guard failure.
+- Updated DA gate documentation and runtime log text to describe a blocking
+  pending gate rather than advisory availability evidence.
+- Added a regression proving commit-QC-ready finalization does not enqueue
+  commit work when the DA payload hash is unavailable, while preserving existing
+  manifest recovery and positive commit-pipeline behavior.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core finalize_pending_block_defers_until_da_payload_available --features telemetry -- --nocapture`
+    (`1` test passed; compile/runtime `14m 03s`)
+  - `cargo test -p iroha_core manifest_gate_ --features telemetry -- --nocapture`
+    (`7` tests passed)
+  - `cargo test -p iroha_core commit_pipeline_runs_with_backlog_when_commit_qc_ready --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core commit_pipeline_defers_reschedule_until_availability_timeout --features telemetry -- --nocapture`
+    (`1` test passed)
+
+## 2026-06-08 DA/RBC generic runner observation closure
+
+- Removed the last generic large-payload runner mode that synthesized a
+  commit-timing-only `RbcObservation` when endpoint observation was disabled.
+  The tight block queue scenario now requires the same RBC delivery evidence, or
+  quorum-visible delivered persisted snapshots after endpoint timeout, as the
+  other DA/RBC large-payload scenarios.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_commit_qc_with_tight_block_queue_four_peers -- --nocapture`
+    (`1` test passed; observed `4/4` chunks; runtime `54.66s`)
+
+## 2026-06-08 DA/RBC payload-loss evidence quorum
+
+- Removed the payload-loss integration fallback that continued to commit checks
+  when RBC session evidence was never observed. The scenario now requires
+  expected-height RBC session evidence on commit quorum and at least one
+  nonterminal or incomplete RBC session before accepting commit progress.
+- Tightened the same payload-loss scenario to wait for Sumeragi status snapshots
+  from the committed quorum before checking that the DA gate did not increment
+  `da_reschedule_total`.
+- Added pure regressions for the expected-height RBC session evidence parser,
+  including nonterminal detection, zero-chunk/wrong-height rejection, and
+  persisted delivered/invalid evidence separation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da rbc_session_height_evidence -- --nocapture`
+    (`3` tests passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_da_payload_loss_does_not_block_commit -- --nocapture`
+    (`1` test passed; runtime `35.18s`)
+
+## 2026-06-08 DA/RBC restart recovery fail-closed evidence
+
+- Removed restart-test fallback branches that accepted a committed block when
+  pre-restart RBC persistence or in-flight session evidence was missing. Peer
+  restart, roster-change restart, and cold restart scenarios now fail closed on
+  missing pre-restart RBC evidence before asserting recovery.
+- Tightened cold-restart recovery to require the exact pre-shutdown RBC session
+  to reappear with recovered in-memory state, preserve chunk counts, persist a
+  recovered-from-disk summary for the same `(hash, height, view)`, expose
+  terminal RBC delivery at the recovered height, and then advance the restarted
+  network before submitting the resume block.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+    (`1` test passed; runtime `56.98s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_recovers_after_restart_with_roster_change -- --nocapture`
+    (`1` test passed; runtime `46.64s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_session_recovers_after_cold_restart -- --nocapture`
+    (`1` test passed; runtime `85.33s`)
+
+## 2026-06-08 DA/RBC persisted-observation quorum fallback
+
+- Tightened the required-observation large-payload fallback used when the
+  `/v1/sumeragi/rbc/sessions` endpoint times out. Persisted RBC delivery now
+  counts only when delivered, non-invalid snapshots are present on the commit
+  quorum of distinct peers; multiple delivered summaries on one peer no longer
+  satisfy the fallback.
+- Added pure positive/negative regressions for the quorum selector and updated
+  the fail-closed timeout error to describe missing quorum-visible persisted
+  delivery evidence.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da persisted_rbc_quorum_selector -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p integration_tests --test consensus_and_da required_rbc_observation_timeout -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_da_large_payload_four_peers -- --nocapture`
+    (`2` tests passed: plain four-peer observed `4/4` chunks; RS16 observed
+    `6/6` chunks; runtime `99.76s`)
+
+## 2026-06-08 DA/RBC adversarial quorum-progress gates
+
+- Tightened the remaining adversarial DA/RBC recovery gates in
+  `sumeragi_adversarial_chunk_drop`,
+  `sumeragi_adversarial_chunk_reorder`,
+  `sumeragi_adversarial_duplicate_inits`,
+  `sumeragi_adversarial_validator_selective_drop`,
+  `sumeragi_adversarial_chunk_equivocation_marks_invalid`,
+  `sumeragi_adversarial_all_chunks_corrupted_abort`,
+  `sumeragi_adversarial_conflicting_ready_marks_invalid`, and
+  `sumeragi_adversarial_partial_chunk_withholding_stalls_delivery` so recovery
+  is accepted only after commit-quorum-visible height progress, not merely any
+  single peer reaching the target height.
+- Added a bounded quorum wait to the uniform-corruption recovery branch before
+  accepting any observed height advance, so a transient one-peer sample cannot
+  be mistaken for a durable recovery.
+- Removed the selective-drop status `unwrap_or_default` timeout fallback; status
+  collection now remains fallible after the quorum wait so missing cluster
+  evidence cannot silently become an empty recovery sample.
+- Removed the obsolete any-peer cluster-height waiter from the adversarial
+  harness. The remaining cluster-height waits in this file all use
+  `try_wait_for_cluster_height_quorum`.
+- Recorded quorum evidence in affected scenario summaries (`progress_quorum`
+  and `progress_quorum_blocks`).
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da count_heights_at_or_above_height_counts_quorum_candidates -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_drop -- --nocapture`
+    (`2` tests passed because the filter also matched
+    `sumeragi_adversarial_chunk_drop_recovery`; both summaries observed quorum
+    `3` with `3` peers at or above the target height; runtime `145.98s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_reorder -- --nocapture`
+    (`1` test passed; summary observed quorum `3` with `3` peers at or above
+    the target height; runtime `64.44s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_duplicate_inits -- --nocapture`
+    (`1` test passed; summary observed quorum `3` with `3` peers at or above
+    the target height; runtime `61.02s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_validator_selective_drop -- --nocapture`
+    (`1` test passed; runtime `64.22s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_equivocation_marks_invalid -- --nocapture`
+    (`1` test passed; runtime `54.32s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_all_chunks_corrupted_abort -- --nocapture`
+    (`1` test passed; stalled path summary observed quorum `3` with `0` peers
+    at or above the target height; runtime `33.76s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_conflicting_ready_marks_invalid -- --nocapture`
+    (`1` test passed; stalled path summary observed quorum `3` with `0` peers
+    at or above the target height; runtime `89.02s`)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_partial_chunk_withholding_stalls_delivery -- --nocapture`
+    (`1` test passed; summary observed quorum `3` with `3` peers at or above
+    the target height; runtime `111.92s`)
+
+## 2026-06-08 DA/RBC required-observation fail-closed guard
+
+- Removed the commit-timing-only fallback from required-observation DA/RBC
+  large-payload scenarios. If the RBC sessions endpoint times out, the harness
+  may still accept delivered persisted RBC snapshot evidence; if neither source
+  exposes delivery, the scenario now fails instead of synthesizing a zero-chunk
+  observation.
+- The follow-up generic runner closure removed the remaining disabled-observation
+  path from the tight-queue scenario as well.
+- Extracted the endpoint-timeout decision into a pure helper and added
+  positive/negative regressions so required-observation scenarios reject
+  commit-timing-only evidence while still accepting delivered persisted
+  snapshots.
+- Updated the active roadmap note so the DA/RBC soft-fallback closure includes
+  fail-closed required observation.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da required_rbc_observation_timeout -- --nocapture`
+    (`2` tests passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_da_large_payload_four_peers -- --nocapture`
+    (`2` tests passed: plain four-peer observed `4/4` chunks; RS16 observed
+    `6/6` chunks; runtime `82.57s`)
+  - `rg -n '^(<<<<<<<|=======($|[^=])|>>>>>>>)' roadmap.md status.md integration_tests/tests/sumeragi_adversarial.rs integration_tests/tests/sumeragi_da.rs crates/iroha_core/src/sumeragi/collectors.rs crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/commit.rs crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/sumeragi/main_loop/reschedule.rs crates/iroha_core/src/sumeragi/main_loop/roster.rs crates/iroha_core/src/sumeragi/main_loop/slot_tracker.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs crates/iroha_core/src/sumeragi/network_topology.rs`
+    returned no matches.
+  - `git diff --check`
+  - `git diff --name-only -- Cargo.lock '*/Cargo.lock'` returned no lockfile
+    changes.
+
+## 2026-06-08 DA/RBC recovery quorum tightening
+
+- Tightened `sumeragi_adversarial_chunk_drop_recovery` so the recovery phase
+  now waits for post-drop progress on the commit quorum, not just any single
+  peer, before accepting the recovered 4-peer run. The test still keeps the
+  bounded peer-skew assertion so a quorum-progress result with an unbounded
+  lagging tail remains a failure.
+- Added a focused pure helper regression for the height-counting predicate used
+  by the quorum waiter, and recorded the observed recovery quorum and quorum
+  block count in the scenario summary.
+- Updated the active roadmap wording to describe quorum-visible post-drop
+  progress for the DA/RBC recovery gate.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da count_heights_at_or_above_height_counts_quorum_candidates -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_drop_recovery -- --nocapture`
+    (`1` test passed; recovery summary observed quorum `3` with `3` peers at
+    or above the recovered height; runtime `1195.54s`)
+
+## 2026-06-08 Sumeragi roadmap stale-marker cleanup
+
+- Pruned the already-closed roadmap checkpoint spans from
+  `frontier-repair-view-change` through native AMX control-plane ingress and
+  from vNext chain-order through `worker-queue-status`, plus the duplicate
+  `kura-store-status` marker. A follow-up audit also pruned the completed
+  NPoS/proposal/Kura/WSV marker span and the post-commit/frontier/DA/handshake
+  observability span through `pacemaker-backpressure-tracker`. The current
+  pass further pruned the locked-QC, roster, pure-engine, proposal evidence,
+  liveness, and frontier-retention helper span through
+  `superseded-frontier-payload-retention`, then the remaining Sumeragi formal
+  marker tail from `stale-missing-block-request-prune` through
+  `restart-replay`. The current tree already has recorded completion evidence
+  for each removed marker: runtime parity coverage where that slice added or
+  rewired Rust behavior, benchmark builds where a performance guard was the
+  deliverable, aggregate exactness where the formal fast configs were
+  upgraded, and Apalache/TLC fast checks plus expected-failure mutation sweeps
+  for the formal helper gates.
+- Kept the unresolved prose work at the front of the `Next checkpoints` list
+  plus the operator-runbook reminder; the active Sumeragi formal marker tail is
+  now cleared out of the roadmap checkpoint list.
+- Also removed duplicate later active-roadmap mentions for the already-closed
+  commit-anchor, committed-height, roster-projection, membership ingress/status,
+  consensus-params, prevalidated-artifact, and commit-job dispatch gates.
+- Validation:
+  - Exact backtick-delimited alias scans over removed marker sets returned no
+    active `roadmap.md` matches; prose scans were used for removed
+    non-backticked marker names.
+  - `cargo fmt --all`
+  - `rg -n '^(<<<<<<<|=======($|[^=])|>>>>>>>)' roadmap.md status.md crates/iroha_core/src/sumeragi/collectors.rs crates/iroha_core/src/sumeragi/main_loop.rs crates/iroha_core/src/sumeragi/main_loop/commit.rs crates/iroha_core/src/sumeragi/main_loop/propose.rs crates/iroha_core/src/sumeragi/main_loop/reschedule.rs crates/iroha_core/src/sumeragi/main_loop/roster.rs crates/iroha_core/src/sumeragi/main_loop/slot_tracker.rs crates/iroha_core/src/sumeragi/main_loop/tests.rs crates/iroha_core/src/sumeragi/network_topology.rs`
+    returned no matches.
+  - `git diff --check`
+  - `git status --short -- roadmap.md status.md Cargo.lock '*/Cargo.lock'`
+    showed only `roadmap.md` and `status.md` modified; `git diff --name-only -- Cargo.lock '*/Cargo.lock'`
+    returned no lockfile changes.
+
+## 2026-06-08 Near-quorum preemptive escalation runtime gate
+
+- Added runtime parity coverage for
+  `SumeragiNearQuorumPreemptiveEscalationGate.tla` through
+  `near_quorum_preemptive_escalation_formal_gate_matrix`, covering budget
+  exhaustion, missing-pending fail-closed behavior, fresh missing-block request
+  suppression, in-flight range-pull suppression, delegate result authority,
+  per-tick cap behavior, and counter/progress consistency.
+- Extracted deterministic helpers for fresh-request suppression and in-flight
+  recovery suppression. A successful near-quorum missing-payload escalation now
+  contributes to the reschedule sweep `progress` return instead of only
+  incrementing the local counter.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core near_quorum_preemptive_escalation_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh near-quorum-preemptive-escalation-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh near-quorum-preemptive-escalation-fast`
+  - TLC and Apalache sweeps for all `22`
+    `near-quorum-preemptive-escalation-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/near_quorum_preemptive_escalation_{tlc,apalache}/`.
+
+## 2026-06-08 Preemptive vote-backed retransmit runtime gate
+
+- Added runtime parity coverage for
+  `SumeragiPreemptiveVoteBackedRetransmitGate.tla` through
+  `preemptive_vote_backed_retransmit_formal_gate_matrix`, covering candidate
+  rejection, missing-pending handling, vote-roster versus commit-topology target
+  selection, fail-closed no-target behavior, downstream output/action mapping,
+  pending retention, and near-quorum fanout flag exactness.
+- Extracted deterministic helpers for pre-timeout vote-backed retransmit
+  candidate admission, target-source selection, downstream action detection,
+  and the near-quorum fanout flag. The runtime preemptive handoff path now
+  delegates those decisions while retaining pending blocks after every path.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core preemptive_vote_backed_retransmit_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh preemptive-vote-backed-retransmit-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh preemptive-vote-backed-retransmit-fast`
+  - TLC and Apalache sweeps for all `22`
+    `preemptive-vote-backed-retransmit-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/preemptive_vote_backed_retransmit_{tlc,apalache}/`.
+
+## 2026-06-08 Isolated vote-backed handoff runtime gate
+
+- Added runtime parity coverage for
+  `SumeragiIsolatedVoteBackedHandoffGate.tla` through
+  `isolated_vote_backed_handoff_formal_gate_matrix`, covering admission
+  rejection, recovery seeding, body-available event replay, slot validation,
+  anchor range-pull admission, request failure handling, and reason labeling.
+- Extracted deterministic isolated handoff helpers for admission, slot
+  validation, anchor-request admission, reason matching, and final action
+  success. The runtime handoff path now uses the shared
+  `frontier_stall_reset_fallback` reason constant.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core isolated_vote_backed_handoff_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh isolated-vote-backed-handoff-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh isolated-vote-backed-handoff-fast`
+  - TLC and Apalache sweeps for all `19`
+    `isolated-vote-backed-handoff-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/isolated_vote_backed_handoff_{tlc,apalache}/`.
+
+## 2026-06-08 Quorum rebroadcast dispatch runtime gate
+
+- Added runtime parity coverage for
+  `SumeragiQuorumRebroadcastDispatchGate.tla` through
+  `quorum_rebroadcast_dispatch_formal_gate_matrix`, covering local-vote
+  gating, fail-closed relay/no-target/cooldown/backlog exits, forced fanout,
+  vote replay, missing commit-QC requests, vote-backed `BlockSyncUpdate`
+  dispatch, `BlockCreated` replay, and precommit rebroadcast marking.
+- Extracted deterministic quorum rebroadcast dispatch predicates for observed
+  vote-count flooring, forced full-fanout selection, missing commit-QC request
+  admission, vote-backed `BlockSyncUpdate` admission, `BlockCreated` replay,
+  and marker stamping. The actor still performs the same side effects in the
+  same order.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core quorum_rebroadcast_dispatch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh quorum-rebroadcast-dispatch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh quorum-rebroadcast-dispatch-fast`
+  - TLC and Apalache sweeps for all `24`
+    `quorum-rebroadcast-dispatch-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/quorum_rebroadcast_dispatch_{tlc,apalache}/`.
+
+## 2026-06-08 Completed quorum view-advance runtime gate
+
+- Added runtime parity coverage for
+  `SumeragiCompletedQuorumViewAdvanceGate.tla` through
+  `completed_quorum_view_advance_route_formal_gate_matrix` and
+  `completed_quorum_view_advance_slot_formal_gate_matrix`, covering exact and
+  generic route choice, no-slot and stale-slot exact fallback,
+  requested/active/candidate view dominance, saturating active-view increment,
+  rebroadcast latch clearing, timestamp updates, cause preservation, and
+  generic route slot-state preservation.
+- Extracted `completed_quorum_view_advance_route(...)` so completed quorum
+  reschedule routing is deterministic and stale exact slots fall through the
+  no-slot exact path instead of mutating stale slot state.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core completed_quorum_view_advance_route_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core completed_quorum_view_advance_slot_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh completed-quorum-view-advance-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh completed-quorum-view-advance-fast`
+  - TLC and Apalache sweeps for all `15`
+    `completed-quorum-view-advance-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/completed_quorum_view_advance_{tlc,apalache}/`.
+
+## 2026-06-08 Vote-backed reassembly stall runtime gate
+
+- Added runtime parity coverage for
+  `SumeragiVoteBackedReassemblyStallGate.tla` through
+  `vote_backed_reassembly_stall_formal_gate_matrix`, covering hard-cap
+  dominance/floor cases, exact slot-owner acceptance/rejection, recovery-owner
+  fallback, latest-progress age selection, no-owner handling, and expiry
+  threshold boundaries.
+- Extracted deterministic helpers for vote-backed reassembly hard-cap
+  arithmetic, owner stall-age source selection, and expiry. The actor methods
+  delegate to those helpers with the same frontier slot and recovery state.
+  Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core vote_backed_reassembly_stall_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh vote-backed-reassembly-stall-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh vote-backed-reassembly-stall-fast`
+  - TLC and Apalache sweeps for all `19`
+    `vote-backed-reassembly-stall-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/vote_backed_reassembly_stall_{tlc,apalache}/`.
+
+## 2026-06-08 RBC availability reschedule runtime gate
+
+- Added runtime parity coverage for `SumeragiRbcAvailabilityRescheduleGate.tla`
+  through `rbc_availability_reschedule_formal_gate_matrix`, covering the formal
+  DA-disabled, availability-timeout boundary, timeout-zero pending, local
+  payload, pending-entry, absent/invalid/delivered session, complete-ready,
+  missing-chunk, zero-total, not-ready, and complete-but-not-ready cases.
+- Latest hardening keeps zero-total non-invalid READY sessions in the unresolved
+  set before the availability timeout; the timeout boundary still releases the
+  gate. The TLA model now mirrors this by treating zero-total as availability
+  deficit evidence rather than a terminal complete session.
+- Extracted `rbc_availability_unresolved_for_reschedule_decision(...)` so the
+  actor method delegates DA/RBC availability gating to a deterministic helper.
+  Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core rbc_availability_reschedule_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh rbc-availability-reschedule-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh rbc-availability-reschedule-fast`
+  - TLC and Apalache sweeps for all `13` `rbc-availability-reschedule-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/rbc_availability_reschedule_{tlc,apalache}/`.
+
+## 2026-06-08 Quorum reschedule backoff runtime gate
+
+- Added runtime parity coverage for `SumeragiQuorumRescheduleBackoffGate.tla`
+  through `quorum_reschedule_backoff_formal_gate_matrix`, covering the formal
+  base-zero, vote-deficit multiplier, quorum-stall escalation, resend-window
+  floor, fast-resend admission, and fast-resend rejection cases.
+- The matrix drives `adaptive_quorum_reschedule_backoff(...)`,
+  `contiguous_frontier_vote_backed_resend_window(...)`, and
+  `contiguous_frontier_vote_backed_fast_resend_window(...)` directly. Runtime
+  behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core quorum_reschedule_backoff_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh quorum-reschedule-backoff-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh quorum-reschedule-backoff-fast`
+  - TLC and Apalache sweeps for all `20` `quorum-reschedule-backoff-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/quorum_reschedule_backoff_{tlc,apalache}/`.
+
+## 2026-06-08 Paced retransmit target runtime gate
+
+- Added runtime parity coverage for `SumeragiPacedRetransmitTargetsGate.tla`
+  through `paced_retransmit_targets_formal_gate_matrix`, covering fail-closed
+  zero/empty input, pre-cap order and duplicate preservation, over-limit
+  sort/dedup behavior, deterministic height/view rotation offsets, modulo
+  handling, limit-one truncation, and dedup-before-sort divergence cases.
+- Extracted `paced_retransmit_targets(...)` so the actor method delegates to a
+  deterministic helper. Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core paced_retransmit_targets_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh paced-retransmit-targets-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh paced-retransmit-targets-fast`
+  - TLC and Apalache sweeps for all `17` `paced-retransmit-targets-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/paced_retransmit_targets_{tlc,apalache}/`.
+
+## 2026-06-08 Retransmit backpressure pacing runtime gate
+
+- Added runtime parity coverage for `SumeragiRetransmitBackpressureGate.tla`
+  through `retransmit_backpressure_formal_gate_matrix`, covering all formal
+  queue pressure, RBC pressure, additive combined pressure, target-limit
+  rounding/liveness, cooldown multiplier, consensus/near-quorum backoff, and
+  near-quorum timeout clamp cases.
+- The matrix drives `retransmit_pressure_score(...)`,
+  `retransmit_target_limit(...)`, `retransmit_cooldown_multiplier(...)`,
+  `consensus_ingress_reschedule_backoff(...)`, and
+  `near_quorum_payload_timeout(...)` directly. Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core retransmit_backpressure_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh retransmit-backpressure-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh retransmit-backpressure-fast`
+  - TLC and Apalache sweeps for all `22` `retransmit-backpressure-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/retransmit_backpressure_{tlc,apalache}/`.
+
+## 2026-06-08 Quorum retransmit target runtime gate
+
+- Added runtime parity coverage for
+  `SumeragiQuorumRetransmitTargetsGate.tla` through
+  `quorum_retransmit_targets_formal_gate_matrix`, covering all formal
+  empty/local-only, below-quorum missing target, near-quorum full fanout,
+  at-quorum, zero-minimum, all-observed, mapping-failure, local-middle, and
+  post-view-mapped target-selection cases.
+- Extracted `quorum_retransmit_targets_from_observed_peers(...)` and
+  `quorum_retransmit_near_commit_quorum(...)` so
+  `quorum_retransmit_targets_for_missing_votes(...)` keeps vote-log and
+  view-topology mapping concerns separate from deterministic target selection.
+  Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core quorum_retransmit_targets_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `cargo test -p iroha_core quorum_retransmit_targets --lib --features telemetry -- --nocapture`
+    (`6` tests passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh quorum-retransmit-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 JVM_ARGS='-Xss16m -Xmx8192m' scripts/formal/sumeragi_apalache.sh quorum-retransmit-fast`
+    (default `4` GiB Apalache heap was insufficient for this model)
+  - TLC sweeps for all `12` `quorum-retransmit-bug-*` modes, plus Apalache
+    sweeps for all `12` modes with `JVM_ARGS='-Xss16m -Xmx8192m'`; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/quorum_retransmit_{tlc,apalache}/`.
+
+## 2026-06-08 P2P topology refresh runtime gate
+
+- Added runtime parity coverage for `SumeragiP2pTopologyRefreshGate.tla`
+  through `p2p_topology_refresh_formal_gate_matrix`, covering all formal empty,
+  unchanged, changed, trusted-network, stray rebroadcast, local-seen latch,
+  local-removal, empty-after-seen, and local-return cases.
+- Extracted the local-peer seen/removed branch into
+  `topology_refresh_local_status(...)` and reused it from
+  `refresh_p2p_topology_with_current(...)`. Runtime behavior is unchanged.
+- The matrix drives `topology_refresh_decision(...)`,
+  `topology_advertisement_for_refresh(...)`,
+  `topology_update_for_local_removal(...)`,
+  `topology_refresh_local_status(...)`, and the trusted-network topology helper
+  directly.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core p2p_topology_refresh_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh p2p-topology-refresh-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh p2p-topology-refresh-fast`
+  - TLC and Apalache sweeps for all `22` `p2p-topology-refresh-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/p2p_topology_refresh_{tlc,apalache}/`.
+
+## 2026-06-08 Trusted-peer P2P topology runtime gate
+
+- Added runtime parity coverage for `SumeragiP2pTopologyTrustedGate.tla`
+  through `p2p_topology_trusted_formal_gate_matrix`, covering all formal world,
+  trusted observer, trusted dedup, local-absent, ordered duplicate stray, and
+  empty-world/trusted cases.
+- The matrix drives `p2p_topology_with_trusted(...)` and
+  `peer_ids_outside_topology(...)` directly, asserting deduplicated topology
+  size plus observed-order stray filtering. Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core p2p_topology_trusted_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh p2p-topology-trusted-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh p2p-topology-trusted-fast`
+  - TLC and Apalache sweeps for all `9` `p2p-topology-trusted-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/p2p_topology_trusted_{tlc,apalache}/`.
+
+## 2026-06-08 Active topology selection runtime gate
+
+- Added runtime parity coverage for
+  `SumeragiActiveTopologySelectionGate.tla` through
+  `active_topology_selection_formal_gate_matrix`, covering all formal source
+  priority, BLS filtering, dedup/canonical-sort, PoP filtering, quorum
+  fallback, trusted fallback, and empty-source cases.
+- The matrix drives `derive_active_topology_from_views(...)` directly with
+  commit, world, and trusted-peer sources. Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core active_topology_selection_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh active-topology-selection-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh active-topology-selection-fast`
+  - TLC and Apalache sweeps for all `15`
+    `active-topology-selection-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/active_topology_selection_{tlc,apalache}/`.
+
+## 2026-06-08 Topology fanout runtime gate
+
+- Added table-driven runtime parity coverage for
+  `SumeragiTopologyFanoutGate.tla` through
+  `topology_fanout_formal_gate_matrix`, covering all formal redundant-send
+  count, view-change quorum, redundant floor, and tail-fanout cases.
+- The matrix drives `redundant_send_r_from_len(...)`,
+  `Topology::min_votes_for_view_change()`,
+  `Topology::redundant_send_r_floor(...)`, and
+  `Topology::topology_fanout_from_tail(...)` directly. Runtime behavior is
+  unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core topology_fanout_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh topology-fanout-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh topology-fanout-fast`
+  - TLC and Apalache sweeps for all `18` `topology-fanout-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/topology_fanout_{tlc,apalache}/`.
+
+## 2026-06-08 PRF leader/shuffle runtime gate
+
+- Added table-driven runtime parity coverage for
+  `SumeragiPrfLeaderShuffleGate.tla` through
+  `prf_leader_shuffle_formal_gate_matrix`, covering leader selection for
+  empty/single/multi-peer rosters, view modulo periodicity, full-cycle
+  distinctness, PRF shuffle permutation properties, and
+  `shuffled_for_prf_seed(...)` canonicalization/dedup/view-reset behavior.
+- The matrix drives `Topology::leader_index_prf(...)`,
+  `Topology::shuffle_prf(...)`, `Topology::prf_shuffled_indices(...)`, and
+  `shuffled_for_prf_seed(...)` directly. Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core prf_leader_shuffle_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh prf-leader-shuffle-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh prf-leader-shuffle-fast`
+  - TLC and Apalache sweeps for all `15` `prf-leader-shuffle-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/prf_leader_shuffle_{tlc,apalache}/`.
+
+## 2026-06-08 Topology mutation runtime gate
+
+- Added table-driven runtime parity coverage for
+  `SumeragiTopologyMutationGate.tla` through
+  `topology_mutation_formal_gate_matrix`, covering the formal rotation,
+  nth-rotation, construction, peer-list update, block-commit reset, and
+  canonicalization cases.
+- The matrix drives `Topology::new(...)`,
+  `Topology::rotate_preserve_view_to_front(...)`,
+  `Topology::nth_rotation(...)`, `Topology::update_peer_list(...)`,
+  `Topology::block_committed(...)`, and `Topology::canonicalize_order()`
+  directly. It also checks that rewind attempts are rejected without mutating
+  the topology state. Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core topology_mutation_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed; the expected view-rewind rejection is caught inside the
+    test)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh topology-mutation-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh topology-mutation-fast`
+  - TLC and Apalache sweeps for all `22` `topology-mutation-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/topology_mutation_{tlc,apalache}/`.
+
+## 2026-06-08 Collector selection runtime gate
+
+- Added table-driven runtime parity coverage for
+  `SumeragiCollectorSelectionGate.tla` through
+  `collector_selection_formal_gate_matrix`, covering all `13` formal cases
+  across quorum/proxy-tail derivation, effective collector fanout, default
+  no-wrap selection, fallback wrap selection, PRF collector contracts, and
+  deterministic wrapper source selection.
+- The matrix drives `commit_quorum_from_len(...)`,
+  `Topology::collector_fanout_floor(...)`,
+  `Topology::collector_indices_k(...)`,
+  `Topology::collector_indices_k_fallback(...)`,
+  `Topology::collector_indices_k_prf(...)`, and
+  `deterministic_collectors(...)` directly. Empty topology behavior is covered
+  through the length-based quorum helper because `Topology::new(...)` enforces
+  non-empty rosters.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core collector_selection_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh collector-selection-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh collector-selection-fast`
+  - TLC and Apalache sweeps for all `18` `collector-selection-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/collector_selection_{tlc,apalache}/`.
+
+## 2026-06-08 Lane interleave runtime gate
+
+- Added table-driven runtime parity coverage for
+  `SumeragiLaneInterleaveGate.tla` through
+  `lane_interleave_formal_gate_matrix`, covering all `9` formal cases: empty,
+  single item, single lane, balanced two-lane input, skewed two-lane input,
+  start-lane rotation, wrapped offset rotation, sorted lane order independent
+  of first-seen order, and later-round missing lanes.
+- The matrix drives `interleave_lane_indices_from_offset(...)`,
+  `interleave_lane_indices_for_slot(...)`, and the test-only zero-offset
+  wrapper `interleave_lane_indices(...)` directly. Runtime behavior is
+  unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core lane_interleave_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh lane-interleave-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh lane-interleave-fast`
+  - TLC and Apalache sweeps for all `11` `lane-interleave-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/lane_interleave_{tlc,apalache}/`.
+
+## 2026-06-08 Collector plan runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiCollectorPlanGate.tla` through
+  `collector_plan_formal_gate_matrix`, covering all `8` formal constructor,
+  cursor, exhaustion, and gossip-fallback cases.
+- The matrix drives `CollectorPlan::new(...)`, `CollectorPlan::default()`,
+  `CollectorPlan::with_sent(...)`, `targets()`, `peek()`, iterator `next()`,
+  `sent_count()`, `exhausted()`, `trigger_gossip()`, and
+  `gossip_triggered()` directly. Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core collector_plan_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh collector-plan-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh collector-plan-fast`
+  - TLC and Apalache sweeps for all `17` `collector-plan-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/collector_plan_{tlc,apalache}/`.
+
+## 2026-06-08 Commitment snapshot builder runtime gate
+
+- Expanded runtime parity coverage for
+  `SumeragiCommitmentSnapshotBuilderGate.tla` through
+  `commitment_snapshot_builder_formal_gate_matrix`, covering two lane entries
+  and two lane/dataspace entries inserted out of order.
+- The matrix confirms block height/hash preservation, lane/dataspace ids,
+  tx/chunk counts, RBC byte totals, TEU totals, and BTreeMap iteration order in
+  `build_commitment_snapshots_from_totals(...)`. Runtime behavior is
+  unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core commitment_snapshot_builder_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh commitment-snapshot-builder-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh commitment-snapshot-builder-fast`
+  - TLC and Apalache sweeps for all `6`
+    `commitment-snapshot-builder-bug-*` modes; all produced the expected
+    invariant rejection. Sweep logs are under
+    `target/formal_sweeps/commitment_snapshot_builder_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal batch runtime gate
+
+- Added inline runtime parity coverage for `SumeragiProposalBatchGate.tla`
+  through `proposal_batch_formal_gate_matrix`, covering the formal trim cases
+  for no excess, one-tail removal, multi-tail removal, singleton preservation,
+  zero-size flooring, and routing-plan companion alignment.
+- The same matrix covers canonicalization for empty, singleton,
+  already-sorted, reverse-key, duplicate-key stable-sort, and plan-aware
+  proposal batches, confirming transaction, route, plan, and size companions
+  stay aligned. Runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_batch_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh proposal-batch-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh proposal-batch-fast`
+  - TLC and Apalache sweeps for all `19` `proposal-batch-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_batch_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal defer-warning throttle runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiProposalDeferWarningThrottleGate.tla` through
+  `proposal_defer_warning_throttle_formal_gate_matrix`, covering all `15`
+  formal throttle cases: first emission, within-cooldown suppression, cooldown
+  boundary emission, suppressed-count replay, kind/hash/height/view key
+  separation, empty-topology view normalization, empty proposal/finalize kind
+  separation, zero-cooldown bypass, and GC retention/pruning boundaries.
+- The matrix drives `ProposalDeferWarningThrottle::allow(...)` directly and
+  inspects the internal retention map for the GC boundary cases; runtime
+  behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_defer_warning_throttle_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh proposal-defer-warning-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh proposal-defer-warning-fast`
+  - TLC and Apalache sweeps for all `15` `proposal-defer-warning-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_defer_warning_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal backpressure runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiProposalBackpressureGate.tla` through
+  `proposal_backpressure_formal_gate_matrix`, covering all `14` formal
+  backpressure combinations across healthy, pacing-only queue/consensus
+  pressure, hard active-pending/RBC/relay pressure, mixed hard+pacing pressure,
+  and all-signals pressure.
+- The matrix drives `ProposalBackpressure::should_defer()`,
+  `ProposalBackpressure::only_pacing_backpressure()`, and
+  `proposal_backpressure_allows_queue_work(...)` directly; runtime behavior is
+  unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_backpressure_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh proposal-backpressure-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh proposal-backpressure-fast`
+  - TLC and Apalache sweeps for all `19` `proposal-backpressure-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_backpressure_{tlc,apalache}/`.
+
+## 2026-06-08 Non-RBC payload budget runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiNonRbcPayloadBudgetGate.tla` through
+  `non_rbc_payload_budget_formal_gate_matrix`, covering all `9` formal cases:
+  unset zero/below/equal/above-headroom frame caps, a large unset frame cap,
+  config below/equal/above the adjusted cap, and config with a frame cap below
+  headroom.
+- The matrix confirms the helper uses saturating headroom subtraction and then
+  clamps the optional configured payload cap against the adjusted frame cap;
+  runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core non_rbc_payload_budget_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh non-rbc-payload-budget-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh non-rbc-payload-budget-fast`
+  - TLC and Apalache sweeps for all `9` `non-rbc-payload-budget-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/non_rbc_payload_budget_{tlc,apalache}/`.
+
+## 2026-06-08 Proposal budget runtime gate
+
+- Added inline runtime parity coverage for `SumeragiProposalBudgetGate.tla`
+  through `proposal_budget_formal_gate_matrix`, covering queue cap flooring and
+  at-cap backpressure, DA payload budget selection, transaction config/param
+  caps, fast-finality transaction caps, fast-finality gas caps, and stale
+  proposal-window scaling.
+- The matrix drives the Rust helpers with production constants while preserving
+  the formal model's branch contracts; runtime behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core proposal_budget_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh proposal-budget-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh proposal-budget-fast`
+  - TLC and Apalache sweeps for all `21` `proposal-budget-bug-*` modes; all
+    produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/proposal_budget_{tlc,apalache}/`.
+
+## 2026-06-08 Missing-block clear reason runtime gate
+
+- Confirmed inline runtime coverage for `SumeragiMissingBlockClearGate.tla`
+  against `missing_block_clear_allowed(...)`, covering the complete four-case
+  table: payload-available clears with known and missing local payloads, and
+  obsolete clears with known and missing local payloads.
+- The helper remains intentionally strict: `PayloadAvailable` clears require
+  the payload to be known locally, while `Obsolete` clears are allowed
+  regardless of local payload availability.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core missing_block_clear_allowed_requires_payload_when_not_obsolete --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh missing-block-clear-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh missing-block-clear-fast`
+  - TLC and Apalache sweeps for all `7` `missing-block-clear-bug-*` modes;
+    all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/missing_block_clear_{tlc,apalache}/`.
+
+## 2026-06-08 Missing-request clear runtime gate
+
+- Added inline runtime parity coverage for
+  `SumeragiMissingRequestClearGate.tla`, covering all `15` preservation and
+  obsolete-clear outcomes across locked-QC rejection and stale `BlockCreated`
+  drop paths.
+- The matrix exercises same-hash lock preservation, committed-history
+  conflicts, committed-lock ancestry conflicts with known and locally traced
+  parents, durable locked-block competitors, unresolved future branches,
+  uncommitted-lock preservation, clean future extension, stale-below-tip
+  clearing, payload-available clearing, committed-conflict clearing, and
+  committed-tip missing-payload preservation.
+- Made `should_clear_missing_request_on_stale_block_drop(...)` crate-visible so
+  the formal parity test can cover the same internal helper directly; runtime
+  behavior is unchanged.
+- Validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core missing_request_clear_formal_gate_matrix --lib --features telemetry -- --nocapture`
+    (`1` test passed)
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH scripts/formal/sumeragi_tlc.sh missing-request-clear-fast`
+  - `JAVA_HOME=/opt/homebrew/opt/openjdk@17 PATH=/opt/homebrew/opt/openjdk@17/bin:$PATH APALACHE_ALLOW_DOCKER=0 scripts/formal/sumeragi_apalache.sh missing-request-clear-fast`
+  - TLC and Apalache sweeps for all `14` `missing-request-clear-bug-*`
+    modes; all produced the expected invariant rejection. Sweep logs are under
+    `target/formal_sweeps/missing_request_clear_{tlc,apalache}/`.
 
 ## 2026-06-08 BlockCreated admission runtime gate
 
@@ -22643,8 +24716,10 @@ Last updated: 2026-06-09
   `SumeragiRbcAvailabilityRescheduleGate.tla`.
 - The aggregate invariant composes exact DA-disabled, timeout, local-payload,
   absent-session, invalid-session, delivered-session, complete-ready, and
-  zero-total READY fail-open paths with pending-entry, zero-timeout pending,
-  missing-chunk, missing-READY, and complete-but-not-ready blocking paths.
+  pending-entry, zero-timeout pending, zero-total READY, missing-chunk,
+  missing-READY, and complete-but-not-ready blocking paths. Current policy
+  treats zero-total READY as unresolved before the availability timeout, not as
+  fail-open terminal evidence.
 - Wired the aggregate through `SumeragiRbcAvailabilityRescheduleGate_fast.cfg`,
   and documented the proof in the formal README and roadmap.
 - Validation:
@@ -24948,7 +27023,8 @@ Last updated: 2026-06-09
   sessions are suppressed, delivered and undelivered complete matches skip
   refetch, incomplete delivered/undelivered sessions still hydrate, wrong
   payload hashes refetch, sessions without a trusted payload hash refetch, and
-  zero-chunk exact metadata stays complete.
+  zero-chunk exact metadata now refetches under the current DA/RBC payload
+  evidence policy.
 - Re-ran the committed-height stale-message helper coverage and cross-checked
   the recovery-helper formal model under both TLC and Apalache.
 - Validation:
@@ -97580,7 +99656,8 @@ Last updated: 2026-06-09
   path plus direct invariants for stale/current/future RBC message commitment,
   Kura presence, invalid-session suppression, delivered/complete session
   suppression, payload-hash mismatch refetches, missing-payload refetches, and
-  zero-chunk completeness.
+  zero-chunk recovery behavior. Current DA/RBC policy treats zero-chunk exact
+  metadata as requiring recovery instead of complete payload evidence.
 - Extended `scripts/formal/sumeragi_tlc.sh` with `rbc-recovery-helper-fast`
   and `rbc-recovery-helper-bug-*` modes so RBC stale-message and
   payload-refetch helper behavior has independent TLC coverage for the same
@@ -105356,8 +107433,9 @@ Last updated: 2026-06-09
   `rbc_availability_unresolved_for_reschedule(...)`.
 - The model proves DA-disabled mode, elapsed nonzero availability timeout,
   local payload availability, absent sessions, invalid sessions, delivered
-  sessions, complete READY sessions, and zero-total complete sessions all fail
-  open for quorum rescheduling.
+  sessions, and complete READY sessions all fail open for quorum rescheduling.
+  Current policy keeps zero-total READY sessions unresolved before the
+  availability timeout.
 - It also proves rescheduling remains blocked before the timeout for pending
   RBC entries, incomplete nonzero chunk sets, and sessions without READY
   quorum, including the zero-timeout case where timeout expiry is disabled.
@@ -114458,9 +116536,10 @@ Last updated: 2026-06-09
   `rbc_session_has_complete_chunk_payload_for_progress(...)`.
 - Captured the RBC progress predicate: metadata must be valid and match the
   session key before chunk or local fallback checks, complete chunks count only
-  for accepted zero-chunk/expected-root/no-expected-root cases, and failed chunk
-  material falls back to local authoritative payload bytes only when height,
-  view, and payload hash match exactly.
+  when positive chunk bytes verify against the advertised payload hash, and
+  failed chunk material falls back to local authoritative payload bytes only
+  when height, view, and payload hash match exactly. Current policy no longer
+  accepts zero-chunk metadata as complete chunk evidence.
 - Added the CI fast config plus 19 expected-failure configs covering metadata
   gate bypasses, complete-chunk rejection, invalid chunk acceptance, local
   fallback loss, and local height/view/hash/absence acceptance. Wired the family
@@ -114470,7 +116549,7 @@ Last updated: 2026-06-09
   - `python3 scripts/formal/check_sumeragi_formal_coverage.py` (`294 PR modes, 5400 expected-failure modes, 5694 documented modes`)
   - `bash -n scripts/formal/sumeragi_apalache.sh ci/check_sumeragi_formal.sh ci/check_sumeragi_formal_expected_failures.sh`
   - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-fast`
-  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-{accept-invalid-session,accept-missing-payload-hash,accept-missing-header,accept-missing-leader-signature,accept-header-hash-mismatch,accept-header-height-mismatch,accept-header-view-mismatch,reject-zero-chunk-expected-root,reject-expected-root-match,reject-no-expected-observed-root,accept-zero-missing-expected-root,accept-incomplete-chunks,accept-root-mismatch,accept-missing-observed-root,skip-local-fallback,accept-local-wrong-height,accept-local-wrong-view,accept-local-wrong-hash,accept-local-absent}` (all 19 expected rejections observed)
+  - `JAVA_HOME=/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home PATH="/opt/homebrew/Cellar/openjdk@21/21.0.11/libexec/openjdk.jdk/Contents/Home/bin:$PATH" APALACHE_ALLOW_DOCKER=0 bash scripts/formal/sumeragi_apalache.sh rbc-authoritative-payload-progress-bug-{accept-invalid-session,accept-missing-payload-hash,accept-missing-header,accept-missing-leader-signature,accept-header-hash-mismatch,accept-header-height-mismatch,accept-header-view-mismatch,accept-zero-chunk-expected-root,reject-expected-root-match,reject-no-expected-observed-root,accept-zero-missing-expected-root,accept-incomplete-chunks,accept-root-mismatch,accept-missing-observed-root,skip-local-fallback,accept-local-wrong-height,accept-local-wrong-view,accept-local-wrong-hash,accept-local-absent}` (all 19 expected rejections observed)
 
 ## 2026-05-27 Sumeragi authoritative payload progress formal gate
 
@@ -125136,9 +127215,9 @@ Last updated: 2026-06-09
   local Kura block marks even future-height message traffic as committed
   evidence.
 - It proves payload recovery is skipped for invalid sessions, delivered
-  complete payload matches, complete undelivered payload matches, and zero-chunk
-  complete matches, while incomplete chunks, missing payload hashes, and
-  mismatched payload hashes still require recovery.
+  complete payload matches, and complete undelivered payload matches, while
+  zero-chunk metadata, incomplete chunks, missing payload hashes, and mismatched
+  payload hashes still require recovery under the current policy.
 - Added fourteen expected-failure configs under
   `docs/formal/sumeragi/SumeragiRbcRecoveryHelperGate_bug_*.cfg` and wired
   `rbc-recovery-helper-fast` / `rbc-recovery-helper-bug-*` through the formal

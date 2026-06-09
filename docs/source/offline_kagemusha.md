@@ -328,8 +328,14 @@ reported `.vk`, `.pk`, key-artifacts package, verifier-keys package, and
 `.record.norito` byte sizes and SHA-256 digests against the adjacent artifact
 bytes.
 All-zero Reserved-lineage artifacts and plain-text or all-zero placeholder
-compact key artifacts are rejected as non-production fixtures even when their
-SHA-256 digest and byte size match the evidence JSON.
+compact key artifacts are rejected from the same prefix captured while hashing
+the artifact, so non-production fixtures cannot be hidden by replacing the path
+between digest and content checks even when their SHA-256 digest and byte size
+match the evidence JSON.
+The compact key evidence helper also hashes, sizes, decodes, and parses the
+generator log from one opened regular file, so helper-generated evidence cannot
+combine a digest from one log with parsed artifact claims from a later path
+replacement.
 Marker-stuffed proof logs with extra passing tests are rejected
 even when their digest matches the evidence JSON. The evidence JSON and its nested `circuit_ids`,
 `artifacts`, and `tests` objects are closed schemas, so extra release claims are
@@ -444,15 +450,18 @@ symlink output leaves as symlinks even when the target is missing,
 rerun parent and ancestor checks after creating missing output parents, write
 `signed-evidence.json` and `sha256sum.txt` through fsynced same-directory
 temporary files, atomically replace the final outputs, read them back before
-success, and preserve existing outputs if replacement fails. The
+success through opened-file identity binding, and preserve existing outputs if
+replacement fails. The
 signing helper revalidates the signed-evidence output as a regular non-symlink,
-non-hardlinked file before hashing it back into `slot.json`. Direct SHA-256 manifest parser and verifier helper
+non-hardlinked file before hashing it back into `slot.json`, then binds that
+digest read to the opened file identity. Direct SHA-256 manifest parser and verifier helper
 calls reject secret-looking slot paths, unreadable slot-root metadata,
 symlinked slot roots, and symlinked slot ancestors before parsing
 `sha256sum.txt` or traversing slot artifacts. Direct
 parser and verifier calls also reject unreadable-metadata and hardlinked
 `sha256sum.txt` manifests before reading manifest bytes or discovering slot
-files. Direct slot-file discovery reports unreadable slot-root and
+files, and the parser binds `sha256sum.txt` bytes to the opened file identity
+so post-preflight regular-file swaps fail closed. Direct slot-file discovery reports unreadable slot-root and
 artifact-directory metadata through caller error lists, returns no artifacts for
 secret-looking slot paths, symlinked slot ancestors, missing roots,
 non-directory roots, or symlinked slot roots before traversal, and skips

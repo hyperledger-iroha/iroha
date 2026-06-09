@@ -3,8 +3,11 @@
 //! Network ingress, signature workers, block validation, RBC, telemetry, and
 //! storage are adapters around this deterministic engine.
 //!
-//! TODO: route the remaining network, worker, and storage adapters through this
-//! engine so consensus decisions are owned by one state machine.
+//! This module is the deterministic reference engine used by the Sumeragi
+//! safety model and unit tests. The production [`crate::sumeragi::main_loop`]
+//! actor owns the concrete network, validation-worker, RBC, telemetry, and
+//! storage adapters; when those consensus decisions change, mirror the behavior
+//! here so the pure model and live adapter path stay aligned.
 
 use std::{
     borrow::Borrow,
@@ -145,7 +148,7 @@ pub struct EngineState {
 #[derive(Clone, Debug)]
 pub struct ConsensusEngine {
     state: EngineState,
-    available_payloads: BTreeSet<(HashOf<BlockHeader>, Hash)>,
+    available_payloads: BTreeSet<(HashOf<BlockHeader>, HashOf<BlockHeader>, Hash)>,
     pending_finality: BTreeMap<HashOf<BlockHeader>, Certificate>,
     committed: BTreeMap<u64, HashOf<BlockHeader>>,
     pending_reconfiguration: Option<ValidatorSetChange>,
@@ -208,12 +211,19 @@ impl ConsensusEngine {
     }
 
     fn on_tick(&mut self) -> Vec<ConsensusOutput> {
+        if self.current_height_committed() {
+            return Vec::new();
+        }
         let next = RoundId {
             view: self.state.round.view.saturating_add(1),
             ..self.state.round
         };
         self.state.round = next;
-        self.state.phase = EnginePhase::Proposal;
+        self.state.phase = if self.state.pending_finality.is_some() {
+            EnginePhase::PendingFinality
+        } else {
+            EnginePhase::Proposal
+        };
         self.validating = None;
         vec![
             ConsensusOutput::SignVote {
@@ -232,10 +242,13 @@ impl ConsensusEngine {
 
     fn on_proposal(&mut self, proposal: EngineProposal) -> Vec<ConsensusOutput> {
         if self.state.phase != EnginePhase::Proposal
+            || self.current_height_committed()
+            || self.state.pending_finality.is_some()
             || proposal.round != self.state.round
-            || !proposal
-                .highest_qc
-                .is_none_or(|highest| qc_ref_is_compatible_with_round(&highest, &proposal.round))
+            || !proposal.highest_qc.is_none_or(|highest| {
+                qc_ref_is_compatible_with_round(&highest, &proposal.round)
+                    && qc_ref_has_locking_phase(&highest)
+            })
             || !self.proposal_satisfies_lock(&proposal)
         {
             return Vec::new();
@@ -264,7 +277,7 @@ impl ConsensusEngine {
         }
         proposal
             .highest_qc
-            .is_some_and(|highest| qc_ref_cmp(&highest, &locked_qc).is_gt())
+            .is_some_and(|highest| qc_ref_round_cmp(&highest, &locked_qc).is_gt())
     }
 
     fn on_certificate(&mut self, certificate: Certificate) -> Vec<ConsensusOutput> {
@@ -278,6 +291,9 @@ impl ConsensusEngine {
             return Vec::new();
         }
         if certificate.quorum_policy != self.state.quorum_policy {
+            return Vec::new();
+        }
+        if certificate.phase != CertPhase::NewView && certificate.highest_qc.is_some() {
             return Vec::new();
         }
         if matches!(certificate.phase, CertPhase::Prepare | CertPhase::Commit)
@@ -299,7 +315,8 @@ impl ConsensusEngine {
             }
             return Vec::new();
         }
-        if self.state.phase == EnginePhase::PendingFinality {
+        if self.state.phase == EnginePhase::PendingFinality || self.state.pending_finality.is_some()
+        {
             return Vec::new();
         }
         let qc = qc_ref_from_certificate(&certificate);
@@ -318,13 +335,22 @@ impl ConsensusEngine {
 
     fn on_commit_qc(&mut self, certificate: Certificate) -> Vec<ConsensusOutput> {
         self.validating = None;
+        let qc = qc_ref_from_certificate(&certificate);
         if let Some(pending) = self.state.pending_finality {
             if pending != certificate.subject {
                 return Vec::new();
             }
+            self.record_highest_qc(qc);
+            let should_replace = self
+                .pending_finality
+                .get(&certificate.subject.block_hash)
+                .is_none_or(|existing| qc_ref_cmp(&qc, &qc_ref_from_certificate(existing)).is_gt());
+            if should_replace {
+                self.pending_finality
+                    .insert(certificate.subject.block_hash, certificate);
+            }
             return Vec::new();
         }
-        let qc = qc_ref_from_certificate(&certificate);
         self.record_highest_qc(qc);
         if self.has_payload(certificate.subject) {
             self.commit_subject(certificate.subject)
@@ -345,16 +371,24 @@ impl ConsensusEngine {
         if certificate.round.view <= self.state.round.view {
             return Vec::new();
         }
-        if let Some(highest) = certificate.highest_qc
-            && !qc_ref_is_compatible_with_round(&highest, &certificate.round)
+        let Some(highest) = certificate.highest_qc else {
+            return Vec::new();
+        };
+        if !qc_ref_is_compatible_with_round(&highest, &certificate.round)
+            || !qc_ref_has_locking_phase(&highest)
+            || certificate.subject.block_hash != highest.subject_block_hash
         {
             return Vec::new();
         }
-        if let Some(highest) = certificate.highest_qc {
+        if self.highest_qc_preserves_pending_finality(&highest) {
             self.record_highest_qc(highest);
         }
         self.state.round = certificate.round;
-        self.state.phase = EnginePhase::Proposal;
+        self.state.phase = if self.state.pending_finality.is_some() {
+            EnginePhase::PendingFinality
+        } else {
+            EnginePhase::Proposal
+        };
         self.validating = None;
         vec![ConsensusOutput::AdvanceView {
             round: certificate.round,
@@ -362,14 +396,17 @@ impl ConsensusEngine {
     }
 
     fn on_payload_available(&mut self, subject: BlockSubject) -> Vec<ConsensusOutput> {
-        self.available_payloads
-            .insert((subject.block_hash, subject.payload_hash));
+        if self.current_height_committed() {
+            return Vec::new();
+        }
         let Some(certificate) = self.pending_finality.get(&subject.block_hash).cloned() else {
+            self.available_payloads.insert(payload_key(subject));
             return Vec::new();
         };
         if certificate.subject != subject {
             return Vec::new();
         }
+        self.available_payloads.insert(payload_key(subject));
         self.pending_finality.remove(&subject.block_hash);
         self.commit_subject(subject)
     }
@@ -425,13 +462,23 @@ impl ConsensusEngine {
         block_hash: HashOf<BlockHeader>,
         reconfiguration: Option<ValidatorSetChange>,
     ) -> Vec<ConsensusOutput> {
+        if round.height > self.state.round.height {
+            return Vec::new();
+        }
+        let current_height = round.height == self.state.round.height;
+        let current_context = current_height
+            && round.epoch == self.state.round.epoch
+            && round.validator_set_id == self.state.round.validator_set_id;
+        if current_height && !current_context {
+            return Vec::new();
+        }
         if let Some(committed) = self.committed.get(&round.height) {
             if committed != &block_hash {
                 return Vec::new();
             }
         } else {
             self.committed.insert(round.height, block_hash);
-            if round.height == self.state.round.height {
+            if current_context {
                 self.validating = None;
                 self.state.phase = EnginePhase::Proposal;
                 if let Some(pending) = self.state.pending_finality.take() {
@@ -445,7 +492,10 @@ impl ConsensusEngine {
                 .pending_reconfiguration
                 .as_ref()
                 .is_some_and(|pending| pending.activation_height == change.activation_height);
-            if change.activation_height == round.height.saturating_add(1) && !already_scheduled {
+            if current_context
+                && change.activation_height == round.height.saturating_add(1)
+                && !already_scheduled
+            {
                 self.pending_reconfiguration = Some(change.clone());
                 outputs.push(ConsensusOutput::ActivateValidatorSet(change));
             }
@@ -454,8 +504,11 @@ impl ConsensusEngine {
     }
 
     fn has_payload(&self, subject: BlockSubject) -> bool {
-        self.available_payloads
-            .contains(&(subject.block_hash, subject.payload_hash))
+        self.available_payloads.contains(&payload_key(subject))
+    }
+
+    fn current_height_committed(&self) -> bool {
+        self.committed.contains_key(&self.state.round.height)
     }
 
     fn commit_subject(&mut self, subject: BlockSubject) -> Vec<ConsensusOutput> {
@@ -481,6 +534,15 @@ impl ConsensusEngine {
             self.state.highest_qc = Some(candidate);
         }
     }
+
+    fn highest_qc_preserves_pending_finality(&self, candidate: &QcRef) -> bool {
+        let Some(pending) = self.state.pending_finality else {
+            return true;
+        };
+        candidate.height != self.state.round.height
+            || (candidate.subject_block_hash == pending.block_hash
+                && candidate.phase == CertPhase::Commit)
+    }
 }
 
 /// Select the deterministic highest QC from a new-view quorum.
@@ -494,9 +556,13 @@ where
         .into_iter()
         .filter_map(|certificate| {
             let certificate = certificate.borrow();
-            (certificate.phase == CertPhase::NewView)
-                .then_some(certificate.highest_qc)
-                .flatten()
+            if certificate.phase != CertPhase::NewView {
+                return None;
+            }
+            let highest = certificate.highest_qc?;
+            (qc_ref_has_locking_phase(&highest)
+                && certificate.subject.block_hash == highest.subject_block_hash)
+                .then_some(highest)
         })
         .max_by(qc_ref_cmp)
 }
@@ -524,9 +590,19 @@ fn qc_ref_cmp(left: &QcRef, right: &QcRef) -> std::cmp::Ordering {
         })
 }
 
+fn qc_ref_round_cmp(left: &QcRef, right: &QcRef) -> std::cmp::Ordering {
+    left.height
+        .cmp(&right.height)
+        .then_with(|| left.view.cmp(&right.view))
+}
+
 fn qc_ref_is_compatible_with_round(qc: &QcRef, round: &RoundId) -> bool {
     qc.epoch == round.epoch
         && (qc.height < round.height || (qc.height == round.height && qc.view <= round.view))
+}
+
+fn qc_ref_has_locking_phase(qc: &QcRef) -> bool {
+    matches!(qc.phase, CertPhase::Prepare | CertPhase::Commit)
 }
 
 const fn phase_rank(phase: CertPhase) -> u8 {
@@ -543,6 +619,14 @@ fn qc_subject(qc: QcRef) -> BlockSubject {
         block_hash: qc.subject_block_hash,
         payload_hash: Hash::prehashed([0; Hash::LENGTH]),
     }
+}
+
+fn payload_key(subject: BlockSubject) -> (HashOf<BlockHeader>, HashOf<BlockHeader>, Hash) {
+    (
+        subject.parent_block,
+        subject.block_hash,
+        subject.payload_hash,
+    )
 }
 
 fn zero_subject() -> BlockSubject {
@@ -603,6 +687,12 @@ mod tests {
         }
     }
 
+    fn new_view_certificate(round: RoundId, highest_qc: QcRef) -> Certificate {
+        let mut certificate = certificate(CertPhase::NewView, round, qc_subject(highest_qc));
+        certificate.highest_qc = Some(highest_qc);
+        certificate
+    }
+
     #[test]
     fn conflicting_blocks_cannot_both_commit_at_same_height() {
         let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
@@ -635,6 +725,49 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(engine.committed_at(1), Some(first.block_hash));
+    }
+
+    #[test]
+    fn conflicting_payload_availability_during_pending_finality_is_ignored() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let pending = subject(b"pending-payload");
+        let mut wrong_payload = pending;
+        wrong_payload.payload_hash = Hash::new(b"wrong-payload-for-same-block");
+
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(certificate(
+                CertPhase::Commit,
+                round(0),
+                pending,
+            ))),
+            vec![ConsensusOutput::FetchPayload(PayloadRequest {
+                round: round(0),
+                block_hash: pending.block_hash,
+                payload_hash: pending.payload_hash,
+            })]
+        );
+        assert_eq!(engine.state().phase, EnginePhase::PendingFinality);
+        assert_eq!(engine.state().pending_finality, Some(pending));
+
+        assert!(
+            engine
+                .handle(ConsensusInput::PayloadAvailable(wrong_payload))
+                .is_empty(),
+            "wrong payload hash for the pending block must not finalize"
+        );
+        assert_eq!(engine.state().phase, EnginePhase::PendingFinality);
+        assert_eq!(engine.state().pending_finality, Some(pending));
+        assert_eq!(engine.committed_at(1), None);
+        assert!(
+            !engine.has_payload(wrong_payload),
+            "wrong same-block payload evidence must not be cached while a commit QC waits for another payload hash"
+        );
+
+        assert_eq!(
+            engine.handle(ConsensusInput::PayloadAvailable(pending)),
+            vec![ConsensusOutput::CommitBlock { subject: pending }]
+        );
+        assert_eq!(engine.committed_at(1), Some(pending.block_hash));
     }
 
     #[test]
@@ -816,14 +949,13 @@ mod tests {
                 .is_empty()
         );
 
-        let mut new_view = certificate(CertPhase::NewView, round(1), locked);
-        new_view.highest_qc = engine.state().highest_qc;
+        let locked_qc = engine.state().locked_qc.expect("lock recorded");
+        let new_view = new_view_certificate(round(1), locked_qc);
         assert_eq!(
             engine.handle(ConsensusInput::Certificate(new_view)),
             vec![ConsensusOutput::AdvanceView { round: round(1) }]
         );
 
-        let locked_qc = engine.state().locked_qc.expect("lock recorded");
         assert!(
             engine
                 .handle(ConsensusInput::Proposal(EngineProposal {
@@ -879,6 +1011,51 @@ mod tests {
     }
 
     #[test]
+    fn same_round_higher_phase_qc_cannot_unlock_conflicting_proposal() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let locked = subject(b"locked-against-same-round-phase");
+        let conflicting = subject(b"conflicting-same-round-phase");
+        assert!(
+            !engine
+                .handle(ConsensusInput::Certificate(certificate(
+                    CertPhase::Prepare,
+                    round(0),
+                    locked,
+                )))
+                .is_empty()
+        );
+        let locked_qc = engine.state().locked_qc.expect("lock recorded");
+
+        let new_view = new_view_certificate(round(1), locked_qc);
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(new_view)),
+            vec![ConsensusOutput::AdvanceView { round: round(1) }]
+        );
+
+        let same_round_commit = QcRef {
+            subject_block_hash: block_hash(b"same-round-conflicting-commit"),
+            phase: CertPhase::Commit,
+            ..locked_qc
+        };
+        assert!(
+            qc_ref_cmp(&same_round_commit, &locked_qc).is_gt(),
+            "phase ranking still treats commit as the stronger same-round QC for highest-QC selection"
+        );
+        assert!(
+            engine
+                .handle(ConsensusInput::Proposal(EngineProposal {
+                    round: round(1),
+                    subject: conflicting,
+                    highest_qc: Some(same_round_commit),
+                }))
+                .is_empty(),
+            "conflicting proposals must require a newer height/view QC, not only a higher same-round phase"
+        );
+        assert_eq!(engine.state().phase, EnginePhase::Proposal);
+        assert_eq!(engine.state().locked_qc, Some(locked_qc));
+    }
+
+    #[test]
     fn proposal_with_incompatible_highest_qc_cannot_unlock_conflicting_lock() {
         for highest_qc in [
             QcRef {
@@ -902,6 +1079,13 @@ mod tests {
                 subject_block_hash: block_hash(b"proposal-wrong-epoch"),
                 phase: CertPhase::Commit,
             },
+            QcRef {
+                height: 1,
+                view: 0,
+                epoch: 0,
+                subject_block_hash: block_hash(b"proposal-new-view-phase"),
+                phase: CertPhase::NewView,
+            },
         ] {
             let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
             let locked = subject(b"proposal-incompatible-lock");
@@ -917,8 +1101,7 @@ mod tests {
             );
             let locked_qc = engine.state().locked_qc.expect("lock recorded");
 
-            let mut new_view = certificate(CertPhase::NewView, round(1), locked);
-            new_view.highest_qc = Some(locked_qc);
+            let new_view = new_view_certificate(round(1), locked_qc);
             assert_eq!(
                 engine.handle(ConsensusInput::Certificate(new_view)),
                 vec![ConsensusOutput::AdvanceView { round: round(1) }]
@@ -962,6 +1145,13 @@ mod tests {
                 epoch: 1,
                 subject_block_hash: block_hash(b"unlocked-proposal-wrong-epoch"),
                 phase: CertPhase::Commit,
+            },
+            QcRef {
+                height: 1,
+                view: 0,
+                epoch: 0,
+                subject_block_hash: block_hash(b"unlocked-proposal-new-view-phase"),
+                phase: CertPhase::NewView,
             },
         ] {
             let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
@@ -1083,6 +1273,45 @@ mod tests {
     }
 
     #[test]
+    fn prepare_and_commit_certificates_reject_carried_highest_qc() {
+        let highest_qc = QcRef {
+            height: 1,
+            view: 0,
+            epoch: 0,
+            subject_block_hash: block_hash(b"carried-highest-qc"),
+            phase: CertPhase::Prepare,
+        };
+        let mut prepare = certificate(
+            CertPhase::Prepare,
+            round(0),
+            subject(b"prepare-with-highest"),
+        );
+        prepare.highest_qc = Some(highest_qc);
+
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        assert!(
+            engine
+                .handle(ConsensusInput::Certificate(prepare))
+                .is_empty()
+        );
+        assert_eq!(engine.state().phase, EnginePhase::Proposal);
+        assert_eq!(engine.state().locked_qc, None);
+        assert_eq!(engine.state().highest_qc, None);
+
+        let mut commit = certificate(CertPhase::Commit, round(0), subject(b"commit-with-highest"));
+        commit.highest_qc = Some(highest_qc);
+        assert!(
+            engine
+                .handle(ConsensusInput::Certificate(commit))
+                .is_empty()
+        );
+        assert_eq!(engine.state().phase, EnginePhase::Proposal);
+        assert_eq!(engine.state().pending_finality, None);
+        assert_eq!(engine.state().highest_qc, None);
+        assert_eq!(engine.committed_at(1), None);
+    }
+
+    #[test]
     fn prepare_and_commit_qcs_from_previous_view_are_ignored_after_timeout() {
         let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
         assert_eq!(
@@ -1154,6 +1383,25 @@ mod tests {
     }
 
     #[test]
+    fn new_view_certificate_without_highest_qc_is_ignored() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+
+        assert!(
+            engine
+                .handle(ConsensusInput::Certificate(certificate(
+                    CertPhase::NewView,
+                    round(1),
+                    zero_subject(),
+                )))
+                .is_empty(),
+            "new-view certificates must carry highest-QC evidence"
+        );
+        assert_eq!(engine.state().round, round(0));
+        assert_eq!(engine.state().phase, EnginePhase::Proposal);
+        assert_eq!(engine.state().highest_qc, None);
+    }
+
+    #[test]
     fn new_view_certificate_rejects_incompatible_highest_qc() {
         for highest_qc in [
             QcRef {
@@ -1177,10 +1425,16 @@ mod tests {
                 subject_block_hash: block_hash(b"wrong-epoch-highest"),
                 phase: CertPhase::Commit,
             },
+            QcRef {
+                height: 1,
+                view: 0,
+                epoch: 0,
+                subject_block_hash: block_hash(b"new-view-phase-highest"),
+                phase: CertPhase::NewView,
+            },
         ] {
             let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
-            let mut new_view = certificate(CertPhase::NewView, round(1), subject(b"new-view"));
-            new_view.highest_qc = Some(highest_qc);
+            let new_view = new_view_certificate(round(1), highest_qc);
 
             assert!(
                 engine
@@ -1199,13 +1453,48 @@ mod tests {
             subject_block_hash: block_hash(b"previous-height-high-view"),
             phase: CertPhase::Commit,
         };
-        let mut new_view = certificate(CertPhase::NewView, round(1), subject(b"compatible"));
-        new_view.highest_qc = Some(compatible_previous_height);
+        let new_view = new_view_certificate(round(1), compatible_previous_height);
         assert_eq!(
             engine.handle(ConsensusInput::Certificate(new_view)),
             vec![ConsensusOutput::AdvanceView { round: round(1) }]
         );
         assert_eq!(engine.state().highest_qc, Some(compatible_previous_height));
+    }
+
+    #[test]
+    fn new_view_certificate_rejects_highest_qc_subject_mismatch() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let highest = QcRef {
+            height: 1,
+            view: 0,
+            epoch: 0,
+            subject_block_hash: block_hash(b"carried-highest-subject"),
+            phase: CertPhase::Prepare,
+        };
+        let mut mismatched = certificate(
+            CertPhase::NewView,
+            round(1),
+            subject(b"mismatched-new-view-subject"),
+        );
+        mismatched.highest_qc = Some(highest);
+
+        assert!(
+            engine
+                .handle(ConsensusInput::Certificate(mismatched))
+                .is_empty(),
+            "new-view subject must match the carried highest QC subject"
+        );
+        assert_eq!(engine.state().round, round(0));
+        assert_eq!(engine.state().highest_qc, None);
+
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(new_view_certificate(
+                round(1),
+                highest
+            ))),
+            vec![ConsensusOutput::AdvanceView { round: round(1) }]
+        );
+        assert_eq!(engine.state().highest_qc, Some(highest));
     }
 
     #[test]
@@ -1218,8 +1507,7 @@ mod tests {
             subject_block_hash: block_hash(b"accepted-highest"),
             phase: CertPhase::Prepare,
         };
-        let mut current_new_view = certificate(CertPhase::NewView, round(3), subject(b"advance"));
-        current_new_view.highest_qc = Some(accepted_highest);
+        let current_new_view = new_view_certificate(round(3), accepted_highest);
         assert_eq!(
             engine.handle(ConsensusInput::Certificate(current_new_view)),
             vec![ConsensusOutput::AdvanceView { round: round(3) }]
@@ -1233,8 +1521,7 @@ mod tests {
             subject_block_hash: block_hash(b"adversarial-highest"),
             phase: CertPhase::Commit,
         };
-        let mut stale_new_view = certificate(CertPhase::NewView, round(2), subject(b"stale"));
-        stale_new_view.highest_qc = Some(adversarial_highest);
+        let stale_new_view = new_view_certificate(round(2), adversarial_highest);
         assert!(
             engine
                 .handle(ConsensusInput::Certificate(stale_new_view))
@@ -1255,8 +1542,7 @@ mod tests {
             subject_block_hash: block_hash(b"high-carried-qc"),
             phase: CertPhase::Commit,
         };
-        let mut advance_with_high = certificate(CertPhase::NewView, round(3), subject(b"high"));
-        advance_with_high.highest_qc = Some(high);
+        let advance_with_high = new_view_certificate(round(3), high);
         assert_eq!(
             engine.handle(ConsensusInput::Certificate(advance_with_high)),
             vec![ConsensusOutput::AdvanceView { round: round(3) }]
@@ -1270,8 +1556,7 @@ mod tests {
             subject_block_hash: block_hash(b"lower-carried-qc"),
             phase: CertPhase::Prepare,
         };
-        let mut advance_with_lower = certificate(CertPhase::NewView, round(4), subject(b"lower"));
-        advance_with_lower.highest_qc = Some(lower);
+        let advance_with_lower = new_view_certificate(round(4), lower);
         assert_eq!(
             engine.handle(ConsensusInput::Certificate(advance_with_lower)),
             vec![ConsensusOutput::AdvanceView { round: round(4) }]
@@ -1301,10 +1586,8 @@ mod tests {
             subject_block_hash: block_hash(b"low"),
             phase: CertPhase::Commit,
         };
-        let mut a = certificate(CertPhase::NewView, round(2), base);
-        a.highest_qc = Some(low);
-        let mut b = certificate(CertPhase::NewView, round(2), base);
-        b.highest_qc = Some(high);
+        let a = new_view_certificate(round(2), low);
+        let b = new_view_certificate(round(2), high);
 
         assert_eq!(select_highest_qc([&a, &b]), Some(high));
         assert_eq!(select_highest_qc([&b, &a]), Some(high));
@@ -1323,10 +1606,8 @@ mod tests {
             subject_block_hash: prehashed_block_hash(255),
             phase: CertPhase::Prepare,
         };
-        let mut phase_a = certificate(CertPhase::NewView, round(2), base);
-        phase_a.highest_qc = Some(phase_prepare_loses);
-        let mut phase_b = certificate(CertPhase::NewView, round(2), base);
-        phase_b.highest_qc = Some(phase_commit_wins);
+        let phase_a = new_view_certificate(round(2), phase_prepare_loses);
+        let phase_b = new_view_certificate(round(2), phase_commit_wins);
 
         assert_eq!(
             select_highest_qc([&phase_a, &phase_b]),
@@ -1342,16 +1623,14 @@ mod tests {
             view: 1,
             epoch: 0,
             subject_block_hash: prehashed_block_hash(1),
-            phase: CertPhase::NewView,
+            phase: CertPhase::Commit,
         };
         let subject_high = QcRef {
             subject_block_hash: prehashed_block_hash(2),
             ..subject_low
         };
-        let mut subject_a = certificate(CertPhase::NewView, round(2), base);
-        subject_a.highest_qc = Some(subject_low);
-        let mut subject_b = certificate(CertPhase::NewView, round(2), base);
-        subject_b.highest_qc = Some(subject_high);
+        let subject_a = new_view_certificate(round(2), subject_low);
+        let subject_b = new_view_certificate(round(2), subject_high);
 
         assert_eq!(
             select_highest_qc([&subject_a, &subject_b]),
@@ -1365,6 +1644,20 @@ mod tests {
         let prepare = certificate(CertPhase::Prepare, round(2), base);
         let commit = certificate(CertPhase::Commit, round(2), base);
         assert_eq!(select_highest_qc([prepare, commit]), None);
+
+        let non_locking = QcRef {
+            phase: CertPhase::NewView,
+            ..subject_high
+        };
+        let non_locking_a = new_view_certificate(round(2), non_locking);
+        let non_locking_b = new_view_certificate(
+            round(2),
+            QcRef {
+                subject_block_hash: prehashed_block_hash(3),
+                ..non_locking
+            },
+        );
+        assert_eq!(select_highest_qc([non_locking_a, non_locking_b]), None);
     }
 
     #[test]
@@ -1507,6 +1800,50 @@ mod tests {
     }
 
     #[test]
+    fn payload_availability_requires_exact_subject_parent() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let subject = subject(b"payload-parent-exactness");
+        let mut wrong_parent = subject;
+        wrong_parent.parent_block = block_hash(b"wrong-payload-parent");
+
+        assert!(
+            engine
+                .handle(ConsensusInput::PayloadAvailable(wrong_parent))
+                .is_empty()
+        );
+        assert!(
+            engine.has_payload(wrong_parent),
+            "the mismatched-parent payload signal may be cached only for its exact subject"
+        );
+        assert!(
+            !engine.has_payload(subject),
+            "mismatched-parent availability must not satisfy the commit-certified subject"
+        );
+
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(certificate(
+                CertPhase::Commit,
+                round(0),
+                subject,
+            ))),
+            vec![ConsensusOutput::FetchPayload(PayloadRequest {
+                round: round(0),
+                block_hash: subject.block_hash,
+                payload_hash: subject.payload_hash,
+            })],
+            "commit QC must still request the exact DA/RBC subject"
+        );
+        assert_eq!(engine.state().phase, EnginePhase::PendingFinality);
+        assert_eq!(engine.state().pending_finality, Some(subject));
+
+        assert_eq!(
+            engine.handle(ConsensusInput::PayloadAvailable(subject)),
+            vec![ConsensusOutput::CommitBlock { subject }]
+        );
+        assert_eq!(engine.committed_at(1), Some(subject.block_hash));
+    }
+
+    #[test]
     fn pending_commit_qc_replays_and_conflicts_do_not_refetch_payload() {
         let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
         let first = subject(b"first-pending-commit-qc");
@@ -1573,6 +1910,73 @@ mod tests {
                 )))
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn committed_current_height_rejects_late_proposals_and_ticks() {
+        let mut local_engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let committed = subject(b"committed-before-late-proposal");
+        assert!(
+            local_engine
+                .handle(ConsensusInput::PayloadAvailable(committed))
+                .is_empty()
+        );
+        assert_eq!(
+            local_engine.handle(ConsensusInput::Certificate(certificate(
+                CertPhase::Commit,
+                round(0),
+                committed,
+            ))),
+            vec![ConsensusOutput::CommitBlock { subject: committed }]
+        );
+        assert_eq!(local_engine.committed_at(1), Some(committed.block_hash));
+
+        let late = subject(b"late-proposal-after-local-commit");
+        assert!(
+            local_engine
+                .handle(ConsensusInput::Proposal(EngineProposal {
+                    round: round(0),
+                    subject: late,
+                    highest_qc: None,
+                }))
+                .is_empty(),
+            "late proposal for a committed height must not emit prepare vote"
+        );
+        assert!(
+            local_engine
+                .handle(ConsensusInput::Tick { now_ms: 30 })
+                .is_empty(),
+            "pacemaker tick for a committed height must not emit new-view vote"
+        );
+        assert_eq!(local_engine.state().round, round(0));
+
+        let mut storage_engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let storage_committed = block_hash(b"storage-committed-before-late-proposal");
+        assert!(
+            storage_engine
+                .handle(ConsensusInput::CommittedBlock {
+                    round: round(0),
+                    block_hash: storage_committed,
+                    reconfiguration: None,
+                })
+                .is_empty()
+        );
+        assert_eq!(storage_engine.committed_at(1), Some(storage_committed));
+        assert!(
+            storage_engine
+                .handle(ConsensusInput::Proposal(EngineProposal {
+                    round: round(0),
+                    subject: subject(b"late-proposal-after-storage-commit"),
+                    highest_qc: None,
+                }))
+                .is_empty()
+        );
+        assert!(
+            storage_engine
+                .handle(ConsensusInput::Tick { now_ms: 40 })
+                .is_empty()
+        );
+        assert_eq!(storage_engine.state().round, round(0));
     }
 
     #[test]
@@ -1648,15 +2052,42 @@ mod tests {
             ]
         );
         assert_eq!(engine.state().pending_finality, Some(pending));
-        assert_eq!(engine.state().phase, EnginePhase::Proposal);
+        assert_eq!(engine.state().phase, EnginePhase::PendingFinality);
 
-        let mut new_view = certificate(CertPhase::NewView, round(2), pending);
-        new_view.highest_qc = Some(commit_qc);
+        let new_view = new_view_certificate(round(2), commit_qc);
         assert_eq!(
             engine.handle(ConsensusInput::Certificate(new_view)),
             vec![ConsensusOutput::AdvanceView { round: round(2) }]
         );
         assert_eq!(engine.state().pending_finality, Some(pending));
+        assert_eq!(engine.state().phase, EnginePhase::PendingFinality);
+
+        let conflicting = subject(b"conflicting-proposal-while-pending-finality");
+        assert!(
+            engine
+                .handle(ConsensusInput::Proposal(EngineProposal {
+                    round: round(2),
+                    subject: conflicting,
+                    highest_qc: Some(commit_qc),
+                }))
+                .is_empty(),
+            "commit QC pending finality must block prepare votes for competing proposals"
+        );
+        assert_eq!(engine.state().pending_finality, Some(pending));
+        assert_eq!(engine.state().phase, EnginePhase::PendingFinality);
+
+        assert!(
+            engine
+                .handle(ConsensusInput::Certificate(certificate(
+                    CertPhase::Prepare,
+                    round(2),
+                    conflicting,
+                )))
+                .is_empty(),
+            "pending finality must also block competing prepare QCs"
+        );
+        assert_eq!(engine.state().pending_finality, Some(pending));
+        assert_eq!(engine.state().phase, EnginePhase::PendingFinality);
 
         assert!(
             engine
@@ -1676,6 +2107,151 @@ mod tests {
         );
         assert_eq!(engine.committed_at(1), Some(pending.block_hash));
         assert_eq!(engine.state().pending_finality, None);
+    }
+
+    #[test]
+    fn pending_finality_pins_highest_qc_across_new_view_noise() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let pending = subject(b"pending-pins-highest-qc");
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(certificate(
+                CertPhase::Commit,
+                round(0),
+                pending,
+            ))),
+            vec![ConsensusOutput::FetchPayload(PayloadRequest {
+                round: round(0),
+                block_hash: pending.block_hash,
+                payload_hash: pending.payload_hash,
+            })]
+        );
+        let commit_qc = engine.state().highest_qc.expect("commit QC recorded");
+
+        let conflicting_commit = QcRef {
+            height: 1,
+            view: 1,
+            epoch: 0,
+            subject_block_hash: block_hash(b"conflicting-new-view-highest"),
+            phase: CertPhase::Commit,
+        };
+        let conflicting_new_view = new_view_certificate(round(2), conflicting_commit);
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(conflicting_new_view)),
+            vec![ConsensusOutput::AdvanceView { round: round(2) }]
+        );
+        assert_eq!(
+            engine.state().highest_qc,
+            Some(commit_qc),
+            "pending finality must keep the exact commit QC as highest"
+        );
+        assert_eq!(engine.state().pending_finality, Some(pending));
+
+        let same_subject_prepare = QcRef {
+            height: 1,
+            view: 3,
+            epoch: 0,
+            subject_block_hash: pending.block_hash,
+            phase: CertPhase::Prepare,
+        };
+        let prepare_new_view = new_view_certificate(round(3), same_subject_prepare);
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(prepare_new_view)),
+            vec![ConsensusOutput::AdvanceView { round: round(3) }]
+        );
+        assert_eq!(
+            engine.state().highest_qc,
+            Some(commit_qc),
+            "same-block non-commit QC must not replace pending finality commit QC"
+        );
+
+        assert_eq!(
+            engine.handle(ConsensusInput::Tick { now_ms: 20 }),
+            vec![
+                ConsensusOutput::SignVote {
+                    phase: CertPhase::NewView,
+                    round: round(4),
+                    subject: qc_subject(commit_qc),
+                    highest_qc: Some(commit_qc),
+                },
+                ConsensusOutput::AdvanceView { round: round(4) },
+            ]
+        );
+        assert_eq!(engine.state().pending_finality, Some(pending));
+
+        assert_eq!(
+            engine.handle(ConsensusInput::PayloadAvailable(pending)),
+            vec![ConsensusOutput::CommitBlock { subject: pending }]
+        );
+        assert_eq!(engine.committed_at(1), Some(pending.block_hash));
+    }
+
+    #[test]
+    fn same_subject_commit_qc_refreshes_pending_finality_highest_qc() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let pending = subject(b"pending-refreshes-highest-qc");
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(certificate(
+                CertPhase::Commit,
+                round(0),
+                pending,
+            ))),
+            vec![ConsensusOutput::FetchPayload(PayloadRequest {
+                round: round(0),
+                block_hash: pending.block_hash,
+                payload_hash: pending.payload_hash,
+            })]
+        );
+        let first_commit_qc = engine.state().highest_qc.expect("first commit QC recorded");
+
+        assert_eq!(
+            engine.handle(ConsensusInput::Tick { now_ms: 10 }),
+            vec![
+                ConsensusOutput::SignVote {
+                    phase: CertPhase::NewView,
+                    round: round(1),
+                    subject: qc_subject(first_commit_qc),
+                    highest_qc: Some(first_commit_qc),
+                },
+                ConsensusOutput::AdvanceView { round: round(1) },
+            ]
+        );
+
+        assert!(
+            engine
+                .handle(ConsensusInput::Certificate(certificate(
+                    CertPhase::Commit,
+                    round(1),
+                    pending,
+                )))
+                .is_empty()
+        );
+        let refreshed_commit_qc = QcRef {
+            view: 1,
+            ..first_commit_qc
+        };
+        assert_eq!(engine.state().highest_qc, Some(refreshed_commit_qc));
+        assert_eq!(engine.state().pending_finality, Some(pending));
+        assert_eq!(engine.committed_at(1), None);
+
+        assert_eq!(
+            engine.handle(ConsensusInput::Tick { now_ms: 20 }),
+            vec![
+                ConsensusOutput::SignVote {
+                    phase: CertPhase::NewView,
+                    round: round(2),
+                    subject: qc_subject(refreshed_commit_qc),
+                    highest_qc: Some(refreshed_commit_qc),
+                },
+                ConsensusOutput::AdvanceView { round: round(2) },
+            ],
+            "subsequent view-change votes should carry the freshest same-block commit QC"
+        );
+
+        assert_eq!(
+            engine.handle(ConsensusInput::PayloadAvailable(pending)),
+            vec![ConsensusOutput::CommitBlock { subject: pending }]
+        );
+        assert_eq!(engine.committed_at(1), Some(pending.block_hash));
     }
 
     #[test]
@@ -1807,8 +2383,7 @@ mod tests {
         );
         let locked_qc = engine.state().highest_qc.expect("highest QC recorded");
 
-        let mut new_view = certificate(CertPhase::NewView, round(1), locked);
-        new_view.highest_qc = Some(locked_qc);
+        let new_view = new_view_certificate(round(1), locked_qc);
         assert_eq!(
             engine.handle(ConsensusInput::Certificate(new_view)),
             vec![ConsensusOutput::AdvanceView { round: round(1) }]
@@ -1878,8 +2453,10 @@ mod tests {
                 )))
                 .is_empty()
         );
-        let mut new_view = certificate(CertPhase::NewView, round(1), locked);
-        new_view.highest_qc = engine.state().highest_qc;
+        let new_view = new_view_certificate(
+            round(1),
+            engine.state().highest_qc.expect("highest QC recorded"),
+        );
         assert!(
             !engine
                 .handle(ConsensusInput::Certificate(new_view))
@@ -2157,6 +2734,10 @@ mod tests {
                 .is_empty(),
             "storage finality already superseded the pending fetch"
         );
+        assert!(
+            !engine.has_payload(pending),
+            "late payload after storage finality must not be cached"
+        );
     }
 
     #[test]
@@ -2197,6 +2778,10 @@ mod tests {
                 .is_empty(),
             "late payload for the superseded pending finality must not commit"
         );
+        assert!(
+            !engine.has_payload(pending),
+            "late payload after conflicting storage finality must not be cached"
+        );
         assert_eq!(engine.committed_at(1), Some(committed));
     }
 
@@ -2230,12 +2815,112 @@ mod tests {
         );
         assert_eq!(engine.state().phase, EnginePhase::PendingFinality);
         assert_eq!(engine.state().pending_finality, Some(pending));
+        assert_eq!(
+            engine.committed_at(other_round.height),
+            None,
+            "future committed-block notification must not pre-populate finality"
+        );
 
         assert_eq!(
             engine.handle(ConsensusInput::PayloadAvailable(pending)),
             vec![ConsensusOutput::CommitBlock { subject: pending }]
         );
         assert_eq!(engine.committed_at(1), Some(pending.block_hash));
+        assert_eq!(engine.committed_at(other_round.height), None);
+    }
+
+    #[test]
+    fn current_height_committed_block_notification_requires_round_context() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let pending = subject(b"pending-before-wrong-context-storage-commit");
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(certificate(
+                CertPhase::Commit,
+                round(0),
+                pending,
+            ))),
+            vec![ConsensusOutput::FetchPayload(PayloadRequest {
+                round: round(0),
+                block_hash: pending.block_hash,
+                payload_hash: pending.payload_hash,
+            })]
+        );
+
+        let mut wrong_epoch = round(0);
+        wrong_epoch.epoch = wrong_epoch.epoch.saturating_add(1);
+        let mut wrong_validator_set = round(0);
+        wrong_validator_set.validator_set_id = validator_set(b"wrong-storage-validator-set");
+
+        for round in [wrong_epoch, wrong_validator_set] {
+            assert!(
+                engine
+                    .handle(ConsensusInput::CommittedBlock {
+                        round,
+                        block_hash: pending.block_hash,
+                        reconfiguration: None,
+                    })
+                    .is_empty()
+            );
+            assert_eq!(engine.state().phase, EnginePhase::PendingFinality);
+            assert_eq!(engine.state().pending_finality, Some(pending));
+            assert_eq!(engine.committed_at(1), None);
+        }
+
+        assert_eq!(
+            engine.handle(ConsensusInput::PayloadAvailable(pending)),
+            vec![ConsensusOutput::CommitBlock { subject: pending }]
+        );
+        assert_eq!(engine.committed_at(1), Some(pending.block_hash));
+    }
+
+    #[test]
+    fn future_committed_block_notification_cannot_activate_reconfiguration() {
+        let mut engine = ConsensusEngine::new(round(0), QuorumPolicy::PermissionedCount(4));
+        let pending = subject(b"pending-before-future-reconfiguration");
+        assert_eq!(
+            engine.handle(ConsensusInput::Certificate(certificate(
+                CertPhase::Commit,
+                round(0),
+                pending,
+            ))),
+            vec![ConsensusOutput::FetchPayload(PayloadRequest {
+                round: round(0),
+                block_hash: pending.block_hash,
+                payload_hash: pending.payload_hash,
+            })]
+        );
+
+        let mut future_round = round(0);
+        future_round.height = future_round.height.saturating_add(1);
+        let future_change = ValidatorSetChange {
+            activation_height: future_round.height.saturating_add(1),
+            validator_set_id: validator_set(b"future-not-yet-activatable"),
+            quorum_policy: QuorumPolicy::PermissionedCount(5),
+        };
+        assert!(
+            engine
+                .handle(ConsensusInput::CommittedBlock {
+                    round: future_round,
+                    block_hash: block_hash(b"future-reconfig-commit"),
+                    reconfiguration: Some(future_change),
+                })
+                .is_empty()
+        );
+        assert_eq!(engine.state().phase, EnginePhase::PendingFinality);
+        assert_eq!(engine.state().pending_finality, Some(pending));
+        assert_eq!(engine.pending_reconfiguration, None);
+        assert_eq!(
+            engine.committed_at(future_round.height),
+            None,
+            "future committed-block notification must not cache finality"
+        );
+
+        assert_eq!(
+            engine.handle(ConsensusInput::PayloadAvailable(pending)),
+            vec![ConsensusOutput::CommitBlock { subject: pending }]
+        );
+        assert_eq!(engine.committed_at(1), Some(pending.block_hash));
+        assert_eq!(engine.committed_at(future_round.height), None);
     }
 
     #[test]

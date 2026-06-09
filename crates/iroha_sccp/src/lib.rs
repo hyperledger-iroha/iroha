@@ -843,6 +843,10 @@ mod json_utils {
     pub mod u64_string {
         use super::{Error, Parser, ToString, json, parse_decimal_u64};
 
+        #[expect(
+            clippy::trivially_copy_pass_by_ref,
+            reason = "norito field serializers receive values by reference"
+        )]
         pub fn serialize(value: &u64, out: &mut String) {
             json::write_json_string(&value.to_string(), out);
         }

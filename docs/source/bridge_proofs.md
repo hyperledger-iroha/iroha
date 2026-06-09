@@ -12,7 +12,8 @@ Torii now exposes two SCCP bundle families:
 ## SCCP launch scope
 
 The active SCCP surface is limited to Ethereum, BSC, Solana, TON, and TRON.
-Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
+Retired runtime-network families outside that launch scope are not supported
+for now.
 Torii public SCCP discovery, proof manifests, route readiness, SDK helpers, and
 operator scripts must advertise only those lanes. Unsupported domain ids fail at
 the absent-manifest/backend boundary rather than routing through diagnostic
@@ -2663,8 +2664,9 @@ all-lanes domain roster or chain-label drift from the production remote lanes,
 non-ready or blocked all-lanes root or lane summaries,
 missing-record lane flags,
 blocked required source-adapter gates, required source-adapter gate summaries
-that omit the named gate hash or expected audit hash roles, non-required gate
-summaries that carry forged hash material,
+that omit the named gate hash or expected audit hash roles, duplicate or
+governed-hash-replayed source-gate audit roles, non-required gate summaries
+that carry forged hash material,
 blocked release-checklist items,
 blocked portal/mobile submission surface rows,
 malformed nested all-lanes lane

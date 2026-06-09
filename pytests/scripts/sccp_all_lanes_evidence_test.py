@@ -6365,6 +6365,70 @@ def test_all_lanes_release_checklist_requires_source_gate_hash_and_audits():
     ) in blockers
 
 
+def test_all_lanes_release_checklist_rejects_source_gate_hash_role_replay():
+    module = load_evidence_module()
+    route_canary_hash = hex32(0x66)
+    duplicate_audit_hash = hex32(0x67)
+    lane = {
+        "domain": module.SCCP_DOMAIN_SOL,
+        "chain": "sol",
+        "records": {
+            "source_verifier_material": True,
+            "source_adapter_deployment": True,
+            "destination_rollout": True,
+            "route_allowlist": True,
+        },
+        "source_record_hashes": {
+            "source_verifier_material_hash": hex32(0x62),
+            "source_adapter_engine_deployment_hash": hex32(0x63),
+        },
+        "source_adapter_gate": {
+            "required": True,
+            "ready": True,
+            "gate_hash": route_canary_hash,
+            "audit_hashes": {
+                "solana_tower_replay_verifier_hash": duplicate_audit_hash,
+                "solana_full_accountsdb_lattice_verifier_hash": duplicate_audit_hash,
+                "solana_bank_fork_choice_verifier_hash": hex32(0x64),
+                "solana_full_light_client_gate_hash": route_canary_hash,
+            },
+            "blockers": [],
+        },
+        "destination_binding": {
+            "expected_destination_binding_hash_matches": True,
+            "destination_binding_hash": hex32(0x65),
+        },
+        "route_allowlist": {
+            "expected_route_allowlist_hash_matches": True,
+            "route_allowlist_hash": hex32(0x68),
+            "route_canary": {
+                "status": "passed",
+                "evidence_hash": route_canary_hash,
+                "evidence_source": "solana_live_programdata_snapshot",
+                "evidence_bound": True,
+            },
+        },
+        "blockers": [],
+    }
+
+    checklist = module._release_checklist([lane], [])
+    items = {item["id"]: item for item in checklist["items"]}
+    blockers = "\n".join(items["governed_deployment_evidence"]["blockers"])
+
+    assert checklist["ready"] is False
+    assert items["governed_deployment_evidence"]["ready"] is False
+    assert (
+        "domain 3 (sol): source adapter gate hash role "
+        "audit_hashes.solana_tower_replay_verifier_hash must not reuse "
+        "audit_hashes.solana_full_accountsdb_lattice_verifier_hash"
+    ) in blockers
+    assert (
+        "domain 3 (sol): source adapter gate hash role "
+        "audit_hashes.solana_full_light_client_gate_hash must not reuse "
+        "route_canary_evidence_hash"
+    ) in blockers
+
+
 def test_all_lanes_release_checklist_rejects_non_required_source_gate_material():
     module = load_evidence_module()
     lane = {

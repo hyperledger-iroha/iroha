@@ -10,7 +10,6 @@ track detailed unfinished engineering work.
 
 The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
 runtime-network families outside that launch scope are not supported for now.
-Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
@@ -131,7 +130,9 @@ material and non-ASCII material before schema namespace mismatch diagnostics can
 echo schema-provided attribute values.
 XSD and XML payload identifiers, XML fixture namespace/name identifiers, and
 schema-root attribute names now use label-only secret-looking or printable-ASCII
-diagnostics instead of echoing schema-provided names or namespace URIs.
+diagnostics instead of echoing schema-provided names or namespace URIs. These
+schema and fixture identifiers also reject overlong ASCII spellings before
+schema/root mismatch diagnostics can print them.
 XML fixture contents are scanned before optional `xmllint` validation, and
 secret-looking, control-bearing, or non-ASCII validator output is redacted before
 it can be reflected in XSD preflight diagnostics.
@@ -201,6 +202,11 @@ operator-provided marker strings.
 Rail receipt `message_type` syntax now uses ASCII-only digits and the direct
 receipt verifier, evidence replay, readiness replay, and XSD profile catalog
 all reject Unicode digit confusables before unsupported-type diagnostics.
+XSD profile-catalog enum values such as rails, embedded signature policies,
+reference datasets, and structured-address modes also reject overlong ASCII
+spellings before unknown-value diagnostics can print them.
+Profile-catalog profile IDs are capped before duplicate-ID or
+missing-schema-version diagnostics can echo catalog-provided IDs.
 XSD profile-catalog `message_def_id` and version entries use the same ASCII-only
 digit policy before missing-schema or skipped-version diagnostics can classify
 Unicode digit confusables as concrete ISO message IDs.
@@ -611,10 +617,10 @@ redistributable schemas, and official trust/revocation bundles.
 	  digest, and material/execution statement derivation rejects governed
 	  public-key drift before material hashing, witness hashing, or Core
 	  proof-helper execution.
-	  BFV-shaped native AIR envelopes now also preflight canonical STARK/FRI
-	  parameters, public digest binding, opened row/path shape, and the
-	  no-unmasked-private-row-opening policy before Core reports the current
-	  dedicated verifier boundary.
+	  BFV-shaped native AIR envelopes now also preflight the canonical
+	  transcript label, statement-bound domain tag, STARK/FRI parameters, public
+	  digest binding, opened row/path shape, and the no-unmasked-private-row
+	  policy before Core reports the current dedicated verifier boundary.
 	  Remaining production work is the audited full-bootstrap arithmetic
 	  proof-producing backend plus release-grade prover/verifier artifacts, not the
 	  Core verifier gate, arithmetic trace-profile digest binding,

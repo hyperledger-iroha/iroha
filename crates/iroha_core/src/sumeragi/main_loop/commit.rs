@@ -2023,7 +2023,7 @@ impl Actor {
                     height = pending_height,
                     view = pending_view,
                     block = ?block_hash,
-                    "Committed block (DA availability advisory)"
+                    "Committed block after DA availability gate cleared"
                 );
                 committed = true;
             }
@@ -3044,6 +3044,7 @@ impl Actor {
             pending.mark_kura_persisted();
         }
         let gate = self.refresh_da_gate_status(&mut pending);
+        record_da_gate_telemetry(self.telemetry_handle(), &gate);
         if let Some(reason) = gate.reason {
             debug!(
                 ?reason,
@@ -3051,8 +3052,10 @@ impl Actor {
                 height = pending_height,
                 view = pending_view,
                 block = %block_hash,
-                "DA availability missing; finalize continues"
+                "DA availability missing; deferring finalize until gate clears"
             );
+            self.pending.pending_blocks.insert(block_hash, pending);
+            return false;
         }
         let (consensus_mode, mode_tag, _) = self.consensus_context_for_height(pending_height);
         let (chain_order_hash, rechain_seq) =
@@ -7487,7 +7490,7 @@ impl Actor {
                         height = pending.height,
                         view = pending.view,
                         da_enabled,
-                        "DA manifest unavailable or mismatched (advisory)"
+                        "DA manifest unavailable or mismatched; keeping gate active"
                     );
                     return DaGateStatus {
                         reason: Some(reason),
@@ -8396,11 +8399,6 @@ impl Actor {
         height: u64,
         purge_persisted_sessions: bool,
     ) {
-        let chunk_store = if self.ensure_rbc_chunk_store() {
-            self.subsystems.da_rbc.rbc.chunk_store.as_ref()
-        } else {
-            None
-        };
         let telemetry = self.telemetry_handle().cloned();
         let delivered_payload_fallbacks = self
             .subsystems
@@ -8415,6 +8413,23 @@ impl Actor {
                 })
             })
             .collect();
+        let pending_keys: Vec<_> = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .pending
+            .keys()
+            .filter(|(hash, _, _)| *hash == block_hash)
+            .copied()
+            .collect();
+        for key in pending_keys {
+            self.clear_pending_rbc(&key);
+        }
+        let chunk_store = if self.ensure_rbc_chunk_store() {
+            self.subsystems.da_rbc.rbc.chunk_store.as_ref()
+        } else {
+            None
+        };
         let (lane_totals, dataspace_totals) = super::drain_rbc_state_for_block(
             block_hash,
             &mut self.subsystems.da_rbc.rbc.sessions,
@@ -8441,22 +8456,29 @@ impl Actor {
             .collect();
         for key in orphan_keys {
             self.refresh_retained_rbc_summary_from_local_payload(key);
-            // Commit cleanup should retain the final status summary for observability and
-            // restart recovery, while still clearing all runtime-only RBC state. If the live
-            // session has already retired (for example, exact-frontier snapshots), commit means
-            // the retained summary has reached the same delivered terminal state with the
-            // complete deterministic chunk set available from the local block payload.
+            // Commit cleanup retains the final status summary for observability and restart
+            // recovery, while still clearing runtime-only RBC state. If the live session has
+            // already retired, only local payload evidence can promote the retained summary to
+            // the same delivered terminal state; counters alone are not authoritative.
             if let Some(mut summary) = self.subsystems.da_rbc.rbc.status_handle.get(&key)
                 && !summary.invalid
             {
+                let local_payload_matches_summary = summary.payload_hash.is_some_and(|expected| {
+                    self.with_local_payload_for_progress(key.0, |height, view, _bytes, hash| {
+                        height == key.1 && view == key.2 && expected == hash
+                    })
+                    .unwrap_or(false)
+                });
+                let can_promote_from_local_payload = local_payload_matches_summary
+                    && summary.total_chunks > 0
+                    && summary.received_chunks <= summary.total_chunks;
                 let mut changed = false;
-                if self.block_payload_available_for_progress(key.0)
-                    && summary.received_chunks != summary.total_chunks
+                if can_promote_from_local_payload && summary.received_chunks != summary.total_chunks
                 {
                     summary.received_chunks = summary.total_chunks;
                     changed = true;
                 }
-                if !summary.delivered {
+                if can_promote_from_local_payload && !summary.delivered {
                     summary.delivered = true;
                     changed = true;
                 }
@@ -8513,13 +8535,16 @@ impl Actor {
         {
             return;
         }
-        let expected_payload_hash = summary.payload_hash;
+        let Some(expected_payload_hash) = summary.payload_hash else {
+            return;
+        };
         let bytes = self
             .with_local_payload_for_progress(
                 key.0,
-                |_height, _view, payload_bytes, local_payload_hash| {
-                    expected_payload_hash
-                        .is_none_or(|expected| local_payload_hash == expected)
+                |height, view, payload_bytes, local_payload_hash| {
+                    (height == key.1
+                        && view == key.2
+                        && local_payload_hash == expected_payload_hash)
                         .then(|| u64::try_from(payload_bytes.len()).unwrap_or(u64::MAX))
                 },
             )
@@ -8533,29 +8558,44 @@ impl Actor {
         &mut self,
         key: super::rbc_store::SessionKey,
     ) {
-        let needs_refresh = self
+        let Some(expected_payload_hash) = self
             .subsystems
             .da_rbc
             .rbc
             .status_handle
             .get(&key)
-            .is_none_or(|summary| {
-                !summary.invalid && summary.received_chunks < summary.total_chunks
-            });
-        if !needs_refresh {
+            .map(|summary| {
+                (!summary.invalid && summary.received_chunks < summary.total_chunks)
+                    .then_some(summary.payload_hash)
+            })
+            .unwrap_or(Some(None))
+        else {
             return;
-        }
+        };
 
         let Some(block) = self.local_signed_block_for_hash(key.0) else {
             return;
         };
+        let header = block.header();
+        if block.hash() != key.0
+            || header.height().get() != key.1
+            || header.view_change_index() != key.2
+        {
+            return;
+        }
         let (payload_bytes, payload_hash) = self
-            .with_local_payload_for_progress(key.0, |_, _, bytes, hash| (bytes.to_vec(), hash))
+            .with_local_payload_for_progress(key.0, |height, view, bytes, hash| {
+                (height == key.1 && view == key.2).then(|| (bytes.to_vec(), hash))
+            })
+            .flatten()
             .unwrap_or_else(|| {
                 let payload_bytes = super::proposals::block_payload_bytes(block.as_ref());
                 let payload_hash = Hash::new(&payload_bytes);
                 (payload_bytes, payload_hash)
             });
+        if expected_payload_hash.is_some_and(|expected| expected != payload_hash) {
+            return;
+        }
         if let Err(err) = self.persist_exact_frontier_rbc_recovery_snapshot(
             key,
             block.as_ref(),
@@ -9402,7 +9442,7 @@ impl Actor {
         self.subsystems.propose.proposal_cache =
             ProposalCache::new(self.recovery_pending_proposal_cap());
         self.reset_collector_state();
-        self.subsystems.da_rbc.rbc.pending.clear();
+        self.clear_all_pending_rbc();
         self.subsystems.da_rbc.rbc.sessions.clear();
         self.subsystems.da_rbc.rbc.session_rosters.clear();
         self.subsystems.da_rbc.rbc.session_roster_sources.clear();
@@ -9463,11 +9503,12 @@ impl Actor {
         let expected_topology = p2p_topology_with_trusted(&current, trusted_peers);
 
         let local_peer = self.common_config.peer.id();
-        let local_in_world = current.contains(local_peer);
-        if local_in_world {
-            self.local_peer_seen_in_world = true;
-        }
-        let removed = self.local_peer_seen_in_world && !local_in_world && !current.is_empty();
+        let (local_peer_seen, removed) = super::topology_refresh_local_status(
+            &current,
+            local_peer,
+            self.local_peer_seen_in_world,
+        );
+        self.local_peer_seen_in_world = local_peer_seen;
         crate::sumeragi::status::set_local_removed_from_world(removed);
         if removed {
             iroha_logger::warn!(
@@ -10053,6 +10094,128 @@ mod tests {
             pops,
         };
         (trusted, peer_id)
+    }
+
+    fn p2p_formal_peer_ids() -> Vec<PeerId> {
+        (1..=5)
+            .map(|idx| {
+                PeerId::new(
+                    KeyPair::from_seed(
+                        format!("p2p-topology-trusted-{idx}").into_bytes(),
+                        Algorithm::BlsNormal,
+                    )
+                    .public_key()
+                    .clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn p2p_peer_set(peers: &[PeerId], indices: &[usize]) -> BTreeSet<PeerId> {
+        indices.iter().map(|idx| peers[idx - 1].clone()).collect()
+    }
+
+    fn p2p_peer_vec(peers: &[PeerId], indices: &[usize]) -> Vec<PeerId> {
+        indices.iter().map(|idx| peers[idx - 1].clone()).collect()
+    }
+
+    fn trusted_with_formal_peer_indices(
+        peers: &[PeerId],
+        trusted_indices: &[usize],
+    ) -> iroha_config::parameters::actual::TrustedPeers {
+        iroha_config::parameters::actual::TrustedPeers {
+            myself: Peer::new(
+                "127.0.0.1:7101".parse::<SocketAddr>().expect("addr").into(),
+                peers[0].clone(),
+            ),
+            others: trusted_indices
+                .iter()
+                .enumerate()
+                .map(|(offset, idx)| {
+                    let port = 7_102_u16
+                        .saturating_add(u16::try_from(offset).expect("trusted peer index fits"));
+                    Peer::new(
+                        format!("127.0.0.1:{port}")
+                            .parse::<SocketAddr>()
+                            .expect("addr")
+                            .into(),
+                        peers[idx - 1].clone(),
+                    )
+                })
+                .collect::<UniqueVec<_>>(),
+            pops: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn p2p_topology_trusted_formal_gate_matrix() {
+        struct Case {
+            world: &'static [usize],
+            trusted: &'static [usize],
+            online: &'static [usize],
+            expected_topology: &'static [usize],
+            expected_strays: &'static [usize],
+        }
+
+        let peers = p2p_formal_peer_ids();
+        for case in [
+            Case {
+                world: &[2, 3],
+                trusted: &[],
+                online: &[1, 2, 3, 4],
+                expected_topology: &[1, 2, 3],
+                expected_strays: &[4],
+            },
+            Case {
+                world: &[1, 2],
+                trusted: &[3],
+                online: &[1, 2, 3, 4],
+                expected_topology: &[1, 2, 3],
+                expected_strays: &[4],
+            },
+            Case {
+                world: &[1, 2, 3],
+                trusted: &[2, 3, 4],
+                online: &[4, 5, 4],
+                expected_topology: &[1, 2, 3, 4],
+                expected_strays: &[5],
+            },
+            Case {
+                world: &[2],
+                trusted: &[],
+                online: &[1, 2, 3],
+                expected_topology: &[1, 2],
+                expected_strays: &[3],
+            },
+            Case {
+                world: &[1],
+                trusted: &[4],
+                online: &[5, 2, 4, 5, 3],
+                expected_topology: &[1, 4],
+                expected_strays: &[5, 2, 5, 3],
+            },
+            Case {
+                world: &[],
+                trusted: &[2],
+                online: &[1, 2, 3],
+                expected_topology: &[1, 2],
+                expected_strays: &[3],
+            },
+        ] {
+            let world = p2p_peer_set(&peers, case.world);
+            let trusted = trusted_with_formal_peer_indices(&peers, case.trusted);
+            let expected_topology = p2p_peer_set(&peers, case.expected_topology);
+            let actual_topology = p2p_topology_with_trusted(&world, &trusted);
+
+            assert_eq!(actual_topology, expected_topology);
+            assert_eq!(actual_topology.len(), case.expected_topology.len());
+
+            let online = p2p_peer_vec(&peers, case.online);
+            let expected_strays = p2p_peer_vec(&peers, case.expected_strays);
+            let actual_strays = peer_ids_outside_topology(&actual_topology, &online);
+
+            assert_eq!(actual_strays, expected_strays);
+        }
     }
 
     #[test]
@@ -11484,7 +11647,7 @@ mod tests {
     }
 
     #[test]
-    fn payload_available_for_da_accepts_rbc_delivery() {
+    fn payload_available_for_da_ignores_summary_only_rbc_delivery() {
         let block = sample_block(2, 0);
         let payload_hash = Hash::new(b"not-a-payload");
         let pending = PendingBlock::new(block, payload_hash, 2, 0);
@@ -11495,11 +11658,11 @@ mod tests {
             block_hash: pending.block.hash(),
             height: pending.height,
             view: pending.view,
-            total_chunks: 0,
+            total_chunks: 1,
             encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
             data_shards: 0,
             parity_shards: 0,
-            received_chunks: 0,
+            received_chunks: 1,
             ready_count: 0,
             delivered: true,
             payload_hash: Some(pending.payload_hash),
@@ -11512,9 +11675,10 @@ mod tests {
         };
         handle.update(summary, std::time::SystemTime::now());
 
-        assert!(Actor::payload_available_for_da(
-            &sessions, &handle, &pending
-        ));
+        assert!(
+            !Actor::payload_available_for_da(&sessions, &handle, &pending),
+            "summary-only RBC delivery does not carry payload bytes and must not satisfy DA availability",
+        );
     }
 
     #[test]
@@ -11533,6 +11697,24 @@ mod tests {
         assert!(Actor::payload_available_for_da(
             &sessions, &handle, &pending
         ));
+    }
+
+    #[test]
+    fn payload_available_for_da_rejects_complete_rbc_payload_with_wrong_bytes() {
+        let block = sample_block(2, 0);
+        let payload_hash = Hash::new(b"advertised-rbc-payload");
+        let pending = PendingBlock::new(block.clone(), payload_hash, 2, 0);
+        let mut sessions = BTreeMap::new();
+        let handle = rbc_status::Handle::new();
+
+        let mut session = RbcSession::test_new(1, Some(payload_hash), None, 0);
+        session.test_note_chunk(0, b"different-complete-bytes".to_vec(), 0);
+        sessions.insert((block.hash(), 2, 0), session);
+
+        assert!(
+            !Actor::payload_available_for_da(&sessions, &handle, &pending),
+            "DA availability must not accept complete RBC counters when the reconstructed bytes hash differently",
+        );
     }
 
     #[test]

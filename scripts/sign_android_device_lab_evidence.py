@@ -163,10 +163,88 @@ def _output_file_sha256(path: Path, label: str) -> tuple[str | None, list[str]]:
     if errors:
         return None, errors
     try:
-        payload = path.read_bytes()
+        expected_stat = path.lstat()
+    except FileNotFoundError:
+        return None, [f"{label} must exist before digest"]
+    except OSError:
+        return None, [f"{label} file metadata could not be read"]
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return None, [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return None, [f"{label} must be a regular file"]
+    try:
+        link_count = path.stat().st_nlink
+    except OSError:
+        return None, [f"{label} hardlink metadata could not be read"]
+    if link_count > 1:
+        return None, [f"{label} must not be hardlinked"]
+    payload, read_errors = _read_existing_output_bytes(path, expected_stat, label)
+    if read_errors:
+        return None, read_errors
+    assert payload is not None
+    return hashlib.sha256(payload).hexdigest(), []
+
+
+def _read_existing_output_bytes(
+    path: Path,
+    expected_stat: os.stat_result,
+    label: str,
+) -> tuple[bytes | None, list[str]]:
+    """Read signer-controlled output bytes without trusting a stale path."""
+
+    chunks: list[bytes] = []
+    try:
+        with path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            path_stat = path.lstat()
+            if stat.S_ISLNK(path_stat.st_mode):
+                return None, [f"{label} must not be a symlink"]
+            if not stat.S_ISREG(path_stat.st_mode) or not stat.S_ISREG(
+                open_stat.st_mode
+            ):
+                return None, [f"{label} must be a regular file"]
+            signer_output_expected_identity = (
+                expected_stat.st_dev,
+                expected_stat.st_ino,
+            )
+            signer_output_open_identity = (open_stat.st_dev, open_stat.st_ino)
+            if signer_output_open_identity != signer_output_expected_identity or (
+                path_stat.st_dev,
+                path_stat.st_ino,
+            ) != signer_output_expected_identity:
+                return None, [f"{label} changed while being read"]
+            if open_stat.st_nlink > 1:
+                return None, [f"{label} must not be hardlinked"]
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                chunks.append(chunk)
+            final_path_stat = path.lstat()
+            if (
+                final_path_stat.st_dev,
+                final_path_stat.st_ino,
+            ) != signer_output_expected_identity:
+                return None, [f"{label} changed while being read"]
     except OSError:
         return None, [f"{label} could not be read"]
-    return hashlib.sha256(payload).hexdigest(), []
+    return b"".join(chunks), []
+
+
+def _read_existing_output_text(
+    path: Path,
+    expected_stat: os.stat_result,
+    label: str,
+) -> tuple[str | None, list[str]]:
+    """Read signer-controlled output text for post-write verification."""
+
+    payload, read_errors = _read_existing_output_bytes(path, expected_stat, label)
+    if read_errors:
+        if read_errors == [f"{label} could not be read"]:
+            return None, [f"{label} write verification failed"]
+        return None, read_errors
+    assert payload is not None
+    try:
+        return payload.decode("utf-8"), []
+    except UnicodeDecodeError:
+        return None, [f"{label} write verification failed"]
 
 
 def _write_json(path: Path, payload: dict[str, Any], label: str) -> list[str]:
@@ -230,9 +308,27 @@ def _write_text_atomic(path: Path, text: str, label: str) -> list[str]:
     if errors:
         return errors
     try:
-        if path.read_text(encoding="utf-8") != text:
-            return [f"{label} write verification failed"]
-    except (OSError, UnicodeDecodeError):
+        expected_stat = path.lstat()
+    except (FileNotFoundError, OSError):
+        return [f"{label} write verification failed"]
+    if stat.S_ISLNK(expected_stat.st_mode):
+        return [f"{label} must not be a symlink"]
+    if not stat.S_ISREG(expected_stat.st_mode):
+        return [f"{label} must be a regular file"]
+    try:
+        link_count = path.stat().st_nlink
+    except OSError:
+        return [f"{label} hardlink metadata could not be read"]
+    if link_count > 1:
+        return [f"{label} must not be hardlinked"]
+    readback_text, readback_errors = _read_existing_output_text(
+        path,
+        expected_stat,
+        label,
+    )
+    if readback_errors:
+        return readback_errors
+    if readback_text != text:
         return [f"{label} write verification failed"]
     return []
 
