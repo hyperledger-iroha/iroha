@@ -142,7 +142,7 @@ public struct EthereumMainnetNativeEvmProverBundleSdkArtifact: Equatable {
                 provingKeyHash: String,
                 implementationArtifact: String? = nil,
                 implementationHash: String) throws {
-        guard !sdk.isEmpty else {
+        guard !sdk.isEmpty, sdk.trimmingCharacters(in: .whitespacesAndNewlines) == sdk else {
             throw EvmSccpProverError.invalidPublicInputs("nativeSdkArtifacts.sdk")
         }
         guard sccpEthNativeEvmProverRequiredImplementationsV1[sdk] == implementation else {
@@ -2479,7 +2479,7 @@ public extension EthereumMainnetNativeEvmProverBundle {
             nativeProverBundle: self
         )
 
-        guard let sdk, !sdk.isEmpty else {
+        guard let sdk, !sdk.isEmpty, sdk.trimmingCharacters(in: .whitespacesAndNewlines) == sdk else {
             throw EvmSccpProverError.invalidPublicInputs("sdk")
         }
         guard let implementationBytes else {
@@ -2521,6 +2521,9 @@ public extension EthereumMainnetNativeEvmProverBundle {
     /// Resolve manifest-declared artifact paths locally, then verify the bytes.
     func verifiedArtifacts(sdk: String,
                            artifactResolver: (String) throws -> Data) throws -> EthereumMainnetNativeEvmProverArtifacts {
+        guard !sdk.isEmpty, sdk.trimmingCharacters(in: .whitespacesAndNewlines) == sdk else {
+            throw EvmSccpProverError.invalidPublicInputs("sdk")
+        }
         guard let proofArtifact else {
             throw EvmSccpProverError.invalidPublicInputs("proofArtifact")
         }
@@ -6166,6 +6169,7 @@ public final class EthereumMainnetSccp {
         }
         guard let sdk = artifacts.sdk,
               !sdk.isEmpty,
+              sdk.trimmingCharacters(in: .whitespacesAndNewlines) == sdk,
               let implementation = artifacts.implementation,
               !implementation.isEmpty,
               let implementationHash = artifacts.implementationHash,
@@ -6182,6 +6186,8 @@ public final class EthereumMainnetSccp {
     ) async throws -> EthereumMainnetNativeEvmProverSelfTestSdkResult {
         guard let artifacts,
               let sdk = artifacts.sdk,
+              !sdk.isEmpty,
+              sdk.trimmingCharacters(in: .whitespacesAndNewlines) == sdk,
               let fixture = artifacts.nativeProverSelfTest,
               let expectedResult = fixture.sdkResults[sdk] else {
             throw EvmSccpProverError.invalidPublicInputs("nativeProverArtifacts.nativeProverSelfTest")
@@ -6223,6 +6229,7 @@ public final class EthereumMainnetSccp {
         }
         guard let sdk = artifacts.sdk,
               !sdk.isEmpty,
+              sdk.trimmingCharacters(in: .whitespacesAndNewlines) == sdk,
               let implementation = artifacts.implementation,
               !implementation.isEmpty,
               let implementationHash = artifacts.implementationHash,

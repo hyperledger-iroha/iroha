@@ -3961,6 +3961,20 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
   assert.equal(verifiedFromBundle.implementationHash, implementationHash);
   assert.equal(verifiedFromBundle.crossSdkFixtureParityHash, parityFixtureHash);
   assert.equal(verifiedFromBundle.nativeProverSelfTestHash, selfTestFixtureHash);
+  await assert.rejects(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifactsFromBundle(
+        {
+          nativeProverBundle: bundle,
+          sdk: " javascript ",
+          artifactResolver(path) {
+            return artifactBytesByPath.get(path);
+          },
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /sdk must be a non-empty canonical string/u,
+  );
   let helperSawOptions = false;
   const helperSelfTestResult = await runEthereumMainnetNativeProverSelfTest(
     {
@@ -3976,6 +3990,19 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
   );
   assert.equal(helperSawOptions, true);
   assert.equal(helperSelfTestResult.proofHash, hex32("e4"));
+  let paddedSelfTestHookCalled = false;
+  await assert.rejects(
+    () =>
+      runEthereumMainnetNativeProverSelfTest({
+        nativeProverArtifacts: { ...verified, sdk: " javascript " },
+        nativeProverSelfTest() {
+          paddedSelfTestHookCalled = true;
+          return verified.nativeProverSelfTest.sdkResults.javascript;
+        },
+      }),
+    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
+  );
+  assert.equal(paddedSelfTestHookCalled, false);
   assert.deepEqual(resolvedArtifacts, [
     `proofArtifact:${verified.nativeProverBundle.proofArtifact}`,
     `provingKey:${verified.nativeProverBundle.provingKey}`,
@@ -4075,6 +4102,17 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         nativeProverArtifacts: missingImplementationHash,
       }),
     (error) => error.message.includes(missingImplementationHashMessage),
+  );
+  assert.throws(
+    () =>
+      new EthereumMainnetSccp({
+        destinationBinding: input.destinationBinding,
+        nativeProverArtifacts: {
+          ...verified,
+          sdk: " javascript ",
+        },
+      }),
+    /nativeProverArtifacts\.sdk must be a non-empty canonical string/u,
   );
   assert.throws(
     () =>
@@ -4192,7 +4230,24 @@ test("EthereumMainnetSccp verifies native prover artifact bytes against manifest
         },
         { destinationBinding: input.destinationBinding },
       ),
-    /sdk must be a non-empty string/u,
+    /sdk must be a non-empty canonical string/u,
+  );
+  assert.throws(
+    () =>
+      verifyEthereumMainnetNativeEvmProverArtifacts(
+        {
+          nativeProverBundle: bundle,
+          proofArtifactBytes,
+          provingKeyBytes,
+          verifierKeyBytes,
+          crossSdkFixtureParityBytes: parityFixtureBytes,
+          nativeProverSelfTestBytes: selfTestFixtureBytes,
+          sdk: " javascript ",
+          implementationBytes,
+        },
+        { destinationBinding: input.destinationBinding },
+      ),
+    /sdk must be a non-empty canonical string/u,
   );
   assert.throws(
     () =>
@@ -4493,6 +4548,18 @@ test("EthereumMainnetSccp rejects unsafe native EVM prover bundle manifests", ()
         proofArtifactHash: bundle.proof_artifact_hash,
       }),
     /proofArtifactHash must not use multiple aliases/u,
+  );
+  assert.throws(
+    () =>
+      validateEthereumMainnetNativeEvmProverBundle({
+        ...bundle,
+        native_sdk_artifacts: bundle.native_sdk_artifacts.map((artifact) =>
+          artifact.sdk === "javascript"
+            ? { ...artifact, sdk: " javascript " }
+            : artifact,
+        ),
+      }),
+    /nativeSdkArtifacts\[\d+\]\.sdk must be a non-empty canonical string/u,
   );
   assert.throws(
     () =>

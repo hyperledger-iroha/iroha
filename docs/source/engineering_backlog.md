@@ -10,12 +10,13 @@ track detailed unfinished engineering work.
 
 The active SCCP launch scope is Ethereum, BSC, Solana, TON, and TRON. Retired
 runtime-network families outside that launch scope are not supported for now.
-Retired platform-family lanes are explicitly outside SCCP launch support for now.
-Retired platform-family networks are explicitly outside SCCP launch support for now.
 Substrate/Polkadot networks are explicitly outside SCCP launch support for now.
 Backlog notes for unsupported network families are diagnostic only; they should
 not be treated as release blockers or advertised as production network support
 unless governance explicitly re-opens that scope.
+SCCP active-launch route-canary evidence source metadata is canonical release
+evidence: missing, empty, non-string, or whitespace-padded values must block
+before semantic source matching.
 
 Current ISO 20022 operator tooling already versions digest-bound XSD, canary,
 trust-bundle, and receipt-verifier summaries and rejects missing or unsupported
@@ -465,19 +466,33 @@ redistributable schemas, and official trust/revocation bundles.
   `OpenVerifyEnvelope` admission now also reject all-zero native STARK
   envelope bytes for Soracloud FHE input, bootstrap-key, full-bootstrap
   material, and full-bootstrap execution proofs.
-  Under `zk-stark`, Core also decodes full-bootstrap execution native
-  `StarkVerifyEnvelopeV1` payloads before backend verification and adversarially
-  rejects drift across transcript label, domain tag, AIR section presence,
-  circuit id, trace width, opening count, composition root, and public digest.
-  A `zk-stark` positive fixture now installs the governed artifact-backed
-  STARK verifier key, generates backend-verified `OpenVerifyEnvelope` proofs
-  over each full-bootstrap execution statement, and proves the active-verifier
-  gate accepts them when STARK verification is enabled at runtime.
-  Matching `zk-stark` positive fixtures cover the bootstrap-key and
-  full-bootstrap material proof gates with active verifier records and
-  backend-verified `OpenVerifyEnvelope` proofs.
-  A `zk-preverify` positive fixture now proves the active-verifier gate accepts
-  a preverified proof batch for every production identifier slot.
+  Under `zk-stark`, Core also decodes Soracloud FHE input-admission,
+  bootstrap-key, full-bootstrap material, and full-bootstrap execution native
+  `StarkVerifyEnvelopeV1` payloads before backend verification and
+  adversarially rejects drift across transcript label, domain tag, AIR section
+  presence, circuit id, trace width, opening count, composition root, and public
+  digest. For full-bootstrap material and execution proofs, generic binding-AIR
+  fixtures are fully validated before they are rejected at the dedicated
+  arithmetic-AIR boundary, while non-generic AIR labels stay fail-closed until
+  the production arithmetic verifier is available. The `zk-preverify` path is
+  covered with poisoned-cache regressions for input-admission and bootstrap-key
+  native AIR drift plus full-bootstrap material/execution generic AIR drift, so
+  cache hits cannot bypass native envelope binding or the dedicated
+  arithmetic-AIR boundary.
+  `zk-stark` full-bootstrap fixtures now install governed artifact-backed
+  STARK verifier keys and generate backend-verified binding-AIR
+  `OpenVerifyEnvelope` payloads only as rejection fixtures: the active
+  full-bootstrap material and execution verifier gates reject them before
+  backend dispatch because they do not prove the BFV bootstrap arithmetic.
+  The bootstrap-key proof gate still has positive active-verifier coverage for
+  the shared binding-AIR verifier path.
+  Full-bootstrap material proof verification now also preflights the active
+  record's stored STARK/FRI verifier-key payload against the canonical material
+  circuit before backend dispatch, so corrupted state cannot retarget the
+  material verifier key to the execution circuit.
+  `zk-preverify` full-bootstrap regressions now prove that preverified cache
+  hits cannot bypass the dedicated arithmetic-AIR boundary for material or
+  execution proof batches.
   The confidential verifier-call defaults now admit one such Soracloud
   full-bootstrap execution batch without an operator override.
   Core regressions now also prove that correctly shaped full-bootstrap
@@ -485,9 +500,16 @@ redistributable schemas, and official trust/revocation bundles.
   governed verifier record is missing or withdrawn.
   The Core proof helper now also reruns local job-shape validation, requires
   input-bound metadata to match the input envelope count, and rejects missing or
-  surplus output slots before deriving proof statements, so stale bound
-  sidecars, stale output sidecars, and multi-input bootstrap drift cannot reach
-  proof verification.
+  surplus output slots before deriving proof statements. The execution proof
+  helper also derives the governed verifier key from the supplied evaluation
+  keys and circuit artifacts and rejects caller-supplied verifier keys that do
+  not match it before reaching the dedicated-prover boundary, so stale bound
+  sidecars, stale output sidecars, wrong verifier keys, and multi-input
+  bootstrap drift cannot reach proof verification.
+  The lower-level `zk-stark` material and execution proof constructors also
+  preflight the supplied verifier-key backend, circuit id, production-floor
+  STARK/FRI shape, and SHA-256 selector before returning the
+  dedicated-prover-unavailable error.
   It also rejects full-bootstrap execution circuit artifacts outside
   full-bootstrap proof context even when no execution-proof attachments are
   supplied, so artifact-only bypass attempts fail at the proof boundary.
@@ -511,9 +533,56 @@ redistributable schemas, and official trust/revocation bundles.
   key-material commitments before Galois-key availability or final output
   execution.
   Full-bootstrap proof-key payloads now also bind the canonical execution
-  public-input layout and a generated prover/verifier pair commitment; governed
-  material stores that pair commitment and Core/Torii recompute it from decoded
-  proof-key artifacts before accepting signed material.
+  public-input layout, a generated prover/verifier pair commitment, and a
+  deterministic native proof-circuit fingerprint for the typed STARK/FRI
+  material; generated pair validation rejects prover/verifier native-circuit
+  mismatch, and governed material stores the pair commitment while Core/Torii
+  recompute it from decoded proof-key artifacts before accepting signed
+  material. Native proof-key material now also rejects noncanonical native
+  payload circuit ids outright, so proof-key artifacts cannot be generated for
+  or retargeted to any circuit other than `iroha_bfv_full_bootstrap_v1`.
+  Native verifier payloads now mirror the transparent prover payload profile by
+  binding their field count, backend, key format, proof system, and field
+  labels before material admission or Core canonicalization. Core's fallback
+  native-verifier canonicalization now independently rejects field-count drift,
+  so relabeled STARK/FRI verifier payloads cannot be smuggled through the
+  governed artifact path.
+  The first-release arithmetic trace layout is now exposed as typed
+  `BfvFullBootstrapArithmeticTraceProfileV1` material with a canonical digest
+  bound by the proof public-input schema, proof-key material envelope, native
+  prover/verifier payloads, native proof-key material, and native
+  proof-circuit fingerprint; crypto and Core reject trace-profile digest drift
+  before governed artifact admission or verifier-key canonicalization. The
+  profile now also binds the active coefficient rows as private witness rows,
+  public deterministic padding rows, and the rule that transparent native
+  proofs must not open unmasked private rows.
+  Release prover input now has a typed
+  `BfvFullBootstrapMaterialProofInputMaterialV1` boundary for governed
+  full-bootstrap material proofs and a typed
+  `BfvFullBootstrapExecutionProofInputMaterialV1` boundary that carries the
+  public key, validated execution witness material, and canonical statement
+  hash together; validation rejects stale input layouts, forged statement
+  hashes, stale public keys, stale evaluation-key material, and stale embedded
+  witnesses before a dedicated arithmetic prover can consume the material.
+  Release execution prover input now also has a typed
+  `BfvFullBootstrapExecutionProverInputMaterialV1` package that binds the proof
+  input, canonical row-major arithmetic trace material/digest, and governed
+  generated prover/verifier proof-key pair before the dedicated prover boundary.
+  Crypto and Core reject stale trace digests, stale trace rows, and unrelated
+  proof-key material or pair commitments before proof generation is attempted.
+  Core material and execution proof helpers now derive and validate typed input
+  material before crossing the current fail-closed dedicated-prover boundary.
+  The typed execution proof helper also derives and validates the canonical
+  row-major arithmetic trace material from proof input, so stale governed
+  material, witness, statement material, or native trace rows are rejected
+  before proof generation is attempted.
+  Release tooling can now derive governed full-bootstrap circuit material
+  directly from a concrete artifact bundle; the crypto helper recomputes every
+  artifact digest, proof-key material commitment, and generated pair commitment
+  before validating the bundle against the derived material. Derivation now also
+  rejects stale proof-key pair commitments even when the individual proof-key
+  material commitments have been refreshed, and the crypto/Core fixture helpers
+  no longer synthesize malformed sample pair commitments.
   Torii signed-request preflight coverage now also rejects full-bootstrap
   artifact attachments outside full-bootstrap context and binds a matching
   signed material digest to a role-swapped artifact envelope before rejecting
@@ -524,9 +593,41 @@ redistributable schemas, and official trust/revocation bundles.
   no-artifact residual-bound wrapper is also test-only, keeping the non-test
   Core path on artifact-aware execution and bound propagation.
   Refresh-only proof and execution paths still reject `FullBootstrapV1`.
-  Remaining production work is the audited full-bootstrap arithmetic
-  proof-producing backend plus release-grade prover/verifier artifacts, not the
-  Core verifier gate or statement-recomputation policy path.
+  Core full-bootstrap proof constructors now also reject zero statement hashes
+  after verifier-key profile admission and before the dedicated arithmetic
+  prover boundary, so release prover tooling cannot request a proof for an
+	  empty public statement. The material and execution proof statement materials
+	  now also carry their advertised layout versions and field counts inside the
+	  canonical hashed bytes, and the Soracloud public-input schemas advertise
+	  those self-describing headers. Public proof input material validation also
+	  rejects zero statement hashes, malformed public-key shapes, and material
+	  prover artifact bundles that do not match governed material before release
+	  prover tooling can hand typed material to the future arithmetic backend, and
+	  Core now pins those typed-material rejection cases at the runtime prover
+	  boundary. The full-bootstrap execution public-input schema and stable hash
+	  now also advertise the arithmetic trace private/public row policy and the
+	  proof-key-bound release prover input package.
+	  Full-mode bootstrap keys now also carry a domain-separated BFV public-key
+	  digest, and material/execution statement derivation rejects governed
+	  public-key drift before material hashing, witness hashing, or Core
+	  proof-helper execution.
+	  BFV-shaped native AIR envelopes now also preflight canonical STARK/FRI
+	  parameters, public digest binding, opened row/path shape, and the
+	  no-unmasked-private-row-opening policy before Core reports the current
+	  dedicated verifier boundary.
+	  Remaining production work is the audited full-bootstrap arithmetic
+	  proof-producing backend plus release-grade prover/verifier artifacts, not the
+	  Core verifier gate, arithmetic trace-profile digest binding,
+	  native proof-circuit fingerprint/pair binding, execution
+	  helper and constructor verifier-key/statement-hash preflights, material runtime verifier-key
+  payload preflight, canonical native proof-key circuit enforcement, governed
+  material derivation from release artifacts, artifact-bound public typed
+  material prover input validation, public typed execution prover input and
+  proof-key-bound prover package validation, canonical row-major arithmetic
+  trace material/digest validation, native BFV AIR metadata/privacy-boundary
+  preflight, public typed execution witness material reconstruction,
+  validation, hashing, self-describing material and execution statement
+  material, or statement-recomputation policy path.
   Direct crypto
   refresh-transcript validation/digesting and Soracloud transcript digesting
   now also preflight the advertised BFV public-key shape

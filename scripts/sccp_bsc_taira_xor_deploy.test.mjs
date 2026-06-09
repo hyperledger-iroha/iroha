@@ -993,6 +993,32 @@ test("BSC route-config requires explicit post-deploy evidence for production-rea
   );
 });
 
+test("BSC route-config refuses allow-unready for production-ready manifests", () => {
+  const manifest = productionReadyRouteManifest();
+  const toml = buildBscTairaXorRouteConfigToml(manifest);
+  assert.match(toml, /production_ready = true/u);
+  assert.match(toml, /sccp_allow_unready_transparent_proofs = false/u);
+
+  assert.throws(
+    () =>
+      buildBscTairaXorRouteConfigToml(manifest, {
+        "allow-unready": "true",
+      }),
+    /production-ready route manifests cannot enable --allow-unready/u,
+  );
+  assert.throws(
+    () =>
+      buildMergedBscTairaXorRouteConfigToml(
+        "[zk]\nother_setting = true\n",
+        manifest,
+        {
+          "allow-unready": "true",
+        },
+      ),
+    /production-ready route manifests cannot enable --allow-unready/u,
+  );
+});
+
 test("BSC route-config validates explorer URLs against the selected network", () => {
   const mainnetBindingHash = bscDestinationBindingHash({
     networkId: BSC_MAINNET_NETWORK_ID_HEX,
@@ -1649,13 +1675,49 @@ test("BSC route-config can merge into TAIRA config while preserving zk settings"
 test("BSC route-config rejects malformed or foreign route manifests", () => {
   const cases = [
     [{ routeId: "taira_tron_xor" }, /routeId/u],
+    [{ routeId: " taira_bsc_xor" }, /routeId.*canonical string/u],
     [{ assetKey: "dot" }, /assetKey/u],
+    [{ assetKey: "xor " }, /assetKey.*canonical string/u],
+    [{ bscNetwork: "BSC-TESTNET" }, /bscNetwork.*canonical lowercase text/u],
+    [{ bscNetwork: "bsc_testnet" }, /bscNetwork.*canonical lowercase text/u],
     [{ chain: "bsc-mainnet" }, /chain/u],
+    [{ chain: "BSC-TESTNET" }, /chain.*canonical lowercase text/u],
     [{ chainIdHex: "0x38" }, /chainIdHex/u],
+    [{ chainIdHex: "0X61" }, /chainIdHex.*canonical lowercase hex/u],
     [{ networkIdHex: `0x${"38".padStart(64, "0")}` }, /networkIdHex/u],
+    [{ networkIdHex: ` ${BSC_TESTNET_NETWORK_ID_HEX}` }, /networkIdHex.*canonical string/u],
+    [{ networkIdHex: BSC_TESTNET_NETWORK_ID_HEX.toUpperCase() }, /networkIdHex.*canonical lowercase hex/u],
     [{ destinationBinding: { networkIdHex: HASH_33 } }, /networkIdHex.*aliases disagree/u],
     [{ counterpartyDomain: 1 }, /counterpartyDomain/u],
     [{ verifierTarget: "TronContract" }, /verifierTarget/u],
+    [
+      { bscTokenAddress: BSC_TOKEN_ADDRESS.toUpperCase() },
+      /token address.*canonical lowercase hex/u,
+    ],
+    [
+      {
+        destinationRollout: {
+          destinationBridgeAddress: BSC_BRIDGE_ADDRESS.toUpperCase(),
+        },
+      },
+      /bridge address.*canonical lowercase hex/u,
+    ],
+    [
+      { sccpBscSourceBridgeAddress: BSC_SOURCE_BRIDGE_ADDRESS.toUpperCase() },
+      /source bridge address.*canonical lowercase hex/u,
+    ],
+    [
+      { bscVerifierAddress: BSC_VERIFIER_ADDRESS.replace(/^0x/u, "0X") },
+      /verifier address.*canonical lowercase hex/u,
+    ],
+    [
+      {
+        destinationRollout: {
+          verifierIdentity: BSC_VERIFIER_ADDRESS.toUpperCase(),
+        },
+      },
+      /verifier address.*canonical lowercase hex/u,
+    ],
     [{ bscBridgeAddress: BSC_TOKEN_ADDRESS }, /bridge address aliases disagree|distinct/u],
     [
       { tokenAddress: BSC_SOURCE_BRIDGE_ADDRESS },
@@ -1697,7 +1759,9 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
       /verifier backend/u,
     ],
     [{ verifierCodeHash: HASH_77 }, /verifierCodeHash aliases disagree/u],
+    [{ destinationRollout: { verifierCodeHash: HASH_44.toUpperCase() } }, /verifierCodeHash.*canonical lowercase hex/u],
     [{ verifierKeyHash: HASH_77 }, /verifierKeyHash aliases disagree/u],
+    [{ destinationRollout: { verifierKeyHash: HASH_55.toUpperCase() } }, /verifierKeyHash.*canonical lowercase hex/u],
     [
       { verifierCodeHash: HASH_11, verifier_code_hash: HASH_11 },
       /verifierCodeHash must not use multiple aliases in route manifest/u,
@@ -1709,6 +1773,10 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
     [
       { destinationRollout: { destinationBindingHash: HASH_33 } },
       /binding hash/u,
+    ],
+    [
+      { destinationRollout: { destinationBindingHash: routeManifest().destinationRollout.destinationBindingHash.toUpperCase() } },
+      /destination binding hash.*canonical lowercase hex/u,
     ],
     [{ destinationBindingHash: HASH_77 }, /destination binding hash aliases disagree/u],
     [{ destinationBindingKey: "stale-binding-key" }, /destination binding key aliases disagree/u],
@@ -1790,6 +1858,22 @@ test("BSC route-config rejects malformed or foreign route manifests", () => {
         },
       },
       /routeCanaryExplorerUrl must not use multiple aliases in route manifest postDeployLiveEvidence/u,
+    ],
+    [
+      { postDeployLiveEvidence: { sourceEventTransactionId: ` ${HASH_55}` } },
+      /sourceEventTransactionId.*canonical string/u,
+    ],
+    [
+      { postDeployLiveEvidence: { sourceEventTransactionId: HASH_55.toUpperCase() } },
+      /sourceEventTransactionId.*canonical lowercase hex/u,
+    ],
+    [
+      { postDeployLiveEvidence: { offlineFullTomlSha256: `${HASH_33} ` } },
+      /offlineFullTomlSha256.*canonical string/u,
+    ],
+    [
+      { postDeployLiveEvidence: { offlineFullTomlSha256: HASH_33.toUpperCase() } },
+      /offlineFullTomlSha256.*canonical lowercase hex/u,
     ],
     [
       { postDeployLiveEvidence: { sourceEventTransactionUrl: ROUTE_CANARY_EXPLORER_URL } },
