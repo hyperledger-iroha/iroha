@@ -87,6 +87,7 @@ MAX_PROFILE_ID_CHARS = 128
 MAX_TRUST_POLICY_CHARS = 128
 MAX_TRUST_SOURCE_TEXT_CHARS = 256
 MAX_RAIL_MESSAGE_ID_CHARS = 128
+MAX_TIMESTAMP_CHARS = 128
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
 MAX_RECEIPT_VERIFIER_OUTPUT_BYTES = 4 * 1024 * 1024
 MAX_HTTP_URL_CHARS = 2048
@@ -3152,6 +3153,10 @@ def _reject_placeholder_trust_source_url(url: str, label: str) -> None:
 def _parse_timestamp(value: Any, label: str) -> dt.datetime:
     if not isinstance(value, str):
         raise EvidenceError(f"{label} must be recorded")
+    if len(value) > MAX_TIMESTAMP_CHARS:
+        raise EvidenceError(
+            f"{label} must be no longer than {MAX_TIMESTAMP_CHARS} characters"
+        )
     if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in value):
         raise EvidenceError(f"{label} must not contain control characters")
     if not value.strip():

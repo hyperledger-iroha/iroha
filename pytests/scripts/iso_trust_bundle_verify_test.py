@@ -2104,6 +2104,21 @@ class IsoTrustBundleVerifyTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_overlong_source_retrieved_at_is_rejected_without_echo(self):
+        hidden = "2" * (VERIFIER.MAX_TIMESTAMP_CHARS + 1)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bundle = valid_bundle()
+            bundle["source"]["retrieved_at"] = hidden
+            path = write_bundle(root, bundle)
+
+            rc, stdout, stderr = run_verify(["--bundle", str(path)])
+
+            self.assertEqual(rc, 2)
+            self.assertEqual(stdout, "")
+            self.assertIn("source.retrieved_at must be no longer than 128 characters", stderr)
+            self.assertNotIn(hidden, stderr)
+
     def test_malformed_der_envelope_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

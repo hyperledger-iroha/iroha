@@ -20,6 +20,11 @@ Last updated: 2026-06-09
   - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-json-input-open-path-binding`
   - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-digest-open-path-binding`
   - `bash ci/check_kagemusha_production_readiness.sh --negative-control-release-bundle-evidence-entry-open-path-binding`
+  - `python3 -m unittest scripts.tests.kagemusha_production_readiness_test`
+    (`393` tests passed, latest run 31.421s)
+  - `python3 scripts/kagemusha_production_readiness.py --repo-root .`
+    (blocked only by `lineage_proof_evidence_missing`,
+    `compact_key_evidence_missing`, and `android_device_lab_root_missing`)
 
 ## 2026-06-09 Kagemusha Android JSON loader read identity binding
 

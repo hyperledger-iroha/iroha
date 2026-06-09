@@ -5357,6 +5357,82 @@ class IsoProductionReadinessTest(unittest.TestCase):
                     self.assertEqual(rc, 2)
                     self.assertIn(message, stderr)
 
+    def test_overlong_compact_timestamps_are_rejected_without_echo(self):
+        def set_nested(value, parts):
+            target = value
+            for part in parts[:-1]:
+                target = target[part]
+            target[parts[-1]] = hidden
+
+        hidden = "2" * (READINESS.MAX_TIMESTAMP_CHARS + 1)
+        cases = (
+            (
+                "xsd-verified-at",
+                "xsd",
+                ("verified_at",),
+                "verified_at must be no longer than 128 characters",
+            ),
+            (
+                "evidence-verified-at",
+                "evidence",
+                ("verified_at",),
+                "verified_at must be no longer than 128 characters",
+            ),
+            (
+                "canary-started-at",
+                "evidence",
+                ("canary_summaries", 0, "started_at"),
+                "started_at must be no longer than 128 characters",
+            ),
+            (
+                "canary-stage-finished-at",
+                "evidence",
+                ("canary_summaries", 0, "stage_windows", 0, "finished_at"),
+                "finished_at must be no longer than 128 characters",
+            ),
+            (
+                "trust-verified-at",
+                "evidence",
+                ("trust_summaries", 0, "verified_at"),
+                "verified_at must be no longer than 128 characters",
+            ),
+            (
+                "trust-source-retrieved-at",
+                "evidence",
+                ("trust_summaries", 0, "profiles", 0, "source", "retrieved_at"),
+                "source.retrieved_at must be no longer than 128 characters",
+            ),
+        )
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            xsd_summary = write_strict_xsd_summary(root / "xsd")
+            evidence_summary = add_archive_receipt_verification(
+                write_evidence_summary(root / "evidence")
+            )
+            for name, target_name, parts, message in cases:
+                with self.subTest(name=name):
+                    xsd_path = xsd_summary
+                    evidence_path = evidence_summary
+                    if target_name == "xsd":
+                        body = json.loads(xsd_summary.read_text(encoding="utf-8"))
+                        set_nested(body, parts)
+                        refresh_digest(body)
+                        xsd_path = write_json(root / f"{name}.summary.json", body)
+                    else:
+                        body = json.loads(evidence_summary.read_text(encoding="utf-8"))
+                        set_nested(body, parts)
+                        refresh_digest(body)
+                        evidence_path = write_json(root / f"{name}.summary.json", body)
+
+                    rc, stdout, stderr = run_readiness(
+                        ["--xsd-summary", str(xsd_path), "--evidence-summary", str(evidence_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
     def test_compact_trust_source_is_required_and_rechecked_by_readiness(self):
         def set_source(evidence, value):
             evidence["trust_summaries"][0]["profiles"][0]["source"] = value

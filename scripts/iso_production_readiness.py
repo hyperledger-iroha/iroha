@@ -51,6 +51,7 @@ MAX_PROFILE_ID_CHARS = 128
 MAX_TRUST_POLICY_CHARS = 128
 MAX_TRUST_SOURCE_TEXT_CHARS = 256
 MAX_SUMMARY_JSON_BYTES = 4 * 1024 * 1024
+MAX_TIMESTAMP_CHARS = 128
 MAX_SOURCE_URL_CHARS = 2048
 MAX_SOURCE_REPOSITORY_CHARS = 2048
 MAX_REVIEWED_GAP_REASON_CHARS = 1024
@@ -1704,6 +1705,10 @@ def _verify_blocked_schema_source_summary(
 
 
 def _parse_timestamp(raw: str, label: str) -> dt.datetime:
+    if len(raw) > MAX_TIMESTAMP_CHARS:
+        raise ReadinessError(
+            f"{label} must be no longer than {MAX_TIMESTAMP_CHARS} characters"
+        )
     normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
     try:
         parsed = dt.datetime.fromisoformat(normalized)

@@ -3711,6 +3711,60 @@ class IsoOperatorEvidenceVerifyTest(unittest.TestCase):
                     self.assertIn("verified_at", stderr)
                     self.assertIn(message, stderr)
 
+    def test_overlong_archive_timestamps_are_rejected_without_echo(self):
+        hidden = "2" * (EVIDENCE.MAX_TIMESTAMP_CHARS + 1)
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            cases = (
+                (
+                    "canary-started-at",
+                    lambda canary, _trust_path: canary.__setitem__("started_at", hidden),
+                    "started_at must be no longer than 128 characters",
+                ),
+                (
+                    "canary-stage-finished-at",
+                    lambda canary, _trust_path: canary["stages"][0].__setitem__(
+                        "finished_at",
+                        hidden,
+                    ),
+                    "finished_at must be no longer than 128 characters",
+                ),
+                (
+                    "trust-verified-at",
+                    lambda _canary, trust_path: rewrite_trust_summary(
+                        trust_path,
+                        lambda body: body.__setitem__("verified_at", hidden),
+                    ),
+                    "verified_at must be no longer than 128 characters",
+                ),
+                (
+                    "trust-source-retrieved-at",
+                    lambda _canary, trust_path: rewrite_trust_summary(
+                        trust_path,
+                        lambda body: body["bundles"][0]["source"].__setitem__(
+                            "retrieved_at",
+                            hidden,
+                        ),
+                    ),
+                    "source.retrieved_at must be no longer than 128 characters",
+                ),
+            )
+            for name, mutate, message in cases:
+                with self.subTest(name=name):
+                    canary = valid_canary_summary()
+                    trust_path = write_trust_summary(root / name)
+                    mutate(canary, trust_path)
+                    canary_path = write_canary(root, digest_summary(canary))
+
+                    rc, stdout, stderr = run_evidence(
+                        ["--canary-summary", str(canary_path), "--trust-summary", str(trust_path)]
+                    )
+
+                    self.assertEqual(rc, 2)
+                    self.assertEqual(stdout, "")
+                    self.assertIn(message, stderr)
+                    self.assertNotIn(hidden, stderr)
+
     def test_canary_summary_digest_tampering_is_rejected(self):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

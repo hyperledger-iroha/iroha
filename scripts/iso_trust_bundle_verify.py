@@ -48,6 +48,7 @@ MAX_SOURCE_URL_CHARS = 2048
 MAX_PROFILE_ID_CHARS = 128
 MAX_TRUST_POLICY_CHARS = 128
 MAX_TRUST_SOURCE_TEXT_CHARS = 256
+MAX_TIMESTAMP_CHARS = 128
 PLACEHOLDER_TRUST_SOURCE_MARKERS = (
     "dummy",
     "fake",
@@ -1166,6 +1167,10 @@ def _validate_retrieved_at(value: str, label: str) -> None:
 
 
 def _parse_timestamp(value: str, label: str) -> dt.datetime:
+    if len(value) > MAX_TIMESTAMP_CHARS:
+        raise TrustBundleError(
+            f"{label} must be no longer than {MAX_TIMESTAMP_CHARS} characters"
+        )
     normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
     try:
         parsed = dt.datetime.fromisoformat(normalized)
